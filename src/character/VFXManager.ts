@@ -239,6 +239,71 @@ interface WeakpointSlot {
   spinnerGroup: THREE.Group;
 }
 
+interface GrappleLineSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  length: number;
+  group: THREE.Group;
+  cableMesh: THREE.Mesh;
+  cableMat: THREE.MeshBasicMaterial;
+  goldWireMesh: THREE.Mesh;
+  goldWireMat: THREE.MeshBasicMaterial;
+  hookGroup: THREE.Group;
+  hookMat: THREE.MeshBasicMaterial;
+  impactRingMesh: THREE.Mesh;
+  impactRingMat: THREE.MeshBasicMaterial;
+}
+
+interface ShieldBubbleSlot {
+  active: boolean;
+  id: string;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  hexWireMesh: THREE.Mesh;
+  hexWireMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+}
+
+interface VehicleBoostSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface VehicleBoostSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  leftPlume: THREE.Mesh;
+  rightPlume: THREE.Mesh;
+  plumeMat: THREE.MeshBasicMaterial;
+  sparks: VehicleBoostSpark[];
+}
+
+function isFiniteVec3(v: Vec3Like | null | undefined): v is Vec3Like {
+  return (
+    v !== null &&
+    v !== undefined &&
+    Number.isFinite(v.x) &&
+    Number.isFinite(v.y) &&
+    Number.isFinite(v.z)
+  );
+}
+
 const TRACER_POOL_SIZE = 48;
 const MUZZLE_POOL_SIZE = 24;
 const CASING_POOL_SIZE = 40;
@@ -256,6 +321,12 @@ const SLIDE_DUST_PARTICLE_COUNT = 8;
 const ELIMINATION_POOL_SIZE = 10;
 const ELIMINATION_VOXEL_COUNT = 18;
 const WEAKPOINT_POOL_SIZE = 8;
+const GRAPPLE_LINE_POOL_SIZE = 8;
+const SHIELD_BUBBLE_POOL_SIZE = 8;
+const VEHICLE_BOOST_POOL_SIZE = 24;
+const VEHICLE_BOOST_SPARK_COUNT = 10;
+const THROW_ARC_MAX_POINTS = 64;
+const THROW_ARC_DOT_COUNT = 40;
 
 /**
  * Pooled 3D VFX manager subscribed to EventBus vfx:* channels.
@@ -282,6 +353,7 @@ export class VFXManager {
   private readonly droneBodyGeo: THREE.BoxGeometry;
   private readonly droneRotorGeo: THREE.TorusGeometry;
   private readonly beamCylGeo: THREE.CylinderGeometry;
+  private readonly hexDomeGeo: THREE.IcosahedronGeometry;
 
   private readonly tracers: TracerSlot[] = [];
   private readonly muzzles: MuzzleSlot[] = [];
@@ -294,6 +366,28 @@ export class VFXManager {
   private readonly slideDusts: SlideDustSlot[] = [];
   private readonly eliminations: EliminationSlot[] = [];
   private readonly weakpoints: WeakpointSlot[] = [];
+  private readonly grappleLines: GrappleLineSlot[] = [];
+  private readonly shieldBubbles: ShieldBubbleSlot[] = [];
+  private readonly vehicleBoosts: VehicleBoostSlot[] = [];
+
+  private readonly throwArcGroup: THREE.Group;
+  private readonly throwArcPositions: Float32Array;
+  private readonly throwArcPosAttr: THREE.BufferAttribute;
+  private readonly throwArcLineGeo: THREE.BufferGeometry;
+  private readonly throwArcLineMat: THREE.LineDashedMaterial;
+  private readonly throwArcLine: THREE.Line;
+  private readonly throwArcDotMat: THREE.MeshBasicMaterial;
+  private readonly throwArcDots: THREE.Mesh[] = [];
+  private readonly throwLandingRingGroup: THREE.Group;
+  private readonly throwLandingOuterMat: THREE.MeshBasicMaterial;
+  private readonly throwLandingInnerMat: THREE.MeshBasicMaterial;
+  private readonly throwLandingFillMat: THREE.MeshBasicMaterial;
+  private readonly scratchArcPoints: THREE.Vector3[] = Array.from(
+    { length: THROW_ARC_MAX_POINTS },
+    () => new THREE.Vector3(),
+  );
+  private throwArcPointCount = 0;
+  private throwArcAge = 0;
 
   private tracerCursor = 0;
   private muzzleCursor = 0;
@@ -305,6 +399,9 @@ export class VFXManager {
   private splashHealCursor = 0;
   private slideDustCursor = 0;
   private eliminationCursor = 0;
+  private grappleLineCursor = 0;
+  private shieldBubbleCursor = 0;
+  private vehicleBoostCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -337,6 +434,98 @@ export class VFXManager {
     this.droneBodyGeo = this.trackGeo(new THREE.BoxGeometry(0.52, 0.16, 0.42));
     this.droneRotorGeo = this.trackGeo(new THREE.TorusGeometry(0.14, 0.022, 6, 12));
     this.beamCylGeo = this.trackGeo(new THREE.CylinderGeometry(0.42, 0.68, 1, 12, 1, true));
+    this.hexDomeGeo = this.trackGeo(new THREE.IcosahedronGeometry(1, 1));
+
+    // Pre-allocated throw trajectory preview arc + landing ring
+    this.throwArcGroup = new THREE.Group();
+    this.throwArcGroup.name = 'vfx_throw_arc';
+    this.throwArcGroup.visible = false;
+    this.root.add(this.throwArcGroup);
+
+    this.throwArcPositions = new Float32Array(THROW_ARC_MAX_POINTS * 3);
+    this.throwArcPosAttr = new THREE.BufferAttribute(this.throwArcPositions, 3);
+    this.throwArcPosAttr.setUsage(THREE.DynamicDrawUsage);
+    this.throwArcLineGeo = this.trackGeo(new THREE.BufferGeometry());
+    this.throwArcLineGeo.setAttribute('position', this.throwArcPosAttr);
+    this.throwArcLineGeo.setDrawRange(0, 0);
+
+    this.throwArcLineMat = this.trackMat(
+      new THREE.LineDashedMaterial({
+        color: 0x38bdf8,
+        dashSize: 0.45,
+        gapSize: 0.25,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+      }),
+    );
+    this.throwArcLine = new THREE.Line(this.throwArcLineGeo, this.throwArcLineMat);
+    this.throwArcLine.frustumCulled = false;
+    this.throwArcGroup.add(this.throwArcLine);
+
+    this.throwArcDotMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x7dd3fc,
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    for (let i = 0; i < THROW_ARC_DOT_COUNT; i++) {
+      const dot = new THREE.Mesh(this.unitCylinderGeo, this.throwArcDotMat);
+      dot.visible = false;
+      this.throwArcGroup.add(dot);
+      this.throwArcDots.push(dot);
+    }
+
+    this.throwLandingRingGroup = new THREE.Group();
+    this.throwLandingOuterMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    const outerLanding = new THREE.Mesh(this.unitRingGeo, this.throwLandingOuterMat);
+    outerLanding.rotation.x = -Math.PI / 2;
+    outerLanding.scale.setScalar(0.85);
+    this.throwLandingRingGroup.add(outerLanding);
+
+    this.throwLandingInnerMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0xe0f2fe,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    const innerLanding = new THREE.Mesh(this.unitRingGeo, this.throwLandingInnerMat);
+    innerLanding.rotation.x = -Math.PI / 2;
+    innerLanding.scale.setScalar(0.45);
+    this.throwLandingRingGroup.add(innerLanding);
+
+    this.throwLandingFillMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x0ea5e9,
+        transparent: true,
+        opacity: 0.32,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    const fillLanding = new THREE.Mesh(this.unitCircleGeo, this.throwLandingFillMat);
+    fillLanding.rotation.x = -Math.PI / 2;
+    fillLanding.scale.setScalar(0.42);
+    this.throwLandingRingGroup.add(fillLanding);
+
+    this.throwArcGroup.add(this.throwLandingRingGroup);
 
     this.initPools();
     this.subscribeEvents();
@@ -1052,6 +1241,231 @@ export class VFXManager {
         spinnerGroup,
       });
     }
+
+    // 12. Grapple Lines (taut glowing cyan/gold cable + impact hook tip)
+    for (let i = 0; i < GRAPPLE_LINE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const cableMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const cableMesh = new THREE.Mesh(this.unitCylinderGeo, cableMat);
+      group.add(cableMesh);
+
+      const goldWireMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const goldWireMesh = new THREE.Mesh(this.unitCylinderGeo, goldWireMat);
+      group.add(goldWireMesh);
+
+      const hookGroup = new THREE.Group();
+      const hookMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfde047,
+          transparent: true,
+          opacity: 0.98,
+        }),
+      );
+      const tipCone = new THREE.Mesh(this.unitConeGeo, hookMat);
+      tipCone.scale.set(0.18, 0.36, 0.18);
+      tipCone.position.y = 0.08;
+      hookGroup.add(tipCone);
+
+      for (let c = 0; c < 3; c++) {
+        const ang = (c / 3) * Math.PI * 2;
+        const claw = new THREE.Mesh(this.unitBoxGeo, hookMat);
+        claw.position.set(Math.cos(ang) * 0.11, -0.06, Math.sin(ang) * 0.11);
+        claw.rotation.set(Math.sin(ang) * 0.65, -ang, -Math.cos(ang) * 0.65);
+        claw.scale.set(0.04, 0.22, 0.04);
+        hookGroup.add(claw);
+      }
+      group.add(hookGroup);
+
+      const impactRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x67e8f9,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const impactRingMesh = new THREE.Mesh(this.unitRingGeo, impactRingMat);
+      group.add(impactRingMesh);
+
+      this.root.add(group);
+      this.grappleLines.push({
+        active: false,
+        age: 0,
+        duration: 0.35,
+        length: 1,
+        group,
+        cableMesh,
+        cableMat,
+        goldWireMesh,
+        goldWireMat,
+        hookGroup,
+        hookMat,
+        impactRingMesh,
+        impactRingMat,
+      });
+    }
+
+    // 13. Shield Bubble Energy Domes (translucent hexagonal blue energy dome)
+    for (let i = 0; i < SHIELD_BUBBLE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x0ea5e9,
+          transparent: true,
+          opacity: 0.22,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.hexDomeGeo, domeMat);
+      group.add(domeMesh);
+
+      const hexWireMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.62,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const hexWireMesh = new THREE.Mesh(this.hexDomeGeo, hexWireMat);
+      group.add(hexWireMesh);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x7dd3fc,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xbae6fd,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMesh = new THREE.Mesh(this.unitCrystalGeo, coreMat);
+      coreMesh.scale.setScalar(0.32);
+      group.add(coreMesh);
+
+      this.root.add(group);
+      this.shieldBubbles.push({
+        active: false,
+        id: '',
+        age: 0,
+        duration: 18,
+        radius: 5.2,
+        group,
+        domeMesh,
+        domeMat,
+        hexWireMesh,
+        hexWireMat,
+        ringMesh,
+        ringMat,
+        coreMesh,
+        coreMat,
+      });
+    }
+
+    // 14. Vehicle Twin Boost Exhaust Sparks
+    for (let i = 0; i < VEHICLE_BOOST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const plumeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+
+      const leftPlume = new THREE.Mesh(this.unitConeGeo, plumeMat);
+      leftPlume.position.set(-0.35, 0, 0.2);
+      leftPlume.rotation.x = Math.PI / 2;
+      leftPlume.scale.set(0.24, 0.55, 0.24);
+      group.add(leftPlume);
+
+      const rightPlume = new THREE.Mesh(this.unitConeGeo, plumeMat);
+      rightPlume.position.set(0.35, 0, 0.2);
+      rightPlume.rotation.x = Math.PI / 2;
+      rightPlume.scale.set(0.24, 0.55, 0.24);
+      group.add(rightPlume);
+
+      const sparks: VehicleBoostSpark[] = [];
+      for (let s = 0; s < VEHICLE_BOOST_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xfef08a : s % 2 === 0 ? 0x22d3ee : 0x38bdf8,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = s % 2 === 0 ? this.unitCrystalGeo : this.unitBoxGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.1,
+        });
+      }
+
+      this.root.add(group);
+      this.vehicleBoosts.push({
+        active: false,
+        age: 0,
+        duration: 0.28,
+        group,
+        leftPlume,
+        rightPlume,
+        plumeMat,
+        sparks,
+      });
+    }
   }
 
   private subscribeEvents(): void {
@@ -1069,6 +1483,13 @@ export class VFXManager {
       this.eventBus.on('vfx:shockwave', (e) => this.spawnShockwave(e.position, e.radius)),
       this.eventBus.on('vfx:splash_heal', (e) => this.spawnSplashHeal(e.position, e.radius)),
       this.eventBus.on('vfx:slide_dust', (e) => this.spawnSlideDust(e.position, e.biome)),
+      this.eventBus.on('vfx:grapple_line', (e) =>
+        this.spawnGrappleLine(e.from, e.to, e.duration),
+      ),
+      this.eventBus.on('vfx:shield_bubble', (e) =>
+        this.spawnShieldBubble(e.id, e.position, e.radius, e.duration),
+      ),
+      this.eventBus.on('vfx:vehicle_boost', (e) => this.spawnVehicleBoost(e.position, e.direction)),
     );
   }
 
@@ -1134,6 +1555,9 @@ export class VFXManager {
       color = 0x93c5fd;
     } else if (weaponId === 'mythic_blade_rifle') {
       scale = 1.35;
+      color = 0x22d3ee;
+    } else if (weaponId === 'grappler') {
+      scale = 1.05;
       color = 0x22d3ee;
     } else if (weaponId === 'smg' || weaponId === 'pistol') {
       scale = 0.78;
@@ -2063,6 +2487,322 @@ export class VFXManager {
       const pulse = 1 + 0.14 * Math.sin(wp.age * 9.5);
       wp.group.scale.setScalar(pulse);
     }
+
+    // 12. Grapple Lines (taut cyan/gold cable + impact hook fading over duration)
+    for (let i = 0; i < GRAPPLE_LINE_POOL_SIZE; i++) {
+      const gl = this.grappleLines[i];
+      if (!gl.active) continue;
+      gl.age += safeDt;
+      const t = gl.age / gl.duration;
+      if (t >= 1) {
+        gl.active = false;
+        gl.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const wScale = 1 - 0.55 * t;
+      gl.cableMesh.scale.set(0.065 * wScale, gl.length, 0.065 * wScale);
+      gl.cableMat.opacity = 0.94 * fade;
+      gl.goldWireMesh.scale.set(0.026 * wScale, gl.length, 0.026 * wScale);
+      gl.goldWireMat.opacity = 0.95 * fade;
+      gl.hookMat.opacity = fade;
+
+      const ringGrow = 0.25 + 0.65 * Math.min(1, t * 2.2);
+      gl.impactRingMesh.scale.setScalar(ringGrow);
+      gl.impactRingMat.opacity = 0.92 * fade;
+    }
+
+    // 13. Shield Bubbles (translucent hexagonal blue energy dome pulsing over duration)
+    for (let i = 0; i < SHIELD_BUBBLE_POOL_SIZE; i++) {
+      const sb = this.shieldBubbles[i];
+      if (!sb.active) continue;
+      sb.age += safeDt;
+      const t = sb.age / sb.duration;
+      if (t >= 1) {
+        sb.active = false;
+        sb.id = '';
+        sb.group.visible = false;
+        continue;
+      }
+
+      const popIn = clamp(sb.age / 0.25, 0, 1);
+      const popScale = 1 - Math.pow(1 - popIn, 3);
+      const fadeOut = t > 0.85 ? clamp((1 - t) / 0.15, 0, 1) : 1;
+      const pulse = 0.5 + 0.5 * Math.sin(sb.age * 4.5);
+      const breathe = 1 + 0.018 * Math.sin(sb.age * 3.2);
+      const domeRadius = sb.radius * popScale * breathe;
+
+      sb.domeMesh.scale.setScalar(domeRadius);
+      sb.domeMat.opacity = (0.18 + 0.08 * pulse) * fadeOut;
+
+      sb.hexWireMesh.scale.setScalar(domeRadius * 1.006);
+      sb.hexWireMesh.rotation.y += 0.22 * safeDt;
+      sb.hexWireMat.opacity = (0.48 + 0.24 * pulse) * fadeOut;
+
+      sb.ringMesh.scale.setScalar(sb.radius * popScale * (0.98 + 0.04 * pulse));
+      sb.ringMat.opacity = (0.65 + 0.25 * pulse) * fadeOut;
+
+      sb.coreMesh.rotation.y += 1.8 * safeDt;
+      sb.coreMesh.scale.setScalar(0.32 * popScale * (0.9 + 0.16 * pulse));
+      sb.coreMat.opacity = 0.9 * fadeOut;
+    }
+
+    // 14. Vehicle Boost Twin Exhaust Sparks
+    for (let i = 0; i < VEHICLE_BOOST_POOL_SIZE; i++) {
+      const vb = this.vehicleBoosts[i];
+      if (!vb.active) continue;
+      vb.age += safeDt;
+      const t = vb.age / vb.duration;
+      if (t >= 1) {
+        vb.active = false;
+        vb.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const plumeScale = 1 - 0.5 * t;
+      vb.leftPlume.scale.set(0.24 * plumeScale, 0.55 * (0.7 + 0.5 * fade), 0.24 * plumeScale);
+      vb.rightPlume.scale.set(0.24 * plumeScale, 0.55 * (0.7 + 0.5 * fade), 0.24 * plumeScale);
+      vb.plumeMat.opacity = 0.92 * fade;
+
+      for (let s = 0; s < VEHICLE_BOOST_SPARK_COUNT; s++) {
+        const sp = vb.sparks[s];
+        sp.vy -= 2.4 * safeDt;
+        sp.mesh.position.x += sp.vx * safeDt;
+        sp.mesh.position.y += sp.vy * safeDt;
+        sp.mesh.position.z += sp.vz * safeDt;
+        sp.mesh.rotation.x += sp.rx * safeDt;
+        sp.mesh.rotation.y += sp.ry * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.65 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 15. Throw Trajectory Arc Preview Pulse
+    if (this.throwArcGroup.visible) {
+      this.throwArcAge += safeDt;
+      const pulse = 1 + 0.08 * Math.sin(this.throwArcAge * 7);
+      this.throwLandingRingGroup.scale.setScalar(pulse);
+      this.throwLandingRingGroup.rotation.y += 1.6 * safeDt;
+      this.throwArcDotMat.opacity = 0.72 + 0.22 * Math.sin(this.throwArcAge * 6);
+    }
+  }
+
+  private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
+    if (this.disposed || !isFiniteVec3(from) || !isFiniteVec3(to)) return;
+
+    this.tmpA.set(from.x, from.y, from.z);
+    this.tmpB.set(to.x, to.y, to.z);
+    this.tmpDir.subVectors(this.tmpB, this.tmpA);
+    const len = this.tmpDir.length();
+    if (len < 1e-4) return;
+
+    const slot = this.grappleLines[this.grappleLineCursor];
+    this.grappleLineCursor = (this.grappleLineCursor + 1) % GRAPPLE_LINE_POOL_SIZE;
+
+    const safeDuration = Math.max(0.08, Number.isFinite(duration) ? duration : 0.35);
+    this.tmpDir.divideScalar(len);
+    this.tmpQuat.setFromUnitVectors(this.upAxis, this.tmpDir);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = safeDuration;
+    slot.length = len;
+    slot.group.visible = true;
+
+    slot.cableMesh.position.addVectors(this.tmpA, this.tmpB).multiplyScalar(0.5);
+    slot.cableMesh.quaternion.copy(this.tmpQuat);
+    slot.cableMesh.scale.set(0.065, len, 0.065);
+    slot.cableMat.opacity = 0.94;
+
+    slot.goldWireMesh.position.copy(slot.cableMesh.position);
+    slot.goldWireMesh.quaternion.copy(this.tmpQuat);
+    slot.goldWireMesh.scale.set(0.026, len, 0.026);
+    slot.goldWireMat.opacity = 0.95;
+
+    slot.hookGroup.position.copy(this.tmpB);
+    slot.hookGroup.quaternion.copy(this.tmpQuat);
+    slot.hookMat.opacity = 0.98;
+
+    slot.impactRingMesh.position.copy(this.tmpB);
+    this.tmpQuat.setFromUnitVectors(this.zAxis, this.tmpDir);
+    slot.impactRingMesh.quaternion.copy(this.tmpQuat);
+    slot.impactRingMesh.scale.setScalar(0.25);
+    slot.impactRingMat.opacity = 0.92;
+  }
+
+  private spawnShieldBubble(id: string, position: Vec3Like, radius: number, duration: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    let slot = id ? this.shieldBubbles.find((s) => s.active && s.id === id) : undefined;
+    if (!slot) {
+      slot =
+        this.shieldBubbles.find((s) => !s.active) ??
+        this.shieldBubbles[this.shieldBubbleCursor];
+      this.shieldBubbleCursor = (this.shieldBubbleCursor + 1) % SHIELD_BUBBLE_POOL_SIZE;
+    }
+
+    const safeRadius = Math.max(0.5, Number.isFinite(radius) ? radius : 5.2);
+    const safeDuration = Math.max(0.2, Number.isFinite(duration) ? duration : 18);
+
+    slot.active = true;
+    slot.id = id;
+    slot.age = 0;
+    slot.duration = safeDuration;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.domeMesh.scale.setScalar(safeRadius * 0.35);
+    slot.domeMat.opacity = 0.22;
+    slot.hexWireMesh.scale.setScalar(safeRadius * 0.352);
+    slot.hexWireMat.opacity = 0.62;
+    slot.ringMesh.scale.setScalar(safeRadius * 0.35);
+    slot.ringMat.opacity = 0.85;
+    slot.coreMesh.scale.setScalar(0.25);
+    slot.coreMat.opacity = 0.9;
+  }
+
+  private spawnVehicleBoost(position: Vec3Like, direction: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.vehicleBoosts[this.vehicleBoostCursor];
+    this.vehicleBoostCursor = (this.vehicleBoostCursor + 1) % VEHICLE_BOOST_POOL_SIZE;
+
+    const safeDir: Vec3Like = isFiniteVec3(direction) ? direction : { x: 0, y: 0, z: 1 };
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.28;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    this.orientToDirection(slot.group, safeDir, this.zAxis);
+    slot.group.visible = true;
+
+    slot.leftPlume.scale.set(0.24, 0.55, 0.24);
+    slot.rightPlume.scale.set(0.24, 0.55, 0.24);
+    slot.plumeMat.opacity = 0.92;
+
+    for (let s = 0; s < VEHICLE_BOOST_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      const r = this.nextRand();
+      const sideX = s % 2 === 0 ? -0.35 : 0.35;
+      sp.baseScale = 0.08 + r * 0.07;
+      sp.mesh.position.set(sideX + (r - 0.5) * 0.08, (r - 0.5) * 0.08, 0.15);
+      sp.mesh.rotation.set(r * Math.PI, r * Math.PI, 0);
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 1;
+      sp.mesh.visible = true;
+      sp.vx = (this.nextRand() - 0.5) * 1.6;
+      sp.vy = 0.35 + this.nextRand() * 1.4;
+      sp.vz = 4.2 + this.nextRand() * 4.4;
+      sp.rx = (this.nextRand() - 0.5) * 16;
+      sp.ry = (this.nextRand() - 0.5) * 16;
+    }
+  }
+
+  /**
+   * Updates the throwable parabolic trajectory preview line + landing ring.
+   * Pass `null` (or < 2 points) to hide the preview cleanly.
+   */
+  public updateThrowArc(points: Vec3Like[] | null): void {
+    if (this.disposed) return;
+
+    if (!points || points.length < 2) {
+      this.throwArcGroup.visible = false;
+      this.throwArcPointCount = 0;
+      return;
+    }
+
+    let count = 0;
+    const maxPts = Math.min(points.length, THROW_ARC_MAX_POINTS);
+    for (let i = 0; i < maxPts; i++) {
+      const pt = points[i];
+      if (!isFiniteVec3(pt)) continue;
+      this.scratchArcPoints[count].set(pt.x, pt.y, pt.z);
+      count++;
+    }
+
+    if (count < 2) {
+      this.throwArcGroup.visible = false;
+      this.throwArcPointCount = 0;
+      return;
+    }
+
+    let totalLen = 0;
+    for (let i = 1; i < count; i++) {
+      totalLen += this.scratchArcPoints[i - 1].distanceTo(this.scratchArcPoints[i]);
+    }
+    if (totalLen < 1e-4) {
+      this.throwArcGroup.visible = false;
+      this.throwArcPointCount = 0;
+      return;
+    }
+
+    for (let i = 0; i < count; i++) {
+      const pt = this.scratchArcPoints[i];
+      const base = i * 3;
+      this.throwArcPositions[base] = pt.x;
+      this.throwArcPositions[base + 1] = pt.y;
+      this.throwArcPositions[base + 2] = pt.z;
+    }
+    const lastPt = this.scratchArcPoints[count - 1];
+    for (let i = count; i < THROW_ARC_MAX_POINTS; i++) {
+      const base = i * 3;
+      this.throwArcPositions[base] = lastPt.x;
+      this.throwArcPositions[base + 1] = lastPt.y;
+      this.throwArcPositions[base + 2] = lastPt.z;
+    }
+
+    this.throwArcPosAttr.needsUpdate = true;
+    this.throwArcLineGeo.setDrawRange(0, count);
+    this.throwArcLineGeo.computeBoundingSphere();
+    this.throwArcLine.computeLineDistances();
+
+    // Place evenly spaced glowing 3D dash capsules along the trajectory
+    const dashInterval = Math.max(0.55, totalLen / THROW_ARC_DOT_COUNT);
+    let dotIdx = 0;
+    let nextDashDist = dashInterval * 0.5;
+    let accumDist = 0;
+
+    for (let i = 1; i < count && dotIdx < THROW_ARC_DOT_COUNT; i++) {
+      const a = this.scratchArcPoints[i - 1];
+      const b = this.scratchArcPoints[i];
+      this.tmpDir.subVectors(b, a);
+      const segLen = this.tmpDir.length();
+      if (segLen < 1e-5) continue;
+      this.tmpDir.divideScalar(segLen);
+      this.tmpQuat.setFromUnitVectors(this.upAxis, this.tmpDir);
+
+      while (nextDashDist <= accumDist + segLen && dotIdx < THROW_ARC_DOT_COUNT) {
+        const alpha = (nextDashDist - accumDist) / segLen;
+        const dot = this.throwArcDots[dotIdx++];
+        dot.position.lerpVectors(a, b, alpha);
+        dot.quaternion.copy(this.tmpQuat);
+        dot.scale.set(0.042, 0.24, 0.042);
+        dot.visible = true;
+        nextDashDist += dashInterval;
+      }
+      accumDist += segLen;
+    }
+
+    for (let i = dotIdx; i < THROW_ARC_DOT_COUNT; i++) {
+      this.throwArcDots[i].visible = false;
+    }
+
+    this.throwLandingRingGroup.position.set(lastPt.x, lastPt.y + 0.04, lastPt.z);
+    this.throwArcGroup.visible = true;
+    this.throwArcPointCount = count;
+  }
+
+  public isThrowArcVisible(): boolean {
+    return this.throwArcGroup.visible;
+  }
+
+  public getThrowArcPointCount(): number {
+    return this.throwArcPointCount;
   }
 
   public getActiveEffectCount(): number {
@@ -2077,6 +2817,9 @@ export class VFXManager {
     for (const s of this.splashHeals) if (s.active) count++;
     for (const s of this.slideDusts) if (s.active) count++;
     for (const s of this.eliminations) if (s.active) count++;
+    for (const s of this.grappleLines) if (s.active) count++;
+    for (const s of this.shieldBubbles) if (s.active) count++;
+    for (const s of this.vehicleBoosts) if (s.active) count++;
     return count;
   }
 
@@ -2113,6 +2856,24 @@ export class VFXManager {
   public getActiveShieldBreakCount(): number {
     let count = 0;
     for (const sb of this.shieldBreaks) if (sb.active) count++;
+    return count;
+  }
+
+  public getActiveGrappleLineCount(): number {
+    let count = 0;
+    for (const gl of this.grappleLines) if (gl.active) count++;
+    return count;
+  }
+
+  public getActiveShieldBubbleCount(): number {
+    let count = 0;
+    for (const sb of this.shieldBubbles) if (sb.active) count++;
+    return count;
+  }
+
+  public getActiveVehicleBoostCount(): number {
+    let count = 0;
+    for (const vb of this.vehicleBoosts) if (vb.active) count++;
     return count;
   }
 
@@ -2162,6 +2923,22 @@ export class VFXManager {
       wp.propId = '';
       wp.group.visible = false;
     }
+    for (const gl of this.grappleLines) {
+      gl.active = false;
+      gl.group.visible = false;
+    }
+    for (const sb of this.shieldBubbles) {
+      sb.active = false;
+      sb.id = '';
+      sb.group.visible = false;
+    }
+    for (const vb of this.vehicleBoosts) {
+      vb.active = false;
+      vb.group.visible = false;
+    }
+    this.throwArcGroup.visible = false;
+    this.throwArcPointCount = 0;
+    this.throwArcAge = 0;
   }
 
   public dispose(): void {

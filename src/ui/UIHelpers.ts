@@ -1,5 +1,19 @@
-import { RARITY_COLORS, WORLD_HALF, WORLD_SIZE } from '../core';
-import type { BiomeType, HUDState, Rarity, StormState } from '../types';
+import {
+  DEFAULT_KEYBINDS,
+  RARITY_COLORS,
+  WORLD_HALF,
+  WORLD_SIZE,
+} from '../core';
+import type {
+  BiomeType,
+  GameSettings,
+  HUDState,
+  KeybindMap,
+  Rarity,
+  StormState,
+  VehicleKind,
+  WeatherKind,
+} from '../types';
 
 export interface CompassTick {
   degree: number;
@@ -346,17 +360,154 @@ export function formatBiomeLabel(biome?: BiomeType): string {
   return BIOME_LABELS[biome] ?? String(biome).toUpperCase();
 }
 
+export interface KeybindActionDef {
+  key: keyof KeybindMap;
+  label: string;
+  group: 'BUILDING' | 'MOVEMENT & COMBAT' | 'TACTICAL';
+}
+
+export const KEYBIND_ACTION_DEFS: ReadonlyArray<KeybindActionDef> = [
+  { key: 'buildWall', label: 'BUILD WALL', group: 'BUILDING' },
+  { key: 'buildFloor', label: 'BUILD FLOOR', group: 'BUILDING' },
+  { key: 'buildRamp', label: 'BUILD RAMP', group: 'BUILDING' },
+  { key: 'buildRoof', label: 'BUILD ROOF', group: 'BUILDING' },
+  { key: 'edit', label: 'EDIT STRUCTURE', group: 'BUILDING' },
+  { key: 'repair', label: 'REPAIR BUILD', group: 'BUILDING' },
+  { key: 'interact', label: 'INTERACT / VEHICLE / VAULT', group: 'MOVEMENT & COMBAT' },
+  { key: 'crouchSlide', label: 'CROUCH / SLIDE', group: 'MOVEMENT & COMBAT' },
+  { key: 'map', label: 'TACTICAL MAP', group: 'TACTICAL' },
+  { key: 'emote', label: 'EMOTE WHEEL', group: 'TACTICAL' },
+];
+
+const KEY_CODE_ALIASES: Readonly<Record<string, string>> = {
+  Space: 'SPACE',
+  ShiftLeft: 'L-SHIFT',
+  ShiftRight: 'R-SHIFT',
+  ControlLeft: 'CTRL',
+  ControlRight: 'R-CTRL',
+  AltLeft: 'ALT',
+  AltRight: 'R-ALT',
+  Tab: 'TAB',
+  CapsLock: 'CAPS',
+  Escape: 'ESC',
+  Enter: 'ENTER',
+  Backspace: 'BKSP',
+  Backquote: '`',
+  Minus: '-',
+  Equal: '=',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  ArrowUp: 'UP',
+  ArrowDown: 'DOWN',
+  ArrowLeft: 'LEFT',
+  ArrowRight: 'RIGHT',
+  Mouse0: 'LMB',
+  Mouse1: 'MMB',
+  Mouse2: 'RMB',
+  Mouse3: 'MB4',
+  Mouse4: 'MB5',
+};
+
+/**
+ * Merges partial user keybinds with DEFAULT_KEYBINDS cleanly.
+ */
+export function resolveKeybinds(keybinds?: Partial<KeybindMap>): KeybindMap {
+  const merged: KeybindMap = { ...DEFAULT_KEYBINDS };
+  if (!keybinds) return merged;
+  for (const def of KEYBIND_ACTION_DEFS) {
+    const val = keybinds[def.key];
+    if (typeof val === 'string' && val.trim().length > 0) {
+      merged[def.key] = val.trim();
+    }
+  }
+  return merged;
+}
+
+/**
+ * Deep-clones GameSettings including nested keybinds.
+ */
+export function cloneSettings(settings: GameSettings): GameSettings {
+  return {
+    ...settings,
+    keybinds: resolveKeybinds(settings.keybinds),
+  };
+}
+
+/**
+ * Formats a KeyboardEvent.code (e.g., 'KeyZ', 'Digit4', 'ShiftLeft') into a crisp HUD keycap label.
+ */
+export function formatKeyCodeLabel(code: string): string {
+  const trimmed = (code ?? '').trim();
+  if (!trimmed) return '?';
+  if (KEY_CODE_ALIASES[trimmed]) {
+    return KEY_CODE_ALIASES[trimmed];
+  }
+  const keyMatch = /^Key([A-Z])$/i.exec(trimmed);
+  if (keyMatch) {
+    return keyMatch[1].toUpperCase();
+  }
+  const digitMatch = /^Digit([0-9])$/i.exec(trimmed);
+  if (digitMatch) {
+    return digitMatch[1];
+  }
+  const numpadMatch = /^Numpad([0-9])$/i.exec(trimmed);
+  if (numpadMatch) {
+    return `NUM${numpadMatch[1]}`;
+  }
+  return trimmed.toUpperCase();
+}
+
+const WEATHER_LABELS: Readonly<Record<WeatherKind, string>> = {
+  clear: 'CLEAR SKIES',
+  golden_hour: 'GOLDEN HOUR',
+  overcast: 'OVERCAST',
+  rain: 'HEAVY RAIN',
+  storm_front: 'STORM FRONT',
+};
+
+/**
+ * Maps WeatherKind enum values to concise uppercase HUD labels.
+ */
+export function formatWeatherLabel(weather?: WeatherKind): string {
+  if (!weather) return '';
+  return WEATHER_LABELS[weather] ?? String(weather).toUpperCase();
+}
+
+/**
+ * Maps VehicleKind enum values to display labels.
+ */
+export function formatVehicleKindLabel(kind: VehicleKind): string {
+  return kind === 'cyber_bike' ? 'CYBER BIKE' : 'HOVER ATV';
+}
+
+/**
+ * Normalizes vehicle boostCharge (either 0..1 fraction or 0..100 percent) into [0, 100].
+ */
+export function normalizeBoostChargePct(boostCharge: number): number {
+  if (!Number.isFinite(boostCharge) || boostCharge <= 0) return 0;
+  const pct = boostCharge <= 1.0001 ? boostCharge * 100 : boostCharge;
+  return Math.max(0, Math.min(100, pct));
+}
+
 /**
  * Computes active contextual action hints for repair/slide/zipline states.
  */
 export function getContextualHudHints(
   state: Pick<HUDState, 'canRepairBuild' | 'isSliding' | 'isZiplining'>,
+  keybinds?: Partial<KeybindMap>,
 ): ContextualHintItem[] {
+  const resolved = resolveKeybinds(keybinds);
   const hints: ContextualHintItem[] = [];
   if (state.canRepairBuild) {
     hints.push({
       id: 'repair',
-      key: 'F',
+      key: formatKeyCodeLabel(resolved.repair),
       label: 'REPAIR BUILD',
       tone: 'emerald',
     });

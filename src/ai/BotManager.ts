@@ -27,11 +27,17 @@ import {
 } from './BotBrain';
 import { pickBotLoadoutCosmetics } from './BotNames';
 import type {
+  BossEliminationRecord,
   BotEntity,
   BotRenderState,
   BotWorldContext,
+  BountyReward,
+  BountyTargetSummary,
   NamedBossSpec,
 } from './BotTypes';
+
+export const BOUNTY_DURATION_SEC = 90;
+export const BOUNTY_RESELECT_COOLDOWN_SEC = 12;
 
 export const BOSS_SPECS: readonly NamedBossSpec[] = [
   {
@@ -83,9 +89,20 @@ interface EliminationMeta {
   timestamp: number;
 }
 
+interface ActiveBounty {
+  targetId: string;
+  targetName: string;
+  startedAt: number;
+  expiresAt: number;
+  rewardLabel: string;
+  rewardShield: number;
+  rewardMats: number;
+  rewardXp: number;
+}
+
 /**
  * Coordinates spawning, updating, LOD throttling, storm ticking, damage handling,
- * and elimination lifecycle for all AI bots in a match.
+ * bounty hunts, boss tracking, and elimination lifecycle for all AI bots in a match.
  */
 export class BotManager {
   private ctx: BotWorldContext;
@@ -96,6 +113,17 @@ export class BotManager {
   private botMap = new Map<string, BotEntity>();
   private lastElapsed = 0;
   private killFeedSeq = 0;
+  private busTotalDuration = 20;
+  private activeBounty: ActiveBounty | null = null;
+  private lastBountyTargetId: string | null = null;
+  private nextAutoBountyAt = 0;
+  private hasHadBounty = false;
+  private pendingBountyRewards: BountyReward[] = [];
+  private lastBountyReward: BountyReward | null = null;
+  private playerEliminatedBossIds = new Set<string>();
+  private playerEliminatedBosses: BossEliminationRecord[] = [];
+  private pendingVaultKeyBosses: BossEliminationRecord[] = [];
+  private onBossEliminatedCallback: ((record: BossEliminationRecord) => void) | null = null;
   private unsubNoise: (() => void) | null = null;
 
   constructor(
@@ -129,11 +157,26 @@ export class BotManager {
     });
   }
 
+  private resetBountyAndBossState(): void {
+    this.activeBounty = null;
+    this.lastBountyTargetId = null;
+    this.nextAutoBountyAt = 0;
+    this.hasHadBounty = false;
+    this.pendingBountyRewards = [];
+    this.lastBountyReward = null;
+    this.playerEliminatedBossIds.clear();
+    this.playerEliminatedBosses = [];
+    this.pendingVaultKeyBosses = [];
+  }
+
   spawnBots(count: number, busTotalDuration: number): void {
     this.bots = [];
     this.botMap.clear();
     this.lastElapsed = 0;
     this.matchCounter += 1;
+    this.resetBountyAndBossState();
+    this.busTotalDuration = busTotalDuration;
+    this.nextAutoBountyAt = Math.max(0, busTotalDuration) + 4.0;
 
     const total = Math.max(0, Math.floor(count));
     if (total === 0) return;
@@ -297,6 +340,10 @@ export class BotManager {
         retreatTimer: 0,
         launchPadCooldown: 0,
         launchPadTargetId: null,
+        shieldBubbleCooldown: 0,
+        recentDamageTaken: 0,
+        recentDamageWindowStart: -999,
+        eliminatedByPlayer: false,
       };
 
       this.bots.push(bot);
@@ -466,6 +513,10 @@ export class BotManager {
         retreatTimer: 0,
         launchPadCooldown: 0,
         launchPadTargetId: null,
+        shieldBubbleCooldown: 0,
+        recentDamageTaken: 0,
+        recentDamageWindowStart: -999,
+        eliminatedByPlayer: false,
       };
 
       this.bots.push(boss);
@@ -494,6 +545,203 @@ export class BotManager {
         isFarLOD,
       );
     }
+    this.stepBountyLifecycle(playerPos, elapsed);
+  }
+
+  private stepBountyLifecycle(playerPos: Vec3Like, nowSec: number): void {
+    if (this.activeBounty) {
+      const target = this.botMap.get(this.activeBounty.targetId);
+      if (!target || !target.alive || target.state === 'eliminated') {
+        this.activeBounty = null;
+        this.nextAutoBountyAt = Math.max(
+          this.nextAutoBountyAt,
+          nowSec + BOUNTY_RESELECT_COOLDOWN_SEC,
+        );
+      } else if (nowSec >= this.activeBounty.expiresAt) {
+        this.expireActiveBounty(nowSec);
+      }
+    }
+
+    if (
+      !this.activeBounty &&
+      this.getAliveCount() > 0 &&
+      nowSec >= this.nextAutoBountyAt
+    ) {
+      const hasGroundedBot = this.bots.some(
+        (b) =>
+          b.alive &&
+          b.state !== 'eliminated' &&
+          b.state !== 'bus' &&
+          b.state !== 'skydiving' &&
+          b.state !== 'gliding',
+      );
+      if (this.hasHadBounty || (nowSec >= this.busTotalDuration + 4.0 && hasGroundedBot)) {
+        this.assignBounty(playerPos, nowSec);
+      }
+    }
+  }
+
+  private expireActiveBounty(nowSec: number): void {
+    if (!this.activeBounty) return;
+    const expired = this.activeBounty;
+    this.activeBounty = null;
+    this.nextAutoBountyAt = nowSec + BOUNTY_RESELECT_COOLDOWN_SEC;
+    this.ctx.eventBus.emit('ui:bounty', {
+      title: 'BOUNTY EXPIRED',
+      targetName: expired.targetName,
+      tone: 'expired',
+    });
+    this.ctx.eventBus.emit('sound:play', {
+      id: 'bounty_alert',
+    });
+  }
+
+  private buildBountySummary(
+    bot: BotEntity,
+    playerPos: Vec3Like,
+    nowSec: number,
+  ): BountyTargetSummary {
+    return {
+      targetName: bot.name,
+      distance: dist3D(playerPos, bot.position),
+      timeRemaining: Math.max(
+        0,
+        (this.activeBounty?.expiresAt ?? nowSec) - nowSec,
+      ),
+      rewardLabel: this.activeBounty?.rewardLabel ?? '+50 SHIELD • +75 MATS',
+    };
+  }
+
+  /**
+   * Assigns an active 90s Bounty Hunt target from living bots and emits `'ui:bounty'` (`start`)
+   * + `'bounty_alert'` SFX. If an unexpired living bounty is already active, returns it.
+   */
+  assignBounty(playerPos: Vec3Like, nowSec: number): BountyTargetSummary | null {
+    if (this.activeBounty) {
+      const existing = this.botMap.get(this.activeBounty.targetId);
+      if (!existing || !existing.alive || existing.state === 'eliminated') {
+        this.activeBounty = null;
+      } else if (nowSec >= this.activeBounty.expiresAt) {
+        this.expireActiveBounty(nowSec);
+      } else {
+        return this.buildBountySummary(existing, playerPos, nowSec);
+      }
+    }
+
+    const aliveBots = this.bots.filter(
+      (b) => b.alive && b.state !== 'eliminated',
+    );
+    if (aliveBots.length === 0) return null;
+
+    const hasNonBus = aliveBots.some((b) => b.state !== 'bus');
+    const hasOtherThanLast = aliveBots.some((b) => b.id !== this.lastBountyTargetId);
+    const hasNonBoss = aliveBots.some((b) => !b.isBoss);
+
+    let best: BotEntity = aliveBots[0];
+    let bestScore = -Infinity;
+    for (const bot of aliveBots) {
+      const d = dist3D(playerPos, bot.position);
+      let score = -Math.abs(d - 85);
+      if (hasNonBus && bot.state === 'bus') score -= 1000;
+      if (hasOtherThanLast && bot.id === this.lastBountyTargetId) score -= 500;
+      if (hasNonBoss && bot.isBoss) score -= 250;
+      if (score > bestScore) {
+        bestScore = score;
+        best = bot;
+      }
+    }
+
+    const rewardShield = best.isBoss ? 75 : 50;
+    const rewardMats = best.isBoss ? 150 : 75;
+    const rewardXp = best.isBoss ? 300 : 150;
+    const rewardLabel = `+${rewardShield} SHIELD • +${rewardMats} MATS`;
+
+    this.activeBounty = {
+      targetId: best.id,
+      targetName: best.name,
+      startedAt: nowSec,
+      expiresAt: nowSec + BOUNTY_DURATION_SEC,
+      rewardLabel,
+      rewardShield,
+      rewardMats,
+      rewardXp,
+    };
+    this.lastBountyTargetId = best.id;
+    this.hasHadBounty = true;
+
+    this.ctx.eventBus.emit('ui:bounty', {
+      title: 'BOUNTY HUNT',
+      targetName: best.name,
+      tone: 'start',
+    });
+    this.ctx.eventBus.emit('sound:play', {
+      id: 'bounty_alert',
+    });
+
+    return this.buildBountySummary(best, playerPos, nowSec);
+  }
+
+  /**
+   * Returns the current Bounty Hunt HUD summary (auto-expiring after 90s if elapsed),
+   * or `null` if no living bounty is active.
+   */
+  getBountyTarget(playerPos: Vec3Like, nowSec: number): BountyTargetSummary | null {
+    if (!this.activeBounty) return null;
+    const bot = this.botMap.get(this.activeBounty.targetId);
+    if (!bot || !bot.alive || bot.state === 'eliminated') {
+      this.activeBounty = null;
+      return null;
+    }
+    if (nowSec >= this.activeBounty.expiresAt) {
+      this.expireActiveBounty(nowSec);
+      return null;
+    }
+    return this.buildBountySummary(bot, playerPos, nowSec);
+  }
+
+  getActiveBountyBot(): BotEntity | null {
+    if (!this.activeBounty) return null;
+    const bot = this.botMap.get(this.activeBounty.targetId);
+    return bot && bot.alive && bot.state !== 'eliminated' ? bot : null;
+  }
+
+  consumeBountyRewards(): BountyReward[] {
+    if (this.pendingBountyRewards.length === 0) return [];
+    const copy = [...this.pendingBountyRewards];
+    this.pendingBountyRewards.length = 0;
+    return copy;
+  }
+
+  getLastBountyReward(): BountyReward | null {
+    return this.lastBountyReward;
+  }
+
+  /**
+   * Returns `true` if `botId` (or any Named Boss if `botId` is omitted) was a Named Boss
+   * eliminated directly by `'player'`, qualifying the player for a Vault Key.
+   */
+  wasBossEliminatedByPlayer(botId?: string): boolean {
+    if (botId !== undefined) {
+      return this.playerEliminatedBossIds.has(botId);
+    }
+    return this.playerEliminatedBossIds.size > 0;
+  }
+
+  consumePlayerEliminatedBosses(): BossEliminationRecord[] {
+    if (this.pendingVaultKeyBosses.length === 0) return [];
+    const copy = [...this.pendingVaultKeyBosses];
+    this.pendingVaultKeyBosses.length = 0;
+    return copy;
+  }
+
+  getPlayerEliminatedBosses(): BossEliminationRecord[] {
+    return [...this.playerEliminatedBosses];
+  }
+
+  setOnBossEliminatedByPlayer(
+    cb: ((record: BossEliminationRecord) => void) | null,
+  ): void {
+    this.onBossEliminatedCallback = cb;
   }
 
   /**
@@ -510,6 +758,9 @@ export class BotManager {
       return false;
     }
 
+    const prevHp = bot.hp;
+    const prevShield = bot.shield;
+
     if (damageEvent.shieldDamage > 0 || damageEvent.hpDamage > 0) {
       const shieldDmg = Math.min(bot.shield, Math.max(0, damageEvent.shieldDamage));
       const overflow = Math.max(0, damageEvent.shieldDamage - shieldDmg);
@@ -519,6 +770,18 @@ export class BotManager {
       const absorbed = Math.min(bot.shield, damageEvent.damage);
       bot.shield = Math.max(0, bot.shield - absorbed);
       bot.hp = Math.max(0, bot.hp - (damageEvent.damage - absorbed));
+    }
+
+    const totalAppliedDamage =
+      Math.max(0, prevShield - bot.shield) + Math.max(0, prevHp - bot.hp);
+    if (
+      bot.recentDamageWindowStart === undefined ||
+      nowSec - bot.recentDamageWindowStart > 3.0
+    ) {
+      bot.recentDamageWindowStart = nowSec;
+      bot.recentDamageTaken = totalAppliedDamage;
+    } else {
+      bot.recentDamageTaken = (bot.recentDamageTaken ?? 0) + totalAppliedDamage;
     }
 
     bot.lastDamageTime = nowSec;
@@ -590,8 +853,8 @@ export class BotManager {
     }
   }
 
-  private eliminateBot(bot: BotEntity, meta: EliminationMeta): void {
-    if (!bot.alive) return;
+  private eliminateBot(bot: BotEntity, meta: EliminationMeta): BountyReward | null {
+    if (!bot.alive) return null;
     bot.alive = false;
     bot.hp = 0;
     bot.state = 'eliminated';
@@ -602,6 +865,9 @@ export class BotManager {
     bot.gliderOpen = false;
     bot.gliderFactor = 0;
 
+    const killedByPlayer = !meta.isStorm && meta.killerId === 'player';
+    bot.eliminatedByPlayer = killedByPlayer;
+
     if (!meta.isStorm && meta.killerId && meta.killerId !== bot.id) {
       const killerBot = this.botMap.get(meta.killerId);
       if (killerBot) {
@@ -611,6 +877,62 @@ export class BotManager {
 
     if (bot.isBoss) {
       this.ensureBossEliminationDrops(bot);
+      if (killedByPlayer) {
+        this.playerEliminatedBossIds.add(bot.id);
+        const record: BossEliminationRecord = {
+          bossId: bot.id,
+          bossName: bot.name,
+          poiId: bot.bossPoiId ?? '',
+          position: { ...bot.position },
+          timestamp: meta.timestamp,
+        };
+        this.playerEliminatedBosses.push(record);
+        this.pendingVaultKeyBosses.push(record);
+        this.onBossEliminatedCallback?.(record);
+      }
+    }
+
+    let bountyReward: BountyReward | null = null;
+    if (this.activeBounty && this.activeBounty.targetId === bot.id) {
+      if (meta.timestamp >= this.activeBounty.expiresAt) {
+        this.expireActiveBounty(meta.timestamp);
+      } else {
+        const active = this.activeBounty;
+        this.activeBounty = null;
+        this.nextAutoBountyAt = meta.timestamp + BOUNTY_RESELECT_COOLDOWN_SEC;
+
+        if (killedByPlayer) {
+          bountyReward = {
+            targetId: bot.id,
+            targetName: bot.name,
+            shield: active.rewardShield,
+            materials: active.rewardMats,
+            xp: active.rewardXp,
+            rewardLabel: active.rewardLabel,
+            timestamp: meta.timestamp,
+          };
+          this.pendingBountyRewards.push(bountyReward);
+          this.lastBountyReward = bountyReward;
+
+          this.ctx.eventBus.emit('ui:bounty', {
+            title: `BOUNTY COMPLETE • ${active.rewardLabel}`,
+            targetName: bot.name,
+            tone: 'complete',
+          });
+          this.ctx.eventBus.emit('sound:play', {
+            id: 'bounty_alert',
+          });
+        } else {
+          this.ctx.eventBus.emit('ui:bounty', {
+            title: 'BOUNTY POACHED',
+            targetName: bot.name,
+            tone: 'expired',
+          });
+          this.ctx.eventBus.emit('sound:play', {
+            id: 'bounty_alert',
+          });
+        }
+      }
     }
 
     this.ctx.dropBotLoot(bot);
@@ -637,6 +959,7 @@ export class BotManager {
         meta.killerId === 'player' || bot.id === 'player',
     };
     this.ctx.eventBus.emit('combat:killfeed', entry);
+    return bountyReward;
   }
 
   private ensureBossEliminationDrops(bot: BotEntity): void {
@@ -766,6 +1089,7 @@ export class BotManager {
     this.bots = [];
     this.botMap.clear();
     this.lastElapsed = 0;
+    this.resetBountyAndBossState();
   }
 
   dispose(): void {

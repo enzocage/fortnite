@@ -746,6 +746,149 @@ function buildMedkit(): THREE.Group {
   return group;
 }
 
+function buildGrappler(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_grappler';
+
+  const darkGrip = makeStandardMat('#1e293b', 0.48, 0.35);
+  const gunmetal = makeStandardMat('#475569', 0.32, 0.7);
+  const steelProng = makeStandardMat('#cbd5e1', 0.22, 0.85);
+  const cyanSpool = makeStandardMat('#06b6d4', 0.16, 0.2, '#22d3ee', 0.82);
+  const cyanGauge = makeStandardMat('#38bdf8', 0.14, 0.15, '#38bdf8', 0.95);
+  const goldAccent = makeStandardMat('#fbbf24', 0.26, 0.72, '#f59e0b', 0.2);
+
+  // Pistol grip & flared pommel base (origin at hand grip 0, 0, 0)
+  addBox(group, 0.04, 0.118, 0.05, darkGrip, 0, -0.024, -0.01, 0.24, 0, 0);
+  addBox(group, 0.046, 0.02, 0.058, goldAccent, 0, -0.082, -0.025, 0.24, 0, 0);
+  addBox(group, 0.016, 0.034, 0.056, darkGrip, 0, 0.024, 0.052);
+
+  // Heavy pneumatic launcher receiver & upper shroud
+  addBox(group, 0.056, 0.068, 0.25, gunmetal, 0, 0.072, 0.07);
+  addBox(group, 0.048, 0.034, 0.24, darkGrip, 0, 0.112, 0.075);
+
+  // Rear compressed-air booster canister + brass pressure cap
+  addCylinder(group, 0.028, 0.028, 0.13, gunmetal, 0, 0.078, -0.085, Math.PI / 2, 0, 0, 12);
+  addCylinder(group, 0.022, 0.026, 0.024, goldAccent, 0, 0.078, -0.156, Math.PI / 2, 0, 0, 10);
+
+  // Side & top glowing cyan charge gauge strips
+  addBox(group, 0.062, 0.02, 0.12, cyanGauge, 0, 0.078, 0.06);
+  addBox(group, 0.022, 0.014, 0.14, cyanGauge, 0, 0.132, 0.065);
+  addBox(group, 0.016, 0.018, 0.014, goldAccent, 0, 0.136, 0.175);
+
+  // Coiled cyan energy spool drum + side flanges + glowing energy coils
+  const spoolZ = 0.22;
+  const spoolY = 0.052;
+  addCylinder(group, 0.016, 0.016, 0.13, steelProng, 0, spoolY, spoolZ, 0, 0, Math.PI / 2, 10);
+  addCylinder(group, 0.058, 0.058, 0.014, gunmetal, 0.056, spoolY, spoolZ, 0, 0, Math.PI / 2, 12);
+  addCylinder(group, 0.058, 0.058, 0.014, gunmetal, -0.056, spoolY, spoolZ, 0, 0, Math.PI / 2, 12);
+  addCylinder(group, 0.038, 0.038, 0.092, cyanSpool, 0, spoolY, spoolZ, 0, 0, Math.PI / 2, 12);
+  for (let c = -1.5; c <= 1.5; c += 1) {
+    addMesh(
+      group,
+      new THREE.TorusGeometry(0.044, 0.009, 8, 16),
+      cyanGauge,
+      c * 0.024,
+      spoolY,
+      spoolZ,
+      0,
+      Math.PI / 2,
+      0,
+    );
+  }
+
+  // Forward launcher collar + twin steel grapple prongs + central energy dart
+  addCylinder(group, 0.034, 0.036, 0.055, goldAccent, 0, 0.082, 0.25, Math.PI / 2, 0, 0, 10);
+  addCylinder(group, 0.015, 0.018, 0.16, cyanSpool, 0, 0.082, 0.34, Math.PI / 2, 0, 0, 10);
+  addMesh(
+    group,
+    new THREE.ConeGeometry(0.022, 0.07, 8),
+    steelProng,
+    0,
+    0.082,
+    0.435,
+    Math.PI / 2,
+    0,
+    0,
+  );
+
+  for (const side of [1, -1]) {
+    addBox(group, 0.016, 0.022, 0.17, steelProng, side * 0.042, 0.082, 0.34, 0, side * 0.08, 0);
+    addBox(group, 0.014, 0.018, 0.055, steelProng, side * 0.062, 0.082, 0.425, 0, side * -0.58, 0);
+    addBox(group, 0.012, 0.018, 0.045, goldAccent, side * 0.034, 0.082, 0.27);
+  }
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.082, 0.45);
+  return group;
+}
+
+function buildShieldBubble(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_shield_bubble';
+
+  const coreBlue = makeStandardMat('#38bdf8', 0.12, 0.15, '#0ea5e9', 0.95);
+  const hexShell = new THREE.MeshStandardMaterial({
+    color: '#0284c7',
+    emissive: '#38bdf8',
+    emissiveIntensity: 0.65,
+    roughness: 0.18,
+    metalness: 0.22,
+    flatShading: true,
+    transparent: true,
+    opacity: 0.88,
+  });
+  const titanium = makeStandardMat('#cbd5e1', 0.26, 0.8);
+  const darkAlloy = makeStandardMat('#1e293b', 0.4, 0.65);
+
+  // Hexagonal base pedestal + grip collar
+  addCylinder(group, 0.056, 0.064, 0.026, darkAlloy, 0, -0.008, 0.02, 0, 0, 0, 6);
+  addCylinder(group, 0.048, 0.054, 0.018, titanium, 0, 0.012, 0.02, 0, 0, 0, 6);
+
+  // Glowing blue hexagonal shield core + faceted crystal lattice + containment bezels
+  addMesh(group, new THREE.SphereGeometry(0.046, 12, 10), coreBlue, 0, 0.072, 0.02);
+  addMesh(group, new THREE.IcosahedronGeometry(0.066, 0), hexShell, 0, 0.072, 0.02);
+  addCylinder(group, 0.054, 0.054, 0.082, coreBlue, 0, 0.072, 0.02, 0, 0, 0, 6);
+  addMesh(
+    group,
+    new THREE.TorusGeometry(0.076, 0.008, 6, 6),
+    titanium,
+    0,
+    0.072,
+    0.02,
+    Math.PI / 2,
+    0,
+    0,
+  );
+  addMesh(
+    group,
+    new THREE.TorusGeometry(0.074, 0.007, 6, 6),
+    darkAlloy,
+    0,
+    0.072,
+    0.02,
+    0.45,
+    Math.PI / 4,
+    0,
+  );
+
+  // 4 radial metallic emitter fins with inner glowing blue energy strips
+  for (let i = 0; i < 4; i++) {
+    const angle = (i * Math.PI) / 2 + Math.PI / 4;
+    const finGroup = new THREE.Group();
+    finGroup.position.set(0, 0.072, 0.02);
+    finGroup.rotation.y = angle;
+    addBox(finGroup, 0.014, 0.115, 0.036, titanium, 0, 0.005, 0.078, -0.18, 0, 0);
+    addBox(finGroup, 0.01, 0.09, 0.012, coreBlue, 0, 0.005, 0.062, -0.18, 0, 0);
+    group.add(finGroup);
+  }
+
+  // Top hexagonal cap & emitter beacon tip
+  addCylinder(group, 0.038, 0.052, 0.024, darkAlloy, 0, 0.138, 0.02, 0, 0, 0, 6);
+  addCylinder(group, 0.02, 0.026, 0.022, coreBlue, 0, 0.158, 0.02, 0, 0, 0, 6);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.24);
+  return group;
+}
+
 function buildSlurpJuice(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_slurp_juice';
@@ -796,17 +939,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildFragGrenade();
     case 'chug_splash':
       return buildChugSplash();
-    case 'grappler': {
-      const g = buildPistol();
-      g.name = 'weapon_grappler_stub';
-      return g;
-    }
-    case 'shield_bubble': {
-      const sb = buildSlurpJuice();
-      sb.name = 'weapon_shield_bubble_stub';
-      sb.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.28);
-      return sb;
-    }
+    case 'grappler':
+      return buildGrappler();
+    case 'shield_bubble':
+      return buildShieldBubble();
     case 'mini_shield':
       return buildMiniShield();
     case 'shield_potion':

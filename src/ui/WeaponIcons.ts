@@ -1,4 +1,11 @@
-import type { AmmoType, BuildPieceType, MaterialType, WeaponId } from '../types';
+import type {
+  AmmoType,
+  BuildPieceType,
+  MaterialType,
+  VehicleKind,
+  WeaponId,
+  WeatherKind,
+} from '../types';
 
 const WEAPON_SVGS: Record<WeaponId, string> = {
   pickaxe: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
@@ -177,8 +184,25 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <path d="M26 36H38M32 30V42" stroke="#e0f2fe" stroke-width="2.8" stroke-linecap="round"/>
   </svg>`,
 
-  grappler: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="12" y="28" width="38" height="12" rx="3" fill="#22d3ee" stroke="#0f172a" stroke-width="2"/></svg>`,
-  shield_bubble: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="32" r="18" fill="#38bdf8" stroke="#0f172a" stroke-width="2"/></svg>`,
+  grappler: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M12 31H35L38 38H25L20 52H13L17 38H12V31Z" fill="#f8fafc" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="17" y="25" width="22" height="7" rx="2" fill="#0284c7" stroke="#0f172a" stroke-width="1.8"/>
+    <circle cx="29" cy="34" r="7.5" fill="#0f172a" stroke="#22d3ee" stroke-width="2.2"/>
+    <circle cx="29" cy="34" r="3" fill="#ffd000"/>
+    <rect x="38" y="27" width="10" height="3.5" rx="1" fill="#22d3ee" stroke="#0f172a" stroke-width="1.4"/>
+    <path d="M47 28.8L57 22L53 28.8L57 35.6L47 28.8Z" fill="#ffd000" stroke="#0f172a" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M46 23L51 17M46 34.5L51 40.5" stroke="#e2e8f0" stroke-width="2.4" stroke-linecap="round"/>
+  </svg>`,
+
+  shield_bubble: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <circle cx="32" cy="30" r="21" fill="rgba(56,189,248,0.28)" stroke="#22d3ee" stroke-width="2.4"/>
+    <path d="M32 10L47 19V39L32 49L17 39V19L32 10Z" fill="rgba(14,165,233,0.32)" stroke="#bae6fd" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M16 25C22 21 42 21 48 25M16 35C22 39 42 39 48 35" stroke="#38bdf8" stroke-width="1.6" stroke-linecap="round"/>
+    <path d="M32 19L40 23V31C40 36.2 36.6 40 32 42C27.4 40 24 36.2 24 31V23L32 19Z" fill="#0ea5e9" stroke="#e0f2fe" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="21" y="47" width="22" height="8" rx="2.5" fill="#334155" stroke="#0f172a" stroke-width="2"/>
+    <rect x="26" y="49" width="12" height="3.5" rx="1" fill="#22d3ee"/>
+    <path d="M21 18C18 21 16.5 25 16.5 28" stroke="#e0f2fe" stroke-width="2.2" stroke-linecap="round"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {
@@ -273,4 +297,84 @@ export function getCrownSvg(): string {
     <circle cx="58" cy="19" r="3" fill="#fef08a"/>
     <circle cx="32" cy="37" r="4" fill="#38bdf8" stroke="#0f172a" stroke-width="1.5"/>
   </svg>`;
+}
+
+export function getVaultKeySvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <circle cx="22" cy="32" r="13" fill="#ffd000" stroke="#78350f" stroke-width="2.6"/>
+    <circle cx="22" cy="32" r="5" fill="#0f172a"/>
+    <path d="M34 28H56V36H50V43H44V36H34V28Z" fill="#ffd000" stroke="#78350f" stroke-width="2.4" stroke-linejoin="round"/>
+    <circle cx="22" cy="32" r="9" stroke="#fef9c3" stroke-width="1.4" stroke-dasharray="4 3"/>
+  </svg>`;
+}
+
+export function getBountyTargetSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <circle cx="32" cy="32" r="21" stroke="#ffd000" stroke-width="3.2"/>
+    <circle cx="32" cy="32" r="11" stroke="#ef4444" stroke-width="3"/>
+    <circle cx="32" cy="32" r="4" fill="#ffd000"/>
+    <path d="M32 6V16M32 48V58M6 32H16M48 32H58" stroke="#ffd000" stroke-width="3.4" stroke-linecap="round"/>
+  </svg>`;
+}
+
+export function getVehicleIconSvg(kind: VehicleKind): string {
+  if (kind === 'cyber_bike') {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+      <circle cx="17" cy="41" r="9" fill="#0f172a" stroke="#22d3ee" stroke-width="3"/>
+      <circle cx="48" cy="41" r="9" fill="#0f172a" stroke="#22d3ee" stroke-width="3"/>
+      <path d="M16 40L28 24H42L50 38H34L27 40H16Z" fill="#38bdf8" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M37 24L45 19" stroke="#ffd000" stroke-width="3" stroke-linecap="round"/>
+    </svg>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <rect x="11" y="24" width="42" height="14" rx="4" fill="#34eb5e" stroke="#0f172a" stroke-width="2.2"/>
+    <path d="M21 24L27 16H40L45 24" fill="#22d3ee" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="19" cy="43" r="7" fill="#0f172a" stroke="#ffd000" stroke-width="2.8"/>
+    <circle cx="45" cy="43" r="7" fill="#0f172a" stroke="#ffd000" stroke-width="2.8"/>
+  </svg>`;
+}
+
+export function getVaultLockSvg(unlocked = false): string {
+  if (unlocked) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+      <path d="M21 13V9C21 6.2 18.8 4 16 4C13.6 4 11.6 5.6 11.1 7.8" stroke="#fde047" stroke-width="2.6" stroke-linecap="round"/>
+      <rect x="7" y="13" width="18" height="15" rx="3" fill="#34eb5e" stroke="#0f172a" stroke-width="2"/>
+      <circle cx="16" cy="20" r="2.5" fill="#0f172a"/>
+    </svg>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M11 13V9C11 6.2 13.2 4 16 4C18.8 4 21 6.2 21 9V13" stroke="#fde047" stroke-width="2.6" stroke-linecap="round"/>
+    <rect x="7" y="13" width="18" height="15" rx="3" fill="#ffd000" stroke="#78350f" stroke-width="2"/>
+    <circle cx="16" cy="20" r="2.5" fill="#0f172a"/>
+  </svg>`;
+}
+
+export function getWeatherIconSvg(weather: WeatherKind): string {
+  switch (weather) {
+    case 'golden_hour':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="18" r="7" fill="#fbbf24" stroke="#f97316" stroke-width="1.8"/>
+        <path d="M4 23H28M16 5V8M7 10L9 12M25 10L23 12" stroke="#fde047" stroke-width="2" stroke-linecap="round"/>
+      </svg>`;
+    case 'overcast':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M8 23H23C25.8 23 28 20.8 28 18C28 15.4 26 13.3 23.4 13C22.4 9.5 19.2 7 15.4 7C11 7 7.4 10.5 7.3 14.9C5.4 15.6 4 17.4 4 19.5C4 21.4 5.8 23 8 23Z" fill="#cbd5e1" stroke="#334155" stroke-width="1.8"/>
+      </svg>`;
+    case 'rain':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M8 19H23C25.5 19 27.5 17 27.5 14.5C27.5 12.2 25.8 10.3 23.5 10C22.6 7 19.8 5 16.5 5C12.5 5 9.2 8.1 9 12C7 12.5 5.5 14.2 5.5 16.3C5.5 17.8 6.6 19 8 19Z" fill="#94a3b8"/>
+        <path d="M10 22L8 27M16 22L14 27M22 22L20 27" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>`;
+    case 'storm_front':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M8 18H23C25.5 18 27.5 16 27.5 13.5C27.5 11.2 25.8 9.3 23.5 9C22.6 6 19.8 4 16.5 4C12.5 4 9.2 7.1 9 11C7 11.5 5.5 13.2 5.5 15.3C5.5 16.8 6.6 18 8 18Z" fill="#7e22ce" stroke="#e9d5ff" stroke-width="1.4"/>
+        <path d="M17 18L13 24H17L14 29L21 22H17L19 18H17Z" fill="#ffd000"/>
+      </svg>`;
+    case 'clear':
+    default:
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="6.5" fill="#ffd000" stroke="#fef08a" stroke-width="1.6"/>
+        <path d="M16 4V7M16 25V28M4 16H7M25 16H28M7.5 7.5L9.7 9.7M22.3 22.3L24.5 24.5M24.5 7.5L22.3 9.7M9.7 22.3L7.5 24.5" stroke="#ffd000" stroke-width="2" stroke-linecap="round"/>
+      </svg>`;
+  }
 }

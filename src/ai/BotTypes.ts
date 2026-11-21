@@ -17,6 +17,7 @@ import type {
   StormState,
   TerrainQuery,
   Vec3Like,
+  VehicleEntity,
   WallDir,
   WeaponId,
 } from '../types';
@@ -41,6 +42,38 @@ export interface BotCombatTarget {
   isPlayer?: boolean;
   radius?: number;
   height?: number;
+  velocity?: Vec3Like;
+  inVehicle?: boolean;
+}
+
+export interface ShieldBubbleZone {
+  position: Vec3Like;
+  radius: number;
+}
+
+export interface BountyTargetSummary {
+  targetName: string;
+  distance: number;
+  timeRemaining: number;
+  rewardLabel: string;
+}
+
+export interface BountyReward {
+  targetId: string;
+  targetName: string;
+  shield: number;
+  materials: number;
+  xp: number;
+  rewardLabel: string;
+  timestamp: number;
+}
+
+export interface BossEliminationRecord {
+  bossId: string;
+  bossName: string;
+  poiId: string;
+  position: Vec3Like;
+  timestamp: number;
 }
 
 export interface BotRenderState extends CharacterRenderState {
@@ -166,7 +199,7 @@ export interface BotEntity {
   /** Deterministic PRNG state for per-bot variation */
   rngState: number;
 
-  // Boss & Wave 1 tactical/traversal state
+  // Boss & Wave 1/2 tactical/traversal state
   isBoss?: boolean;
   bossPoiId?: string;
   bossHomePos?: Vec3Like;
@@ -175,6 +208,10 @@ export interface BotEntity {
   launchPadCooldown?: number;
   launchPadTargetId?: string | null;
   lastBuildTime?: number;
+  shieldBubbleCooldown?: number;
+  recentDamageTaken?: number;
+  recentDamageWindowStart?: number;
+  eliminatedByPlayer?: boolean;
 }
 
 export interface BotWorldContext {
@@ -234,6 +271,8 @@ export interface BotWorldContext {
   getCombatTargets(): BotCombatTarget[];
   getLaunchPads?: () => LaunchPadEntity[];
   getBuildPieces?: () => BuildPiece[];
+  getActiveShieldBubbles?: () => Array<{ position: Vec3Like; radius: number }>;
+  getVehicles?: () => VehicleEntity[];
   dropBotLoot(bot: BotEntity): void;
   eventBus: EventBus;
 }

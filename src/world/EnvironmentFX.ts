@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { ISLAND_RADIUS, WATER_LEVEL, mulberry32 } from '../core';
-import type { Vec3Like } from '../types';
+import { EventBus, ISLAND_RADIUS, WATER_LEVEL, clamp, lerp, mulberry32, smoothstep } from '../core';
+import type { Vec3Like, WeatherKind, WeatherState } from '../types';
 
 interface CloudEntry {
   group: THREE.Group;
@@ -22,13 +22,96 @@ interface AmbientParticle {
   offsetZ: number;
 }
 
+interface RainDrop {
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  speedScale: number;
+  streakLen: number;
+}
+
+interface WeatherProfile {
+  intensity: number;
+  sunElevation: number;
+  windX: number;
+  windZ: number;
+  warmth: number;
+  overcast: number;
+  rain: number;
+}
+
+const WEATHER_ORDER: readonly WeatherKind[] = [
+  'clear',
+  'golden_hour',
+  'overcast',
+  'rain',
+  'storm_front',
+];
+
+const WEATHER_PROFILES: Record<WeatherKind, WeatherProfile> = {
+  clear: {
+    intensity: 0.0,
+    sunElevation: 0.56,
+    windX: 1.8,
+    windZ: 0.4,
+    warmth: 0.0,
+    overcast: 0.0,
+    rain: 0.0,
+  },
+  golden_hour: {
+    intensity: 0.25,
+    sunElevation: 0.22,
+    windX: 2.4,
+    windZ: 0.8,
+    warmth: 1.0,
+    overcast: 0.12,
+    rain: 0.0,
+  },
+  overcast: {
+    intensity: 0.48,
+    sunElevation: 0.36,
+    windX: 4.6,
+    windZ: 1.6,
+    warmth: 0.06,
+    overcast: 0.85,
+    rain: 0.0,
+  },
+  rain: {
+    intensity: 0.74,
+    sunElevation: 0.28,
+    windX: 6.8,
+    windZ: 2.6,
+    warmth: 0.0,
+    overcast: 0.92,
+    rain: 0.78,
+  },
+  storm_front: {
+    intensity: 1.0,
+    sunElevation: 0.18,
+    windX: 10.5,
+    windZ: 4.2,
+    warmth: 0.0,
+    overcast: 1.0,
+    rain: 1.0,
+  },
+};
+
+const WEATHER_STAGE_SEC = 60;
+const WEATHER_BLEND_SEC = 12;
+
 export class EnvironmentFX {
   private group = new THREE.Group();
+  private eventBus?: EventBus;
+  private weatherRand: () => number;
+
   private skyMesh: THREE.Mesh;
   private skyMat: THREE.ShaderMaterial;
   private oceanMesh: THREE.Mesh;
   private oceanMat: THREE.ShaderMaterial;
   private clouds: CloudEntry[] = [];
+  private cloudTopMat!: THREE.MeshStandardMaterial;
+  private cloudMidMat!: THREE.MeshStandardMaterial;
+  private cloudUnderMat!: THREE.MeshStandardMaterial;
   private distantIslands: DistantIsland[] = [];
   private busGroup: THREE.Group;
   private thrusterFlames: THREE.Mesh[] = [];
@@ -38,15 +121,37 @@ export class EnvironmentFX {
   private ambientGeo: THREE.BufferGeometry;
   private ambientMat: THREE.PointsMaterial;
   private ambientParticles: AmbientParticle[] = [];
+
+  private rainLines: THREE.LineSegments;
+  private rainGeo: THREE.BufferGeometry;
+  private rainMat: THREE.LineBasicMaterial;
+  private rainDrops: RainDrop[] = [];
+
   private sunDir = new THREE.Vector3(0.55, 0.52, -0.65).normalize();
+
+  private weatherState: WeatherState = {
+    kind: 'clear',
+    intensity: 0,
+    sunElevation: 0.56,
+    windX: 1.8,
+    windZ: 0.4,
+  };
+  private manualWeather: WeatherKind | null = null;
+  private currentWarmth = 0;
+  private currentOvercast = 0;
+  private currentRainStrength = 0;
+  private lightningIntensity = 0;
+  private lightningCooldown = 2.0;
 
   private geometries: THREE.BufferGeometry[] = [];
   private materials: THREE.Material[] = [];
 
-  constructor(seed = 4201) {
+  constructor(seed = 4201, eventBus?: EventBus) {
     this.group.name = 'EnvironmentFX';
+    this.eventBus = eventBus;
+    this.weatherRand = mulberry32(seed + 8881);
 
-    // 1. Stylized Gradient Sky Dome + Sun Disc with dynamic Time-of-Day uniforms
+    // 1. Stylized Gradient Sky Dome + Sun Disc with dynamic Weather & Time-of-Day uniforms
     const skyGeo = new THREE.SphereGeometry(1400, 32, 20);
     this.geometries.push(skyGeo);
     this.skyMat = new THREE.ShaderMaterial({
@@ -56,6 +161,9 @@ export class EnvironmentFX {
         uTime: { value: 0 },
         uDayPhase: { value: 0 },
         uSunDir: { value: this.sunDir.clone() },
+        uWarmth: { value: 0 },
+        uOvercast: { value: 0 },
+        uLightning: { value: 0 },
       },
       vertexShader: `
         varying vec3 vWorldDir;
@@ -68,23 +176,33 @@ export class EnvironmentFX {
       fragmentShader: `
         uniform vec3 uSunDir;
         uniform float uDayPhase;
+        uniform float uWarmth;
+        uniform float uOvercast;
+        uniform float uLightning;
         varying vec3 vWorldDir;
         void main() {
           vec3 dir = normalize(vWorldDir);
           float h = clamp(dir.y, -0.2, 1.0);
+
           vec3 zenithDay = vec3(0.08, 0.42, 0.88);
-          vec3 zenithGold = vec3(0.14, 0.34, 0.72);
-          vec3 zenith = mix(zenithDay, zenithGold, uDayPhase);
+          vec3 zenithGold = vec3(0.20, 0.24, 0.58);
+          vec3 zenithStorm = vec3(0.13, 0.17, 0.26);
+          vec3 zenith = mix(zenithDay, zenithGold, clamp(max(uDayPhase * 0.7, uWarmth), 0.0, 1.0));
+          zenith = mix(zenith, zenithStorm, uOvercast);
 
           vec3 midDay = vec3(0.28, 0.72, 0.98);
-          vec3 midGold = vec3(0.45, 0.64, 0.92);
-          vec3 midSky = mix(midDay, midGold, uDayPhase);
+          vec3 midGold = vec3(0.68, 0.52, 0.76);
+          vec3 midStorm = vec3(0.25, 0.31, 0.41);
+          vec3 midSky = mix(midDay, midGold, clamp(max(uDayPhase * 0.75, uWarmth), 0.0, 1.0));
+          midSky = mix(midSky, midStorm, uOvercast);
 
           vec3 horDay = vec3(0.76, 0.93, 1.0);
-          vec3 horGold = vec3(0.98, 0.82, 0.66);
-          vec3 horizon = mix(horDay, horGold, uDayPhase);
+          vec3 horGold = vec3(1.0, 0.70, 0.42);
+          vec3 horStorm = vec3(0.41, 0.48, 0.56);
+          vec3 horizon = mix(horDay, horGold, clamp(max(uDayPhase * 0.8, uWarmth), 0.0, 1.0));
+          horizon = mix(horizon, horStorm, uOvercast);
 
-          vec3 below = vec3(0.10, 0.36, 0.62);
+          vec3 below = mix(vec3(0.10, 0.36, 0.62), vec3(0.14, 0.20, 0.28), uOvercast);
 
           vec3 col = mix(horizon, midSky, smoothstep(0.0, 0.35, h));
           col = mix(col, zenith, smoothstep(0.28, 0.95, h));
@@ -92,11 +210,16 @@ export class EnvironmentFX {
             col = mix(horizon, below, smoothstep(0.0, -0.2, h));
           }
 
+          float sunVis = 1.0 - uOvercast * 0.88;
           float sunDot = max(dot(dir, normalize(uSunDir)), 0.0);
           float horizonBand = 1.0 - smoothstep(-0.08, 0.44, abs(h));
-          col += vec3(1.0, 0.78, 0.46) * pow(sunDot, 4.0) * horizonBand * (0.28 + uDayPhase * 0.34);
-          col += vec3(1.0, 0.88, 0.58) * pow(sunDot, 12.0) * (0.36 + uDayPhase * 0.22);
-          col += vec3(1.0, 0.98, 0.88) * smoothstep(0.9965, 0.9992, sunDot) * 1.15;
+          float warmBoost = max(uDayPhase * 0.34, uWarmth * 0.58);
+          col += vec3(1.0, 0.74, 0.40) * pow(sunDot, 4.0) * horizonBand * (0.26 + warmBoost) * sunVis;
+          col += vec3(1.0, 0.86, 0.54) * pow(sunDot, 12.0) * (0.36 + warmBoost * 0.5) * sunVis;
+          col += vec3(1.0, 0.98, 0.88) * smoothstep(0.9965, 0.9992, sunDot) * 1.15 * sunVis;
+
+          // Lightning flash sheet glow across storm clouds & zenith
+          col += vec3(0.76, 0.86, 1.0) * uLightning * (0.35 + 0.65 * smoothstep(0.0, 0.65, h));
 
           gl_FragColor = vec4(col, 1.0);
         }
@@ -107,7 +230,7 @@ export class EnvironmentFX {
     this.skyMesh.name = 'SkyDome';
     this.group.add(this.skyMesh);
 
-    // 2. Animated Shimmering Turquoise Ocean Plane (Fresnel reflection + dual-layer caustics + shore/river foam)
+    // 2. Animated Shimmering Turquoise Ocean Plane (Fresnel reflection + caustics + weather tint)
     const oceanGeo = new THREE.CircleGeometry(2200, 96);
     oceanGeo.rotateX(-Math.PI * 0.5);
     this.geometries.push(oceanGeo);
@@ -120,6 +243,8 @@ export class EnvironmentFX {
         uIslandRadius: { value: ISLAND_RADIUS },
         uSunDir: { value: this.sunDir.clone() },
         uDayPhase: { value: 0 },
+        uOvercast: { value: 0 },
+        uLightning: { value: 0 },
       },
       vertexShader: `
         uniform float uTime;
@@ -138,6 +263,8 @@ export class EnvironmentFX {
         uniform float uIslandRadius;
         uniform vec3 uSunDir;
         uniform float uDayPhase;
+        uniform float uOvercast;
+        uniform float uLightning;
         varying vec3 vWorldPos;
 
         float segDist2D(vec2 p, vec2 a, vec2 b) {
@@ -152,7 +279,6 @@ export class EnvironmentFX {
           float r = length(xz);
           float shallowMix = 1.0 - smoothstep(uIslandRadius - 25.0, uIslandRadius + 95.0, r);
 
-          // Crystal Basin & interior River Gorge distance & masks
           float basinDist = length(xz - vec2(25.0, -115.0));
           float basinMix = 1.0 - smoothstep(42.0, 68.0, basinDist);
 
@@ -169,18 +295,16 @@ export class EnvironmentFX {
           float insideIsland = 1.0 - smoothstep(uIslandRadius - 20.0, uIslandRadius + 10.0, r);
           float coastal = clamp(max(max(shallowMix, basinMix), max(insideIsland, riverMask)), 0.0, 1.0);
 
-          vec3 deepBlue = vec3(0.04, 0.30, 0.64);
-          vec3 turquoise = vec3(0.10, 0.76, 0.86);
+          vec3 deepBlue = mix(vec3(0.04, 0.30, 0.64), vec3(0.05, 0.16, 0.30), uOvercast);
+          vec3 turquoise = mix(vec3(0.10, 0.76, 0.86), vec3(0.14, 0.44, 0.56), uOvercast);
           vec3 col = mix(deepBlue, turquoise, coastal);
 
-          // Analytic perturbed water normal for Fresnel sky reflection & sun specularity
           float rippleA = sin(xz.x * 0.28 + xz.y * 0.22 + uTime * 2.1);
           float rippleB = cos(xz.x * 0.19 - xz.y * 0.31 + uTime * 1.7);
           float nx = cos(xz.x * 0.24 + xz.y * 0.15 + uTime * 1.9) * 0.08 + cos(xz.x * 0.43 - xz.y * 0.35 - uTime * 1.4) * 0.05;
           float nz = sin(xz.y * 0.26 - xz.x * 0.16 + uTime * 1.7) * 0.08 + sin(xz.y * 0.38 + xz.x * 0.28 - uTime * 1.5) * 0.05;
           vec3 waterNormal = normalize(vec3(nx, 1.0, nz));
 
-          // Dual-layer scrolling caustic highlights
           vec2 cUv1 = xz * 0.22 + vec2(uTime * 0.28, uTime * 0.20);
           vec2 cUv2 = xz * 0.33 + vec2(-uTime * 0.23, uTime * 0.27);
           float c1 = abs(sin(cUv1.x + sin(cUv1.y * 1.3 + uTime * 0.8)) + cos(cUv1.y + cos(cUv1.x * 1.2 - uTime * 0.6)));
@@ -188,10 +312,9 @@ export class EnvironmentFX {
           float causticA = pow(1.0 - clamp(c1 * 0.5, 0.0, 1.0), 4.0);
           float causticB = pow(1.0 - clamp(c2 * 0.5, 0.0, 1.0), 4.0);
           float causticMask = (0.35 + 0.65 * coastal) * (1.0 - smoothstep(420.0, 960.0, r));
-          float caustics = clamp((causticA + causticB) * 0.55, 0.0, 1.0) * causticMask;
+          float caustics = clamp((causticA + causticB) * 0.55, 0.0, 1.0) * causticMask * (1.0 - uOvercast * 0.55);
           col += vec3(0.45, 0.90, 0.98) * caustics * 0.36;
 
-          // Turquoise shore, Crystal Basin & downstream river rapids foam
           float coastRing = smoothstep(16.0, 0.0, abs(r - uIslandRadius));
           float foamWave = 0.5 + 0.5 * sin(r * 0.42 - uTime * 2.5);
           float basinShore = clamp(smoothstep(4.5, 0.0, abs(basinDist - 45.0)) + smoothstep(3.5, 0.0, abs(basinDist - 19.0)), 0.0, 1.0);
@@ -200,24 +323,24 @@ export class EnvironmentFX {
           float foamAmount = clamp(coastRing * foamWave * 0.34 + basinShore * (0.45 + 0.4 * foamWave) * 0.28 + riverBank * 0.32 + riverFlowFoam * 0.24, 0.0, 0.72);
           col = mix(col, vec3(0.76, 0.98, 1.0), foamAmount);
 
-          // Fresnel horizon sky reflection + warm sun scattering glitter
           vec3 viewDir = normalize(cameraPosition - vWorldPos);
           float fresnel = pow(1.0 - max(dot(viewDir, waterNormal), 0.0), 3.4);
           vec3 reflDir = reflect(-viewDir, waterNormal);
           float reflH = clamp(reflDir.y, 0.0, 1.0);
-          vec3 skyHorizon = mix(vec3(0.76, 0.93, 1.0), vec3(0.98, 0.82, 0.66), uDayPhase);
-          vec3 skyMid = mix(vec3(0.28, 0.72, 0.98), vec3(0.45, 0.64, 0.92), uDayPhase);
+          vec3 skyHorizon = mix(mix(vec3(0.76, 0.93, 1.0), vec3(0.98, 0.82, 0.66), uDayPhase), vec3(0.41, 0.48, 0.56), uOvercast);
+          vec3 skyMid = mix(mix(vec3(0.28, 0.72, 0.98), vec3(0.45, 0.64, 0.92), uDayPhase), vec3(0.25, 0.31, 0.41), uOvercast);
           vec3 skyRefl = mix(skyHorizon, skyMid, smoothstep(0.0, 0.45, reflH));
 
           vec3 sunDir = normalize(uSunDir);
-          float sunSpec = pow(max(dot(reflDir, sunDir), 0.0), 64.0);
-          float sunScatter = pow(max(dot(reflDir, sunDir), 0.0), 5.0);
+          float sunSpec = pow(max(dot(reflDir, sunDir), 0.0), 64.0) * (1.0 - uOvercast * 0.85);
+          float sunScatter = pow(max(dot(reflDir, sunDir), 0.0), 5.0) * (1.0 - uOvercast * 0.85);
           vec3 warmScatter = vec3(1.0, 0.85, 0.56) * (sunScatter * (0.22 + uDayPhase * 0.25) + sunSpec * 0.85);
           skyRefl += warmScatter;
+          skyRefl += vec3(0.65, 0.78, 0.98) * uLightning * 0.5;
 
           col = mix(col, skyRefl, clamp(fresnel * 0.68 + 0.06, 0.0, 0.82));
 
-          float glint = smoothstep(0.65, 0.98, (rippleA + rippleB) * 0.5);
+          float glint = smoothstep(0.65, 0.98, (rippleA + rippleB) * 0.5) * (1.0 - uOvercast * 0.75);
           col += vec3(0.55, 0.88, 0.96) * glint * 0.14 * (1.0 - smoothstep(420.0, 900.0, r));
 
           float horizonFog = smoothstep(520.0, 1550.0, r);
@@ -275,7 +398,47 @@ export class EnvironmentFX {
     this.ambientPoints.frustumCulled = false;
     this.group.add(this.ambientPoints);
 
-    // 6. Iconic Battle Bus 3D Group
+    // 6. Camera/Player-Centered 3D Rain Streak Particles (visible during 'rain' / 'storm_front')
+    const rainCount = 320;
+    const rainPositions = new Float32Array(rainCount * 6);
+    const rainRand = mulberry32(seed + 5151);
+    for (let i = 0; i < rainCount; i++) {
+      const ox = (rainRand() - 0.5) * 44;
+      const oy = rainRand() * 20 - 2;
+      const oz = (rainRand() - 0.5) * 44;
+      const streakLen = 0.85 + rainRand() * 0.65;
+      this.rainDrops.push({
+        offsetX: ox,
+        offsetY: oy,
+        offsetZ: oz,
+        speedScale: 0.85 + rainRand() * 0.35,
+        streakLen,
+      });
+      const idx = i * 6;
+      rainPositions[idx] = ox;
+      rainPositions[idx + 1] = oy;
+      rainPositions[idx + 2] = oz;
+      rainPositions[idx + 3] = ox;
+      rainPositions[idx + 4] = oy + streakLen;
+      rainPositions[idx + 5] = oz;
+    }
+    this.rainGeo = new THREE.BufferGeometry();
+    this.rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
+    this.rainMat = new THREE.LineBasicMaterial({
+      color: '#bae6fd',
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    this.geometries.push(this.rainGeo);
+    this.materials.push(this.rainMat);
+    this.rainLines = new THREE.LineSegments(this.rainGeo, this.rainMat);
+    this.rainLines.name = 'RainStreaks';
+    this.rainLines.visible = false;
+    this.rainLines.frustumCulled = false;
+    this.group.add(this.rainLines);
+
+    // 7. Iconic Battle Bus 3D Group
     const { busGroup, thrusterFlames, burnerGlow } = this.buildBattleBus();
     this.busGroup = busGroup;
     this.thrusterFlames = thrusterFlames;
@@ -336,21 +499,21 @@ export class EnvironmentFX {
   private buildClouds(seed: number): void {
     const rand = mulberry32(seed + 515);
     const puffGeo = new THREE.DodecahedronGeometry(1, 0);
-    const cloudTopMat = new THREE.MeshStandardMaterial({
+    this.cloudTopMat = new THREE.MeshStandardMaterial({
       color: '#ffffff',
       emissive: '#f0f9ff',
       emissiveIntensity: 0.25,
       roughness: 0.92,
       metalness: 0.0,
     });
-    const cloudMidMat = new THREE.MeshStandardMaterial({
+    this.cloudMidMat = new THREE.MeshStandardMaterial({
       color: '#e2eefc',
       emissive: '#bae6fd',
       emissiveIntensity: 0.18,
       roughness: 0.95,
       metalness: 0.0,
     });
-    const cloudUnderMat = new THREE.MeshStandardMaterial({
+    this.cloudUnderMat = new THREE.MeshStandardMaterial({
       color: '#9db8d8',
       emissive: '#64748b',
       emissiveIntensity: 0.12,
@@ -358,23 +521,18 @@ export class EnvironmentFX {
       metalness: 0.0,
     });
     this.geometries.push(puffGeo);
-    this.materials.push(cloudTopMat, cloudMidMat, cloudUnderMat);
+    this.materials.push(this.cloudTopMat, this.cloudMidMat, this.cloudUnderMat);
 
     const cloudCount = 42;
     for (let i = 0; i < cloudCount; i++) {
       const cg = new THREE.Group();
       cg.name = 'CloudGroup';
       const baseY = 148 + rand() * 68;
-      cg.position.set(
-        (rand() - 0.5) * 1050,
-        baseY,
-        (rand() - 0.5) * 1050,
-      );
+      cg.position.set((rand() - 0.5) * 1050, baseY, (rand() - 0.5) * 1050);
 
-      // Multi-shade cloud cluster: broad shaded underside shelf + sunlit billowy crowns
       const underCount = 2 + Math.floor(rand() * 2);
       for (let u = 0; u < underCount; u++) {
-        const under = new THREE.Mesh(puffGeo, cloudUnderMat);
+        const under = new THREE.Mesh(puffGeo, this.cloudUnderMat);
         const s = 5.6 + rand() * 5.8;
         under.scale.set(s * 1.55, s * 0.42, s * 1.18);
         under.position.set(
@@ -388,7 +546,10 @@ export class EnvironmentFX {
       const puffCount = 3 + Math.floor(rand() * 3);
       for (let p = 0; p < puffCount; p++) {
         const isCrown = p === Math.floor(puffCount * 0.5) || rand() > 0.52;
-        const puff = new THREE.Mesh(puffGeo, isCrown ? cloudTopMat : cloudMidMat);
+        const puff = new THREE.Mesh(
+          puffGeo,
+          isCrown ? this.cloudTopMat : this.cloudMidMat,
+        );
         const s = 5.2 + rand() * 6.8;
         puff.scale.set(s * 1.35, s * (isCrown ? 0.78 : 0.62), s * 1.05);
         puff.position.set(
@@ -481,24 +642,20 @@ export class EnvironmentFX {
       return g;
     };
 
-    // Bus body (facing +Z)
     const hull = new THREE.Mesh(addGeo(new THREE.BoxGeometry(3.2, 2.7, 9.2)), royalBlue);
     hull.position.set(0, 1.8, -0.3);
     hull.castShadow = true;
     busGroup.add(hull);
 
-    // Front engine hood
     const hood = new THREE.Mesh(addGeo(new THREE.BoxGeometry(2.9, 1.65, 2.2)), royalBlue);
     hood.position.set(0, 1.28, 5.1);
     hood.castShadow = true;
     busGroup.add(hood);
 
-    // Yellow side trim stripe
     const stripe = new THREE.Mesh(addGeo(new THREE.BoxGeometry(3.26, 0.34, 9.24)), stripeYellow);
     stripe.position.set(0, 1.4, -0.3);
     busGroup.add(stripe);
 
-    // Front windshield & side windows
     const windshield = new THREE.Mesh(addGeo(new THREE.BoxGeometry(2.7, 1.0, 0.14)), glassMat);
     windshield.position.set(0, 2.5, 4.32);
     busGroup.add(windshield);
@@ -507,7 +664,6 @@ export class EnvironmentFX {
     sideWin.position.set(0, 2.38, -0.2);
     busGroup.add(sideWin);
 
-    // Glowing headlights
     const headlightGeo = addGeo(new THREE.CylinderGeometry(0.24, 0.24, 0.14, 10));
     headlightGeo.rotateX(Math.PI * 0.5);
     for (const hx of [-0.95, 0.95]) {
@@ -516,7 +672,6 @@ export class EnvironmentFX {
       busGroup.add(hl);
     }
 
-    // 4 chunky wheels
     const wheelGeo = addGeo(new THREE.CylinderGeometry(0.68, 0.68, 0.48, 14));
     wheelGeo.rotateZ(Math.PI * 0.5);
     for (const wx of [-1.62, 1.62]) {
@@ -527,7 +682,6 @@ export class EnvironmentFX {
       }
     }
 
-    // Giant Hot-Air Balloon above the bus
     const balloonGroup = new THREE.Group();
     balloonGroup.position.set(0, 11.2, -0.3);
 
@@ -549,7 +703,6 @@ export class EnvironmentFX {
     topCap.position.y = 4.2;
     balloonGroup.add(topCap);
 
-    // Basket ring + burner flame
     const neckRing = new THREE.Mesh(
       addGeo(new THREE.CylinderGeometry(1.75, 1.35, 1.2, 14)),
       metalMat,
@@ -561,7 +714,6 @@ export class EnvironmentFX {
     burnerGlow.position.set(0, -6.5, 0);
     balloonGroup.add(burnerGlow);
 
-    // Suspension cables connecting bus roof to balloon
     const cableGeo = addGeo(new THREE.CylinderGeometry(0.06, 0.06, 8.2, 6));
     for (const [cx, cz] of [
       [-1.3, -3.2],
@@ -576,7 +728,6 @@ export class EnvironmentFX {
 
     busGroup.add(balloonGroup);
 
-    // Rear dual booster pods + glowing cyan thruster flames (facing -Z)
     const podGeo = addGeo(new THREE.CylinderGeometry(0.45, 0.58, 1.4, 12));
     podGeo.rotateX(Math.PI * 0.5);
     const flameGeo = addGeo(new THREE.ConeGeometry(0.46, 3.2, 12));
@@ -601,10 +752,78 @@ export class EnvironmentFX {
     return this.group;
   }
 
+  getWeatherState(): WeatherState {
+    return { ...this.weatherState };
+  }
+
+  setWeather(kind?: WeatherKind): void {
+    if (!kind) {
+      this.manualWeather = null;
+      return;
+    }
+    this.manualWeather = kind;
+    const p = WEATHER_PROFILES[kind];
+    this.weatherState = {
+      kind,
+      intensity: p.intensity,
+      sunElevation: p.sunElevation,
+      windX: p.windX,
+      windZ: p.windZ,
+    };
+
+    if (kind === 'rain' || kind === 'storm_front') {
+      this.currentRainStrength = Math.max(this.currentRainStrength, p.rain * 0.65);
+      this.rainMat.opacity = clamp(this.currentRainStrength * 0.68, 0.25, 0.72);
+      this.rainLines.visible = true;
+      if (kind === 'storm_front') {
+        this.lightningCooldown = Math.min(this.lightningCooldown, 1.8);
+      }
+    } else {
+      this.currentRainStrength = 0;
+      this.rainMat.opacity = 0;
+      this.rainLines.visible = false;
+      this.lightningIntensity = 0;
+    }
+  }
+
   setBusTransform(pos: Vec3Like, yaw: number, active: boolean): void {
     this.busGroup.visible = active;
     this.busGroup.position.set(pos.x, pos.y, pos.z);
     this.busGroup.rotation.y = yaw;
+  }
+
+  private sampleAutoWeather(elapsed: number): {
+    kind: WeatherKind;
+    intensity: number;
+    sunElevation: number;
+    windX: number;
+    windZ: number;
+    warmth: number;
+    overcast: number;
+    rain: number;
+  } {
+    const cycleLen = WEATHER_ORDER.length * WEATHER_STAGE_SEC;
+    const t = ((elapsed % cycleLen) + cycleLen) % cycleLen;
+    const idx = Math.floor(t / WEATHER_STAGE_SEC);
+    const localT = t - idx * WEATHER_STAGE_SEC;
+    const currKind = WEATHER_ORDER[idx];
+    const nextKind = WEATHER_ORDER[(idx + 1) % WEATHER_ORDER.length];
+    const curr = WEATHER_PROFILES[currKind];
+    const next = WEATHER_PROFILES[nextKind];
+
+    const blendStart = WEATHER_STAGE_SEC - WEATHER_BLEND_SEC;
+    const alpha = localT > blendStart ? smoothstep(blendStart, WEATHER_STAGE_SEC, localT) : 0;
+
+    return {
+      kind: alpha > 0.5 ? nextKind : currKind,
+      intensity: lerp(curr.intensity, next.intensity, alpha),
+      sunElevation: lerp(curr.sunElevation, next.sunElevation, alpha),
+      windX: lerp(curr.windX, next.windX, alpha),
+      windZ: lerp(curr.windZ, next.windZ, alpha),
+      warmth: lerp(curr.warmth, next.warmth, alpha),
+      overcast: lerp(curr.overcast, next.overcast, alpha),
+      rain: lerp(curr.rain, next.rain, alpha),
+    };
   }
 
   update(
@@ -613,34 +832,110 @@ export class EnvironmentFX {
     playerPos?: Vec3Like,
     biome?: string,
   ): void {
+    const safeDt = Math.max(0, dt);
     this.skyMat.uniforms.uTime.value = elapsed;
     this.oceanMat.uniforms.uTime.value = elapsed;
 
-    // Gentle Time-of-Day cycle across 6 minutes (bright sunlit morning -> golden afternoon)
-    const dayPhase = 0.5 - 0.5 * Math.cos(elapsed * 0.018);
-    const scaledDayPhase = dayPhase * 0.65;
+    // 1. Dynamic Weather & Smooth Transitions
+    let targetWarmth = 0;
+    let targetOvercast = 0;
+    let targetRain = 0;
+
+    if (this.manualWeather) {
+      const p = WEATHER_PROFILES[this.manualWeather];
+      this.weatherState.kind = this.manualWeather;
+      this.weatherState.intensity = p.intensity;
+      this.weatherState.sunElevation = p.sunElevation;
+      this.weatherState.windX = p.windX;
+      this.weatherState.windZ = p.windZ;
+      targetWarmth = p.warmth;
+      targetOvercast = p.overcast;
+      targetRain = p.rain;
+    } else {
+      const auto = this.sampleAutoWeather(elapsed);
+      this.weatherState.kind = auto.kind;
+      this.weatherState.intensity = auto.intensity;
+      this.weatherState.sunElevation = auto.sunElevation;
+      this.weatherState.windX = auto.windX;
+      this.weatherState.windZ = auto.windZ;
+      targetWarmth = auto.warmth;
+      targetOvercast = auto.overcast;
+      targetRain = auto.rain;
+    }
+
+    const blendStep = Math.min(1, safeDt * 2.2);
+    this.currentWarmth = lerp(this.currentWarmth, targetWarmth, blendStep);
+    this.currentOvercast = lerp(this.currentOvercast, targetOvercast, blendStep);
+    this.currentRainStrength = lerp(this.currentRainStrength, targetRain, blendStep);
+
+    // Lightning flashes during 'storm_front'
+    if (this.weatherState.kind === 'storm_front') {
+      this.lightningCooldown -= safeDt;
+      if (this.lightningCooldown <= 0) {
+        this.lightningIntensity = 0.78 + this.weatherRand() * 0.22;
+        this.lightningCooldown = 5.5 + this.weatherRand() * 4.2;
+        this.eventBus?.emit('vfx:lightning_flash', {
+          intensity: this.lightningIntensity,
+        });
+        this.eventBus?.emit('sound:play', {
+          id: 'weather_thunder',
+          volume: 0.74,
+          spatial: false,
+        });
+      }
+    }
+    if (this.lightningIntensity > 0) {
+      this.lightningIntensity = Math.max(0, this.lightningIntensity - safeDt * 4.2);
+    }
+
+    // 2. Sky / Ocean / Sun Elevation Sync
+    const dayPhase = clamp((0.58 - this.weatherState.sunElevation) / 0.4, 0, 1);
+    const scaledDayPhase = dayPhase * 0.75;
     this.skyMat.uniforms.uDayPhase.value = scaledDayPhase;
     this.oceanMat.uniforms.uDayPhase.value = scaledDayPhase;
-    this.sunDir.set(
-      0.55 - dayPhase * 0.25,
-      0.52 - dayPhase * 0.14,
-      -0.65 + dayPhase * 0.2,
-    ).normalize();
+    this.skyMat.uniforms.uWarmth.value = this.currentWarmth;
+    this.skyMat.uniforms.uOvercast.value = this.currentOvercast;
+    this.skyMat.uniforms.uLightning.value = this.lightningIntensity;
+    this.oceanMat.uniforms.uOvercast.value = this.currentOvercast;
+    this.oceanMat.uniforms.uLightning.value = this.lightningIntensity;
+
+    this.sunDir
+      .set(
+        0.55 - dayPhase * 0.26,
+        clamp(this.weatherState.sunElevation, 0.14, 0.72),
+        -0.65 + dayPhase * 0.22,
+      )
+      .normalize();
     (this.skyMat.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
     (this.oceanMat.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
 
-    // Drift clouds gently across sky and wrap
+    // Tint clouds dynamically across weather states
+    this.cloudTopMat.color
+      .set('#ffffff')
+      .lerp(new THREE.Color('#ffedd5'), this.currentWarmth * 0.5)
+      .lerp(new THREE.Color('#64748b'), this.currentOvercast * 0.72);
+    this.cloudMidMat.color
+      .set('#e2eefc')
+      .lerp(new THREE.Color('#fed7aa'), this.currentWarmth * 0.45)
+      .lerp(new THREE.Color('#475569'), this.currentOvercast * 0.76);
+    this.cloudUnderMat.color
+      .set('#9db8d8')
+      .lerp(new THREE.Color('#334155'), this.currentOvercast * 0.8);
+    this.cloudTopMat.emissiveIntensity = 0.25 * (1 - this.currentOvercast * 0.6) + this.lightningIntensity * 0.85;
+
+    // 3. Drift clouds with dynamic wind & wrap
     const wrapLimit = 560;
+    const windDrift = this.weatherState.windX * 0.75;
     for (let i = 0; i < this.clouds.length; i++) {
       const c = this.clouds[i];
-      c.group.position.x += c.speed * dt;
+      c.group.position.x += (c.speed + windDrift) * safeDt;
       if (c.group.position.x > wrapLimit) {
         c.group.position.x = -wrapLimit;
       }
       c.group.position.y = c.baseY + Math.sin(elapsed * 0.35 + c.phase) * 1.4;
     }
 
-    // Battle Bus thruster flicker & slight bob
+    // 4. Battle Bus thruster flicker & slight bob
     if (this.busGroup.visible) {
       const pulse = 0.85 + Math.sin(elapsed * 26) * 0.22;
       for (const flame of this.thrusterFlames) {
@@ -649,7 +944,55 @@ export class EnvironmentFX {
       this.burnerGlow.scale.set(1, 0.85 + Math.sin(elapsed * 18) * 0.2, 1);
     }
 
-    // Camera/player-centered Biome Ambient Particle Pool
+    // 5. Camera/player-centered 3D Rain Streak Particles
+    const rainActive =
+      this.currentRainStrength > 0.02 ||
+      this.weatherState.kind === 'rain' ||
+      this.weatherState.kind === 'storm_front';
+    if (rainActive) {
+      const center = playerPos ?? { x: 0, y: 12, z: 0 };
+      const targetOpacity = clamp(this.currentRainStrength * 0.68, 0.2, 0.74);
+      this.rainMat.opacity = targetOpacity;
+      this.rainLines.visible = true;
+
+      const rainAttr = this.rainGeo.getAttribute('position') as THREE.BufferAttribute;
+      const arr = rainAttr.array as Float32Array;
+      const fallSpeed = 24 + this.currentRainStrength * 10;
+      const wx = this.weatherState.windX;
+      const wz = this.weatherState.windZ;
+
+      for (let i = 0; i < this.rainDrops.length; i++) {
+        const d = this.rainDrops[i];
+        d.offsetX += wx * 0.42 * safeDt;
+        d.offsetY -= fallSpeed * d.speedScale * safeDt;
+        d.offsetZ += wz * 0.42 * safeDt;
+
+        if (d.offsetY < -2) d.offsetY += 20;
+        if (d.offsetY > 18) d.offsetY -= 20;
+        if (d.offsetX > 22) d.offsetX -= 44;
+        if (d.offsetX < -22) d.offsetX += 44;
+        if (d.offsetZ > 22) d.offsetZ -= 44;
+        if (d.offsetZ < -22) d.offsetZ += 44;
+
+        const px = center.x + d.offsetX;
+        const py = center.y + d.offsetY;
+        const pz = center.z + d.offsetZ;
+
+        const idx = i * 6;
+        arr[idx] = px;
+        arr[idx + 1] = py;
+        arr[idx + 2] = pz;
+        arr[idx + 3] = px - wx * 0.045;
+        arr[idx + 4] = py + d.streakLen;
+        arr[idx + 5] = pz - wz * 0.045;
+      }
+      rainAttr.needsUpdate = true;
+    } else {
+      this.rainMat.opacity = 0;
+      this.rainLines.visible = false;
+    }
+
+    // 6. Camera/player-centered Biome Ambient Particle Pool
     if (playerPos && biome) {
       let targetOpacity = 0;
       let dirY = -1.5;
@@ -675,15 +1018,15 @@ export class EnvironmentFX {
         dirY = -0.65;
       }
 
-      this.ambientMat.opacity += (targetOpacity - this.ambientMat.opacity) * Math.min(1, dt * 4);
+      this.ambientMat.opacity += (targetOpacity - this.ambientMat.opacity) * Math.min(1, safeDt * 4);
       if (this.ambientMat.opacity > 0.02) {
         const attr = this.ambientGeo.getAttribute('position') as THREE.BufferAttribute;
         const arr = attr.array as Float32Array;
         for (let i = 0; i < this.ambientParticles.length; i++) {
           const p = this.ambientParticles[i];
-          p.offsetX += p.vx * dt;
-          p.offsetY += dirY * dt;
-          p.offsetZ += p.vz * dt;
+          p.offsetX += p.vx * safeDt;
+          p.offsetY += dirY * safeDt;
+          p.offsetZ += p.vz * safeDt;
           if (p.offsetY < -1) p.offsetY += 15;
           if (p.offsetY > 14) p.offsetY -= 15;
           if (p.offsetX > 22) p.offsetX -= 44;
@@ -713,6 +1056,7 @@ export class EnvironmentFX {
     this.clouds = [];
     this.distantIslands = [];
     this.ambientParticles = [];
+    this.rainDrops = [];
     this.thrusterFlames = [];
   }
 }

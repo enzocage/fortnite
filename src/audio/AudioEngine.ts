@@ -7,6 +7,7 @@ import type {
   SoundEventId,
   SoundEventPayload,
   Vec3Like,
+  WeatherKind,
 } from '../types';
 import { MusicSequencer } from './MusicSequencer';
 import { type LoopHandle, SoundSynthesizer } from './SoundSynthesizer';
@@ -35,16 +36,22 @@ export interface BiomeAmbienceProfile {
   droneHarmonicFreq: number;
   droneWave: OscillatorType;
   droneGain: number;
+  stormFilterFreq: number;
+  stormFilterQ: number;
   stormOverlayGain: number;
 }
 
 export interface BiomeAmbienceState {
   biome: BiomeType | null;
   inStorm: boolean;
+  weather: WeatherKind;
   active: boolean;
 }
 
-export const BIOME_AMBIENCE_PROFILES: Record<BiomeType, Omit<BiomeAmbienceProfile, 'stormOverlayGain'>> = {
+export const BIOME_AMBIENCE_PROFILES: Record<
+  BiomeType,
+  Omit<BiomeAmbienceProfile, 'stormOverlayGain' | 'stormFilterFreq' | 'stormFilterQ'>
+> = {
   ocean: {
     noiseFilterType: 'lowpass',
     noiseFilterFreq: 420,
@@ -147,20 +154,83 @@ export const BIOME_AMBIENCE_PROFILES: Record<BiomeType, Omit<BiomeAmbienceProfil
   },
 };
 
-export function getBiomeAmbienceProfile(biome: BiomeType, inStorm: boolean): BiomeAmbienceProfile {
+export function getBiomeAmbienceProfile(
+  biome: BiomeType,
+  inStorm: boolean,
+  weather: WeatherKind = 'clear',
+): BiomeAmbienceProfile {
   const base = BIOME_AMBIENCE_PROFILES[biome] ?? BIOME_AMBIENCE_PROFILES.grassland;
-  if (!inStorm) {
-    return {
-      ...base,
-      stormOverlayGain: 0.0001,
-    };
+
+  let noiseFilterType = base.noiseFilterType;
+  let noiseFilterFreq = base.noiseFilterFreq;
+  let noiseFilterQ = base.noiseFilterQ;
+  let noiseGain = base.noiseGain;
+  let stormFilterFreq = 340;
+  let stormFilterQ = 2.2;
+  let stormOverlayGain = 0.0001;
+
+  switch (weather) {
+    case 'golden_hour':
+      noiseFilterFreq = Math.max(80, base.noiseFilterFreq * 0.94);
+      noiseGain = clamp(base.noiseGain * 0.92, 0.0001, 0.08);
+      break;
+    case 'overcast':
+      noiseFilterFreq = Math.max(120, base.noiseFilterFreq * 1.08);
+      noiseFilterQ = Math.max(0.6, base.noiseFilterQ * 0.95);
+      noiseGain = clamp(base.noiseGain * 1.12 + 0.004, 0.0001, 0.08);
+      stormFilterFreq = 310;
+      stormFilterQ = 1.9;
+      break;
+    case 'rain':
+      noiseFilterType = 'bandpass';
+      noiseFilterFreq = Math.max(1350, base.noiseFilterFreq * 1.45);
+      noiseFilterQ = 0.85;
+      noiseGain = clamp(base.noiseGain * 1.45 + 0.022, 0.0001, 0.095);
+      stormFilterFreq = 420;
+      stormFilterQ = 1.8;
+      stormOverlayGain = 0.012;
+      break;
+    case 'storm_front':
+      noiseFilterType = 'bandpass';
+      noiseFilterFreq = Math.max(1750, base.noiseFilterFreq * 1.75);
+      noiseFilterQ = 1.15;
+      noiseGain = clamp(base.noiseGain * 1.65 + 0.032, 0.0001, 0.11);
+      stormFilterFreq = 500;
+      stormFilterQ = 2.6;
+      stormOverlayGain = 0.028;
+      break;
+    case 'clear':
+    default:
+      break;
   }
+
+  if (inStorm) {
+    if (weather === 'rain' || weather === 'storm_front') {
+      noiseFilterFreq = Math.max(1200, noiseFilterFreq * 0.92);
+      noiseFilterQ = Math.max(0.8, noiseFilterQ + 0.45);
+      noiseGain = clamp(noiseGain * 1.12 + 0.008, 0.0001, 0.12);
+      stormFilterFreq = weather === 'storm_front' ? 560 : 460;
+      stormFilterQ = 2.8;
+      stormOverlayGain = weather === 'storm_front' ? 0.056 : 0.048;
+    } else {
+      noiseFilterFreq = Math.max(120, noiseFilterFreq * 0.85);
+      noiseFilterQ = Math.max(0.7, noiseFilterQ + 0.6);
+      noiseGain = clamp(noiseGain * 1.15 + 0.015, 0.0001, 0.08);
+      stormFilterFreq = 360;
+      stormFilterQ = 2.4;
+      stormOverlayGain = 0.042;
+    }
+  }
+
   return {
     ...base,
-    noiseFilterFreq: Math.max(120, base.noiseFilterFreq * 0.85),
-    noiseFilterQ: Math.max(0.7, base.noiseFilterQ + 0.6),
-    noiseGain: clamp(base.noiseGain * 1.15 + 0.015, 0.0001, 0.08),
-    stormOverlayGain: 0.042,
+    noiseFilterType,
+    noiseFilterFreq,
+    noiseFilterQ,
+    noiseGain,
+    stormFilterFreq,
+    stormFilterQ,
+    stormOverlayGain,
   };
 }
 
@@ -206,7 +276,7 @@ export function computeBusGains(
   };
 }
 
-function getSoundPriority(id: SoundEventId): number {
+export function getSoundPriority(id: SoundEventId): number {
   switch (id) {
     case 'victory_fanfare':
     case 'elimination':
@@ -224,6 +294,11 @@ function getSoundPriority(id: SoundEventId): number {
     case 'poi_discover':
     case 'launch_pad':
     case 'fall_damage':
+    case 'vehicle_crash':
+    case 'shield_bubble_deploy':
+    case 'vault_unlock':
+    case 'weather_thunder':
+    case 'bounty_alert':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -246,13 +321,14 @@ function getSoundPriority(id: SoundEventId): number {
     case 'slide_loop':
     case 'mantle_climb':
     case 'zipline_loop':
+    case 'grappler_reel':
       return 1;
     default:
       return 2;
   }
 }
 
-function getMaxHearDistance(id: SoundEventId): number {
+export function getMaxHearDistance(id: SoundEventId): number {
   switch (id) {
     case 'footstep':
     case 'footstep_wood':
@@ -278,6 +354,19 @@ function getMaxHearDistance(id: SoundEventId): number {
     case 'zipline_attach':
     case 'zipline_loop':
       return 85;
+    case 'grappler_reel':
+      return 110;
+    case 'grappler_fire':
+      return 130;
+    case 'shield_bubble_deploy':
+      return 140;
+    case 'vehicle_horn':
+      return 180;
+    case 'vehicle_boost':
+      return 190;
+    case 'vehicle_crash':
+    case 'vault_unlock':
+      return 220;
     case 'shot_sniper':
     case 'shot_rocket':
     case 'explosion':
@@ -285,6 +374,8 @@ function getMaxHearDistance(id: SoundEventId): number {
     case 'bus_horn':
     case 'launch_pad':
       return 240;
+    case 'weather_thunder':
+      return 350;
     default:
       return 175;
   }
@@ -321,8 +412,10 @@ export class AudioEngine {
   private ambienceActive = false;
   private appliedBiome: BiomeType | null = null;
   private appliedInStorm = false;
+  private appliedWeather: WeatherKind = 'clear';
   private desiredBiome: BiomeType | null = null;
   private desiredInStorm = false;
+  private desiredWeather: WeatherKind = 'clear';
 
   constructor(
     eventBus: EventBus,
@@ -369,7 +462,7 @@ export class AudioEngine {
     if (ctx.state !== 'suspended') {
       this.unbindGestureUnlock();
       if (this.desiredBiome !== null) {
-        this.updateBiomeAmbience(this.desiredBiome, this.desiredInStorm);
+        this.updateBiomeAmbience(this.desiredBiome, this.desiredInStorm, this.desiredWeather);
       }
     }
   }
@@ -600,16 +693,22 @@ export class AudioEngine {
   }
 
   /**
-   * Updates the subtle procedural ambient bed (wind/ocean/lava/cyber/storm)
-   * for the player's current biome and storm state. Safe no-op when headless/mocked.
+   * Updates the subtle procedural ambient bed (wind/ocean/lava/cyber/rain/storm)
+   * for the player's current biome, storm state, and weather. Safe no-op when headless/mocked.
    */
-  updateBiomeAmbience(biome: BiomeType, inStorm: boolean): void {
+  updateBiomeAmbience(biome: BiomeType, inStorm: boolean, weather: WeatherKind = 'clear'): void {
     if (this.disposed) return;
 
     this.desiredBiome = biome;
     this.desiredInStorm = inStorm;
+    this.desiredWeather = weather;
 
-    if (this.ambienceActive && this.appliedBiome === biome && this.appliedInStorm === inStorm) {
+    if (
+      this.ambienceActive &&
+      this.appliedBiome === biome &&
+      this.appliedInStorm === inStorm &&
+      this.appliedWeather === weather
+    ) {
       return;
     }
 
@@ -642,8 +741,9 @@ export class AudioEngine {
     this.ambienceActive = true;
     this.appliedBiome = biome;
     this.appliedInStorm = inStorm;
+    this.appliedWeather = weather;
 
-    const profile = getBiomeAmbienceProfile(biome, inStorm);
+    const profile = getBiomeAmbienceProfile(biome, inStorm, weather);
     this.applyBiomeAmbienceProfile(this.ctx, this.ambienceRig, profile);
   }
 
@@ -651,6 +751,7 @@ export class AudioEngine {
     return {
       biome: this.appliedBiome ?? this.desiredBiome,
       inStorm: this.ambienceActive ? this.appliedInStorm : this.desiredInStorm,
+      weather: this.ambienceActive ? this.appliedWeather : this.desiredWeather,
       active: this.ambienceActive,
     };
   }
@@ -1012,6 +1113,10 @@ export class AudioEngine {
       this.rampParam(rig.droneOscA.frequency, Math.max(20, profile.droneFreq), now, 0.4);
       this.rampParam(rig.droneOscB.frequency, Math.max(20, profile.droneHarmonicFreq), now, 0.4);
       this.rampParam(rig.droneGain.gain, Math.max(0.0001, profile.droneGain), now, 0.4);
+      if (rig.stormFilter) {
+        this.rampParam(rig.stormFilter.frequency, Math.max(25, profile.stormFilterFreq), now, 0.35);
+        this.rampParam(rig.stormFilter.Q, Math.max(0.1, profile.stormFilterQ), now, 0.35);
+      }
       this.rampParam(rig.stormGain.gain, Math.max(0.0001, profile.stormOverlayGain), now, 0.3);
     } catch {
       // Gracefully tolerate incomplete AudioNode mocks
@@ -1024,8 +1129,10 @@ export class AudioEngine {
     this.ambienceActive = false;
     this.appliedBiome = null;
     this.appliedInStorm = false;
+    this.appliedWeather = 'clear';
     this.desiredBiome = null;
     this.desiredInStorm = false;
+    this.desiredWeather = 'clear';
 
     if (!rig) return;
 

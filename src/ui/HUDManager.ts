@@ -11,24 +11,34 @@ import type {
   MaterialType,
 } from '../types';
 import {
+  cloneSettings,
   computeFallbackStormDistance,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
+  formatKeyCodeLabel,
   formatSafeZoneDistance,
+  formatVehicleKindLabel,
+  formatWeatherLabel,
   getBearingDeg,
   getContextualHudHints,
   getKillStreakCallout,
   getRarityMeta,
+  normalizeBoostChargePct,
+  resolveKeybinds,
   worldToMapNorm,
 } from './UIHelpers';
 import {
+  getBountyTargetSvg,
   getBuildIconSvg,
   getCrownSvg,
   getMaterialIconSvg,
   getSkullSvg,
   getStormEyeSvg,
+  getVaultKeySvg,
+  getVehicleIconSvg,
   getWeaponSvg,
+  getWeatherIconSvg,
 } from './WeaponIcons';
 
 export interface HUDCallbacks {
@@ -37,6 +47,8 @@ export interface HUDCallbacks {
   onEditConfirm: () => void;
   onEditReset: () => void;
   onRequestPointerLock?: () => void;
+  onSpectateNext?: () => void;
+  onSpectateMatchSummary?: () => void;
 }
 
 interface ActiveDamageNum {
@@ -73,10 +85,23 @@ export class HUDManager {
   private lowHealthVignetteEl: HTMLDivElement;
   private fpsBadgeEl: HTMLDivElement;
   private killStreakEl: HTMLDivElement;
+  private vaultKeyBadgeEl: HTMLDivElement;
+  private vaultKeyTextEl: HTMLSpanElement;
+  private bountyCardEl: HTMLDivElement;
+  private bountyTimerEl: HTMLSpanElement;
+  private bountyTargetEl: HTMLDivElement;
+  private bountyDistEl: HTMLSpanElement;
+  private bountyRewardEl: HTMLSpanElement;
 
-  // Compass
+  // Compass & Boss Bar
   private compassTapeEl: HTMLDivElement;
   private compassReadoutEl: HTMLDivElement;
+  private bossBarEl: HTMLDivElement;
+  private bossNameEl: HTMLSpanElement;
+  private bossStatsEl: HTMLSpanElement;
+  private bossDistEl: HTMLSpanElement;
+  private bossShieldFillEl: HTMLDivElement;
+  private bossHpFillEl: HTMLDivElement;
   private phaseHintEl: HTMLDivElement;
   private phaseHintTextEl: HTMLSpanElement;
 
@@ -84,10 +109,14 @@ export class HUDManager {
   private minimapCanvas: HTMLCanvasElement;
   private minimapCtx: CanvasRenderingContext2D | null;
   private terrainMapCanvas: HTMLCanvasElement | null = null;
+  private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
   private stormDistEl: HTMLDivElement;
   private locationChipEl: HTMLDivElement;
+  private weatherPillEl: HTMLDivElement;
+  private weatherIconEl: HTMLSpanElement;
+  private weatherTextEl: HTMLSpanElement;
   private aliveTextEl: HTMLSpanElement;
   private elimsTextEl: HTMLSpanElement;
 
@@ -95,7 +124,7 @@ export class HUDManager {
   private killFeedEl: HTMLDivElement;
   private killFeedItems: ActiveKillFeedItem[] = [];
 
-  // Bottom center
+  // Bottom center & Vehicle Dashboard & Spectator Bar
   private contextHintsEl: HTMLDivElement;
   private siphonBadgeEl: HTMLDivElement;
   private interactEl: HTMLDivElement;
@@ -105,12 +134,29 @@ export class HUDManager {
   private channelLabelEl: HTMLSpanElement;
   private channelPctEl: HTMLSpanElement;
   private channelFillEl: HTMLDivElement;
+  private vehicleDashEl: HTMLDivElement;
+  private vehicleIconEl: HTMLSpanElement;
+  private vehicleTitleEl: HTMLSpanElement;
+  private vehicleSpeedEl: HTMLSpanElement;
+  private vehicleHpTextEl: HTMLSpanElement;
+  private vehicleBoostFillEl: HTMLDivElement;
+  private vehicleHpFillEl: HTMLDivElement;
+  private vehicleHintEl: HTMLDivElement;
+  private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
   private shieldFillEl: HTMLDivElement;
   private shieldTextEl: HTMLSpanElement;
   private healthFillEl: HTMLDivElement;
   private healthTextEl: HTMLSpanElement;
+  private spectatorBarEl: HTMLDivElement;
+  private specTargetNameEl: HTMLSpanElement;
+  private specShieldFillEl: HTMLDivElement;
+  private specShieldTextEl: HTMLSpanElement;
+  private specHpFillEl: HTMLDivElement;
+  private specHpTextEl: HTMLSpanElement;
+  private specElimsEl: HTMLSpanElement;
+  private specAliveEl: HTMLSpanElement;
 
   // Bottom right
   private matEls = new Map<
@@ -118,9 +164,12 @@ export class HUDManager {
     { root: HTMLDivElement; count: HTMLSpanElement }
   >();
   private buildEls = new Map<BuildPieceType, HTMLDivElement>();
+  private buildKeyEls = new Map<BuildPieceType, HTMLSpanElement>();
   private ammoWrapEl: HTMLDivElement;
   private ammoMainEl: HTMLDivElement;
   private ammoResEl: HTMLDivElement;
+  private grapplerBadgeEl: HTMLDivElement;
+  private grapplerCountEl: HTMLSpanElement;
   private slotEls: HTMLDivElement[] = [];
 
   // Center overlays
@@ -131,9 +180,11 @@ export class HUDManager {
   private damageNumsEl: HTMLDivElement;
   private activeDamageNums: ActiveDamageNum[] = [];
   private editOverlayEl: HTMLDivElement;
+  private editConfirmBtn: HTMLButtonElement;
   private editTileEls: HTMLButtonElement[] = [];
   private emoteBackdropEl: HTMLDivElement;
   private pointerPromptEl: HTMLDivElement;
+  private pointerSubEl: HTMLDivElement;
 
   // State caches for diffed DOM updates
   private visible = false;
@@ -180,6 +231,13 @@ export class HUDManager {
   private lastSiphonFlashAt = 0;
   private lastSiphonBusMs = 0;
   private siphonHideAt = 0;
+  private lastVehicleKey = '';
+  private lastBossKey = '';
+  private lastBountyKey = '';
+  private lastVaultKeyCount = -1;
+  private lastWeatherKey = '';
+  private lastGrapplerKey = '';
+  private lastSpectatingKey = '';
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -192,7 +250,7 @@ export class HUDManager {
     callbacks: HUDCallbacks,
   ) {
     this.root = root;
-    this.settings = { ...settings };
+    this.settings = cloneSettings(settings);
     this.callbacks = callbacks;
 
     this.containerEl = document.createElement('div');
@@ -208,14 +266,55 @@ export class HUDManager {
     this.lowHealthVignetteEl = document.createElement('div');
     this.lowHealthVignetteEl.className = 'fdr-low-health-vignette';
 
-    // FPS Badge
+    // Top-Left Stack: FPS, Kill-Streak, Vault Key Badge, Active Bounty Card
+    const topLeftStack = document.createElement('div');
+    topLeftStack.className = 'fdr-top-left-stack';
+
     this.fpsBadgeEl = document.createElement('div');
     this.fpsBadgeEl.className = 'fdr-fps-badge fdr-hidden';
     this.fpsBadgeEl.textContent = '60 FPS';
 
-    // Kill-Streak Callout Badge
     this.killStreakEl = document.createElement('div');
     this.killStreakEl.className = 'fdr-killstreak-badge fdr-hidden';
+
+    this.vaultKeyBadgeEl = document.createElement('div');
+    this.vaultKeyBadgeEl.className = 'fdr-vault-key-badge fdr-hidden';
+    const vaultKeyIcon = document.createElement('span');
+    vaultKeyIcon.className = 'fdr-vault-key-icon';
+    vaultKeyIcon.innerHTML = getVaultKeySvg();
+    this.vaultKeyTextEl = document.createElement('span');
+    this.vaultKeyTextEl.textContent = '1 VAULT KEY';
+    this.vaultKeyBadgeEl.append(vaultKeyIcon, this.vaultKeyTextEl);
+
+    this.bountyCardEl = document.createElement('div');
+    this.bountyCardEl.className = 'fdr-bounty-card fdr-hidden';
+    const bountyHead = document.createElement('div');
+    bountyHead.className = 'fdr-bounty-head';
+    const bountyIcon = document.createElement('span');
+    bountyIcon.className = 'fdr-bounty-icon';
+    bountyIcon.innerHTML = getBountyTargetSvg();
+    const bountyEyebrow = document.createElement('span');
+    bountyEyebrow.textContent = 'BOUNTY TARGET';
+    this.bountyTimerEl = document.createElement('span');
+    this.bountyTimerEl.className = 'fdr-bounty-timer';
+    bountyHead.append(bountyIcon, bountyEyebrow, this.bountyTimerEl);
+    this.bountyTargetEl = document.createElement('div');
+    this.bountyTargetEl.className = 'fdr-bounty-target';
+    const bountyMeta = document.createElement('div');
+    bountyMeta.className = 'fdr-bounty-meta';
+    this.bountyDistEl = document.createElement('span');
+    this.bountyDistEl.className = 'fdr-bounty-dist';
+    this.bountyRewardEl = document.createElement('span');
+    this.bountyRewardEl.className = 'fdr-bounty-reward';
+    bountyMeta.append(this.bountyDistEl, this.bountyRewardEl);
+    this.bountyCardEl.append(bountyHead, this.bountyTargetEl, bountyMeta);
+
+    topLeftStack.append(
+      this.fpsBadgeEl,
+      this.killStreakEl,
+      this.vaultKeyBadgeEl,
+      this.bountyCardEl,
+    );
 
     // Compass
     const compassWrap = document.createElement('div');
@@ -228,6 +327,43 @@ export class HUDManager {
     this.compassReadoutEl.className = 'fdr-compass-readout';
     this.compassReadoutEl.textContent = '0°';
     compassWrap.append(centerMark, this.compassTapeEl, this.compassReadoutEl);
+
+    // Boss Encounter Healthbar (top-center below compass)
+    this.bossBarEl = document.createElement('div');
+    this.bossBarEl.className = 'fdr-boss-bar fdr-hidden';
+    const bossHead = document.createElement('div');
+    bossHead.className = 'fdr-boss-head';
+    const bossTitleGroup = document.createElement('div');
+    bossTitleGroup.className = 'fdr-boss-title-group';
+    const bossCrown = document.createElement('span');
+    bossCrown.className = 'fdr-boss-crown';
+    bossCrown.innerHTML = getCrownSvg();
+    this.bossNameEl = document.createElement('span');
+    this.bossNameEl.className = 'fdr-boss-name';
+    bossTitleGroup.append(bossCrown, this.bossNameEl);
+    const bossRightGroup = document.createElement('div');
+    bossRightGroup.className = 'fdr-boss-right-group';
+    this.bossStatsEl = document.createElement('span');
+    this.bossStatsEl.className = 'fdr-boss-stats';
+    this.bossDistEl = document.createElement('span');
+    this.bossDistEl.className = 'fdr-boss-dist';
+    bossRightGroup.append(this.bossStatsEl, this.bossDistEl);
+    bossHead.append(bossTitleGroup, bossRightGroup);
+
+    const bossBars = document.createElement('div');
+    bossBars.className = 'fdr-boss-bars';
+    const bossShieldTrack = document.createElement('div');
+    bossShieldTrack.className = 'fdr-boss-track shield';
+    this.bossShieldFillEl = document.createElement('div');
+    this.bossShieldFillEl.className = 'fdr-boss-fill shield';
+    bossShieldTrack.appendChild(this.bossShieldFillEl);
+    const bossHpTrack = document.createElement('div');
+    bossHpTrack.className = 'fdr-boss-track hp';
+    this.bossHpFillEl = document.createElement('div');
+    this.bossHpFillEl.className = 'fdr-boss-fill hp';
+    bossHpTrack.appendChild(this.bossHpFillEl);
+    bossBars.append(bossShieldTrack, bossHpTrack);
+    this.bossBarEl.append(bossHead, bossBars);
 
     // Phase hint
     this.phaseHintEl = document.createElement('div');
@@ -246,10 +382,10 @@ export class HUDManager {
     this.minimapCanvas.height = 220;
     this.minimapCanvas.className = 'fdr-minimap-canvas';
     this.minimapCtx = this.minimapCanvas.getContext('2d');
-    const mapKeyTag = document.createElement('div');
-    mapKeyTag.className = 'fdr-minimap-mapkey';
-    mapKeyTag.textContent = 'M • MAP';
-    minimapFrame.append(this.minimapCanvas, mapKeyTag);
+    this.mapKeyTagEl = document.createElement('div');
+    this.mapKeyTagEl.className = 'fdr-minimap-mapkey';
+    this.mapKeyTagEl.textContent = 'M • MAP';
+    minimapFrame.append(this.minimapCanvas, this.mapKeyTagEl);
 
     const teleRow = document.createElement('div');
     teleRow.className = 'fdr-telemetry-row';
@@ -290,7 +426,14 @@ export class HUDManager {
     this.locationChipEl = document.createElement('div');
     this.locationChipEl.className = 'fdr-zone-pill location fdr-hidden';
 
-    zoneMetaRow.append(this.stormDistEl, this.locationChipEl);
+    this.weatherPillEl = document.createElement('div');
+    this.weatherPillEl.className = 'fdr-zone-pill weather fdr-hidden';
+    this.weatherIconEl = document.createElement('span');
+    this.weatherIconEl.className = 'fdr-weather-icon';
+    this.weatherTextEl = document.createElement('span');
+    this.weatherPillEl.append(this.weatherIconEl, this.weatherTextEl);
+
+    zoneMetaRow.append(this.stormDistEl, this.locationChipEl, this.weatherPillEl);
     minimapCluster.append(minimapFrame, teleRow, zoneMetaRow);
 
     // Bottom-Left Kill Feed
@@ -329,8 +472,65 @@ export class HUDManager {
     chTrack.appendChild(this.channelFillEl);
     this.channelEl.append(chTop, chTrack);
 
-    const vitalsStack = document.createElement('div');
-    vitalsStack.className = 'fdr-vitals-stack';
+    // Vehicle Dashboard (above vitals when driving)
+    this.vehicleDashEl = document.createElement('div');
+    this.vehicleDashEl.className = 'fdr-vehicle-dash fdr-hidden';
+    const vehHead = document.createElement('div');
+    vehHead.className = 'fdr-vehicle-head';
+    const vehLeft = document.createElement('div');
+    vehLeft.className = 'fdr-vehicle-title-group';
+    this.vehicleIconEl = document.createElement('span');
+    this.vehicleIconEl.className = 'fdr-vehicle-icon';
+    this.vehicleIconEl.innerHTML = getVehicleIconSvg('hover_atv');
+    this.vehicleTitleEl = document.createElement('span');
+    this.vehicleTitleEl.className = 'fdr-vehicle-title';
+    this.vehicleTitleEl.textContent = 'HOVER ATV';
+    vehLeft.append(this.vehicleIconEl, this.vehicleTitleEl);
+    const vehRight = document.createElement('div');
+    vehRight.className = 'fdr-vehicle-readouts';
+    this.vehicleSpeedEl = document.createElement('span');
+    this.vehicleSpeedEl.className = 'fdr-vehicle-speed';
+    this.vehicleSpeedEl.textContent = '0 KM/H';
+    this.vehicleHpTextEl = document.createElement('span');
+    this.vehicleHpTextEl.className = 'fdr-vehicle-hp-text';
+    this.vehicleHpTextEl.textContent = '400 / 400';
+    vehRight.append(this.vehicleSpeedEl, this.vehicleHpTextEl);
+    vehHead.append(vehLeft, vehRight);
+
+    const vehBars = document.createElement('div');
+    vehBars.className = 'fdr-vehicle-bars';
+    const boostRow = document.createElement('div');
+    boostRow.className = 'fdr-vehicle-bar-row';
+    const boostLbl = document.createElement('span');
+    boostLbl.className = 'fdr-vehicle-bar-lbl';
+    boostLbl.textContent = 'BOOST';
+    const boostTrack = document.createElement('div');
+    boostTrack.className = 'fdr-vehicle-track';
+    this.vehicleBoostFillEl = document.createElement('div');
+    this.vehicleBoostFillEl.className = 'fdr-vehicle-fill boost';
+    boostTrack.appendChild(this.vehicleBoostFillEl);
+    boostRow.append(boostLbl, boostTrack);
+
+    const vHpRow = document.createElement('div');
+    vHpRow.className = 'fdr-vehicle-bar-row';
+    const vHpLbl = document.createElement('span');
+    vHpLbl.className = 'fdr-vehicle-bar-lbl';
+    vHpLbl.textContent = 'HULL';
+    const vHpTrack = document.createElement('div');
+    vHpTrack.className = 'fdr-vehicle-track';
+    this.vehicleHpFillEl = document.createElement('div');
+    this.vehicleHpFillEl.className = 'fdr-vehicle-fill hp';
+    vHpTrack.appendChild(this.vehicleHpFillEl);
+    vHpRow.append(vHpLbl, vHpTrack);
+    vehBars.append(boostRow, vHpRow);
+
+    this.vehicleHintEl = document.createElement('div');
+    this.vehicleHintEl.className = 'fdr-vehicle-hint';
+    this.vehicleHintEl.textContent = '[E] EXIT • [SHIFT] BOOST • [H] HORN';
+    this.vehicleDashEl.append(vehHead, vehBars, this.vehicleHintEl);
+
+    this.vitalsStackEl = document.createElement('div');
+    this.vitalsStackEl.className = 'fdr-vitals-stack';
 
     this.staminaWrapEl = document.createElement('div');
     this.staminaWrapEl.className = 'fdr-stamina-wrap fdr-hidden';
@@ -364,14 +564,84 @@ export class HUDManager {
     healthTxt.append(healthTag, this.healthTextEl);
     healthBar.append(this.healthFillEl, healthTxt);
 
-    vitalsStack.append(this.staminaWrapEl, shieldBar, healthBar);
+    this.vitalsStackEl.append(this.staminaWrapEl, shieldBar, healthBar);
     bottomCenter.append(
       this.contextHintsEl,
       this.siphonBadgeEl,
       this.interactEl,
       this.channelEl,
-      vitalsStack,
+      this.vehicleDashEl,
+      this.vitalsStackEl,
     );
+
+    // Live Spectator Bar
+    this.spectatorBarEl = document.createElement('div');
+    this.spectatorBarEl.className = 'fdr-spectator-bar fdr-hidden';
+    const specTop = document.createElement('div');
+    specTop.className = 'fdr-spec-top';
+    const specLeft = document.createElement('div');
+    specLeft.className = 'fdr-spec-identity';
+    const specTag = document.createElement('span');
+    specTag.className = 'fdr-spec-tag';
+    specTag.textContent = 'SPECTATING';
+    this.specTargetNameEl = document.createElement('span');
+    this.specTargetNameEl.className = 'fdr-spec-name';
+    specLeft.append(specTag, this.specTargetNameEl);
+
+    const specMeta = document.createElement('div');
+    specMeta.className = 'fdr-spec-meta';
+    this.specElimsEl = document.createElement('span');
+    this.specElimsEl.className = 'fdr-spec-stat elims';
+    this.specAliveEl = document.createElement('span');
+    this.specAliveEl.className = 'fdr-spec-stat alive';
+    specMeta.append(this.specElimsEl, this.specAliveEl);
+    specTop.append(specLeft, specMeta);
+
+    const specBars = document.createElement('div');
+    specBars.className = 'fdr-spec-bars';
+    const specShieldWrap = document.createElement('div');
+    specShieldWrap.className = 'fdr-spec-bar';
+    this.specShieldFillEl = document.createElement('div');
+    this.specShieldFillEl.className = 'fdr-vital-fill shield';
+    const specShieldLbl = document.createElement('div');
+    specShieldLbl.className = 'fdr-spec-bar-txt';
+    const specShieldTag = document.createElement('span');
+    specShieldTag.textContent = 'SHIELD';
+    this.specShieldTextEl = document.createElement('span');
+    specShieldLbl.append(specShieldTag, this.specShieldTextEl);
+    specShieldWrap.append(this.specShieldFillEl, specShieldLbl);
+
+    const specHpWrap = document.createElement('div');
+    specHpWrap.className = 'fdr-spec-bar';
+    this.specHpFillEl = document.createElement('div');
+    this.specHpFillEl.className = 'fdr-vital-fill health';
+    const specHpLbl = document.createElement('div');
+    specHpLbl.className = 'fdr-spec-bar-txt';
+    const specHpTag = document.createElement('span');
+    specHpTag.textContent = 'HEALTH';
+    this.specHpTextEl = document.createElement('span');
+    specHpLbl.append(specHpTag, this.specHpTextEl);
+    specHpWrap.append(this.specHpFillEl, specHpLbl);
+    specBars.append(specShieldWrap, specHpWrap);
+
+    const specActions = document.createElement('div');
+    specActions.className = 'fdr-spec-actions';
+    const specNextBtn = document.createElement('button');
+    specNextBtn.type = 'button';
+    specNextBtn.className = 'fdr-spec-btn next';
+    specNextBtn.textContent = '[TAB] NEXT PLAYER';
+    specNextBtn.addEventListener('click', () => {
+      this.callbacks.onSpectateNext?.();
+    });
+    const specSummaryBtn = document.createElement('button');
+    specSummaryBtn.type = 'button';
+    specSummaryBtn.className = 'fdr-spec-btn summary';
+    specSummaryBtn.textContent = '[ESC] MATCH SUMMARY';
+    specSummaryBtn.addEventListener('click', () => {
+      this.callbacks.onSpectateMatchSummary?.();
+    });
+    specActions.append(specNextBtn, specSummaryBtn);
+    this.spectatorBarEl.append(specTop, specBars, specActions);
 
     // Bottom-Right Build & Hotbar
     const bottomRight = document.createElement('div');
@@ -400,9 +670,16 @@ export class HUDManager {
     for (const bp of BUILD_PIECES) {
       const tile = document.createElement('div');
       tile.className = 'fdr-build-tile';
-      tile.innerHTML = `<span class="fdr-build-key">${bp.key}</span>${getBuildIconSvg(bp.type)}`;
+      const keySpan = document.createElement('span');
+      keySpan.className = 'fdr-build-key';
+      keySpan.textContent = bp.key;
+      const svgWrap = document.createElement('span');
+      svgWrap.style.display = 'inline-flex';
+      svgWrap.innerHTML = getBuildIconSvg(bp.type);
+      tile.append(keySpan, svgWrap);
       buildTiles.appendChild(tile);
       this.buildEls.set(bp.type, tile);
+      this.buildKeyEls.set(bp.type, keySpan);
     }
 
     buildMatsBar.append(matsStrip, buildTiles);
@@ -418,6 +695,22 @@ export class HUDManager {
     this.ammoResEl.className = 'fdr-ammo-res';
     this.ammoWrapEl.append(this.ammoMainEl, this.ammoResEl);
 
+    this.grapplerBadgeEl = document.createElement('div');
+    this.grapplerBadgeEl.className = 'fdr-grappler-badge fdr-hidden';
+    const grapplerIcon = document.createElement('span');
+    grapplerIcon.className = 'fdr-grappler-icon';
+    grapplerIcon.innerHTML = getWeaponSvg('grappler');
+    const grapplerMeta = document.createElement('div');
+    grapplerMeta.className = 'fdr-grappler-meta';
+    const grapplerTitle = document.createElement('span');
+    grapplerTitle.className = 'fdr-grappler-title';
+    grapplerTitle.textContent = 'GRAPPLER';
+    this.grapplerCountEl = document.createElement('span');
+    this.grapplerCountEl.className = 'fdr-grappler-count';
+    this.grapplerCountEl.textContent = '10 CHARGES';
+    grapplerMeta.append(grapplerTitle, this.grapplerCountEl);
+    this.grapplerBadgeEl.append(grapplerIcon, grapplerMeta);
+
     const hotbarSlots = document.createElement('div');
     hotbarSlots.className = 'fdr-hotbar-slots';
     for (let i = 0; i < 6; i++) {
@@ -428,7 +721,7 @@ export class HUDManager {
       this.slotEls.push(card);
     }
 
-    hotbarWrap.append(this.ammoWrapEl, hotbarSlots);
+    hotbarWrap.append(this.ammoWrapEl, this.grapplerBadgeEl, hotbarSlots);
     bottomRight.append(buildMatsBar, hotbarWrap);
 
     // Center Tactical Overlays
@@ -498,17 +791,17 @@ export class HUDManager {
     }
     const editActions = document.createElement('div');
     editActions.className = 'fdr-edit-actions';
-    const confirmBtn = document.createElement('button');
-    confirmBtn.type = 'button';
-    confirmBtn.className = 'fdr-edit-btn confirm';
-    confirmBtn.textContent = 'CONFIRM [G]';
-    confirmBtn.addEventListener('click', () => this.callbacks.onEditConfirm());
+    this.editConfirmBtn = document.createElement('button');
+    this.editConfirmBtn.type = 'button';
+    this.editConfirmBtn.className = 'fdr-edit-btn confirm';
+    this.editConfirmBtn.textContent = 'CONFIRM [G]';
+    this.editConfirmBtn.addEventListener('click', () => this.callbacks.onEditConfirm());
     const resetBtn = document.createElement('button');
     resetBtn.type = 'button';
     resetBtn.className = 'fdr-edit-btn';
     resetBtn.textContent = 'RESET [RMB]';
     resetBtn.addEventListener('click', () => this.callbacks.onEditReset());
-    editActions.append(confirmBtn, resetBtn);
+    editActions.append(this.editConfirmBtn, resetBtn);
     this.editOverlayEl.append(editHead, editGrid, editActions);
 
     // Radial Emote Wheel (supports 6 radial slices cleanly around center)
@@ -561,22 +854,26 @@ export class HUDManager {
     // Pointer lock prompt
     this.pointerPromptEl = document.createElement('div');
     this.pointerPromptEl.className = 'fdr-pointer-prompt fdr-hidden';
-    this.pointerPromptEl.innerHTML = `
-      <div class="fdr-pointer-title">CLICK SCREEN TO AIM &amp; PLAY</div>
-      <div class="fdr-pointer-sub">ESC / P: PAUSE • M: TACTICAL MAP • B: EMOTES</div>
-    `;
+    const ptrTitle = document.createElement('div');
+    ptrTitle.className = 'fdr-pointer-title';
+    ptrTitle.textContent = 'CLICK SCREEN TO AIM & PLAY';
+    this.pointerSubEl = document.createElement('div');
+    this.pointerSubEl.className = 'fdr-pointer-sub';
+    this.pointerSubEl.textContent = 'ESC / P: PAUSE • M: TACTICAL MAP • B: EMOTES';
+    this.pointerPromptEl.append(ptrTitle, this.pointerSubEl);
 
     this.containerEl.append(
       this.speedLinesEl,
       this.lowHealthVignetteEl,
       this.stormVignetteEl,
-      this.fpsBadgeEl,
-      this.killStreakEl,
+      topLeftStack,
       compassWrap,
+      this.bossBarEl,
       this.phaseHintEl,
       minimapCluster,
       this.killFeedEl,
       bottomCenter,
+      this.spectatorBarEl,
       bottomRight,
       this.crosshairEl,
       this.scopeEl,
@@ -589,6 +886,7 @@ export class HUDManager {
     );
 
     this.root.appendChild(this.containerEl);
+    this.applySettingsKeybinds();
 
     if (typeof window !== 'undefined') {
       window.addEventListener('mouseup', this.pointerUpHandler);
@@ -600,10 +898,31 @@ export class HUDManager {
   }
 
   setSettings(settings: GameSettings): void {
-    this.settings = { ...settings };
+    this.settings = cloneSettings(settings);
     if (!this.settings.showFps) {
       this.fpsBadgeEl.classList.add('fdr-hidden');
     }
+    this.applySettingsKeybinds();
+  }
+
+  private applySettingsKeybinds(): void {
+    const kb = resolveKeybinds(this.settings.keybinds);
+    const mapKey = formatKeyCodeLabel(kb.map);
+    const emoteKey = formatKeyCodeLabel(kb.emote);
+    const editKey = formatKeyCodeLabel(kb.edit);
+    const interactKey = formatKeyCodeLabel(kb.interact);
+
+    this.mapKeyTagEl.textContent = `${mapKey} • MAP`;
+    this.buildKeyEls.get('wall')!.textContent = formatKeyCodeLabel(kb.buildWall);
+    this.buildKeyEls.get('floor')!.textContent = formatKeyCodeLabel(kb.buildFloor);
+    this.buildKeyEls.get('ramp')!.textContent = formatKeyCodeLabel(kb.buildRamp);
+    this.buildKeyEls.get('roof')!.textContent = formatKeyCodeLabel(kb.buildRoof);
+    this.editConfirmBtn.textContent = `CONFIRM [${editKey}]`;
+    this.pointerSubEl.textContent = `ESC / P: PAUSE • ${mapKey}: TACTICAL MAP • ${emoteKey}: EMOTES`;
+    this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [SHIFT] BOOST • [H] HORN`;
+
+    this.lastContextHintKey = '';
+    this.lastVehicleKey = '';
   }
 
   setTerrainMapCanvas(canvas: HTMLCanvasElement): void {
@@ -647,6 +966,21 @@ export class HUDManager {
     this.lastLowHealthPulse = -1;
     this.contextHintsEl.classList.add('fdr-hidden');
     this.lastContextHintKey = '';
+    this.vehicleDashEl.classList.add('fdr-hidden');
+    this.lastVehicleKey = '';
+    this.bossBarEl.classList.add('fdr-hidden');
+    this.lastBossKey = '';
+    this.bountyCardEl.classList.add('fdr-hidden');
+    this.lastBountyKey = '';
+    this.vaultKeyBadgeEl.classList.add('fdr-hidden');
+    this.lastVaultKeyCount = -1;
+    this.weatherPillEl.classList.add('fdr-hidden');
+    this.lastWeatherKey = '';
+    this.grapplerBadgeEl.classList.add('fdr-hidden');
+    this.lastGrapplerKey = '';
+    this.spectatorBarEl.classList.add('fdr-hidden');
+    this.vitalsStackEl.classList.remove('fdr-hidden');
+    this.lastSpectatingKey = '';
   }
 
   triggerSiphonFlash(
@@ -807,6 +1141,7 @@ export class HUDManager {
     this.updateInteractAndChannel(state);
     this.updateMaterialsAndBuilds(state);
     this.updateHotbar(state);
+    this.updateWave2HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -923,8 +1258,8 @@ export class HUDManager {
       }
     }
 
-    const hints = getContextualHudHints(state);
-    const hintKey = hints.map((h) => h.id).join(':');
+    const hints = getContextualHudHints(state, this.settings.keybinds);
+    const hintKey = hints.map((h) => `${h.id}:${h.key}`).join(':');
     if (hintKey !== this.lastContextHintKey) {
       this.lastContextHintKey = hintKey;
       this.contextHintsEl.classList.toggle('fdr-hidden', hints.length === 0);
@@ -1220,6 +1555,142 @@ export class HUDManager {
     }
   }
 
+  private updateWave2HUD(state: HUDState): void {
+    // 1. Vault Key Badge
+    const vaultKeys = Math.max(0, Math.floor(state.activeVaultKeys ?? 0));
+    if (vaultKeys !== this.lastVaultKeyCount) {
+      this.lastVaultKeyCount = vaultKeys;
+      this.vaultKeyBadgeEl.classList.toggle('fdr-hidden', vaultKeys <= 0);
+      if (vaultKeys > 0) {
+        this.vaultKeyTextEl.textContent =
+          vaultKeys === 1 ? '1 VAULT KEY' : `${vaultKeys} VAULT KEYS`;
+      }
+    }
+
+    // 2. Weather Pill
+    const weather = state.weather;
+    const weatherKey = weather ?? '';
+    if (weatherKey !== this.lastWeatherKey) {
+      this.lastWeatherKey = weatherKey;
+      this.weatherPillEl.classList.toggle('fdr-hidden', !weather);
+      if (weather) {
+        this.weatherPillEl.className = `fdr-zone-pill weather weather-${weather}`;
+        this.weatherIconEl.innerHTML = getWeatherIconSvg(weather);
+        this.weatherTextEl.textContent = formatWeatherLabel(weather);
+      }
+    }
+
+    // 3. Boss Encounter Healthbar (top-center below compass)
+    const boss = state.nearbyBoss ?? null;
+    const bossKey = boss
+      ? `${boss.name}:${Math.round(boss.hp)}/${Math.round(boss.maxHp)}:${Math.round(boss.shield)}/${Math.round(boss.maxShield)}:${Math.round(boss.distance)}`
+      : '';
+    if (bossKey !== this.lastBossKey) {
+      this.lastBossKey = bossKey;
+      this.bossBarEl.classList.toggle('fdr-hidden', !boss);
+      if (boss) {
+        const hp = Math.max(0, Math.round(boss.hp));
+        const maxHp = Math.max(1, Math.round(boss.maxHp));
+        const shield = Math.max(0, Math.round(boss.shield));
+        const maxShield = Math.max(0, Math.round(boss.maxShield));
+        this.bossNameEl.textContent = boss.name.toUpperCase();
+        this.bossStatsEl.textContent = `HP ${hp}/${maxHp} • SHD ${shield}/${maxShield}`;
+        this.bossDistEl.textContent = `${Math.max(0, Math.round(boss.distance))}M`;
+        this.bossHpFillEl.style.width = `${Math.min(100, (hp / maxHp) * 100).toFixed(1)}%`;
+        this.bossShieldFillEl.style.width =
+          maxShield > 0
+            ? `${Math.min(100, (shield / maxShield) * 100).toFixed(1)}%`
+            : '0%';
+      }
+    }
+
+    // 4. Active Bounty Card
+    const bounty = state.activeBounty ?? null;
+    const bountySec = bounty ? Math.max(0, Math.ceil(bounty.timeRemaining)) : -1;
+    const bountyKey = bounty
+      ? `${bounty.targetName}:${Math.round(bounty.distance)}:${bountySec}:${bounty.rewardLabel}`
+      : '';
+    if (bountyKey !== this.lastBountyKey) {
+      this.lastBountyKey = bountyKey;
+      this.bountyCardEl.classList.toggle('fdr-hidden', !bounty);
+      if (bounty) {
+        this.bountyTargetEl.textContent = bounty.targetName;
+        this.bountyDistEl.textContent = `${Math.max(0, Math.round(bounty.distance))}M`;
+        this.bountyRewardEl.textContent = bounty.rewardLabel;
+        this.bountyTimerEl.textContent = formatCountdown(bounty.timeRemaining);
+        this.bountyCardEl.classList.toggle('urgent', bounty.timeRemaining <= 15);
+      }
+    }
+
+    // 5. Vehicle Dashboard
+    const veh = state.vehicle ?? null;
+    const interactKey = formatKeyCodeLabel(
+      resolveKeybinds(this.settings.keybinds).interact,
+    );
+    const vehKey = veh
+      ? `${veh.kind}:${Math.round(veh.speedKmh)}:${Math.round(veh.hp)}/${Math.round(veh.maxHp)}:${Math.round(normalizeBoostChargePct(veh.boostCharge))}:${veh.isBoosting ? 1 : 0}:${interactKey}`
+      : '';
+    if (vehKey !== this.lastVehicleKey) {
+      this.lastVehicleKey = vehKey;
+      this.vehicleDashEl.classList.toggle('fdr-hidden', !veh);
+      if (veh) {
+        const hp = Math.max(0, Math.round(veh.hp));
+        const maxHp = Math.max(1, Math.round(veh.maxHp));
+        const hpPct = Math.min(100, (hp / maxHp) * 100);
+        const boostPct = normalizeBoostChargePct(veh.boostCharge);
+        this.vehicleIconEl.innerHTML = getVehicleIconSvg(veh.kind);
+        this.vehicleTitleEl.textContent = formatVehicleKindLabel(veh.kind);
+        this.vehicleSpeedEl.textContent = `${Math.max(0, Math.round(veh.speedKmh))} KM/H`;
+        this.vehicleSpeedEl.classList.toggle('boosting', veh.isBoosting);
+        this.vehicleHpTextEl.textContent = `${hp} / ${maxHp}`;
+        this.vehicleBoostFillEl.style.width = `${boostPct.toFixed(1)}%`;
+        this.vehicleBoostFillEl.classList.toggle('boosting', veh.isBoosting);
+        this.vehicleHpFillEl.style.width = `${hpPct.toFixed(1)}%`;
+        this.vehicleHpFillEl.classList.toggle('low', hpPct <= 30);
+        this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [SHIFT] BOOST • [H] HORN`;
+      }
+    }
+
+    // 6. Grappler Charges Badge
+    const grapplerVal =
+      typeof state.grapplerCharges === 'number' &&
+      Number.isFinite(state.grapplerCharges)
+        ? Math.max(0, Math.round(state.grapplerCharges))
+        : null;
+    const grapplerKey = grapplerVal === null ? '' : String(grapplerVal);
+    if (grapplerKey !== this.lastGrapplerKey) {
+      this.lastGrapplerKey = grapplerKey;
+      this.grapplerBadgeEl.classList.toggle('fdr-hidden', grapplerVal === null);
+      if (grapplerVal !== null) {
+        this.grapplerCountEl.textContent =
+          grapplerVal === 1 ? '1 CHARGE' : `${grapplerVal} CHARGES`;
+        this.grapplerBadgeEl.classList.toggle('empty', grapplerVal === 0);
+      }
+    }
+
+    // 7. Live Spectator Bar
+    const spec = state.spectating ?? null;
+    const specKey = spec
+      ? `${spec.targetName}:${Math.round(spec.targetHp)}:${Math.round(spec.targetShield)}:${Math.round(spec.targetKills)}:${Math.round(spec.aliveCount)}`
+      : '';
+    if (specKey !== this.lastSpectatingKey) {
+      this.lastSpectatingKey = specKey;
+      this.spectatorBarEl.classList.toggle('fdr-hidden', !spec);
+      this.vitalsStackEl.classList.toggle('fdr-hidden', Boolean(spec));
+      if (spec) {
+        const hp = Math.max(0, Math.min(100, Math.round(spec.targetHp)));
+        const shield = Math.max(0, Math.min(100, Math.round(spec.targetShield)));
+        this.specTargetNameEl.textContent = spec.targetName;
+        this.specShieldTextEl.textContent = `${shield} / 100`;
+        this.specHpTextEl.textContent = `${hp} / 100`;
+        this.specShieldFillEl.style.width = `${shield}%`;
+        this.specHpFillEl.style.width = `${hp}%`;
+        this.specElimsEl.textContent = `${Math.max(0, Math.round(spec.targetKills))} ELIMS`;
+        this.specAliveEl.textContent = `${Math.max(0, Math.round(spec.aliveCount))} ALIVE`;
+      }
+    }
+  }
+
   private updateCenterCombat(state: HUDState, now: number): void {
     if (this.lastScoped !== state.isScoped) {
       this.lastScoped = state.isScoped;
@@ -1230,6 +1701,7 @@ export class HUDManager {
       state.isScoped ||
       state.editMode.active ||
       state.phase === 'bus' ||
+      Boolean(state.spectating) ||
       this.emoteWheelOpen;
     this.crosshairEl.classList.toggle('fdr-hidden', hideCrosshair);
 
@@ -1289,6 +1761,7 @@ export class HUDManager {
       !this.suppressPointerPrompt &&
       !this.emoteWheelOpen &&
       !state.editMode.active &&
+      !state.spectating &&
       !state.pointerLocked &&
       state.phase === 'playing';
     if (shouldShow === this.lastPointerPromptVisible) return;

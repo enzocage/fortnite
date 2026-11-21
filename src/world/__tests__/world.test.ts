@@ -20,10 +20,14 @@ import {
   StormSystem,
   TerrainSystem,
   TextureFactory,
+  VehicleSystem,
+  VOLCANO_CENTER_X,
+  VOLCANO_CENTER_Z,
   WorldBuilder,
   WorldInteractables,
   type BumpTextureKind,
 } from '../index';
+import type { WeatherKind } from '../../types';
 
 function createMockCanvasEnvironment() {
   const noop = () => {};
@@ -868,6 +872,295 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     detail.update(0.016, 1.0);
     detail.dispose();
 
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('constructs 3 interactive Mythic Boss Vaults at Skyline, Caldera & Frostpeak and unlocks smoothly', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const soundSpy = vi.fn();
+    bus.on('sound:play', soundSpy);
+
+    const interactables = new WorldInteractables(terrain, bus);
+    const vaults = interactables.getVaults();
+    expect(vaults).toHaveLength(3);
+
+    const poiIds = new Set(vaults.map((v) => v.poiId));
+    expect(poiIds).toEqual(
+      new Set(['skyline_spire', 'scorched_caldera', 'frostpeak_citadel']),
+    );
+    for (const v of vaults) {
+      expect(v.unlocked).toBe(false);
+      expect(v.opened).toBe(false);
+      expect(v.bossName.length).toBeGreaterThan(3);
+      expect(Number.isFinite(v.x)).toBe(true);
+      expect(Number.isFinite(v.y)).toBe(true);
+      expect(Number.isFinite(v.z)).toBe(true);
+      expect(terrain.isWater(v.x, v.z)).toBe(false);
+    }
+
+    const colsBefore = interactables.getVaultColliders().length;
+    expect(colsBefore).toBe(15); // 3 vaults * (4 bunker walls/roof + 1 door)
+
+    const targetVault = vaults[0];
+    expect(interactables.unlockVault('nonexistent_vault')).toEqual({ unlocked: false });
+
+    const unlockRes = interactables.unlockVault(targetVault.id);
+    expect(unlockRes.unlocked).toBe(true);
+    expect(unlockRes.lootPos).toBeDefined();
+    expect(Number.isFinite(unlockRes.lootPos!.x)).toBe(true);
+    expect(Number.isFinite(unlockRes.lootPos!.y)).toBe(true);
+    expect(Number.isFinite(unlockRes.lootPos!.z)).toBe(true);
+    expect(targetVault.unlocked).toBe(true);
+    expect(targetVault.opened).toBe(false);
+    expect(soundSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'vault_unlock' }),
+    );
+    expect(interactables.getVaultColliders().length).toBe(colsBefore - 1);
+
+    // Double unlock rejected cleanly
+    expect(interactables.unlockVault(targetVault.id)).toEqual({ unlocked: false });
+
+    // Door animates open smoothly over update()
+    for (let i = 0; i < 30; i++) {
+      interactables.update(0.05, i * 0.05);
+    }
+    expect(targetVault.opened).toBe(true);
+
+    interactables.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('VehicleSystem', () => {
+  it('spawns 8 deterministic hover vehicles (4 hover_atv + 4 cyber_bike) clear of water and buildings', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+
+    const vs1 = new VehicleSystem(terrain, undefined, 4201);
+    const vs2 = new VehicleSystem(terrain, undefined, 4201);
+
+    const v1 = vs1.getVehicles();
+    const v2 = vs2.getVehicles();
+    expect(v1).toHaveLength(8);
+    expect(v2).toHaveLength(8);
+    expect(v1.filter((v) => v.kind === 'hover_atv')).toHaveLength(4);
+    expect(v1.filter((v) => v.kind === 'cyber_bike')).toHaveLength(4);
+    expect(vs1.getGroup()).toBeInstanceOf(THREE.Group);
+    expect(vs1.getActiveVehicleColliders()).toHaveLength(8);
+
+    for (let i = 0; i < v1.length; i++) {
+      expect(v1[i].id).toBe(v2[i].id);
+      expect(v1[i].x).toBe(v2[i].x);
+      expect(v1[i].z).toBe(v2[i].z);
+      expect(terrain.isWater(v1[i].x, v1[i].z)).toBe(false);
+      expect(v1[i].hp).toBe(v1[i].maxHp);
+      expect(v1[i].driverId).toBeNull();
+      expect(v1[i].destroyed).toBe(false);
+
+      // Must not spawn embedded inside solid building walls
+      const overlapsWall = world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.maxY > v1[i].y &&
+          c.minY < v1[i].y + 1.5 &&
+          v1[i].x >= c.minX - 1.0 &&
+          v1[i].x <= c.maxX + 1.0 &&
+          v1[i].z >= c.minZ - 1.0 &&
+          v1[i].z <= c.maxZ + 1.0,
+      );
+      expect(overlapsWall).toBe(false);
+    }
+
+    vs1.dispose();
+    vs2.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('supports enter, driving, steering, boost VFX, water/lava hover float, exit, damage, spawn, and reset', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const boostSpy = vi.fn();
+    const explosionSpy = vi.fn();
+    bus.on('vfx:vehicle_boost', boostSpy);
+    bus.on('vfx:explosion', explosionSpy);
+
+    const vs = new VehicleSystem(terrain, bus, 4201);
+    const first = vs.getVehicles()[0];
+
+    expect(vs.enterVehicle(first.id, 'player')).toBe(true);
+    expect(first.driverId).toBe('player');
+    expect(vs.enterVehicle(first.id, 'bot_1')).toBe(false);
+
+    const startX = first.x;
+    const startZ = first.z;
+    const startYaw = first.yaw;
+
+    for (let i = 0; i < 15; i++) {
+      vs.driveVehicle(first.id, 1, 0.8, true, 0.05);
+      vs.update(0.05, i * 0.05);
+    }
+
+    expect(Math.hypot(first.x - startX, first.z - startZ)).toBeGreaterThan(4);
+    expect(first.yaw).not.toBeCloseTo(startYaw, 3);
+    expect(first.boostCharge).toBeLessThan(1.0);
+    expect(Number.isFinite(first.y)).toBe(true);
+    expect(Number.isFinite(first.pitch)).toBe(true);
+    expect(Number.isFinite(first.roll)).toBe(true);
+    expect(boostSpy).toHaveBeenCalled();
+
+    // Wrong driver cannot exit
+    expect(vs.exitVehicle(first.id, 'bot_1')).toBeNull();
+    const exitPos = vs.exitVehicle(first.id, 'player');
+    expect(exitPos).not.toBeNull();
+    expect(Number.isFinite(exitPos!.x)).toBe(true);
+    expect(Number.isFinite(exitPos!.y)).toBe(true);
+    expect(Number.isFinite(exitPos!.z)).toBe(true);
+    expect(first.driverId).toBeNull();
+
+    // Water floatation over Crystal Basin lake (25 + 35, -115)
+    const waterBike = vs.spawnVehicleAt('cyber_bike', 60, -115, 0);
+    expect(vs.getVehicles()).toHaveLength(9);
+    expect(terrain.isWater(waterBike.x, waterBike.z)).toBe(true);
+    expect(waterBike.y).toBeGreaterThan(WATER_LEVEL + 0.3);
+
+    // Volcanic lava thermal float & boost recharge over Scorched Caldera
+    const lavaAtv = vs.spawnVehicleAt('hover_atv', VOLCANO_CENTER_X, VOLCANO_CENTER_Z, 0);
+    lavaAtv.boostCharge = 0.2;
+    vs.driveVehicle(lavaAtv.id, 1, 0, false, 0.25);
+    expect(lavaAtv.y).toBeGreaterThan(terrain.getHeightAt(VOLCANO_CENTER_X, VOLCANO_CENTER_Z) + 1.5);
+    expect(lavaAtv.boostCharge).toBeGreaterThan(0.2);
+
+    // Damage & explosion
+    expect(vs.damageVehicle(first.id, 100, { x: first.x, y: first.y, z: first.z })).toBe(false);
+    expect(first.hp).toBe(first.maxHp - 100);
+    expect(
+      vs.damageVehicle(first.id, first.hp + 50, { x: first.x, y: first.y, z: first.z }),
+    ).toBe(true);
+    expect(first.destroyed).toBe(true);
+    expect(first.hp).toBe(0);
+    expect(explosionSpy).toHaveBeenCalledTimes(1);
+    expect(vs.enterVehicle(first.id, 'player')).toBe(false);
+    expect(vs.getActiveVehicleColliders()).toHaveLength(9);
+
+    vs.reset();
+    expect(vs.getVehicles()).toHaveLength(8);
+    expect(vs.getVehicles().every((v) => !v.destroyed && v.hp === v.maxHp)).toBe(true);
+
+    vs.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('EnvironmentFX Wave-2 Weather & Rain', () => {
+  it('supports all 5 weather states, smooth automatic transitions, rain streaks, and storm lightning', () => {
+    const bus = new EventBus();
+    const lightningSpy = vi.fn();
+    const soundSpy = vi.fn();
+    bus.on('vfx:lightning_flash', lightningSpy);
+    bus.on('sound:play', soundSpy);
+
+    const fx = new EnvironmentFX(4201, bus);
+    const rainMesh = fx.getGroup().getObjectByName('RainStreaks') as THREE.LineSegments;
+    const skyMesh = fx.getGroup().getObjectByName('SkyDome') as THREE.Mesh;
+    const skyMat = skyMesh.material as THREE.ShaderMaterial;
+    expect(rainMesh).toBeDefined();
+    expect(rainMesh.visible).toBe(false);
+
+    const kinds: WeatherKind[] = ['clear', 'golden_hour', 'overcast', 'rain', 'storm_front'];
+    for (const k of kinds) {
+      fx.setWeather(k);
+      expect(fx.getWeatherState().kind).toBe(k);
+      fx.update(0.25, 1.0, { x: 10, y: 12, z: 10 }, 'grassland');
+      if (k === 'rain' || k === 'storm_front') {
+        expect(rainMesh.visible).toBe(true);
+      } else {
+        expect(rainMesh.visible).toBe(false);
+      }
+    }
+
+    // Golden hour warmth vs Storm overcast shader uniforms
+    fx.setWeather('golden_hour');
+    for (let i = 0; i < 15; i++) fx.update(0.1, i * 0.1);
+    expect(skyMat.uniforms.uWarmth.value).toBeGreaterThan(0.5);
+
+    fx.setWeather('storm_front');
+    for (let i = 0; i < 40; i++) {
+      fx.update(0.2, 10 + i * 0.2, { x: 0, y: 14, z: 0 }, 'grassland');
+    }
+    expect(skyMat.uniforms.uOvercast.value).toBeGreaterThan(0.7);
+    expect(lightningSpy).toHaveBeenCalled();
+    expect(soundSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'weather_thunder' }),
+    );
+
+    // Resume automatic weather cycle over match time
+    fx.setWeather();
+    const seenAutoKinds = new Set<WeatherKind>();
+    for (let t = 0; t <= 300; t += 20) {
+      fx.update(0.5, t, { x: 0, y: 12, z: 0 }, 'grassland');
+      seenAutoKinds.add(fx.getWeatherState().kind);
+    }
+    expect(seenAutoKinds).toEqual(new Set(kinds));
+
+    fx.dispose();
+  });
+});
+
+describe('PropsAndLoot Wave-2 Loot Pools', () => {
+  it('spawns grappler and shield_bubble across floor, chest, and supply-drop loot pools', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 220; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('grappler')).toBe(true);
+    expect(chestIds.has('grappler')).toBe(true);
+
+    const consumableIds = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const c = pal.rollConsumable();
+      expect(WEAPONS[c.weaponId].allowedRarities).toContain(c.rarity);
+      expect(c.magAmmo).toBe(0);
+      consumableIds.add(c.weaponId);
+    }
+    expect(consumableIds.has('shield_bubble')).toBe(true);
+
+    // Open multiple supply drops and confirm grappler & shield_bubble both appear
+    const supplyItemIds = new Set<string>();
+    for (let i = 0; i < 30; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    for (const drop of pal.getLootDrops()) {
+      if (drop.item) {
+        expect(WEAPONS[drop.item.weaponId].allowedRarities).toContain(drop.item.rarity);
+        supplyItemIds.add(drop.item.weaponId);
+      }
+    }
+    expect(supplyItemIds.has('grappler')).toBe(true);
+    expect(supplyItemIds.has('shield_bubble')).toBe(true);
+
+    pal.dispose();
     builder.dispose();
     terrain.dispose();
   });

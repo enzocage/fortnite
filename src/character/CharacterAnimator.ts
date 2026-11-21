@@ -154,7 +154,8 @@ function isThrowable(weaponId: WeaponId): boolean {
   return (
     weaponId === 'shockwave_grenade' ||
     weaponId === 'frag_grenade' ||
-    weaponId === 'chug_splash'
+    weaponId === 'chug_splash' ||
+    weaponId === 'shield_bubble'
   );
 }
 
@@ -190,7 +191,7 @@ function resolveAnimState(state: CharacterRenderState): AnimState {
 
 /**
  * Procedural skeletal animator for CharacterRig.
- * Supports all 19 AnimStates, all 6 EmoteId dances, banking lean, aiming pitch, and recoil kick.
+ * Supports all 20 AnimStates, all 6 EmoteId dances, banking lean, aiming pitch, and recoil kick.
  */
 export class CharacterAnimator {
   private readonly rigStates = new WeakMap<CharacterRig, RigAnimData>();
@@ -242,6 +243,7 @@ export class CharacterAnimator {
     const t = data.time;
     const speed = finiteOr(state.moveSpeed);
     const velY = clamp(finiteOr(state.velocityY), -25, 25);
+    const lean = clamp(finiteOr(state.leanAngle), -0.45, 0.45);
 
     // 1. Base locomotion / full-body action pose
     switch (anim) {
@@ -280,6 +282,9 @@ export class CharacterAnimator {
         break;
       case 'zipline':
         this.applyZiplinePose(p, t);
+        break;
+      case 'drive':
+        this.applyDrivePose(p, t, speed, lean);
         break;
       case 'skydive':
         this.applySkydivePose(p, t);
@@ -327,8 +332,7 @@ export class CharacterAnimator {
         break;
     }
 
-    // 2. Banking lean roll (carving turns during sprint, slide, glide, swim, etc.)
-    const lean = clamp(finiteOr(state.leanAngle), -0.45, 0.45);
+    // 2. Banking lean roll (carving turns during sprint, slide, glide, drive, swim, etc.)
     if (lean !== 0 && anim !== 'emote' && anim !== 'heal') {
       p.hipsRz += lean * 0.55;
       p.spineRz += lean * 0.35;
@@ -342,6 +346,7 @@ export class CharacterAnimator {
     const suppressWeaponAim =
       anim === 'skydive' ||
       anim === 'glide' ||
+      anim === 'drive' ||
       anim === 'emote' ||
       anim === 'harvest' ||
       anim === 'reload' ||
@@ -372,8 +377,17 @@ export class CharacterAnimator {
 
     // 5. Smoothly damp joints toward target pose (instant snap on dt === 0 for deterministic single-step tests)
     const blendLambda =
-      anim === 'emote' || anim === 'harvest' || anim === 'slide' || anim === 'mantle' ? 22 : 16;
+      anim === 'emote' || anim === 'harvest' || anim === 'slide' || anim === 'mantle' || anim === 'drive'
+        ? 22
+        : 16;
     this.applyPoseToJoints(rig, p, blendLambda, safeDt);
+
+    // 6. Sync Boss Crown Aura state & animation if provided or active
+    if (state.isBoss !== undefined) {
+      rig.setBossAura(Boolean(state.isBoss), data.time);
+    } else if (rig.isBossAuraEnabled()) {
+      rig.setBossAura(true, data.time);
+    }
   }
 
   private applyIdlePose(p: PoseTarget, t: number): void {
@@ -634,6 +648,47 @@ export class CharacterAnimator {
     p.rFoRx = 0.32;
   }
 
+  private applyDrivePose(p: PoseTarget, t: number, speed: number, lean: number): void {
+    const hoverHum = Math.sin(t * (speed > 1.5 ? 16 : 5)) * (speed > 1.5 ? 0.01 : 0.006);
+    const speedTilt = clamp(speed / 24, 0, 1) * 0.12;
+    const steerPull = lean * 0.18;
+
+    // Seated hover-saddle posture leaning subtly forward over handlebars
+    p.hipsY = 0.62 + hoverHum;
+    p.hipsRx = -0.08;
+    p.spineRx = 0.24 + speedTilt;
+    p.chestRx = 0.14;
+    p.chestRy = -lean * 0.16;
+    p.headRx = -0.26 - speedTilt * 0.5;
+    p.headRy = -lean * 0.22;
+
+    // Both arms reaching forward gripping hover-handlebars
+    p.lShRx = -1.12 + steerPull;
+    p.lShRy = -0.16;
+    p.lShRz = 0.18;
+    p.lElRx = -0.46;
+    p.lHaRx = 0.15;
+
+    p.rShRx = -1.12 - steerPull;
+    p.rShRy = 0.16;
+    p.rShRz = -0.18;
+    p.rElRx = -0.46;
+    p.rHaRx = 0.15;
+
+    // Bent hips & knees straddling hover-bike/ATV seat onto footrests
+    p.lHiRx = -1.22;
+    p.lHiRy = 0.08;
+    p.lHiRz = 0.16;
+    p.lKnRx = 1.42;
+    p.lFoRx = -0.15;
+
+    p.rHiRx = -1.22;
+    p.rHiRy = -0.08;
+    p.rHiRz = -0.16;
+    p.rKnRx = 1.42;
+    p.rFoRx = -0.15;
+  }
+
   private applySkydivePose(p: PoseTarget, t: number): void {
     const wind = Math.sin(t * 11) * 0.07;
     p.hipsY = 1.02 + Math.sin(t * 4) * 0.03;
@@ -882,7 +937,7 @@ export class CharacterAnimator {
       return;
     }
 
-    if (weapon === 'pistol' || keepLeftGripOnZipline) {
+    if (weapon === 'pistol' || weapon === 'grappler' || keepLeftGripOnZipline) {
       p.rElRx = state.isAiming ? -0.32 : -0.55;
       p.rHaRx = 0;
       p.rShRx = -Math.PI / 2 - torsoPitch - aimPitch - recoilTilt - p.rElRx - p.rHaRx;

@@ -13,7 +13,9 @@ import type {
   SoundEventId,
   SupplyDrop,
   TerrainQuery,
+  VaultEntity,
   Vec3Like,
+  VehicleEntity,
   ZiplineEntity,
 } from '../../types';
 import {
@@ -28,6 +30,7 @@ import {
   PLAYER_RADIUS,
   RARITY_MULTIPLIER,
   WEAPONS,
+  dist3D,
 } from '../../core';
 import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from '../../world';
 import {
@@ -43,6 +46,8 @@ import {
   getRoofHeightAtLocal,
   type CombatActor,
   type PropsInteractionBridge,
+  type VaultBridge,
+  type VehicleBridge,
 } from '../index';
 
 function createFlatTerrain(
@@ -1413,5 +1418,684 @@ describe('Wave 1 Gameplay Mechanics', () => {
     player.teleport({ x: (gx + 0.5) * GRID_XZ, y: 0.01, z: (gz + 0.5) * GRID_XZ });
     for (let i = 0; i < 15; i++) player.update(0.04, 4.0 + i * 0.04);
     expect(sounds).toContain('footstep_wood');
+  });
+});
+
+describe('Wave 2 Gameplay Mechanics', () => {
+  function setupWave2Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'Tester');
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockVehicleBridge(initial: VehicleEntity[] = []): VehicleBridge & {
+    vehicles: VehicleEntity[];
+    driveCalls: Array<{ id: string; throttle: number; steer: number; boost: boolean; dt: number }>;
+    damageCalls: Array<{ id: string; dmg: number; hitPos: Vec3Like }>;
+  } {
+    const vehicles = initial;
+    const driveCalls: Array<{ id: string; throttle: number; steer: number; boost: boolean; dt: number }> = [];
+    const damageCalls: Array<{ id: string; dmg: number; hitPos: Vec3Like }> = [];
+    return {
+      vehicles,
+      driveCalls,
+      damageCalls,
+      getVehicles: () => vehicles,
+      enterVehicle: (id, driverId) => {
+        const v = vehicles.find((item) => item.id === id);
+        if (!v || v.destroyed || v.hp <= 0 || v.driverId !== null) return false;
+        v.driverId = driverId;
+        return true;
+      },
+      exitVehicle: (id, driverId) => {
+        const v = vehicles.find((item) => item.id === id);
+        if (!v || v.driverId !== driverId) return null;
+        v.driverId = null;
+        v.isBoosting = false;
+        return { x: v.x + 2.1, y: v.y, z: v.z };
+      },
+      driveVehicle: (id, throttle, steer, boost, dt) => {
+        driveCalls.push({ id, throttle, steer, boost, dt });
+        const v = vehicles.find((item) => item.id === id);
+        if (!v || v.destroyed) return;
+        v.yaw -= steer * 2.0 * dt;
+        const speed = throttle * (boost && v.boostCharge > 0 ? 28 : 16);
+        v.vx = Math.sin(v.yaw) * speed;
+        v.vz = Math.cos(v.yaw) * speed;
+        v.x += v.vx * dt;
+        v.z += v.vz * dt;
+        v.isBoosting = Boolean(boost && throttle !== 0 && v.boostCharge > 0);
+        if (v.isBoosting) {
+          v.boostCharge = Math.max(0, v.boostCharge - 0.3 * dt);
+        }
+      },
+      damageVehicle: (id, dmg, hitPos) => {
+        damageCalls.push({ id, dmg, hitPos });
+        const v = vehicles.find((item) => item.id === id);
+        if (!v || v.destroyed) return false;
+        v.hp = Math.max(0, v.hp - dmg);
+        if (v.hp <= 0) {
+          v.destroyed = true;
+          v.driverId = null;
+        }
+        return true;
+      },
+    };
+  }
+
+  it('mounts, drives, boosts, honks, widens camera, dismounts with cooldown, and damages vehicles via hitscan & explosives', () => {
+    const { bus, weapons, camera, player } = setupWave2Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    const atv: VehicleEntity = {
+      id: 'veh_1',
+      kind: 'hover_atv',
+      x: 0,
+      y: 0,
+      z: -3.4,
+      yaw: Math.PI,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 400,
+      maxHp: 400,
+      boostCharge: 1.0,
+      isBoosting: false,
+      driverId: null,
+      destroyed: false,
+    };
+    const vehicleBridge = createMockVehicleBridge([atv]);
+    player.setVehicleBridge(vehicleBridge);
+
+    // Out of range (> 3.8m) -> no vehicle prompt
+    player.teleport({ x: 0, y: 0, z: 2.0 });
+    player.setLook(Math.PI, 0);
+    player.update(0.016, 0.016);
+    expect(player.getHudSnapshot().interactPrompt).toBeNull();
+    const onFootCamDist = dist3D(camera.position, player.getPosition());
+
+    // Move within 3.8m -> prompt appears & KeyE mounts
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.016, 0.032);
+    expect(player.getHudSnapshot().interactPrompt?.label).toContain('Drive');
+    expect(player.getHudSnapshot().interactPrompt?.key).toBe('E');
+
+    player.pressKey('KeyE');
+    expect(atv.driverId).toBe('player');
+    expect(player.getActiveVehicleId()).toBe('veh_1');
+    expect(player.getCharacterRenderState().animState).toBe('drive');
+    expect(player.getHudSnapshot().vehicle).toEqual({
+      kind: 'hover_atv',
+      speedKmh: 0,
+      hp: 400,
+      maxHp: 400,
+      boostCharge: 1.0,
+      isBoosting: false,
+    });
+
+    // Drive forward + steer + Shift turbo boost
+    player.pressKey('KeyW');
+    player.pressKey('KeyD');
+    player.pressKey('ShiftLeft');
+    for (let i = 0; i < 6; i++) {
+      player.update(0.04, 0.08 + i * 0.04);
+    }
+    expect(vehicleBridge.driveCalls.length).toBe(6);
+    expect(vehicleBridge.driveCalls[0].throttle).toBe(1);
+    expect(vehicleBridge.driveCalls[0].steer).toBe(1);
+    expect(vehicleBridge.driveCalls[0].boost).toBe(true);
+    expect(player.getPosition().x).toBeCloseTo(atv.x, 3);
+    expect(player.getPosition().z).toBeCloseTo(atv.z, 3);
+    expect(atv.z).toBeLessThan(-3.4);
+    expect(player.getHudSnapshot().showSpeedLines).toBe(true);
+    expect(player.getHudSnapshot().vehicle?.isBoosting).toBe(true);
+    expect(player.getHudSnapshot().vehicle?.speedKmh).toBeGreaterThan(50);
+
+    // Wider third-person vehicle chase camera
+    const drivingCamDist = dist3D(camera.position, player.getPosition());
+    expect(drivingCamDist).toBeGreaterThan(onFootCamDist + 1.5);
+
+    // Horn SFX via H
+    player.pressKey('KeyH');
+    expect(sounds).toContain('vehicle_horn');
+
+    // Clean dismount via Space + dismount cooldown blocks immediate re-mount
+    player.releaseKey('KeyW');
+    player.releaseKey('KeyD');
+    player.releaseKey('ShiftLeft');
+    player.pressKey('Space');
+    expect(atv.driverId).toBeNull();
+    expect(player.getActiveVehicleId()).toBeNull();
+    expect(player.getCharacterRenderState().animState).not.toBe('drive');
+    expect(player.getHudSnapshot().vehicle).toBeNull();
+    expect(player.getPosition().x).toBeCloseTo(atv.x + 2.1, 2);
+
+    // Immediate re-mount blocked by cooldown
+    player.teleport({ x: atv.x, y: atv.y, z: atv.z + 1.5 });
+    player.pressKey('KeyE');
+    expect(atv.driverId).toBeNull();
+
+    // After cooldown expires (> 0.35s), KeyE re-mounts and KeyE dismounts
+    for (let i = 0; i < 10; i++) player.update(0.05, 0.5 + i * 0.05);
+    player.pressKey('KeyE');
+    expect(atv.driverId).toBe('player');
+    player.pressKey('KeyE');
+    expect(atv.driverId).toBeNull();
+
+    // Hitscan AR and RPG splash damage vehicle via WeaponSystem
+    const shooter: CombatActor = {
+      id: 'bot_shooter',
+      name: 'Shooter',
+      position: { x: atv.x, y: 0, z: atv.z + 12 },
+      eyePos: { x: atv.x, y: 0.6, z: atv.z + 12 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [shooter]);
+    weapons.fireWeapon({
+      actor: shooter,
+      item: { uid: 'ar_v', weaponId: 'ar', rarity: 'rare', magAmmo: 30, stackCount: 1 },
+      origin: { x: atv.x, y: 0.6, z: atv.z + 12 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: false,
+    });
+    expect(atv.hp).toBeLessThan(400);
+
+    const hpAfterAr = atv.hp;
+    weapons.fireWeapon({
+      actor: shooter,
+      item: { uid: 'rpg_v', weaponId: 'rocket_launcher', rarity: 'legendary', magAmmo: 1, stackCount: 1 },
+      origin: { x: atv.x, y: 0.6, z: atv.z + 12 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: false,
+    });
+    for (let i = 0; i < 15; i++) weapons.update(0.03);
+    expect(atv.hp).toBeLessThan(hpAfterAr);
+  });
+
+  it('fires Tactical Grappler within 58m, pulls with fallImmune, consumes magAmmo without reload, and enforces cooldown', () => {
+    const { collision, bus, player } = setupWave2Harness();
+    const sounds: SoundEventId[] = [];
+    const grappleLines: Array<{ from: Vec3Like; to: Vec3Like; duration: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:grapple_line', (ev) => grappleLines.push(ev));
+
+    // Wall 35m ahead (within 58m range)
+    collision.setStaticColliders([
+      { id: 'grapple_wall', minX: -5, minY: 0, minZ: -37, maxX: 5, maxY: 16, maxZ: -35, material: 'metal' },
+    ]);
+
+    const grapplerInput: ItemInstance = {
+      uid: 'grap_1',
+      weaponId: 'grappler',
+      rarity: 'epic',
+      magAmmo: 2,
+      stackCount: 1,
+    };
+    player.getInventory().addItem(grapplerInput);
+    player.getInventory().setActiveSlot(1);
+    const grapplerItem = player.getInventory().getSlot(1)!;
+    player.teleport({ x: 0, y: 0, z: 0 });
+
+    expect(player.getHudSnapshot().grapplerCharges).toBe(2);
+
+    // Aiming into empty sky (> 58m / no hit) does not consume charge or grapple
+    player.setLook(Math.PI, 0.9);
+    player.update(0.016, 0.016);
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(grapplerItem.magAmmo).toBe(2);
+    expect(grappleLines.length).toBe(0);
+
+    // Aim at wall 35m ahead & slightly up
+    player.setLook(Math.PI, 0.12);
+    player.update(0.016, 0.032);
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+
+    expect(grapplerItem.magAmmo).toBe(1);
+    expect(player.getHudSnapshot().grapplerCharges).toBe(1);
+    expect(player.isFallImmune()).toBe(true);
+    expect(grappleLines.length).toBe(1);
+    expect(grappleLines[0].to.z).toBeCloseTo(-35, 1);
+    expect(sounds).toContain('grappler_fire');
+    expect(sounds).toContain('grappler_reel');
+
+    // Immediate refire blocked by cooldown (1 / 1.1s)
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(grapplerItem.magAmmo).toBe(1);
+
+    // Step simulation -> player pulls strongly toward wall without taking fall damage
+    const zStart = player.getPosition().z;
+    for (let i = 0; i < 30; i++) {
+      player.update(0.04, 0.08 + i * 0.04);
+    }
+    expect(player.getPosition().z).toBeLessThan(zStart - 10);
+    expect(player.getHealth()).toBe(100);
+
+    // Second grapple drains last charge to 0 without starting a reload
+    player.setLook(Math.PI, 0.12);
+    player.update(0.016, 1.3);
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(grapplerItem.magAmmo).toBe(0);
+    expect(player.getHudSnapshot().grapplerCharges).toBe(0);
+    expect(player.getHudSnapshot().reloadProgress).toBeNull();
+
+    // Third click at 0 charges emits dryfire and stays 0
+    for (let i = 0; i < 25; i++) player.update(0.05, 1.4 + i * 0.05);
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(grapplerItem.magAmmo).toBe(0);
+    expect(sounds).toContain('dryfire');
+  });
+
+  it('deploys 5.2m Shield Bubble lasting 18s that blocks hitscan & projectiles across the shell while actors walk through', () => {
+    const { collision, bus, weapons, player } = setupWave2Harness();
+    const sounds: SoundEventId[] = [];
+    const bubbleEvents: Array<{ id: string; position: Vec3Like; radius: number; duration: number }> = [];
+    const impactMaterials: string[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:shield_bubble', (ev) => bubbleEvents.push(ev));
+    bus.on('vfx:impact', (ev) => impactMaterials.push(ev.material));
+
+    const thrower: CombatActor = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 0, z: 0 },
+      eyePos: { x: 0, y: 1.6, z: 0 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const insideTarget: CombatActor = {
+      id: 'bot_inside',
+      name: 'InsideBot',
+      position: { x: 0, y: 0, z: -10 },
+      eyePos: { x: 0, y: 1.6, z: -10 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const outsideTarget: CombatActor = {
+      id: 'bot_outside',
+      name: 'OutsideBot',
+      position: { x: 0, y: 0, z: -22 },
+      eyePos: { x: 0, y: 1.6, z: -22 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const insideShooter: CombatActor = {
+      id: 'bot_inner_shooter',
+      name: 'InnerShooter',
+      position: { x: 0, y: 0, z: -8 },
+      eyePos: { x: 0, y: 1.2, z: -8 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [thrower, insideTarget, outsideTarget, insideShooter]);
+
+    // Throw shield_bubble onto terrain around z = -10
+    const bubbleItem: ItemInstance = {
+      uid: 'sb_1',
+      weaponId: 'shield_bubble',
+      rarity: 'epic',
+      magAmmo: 0,
+      stackCount: 2,
+    };
+    weapons.fireWeapon({
+      actor: thrower,
+      item: bubbleItem,
+      origin: { x: 0, y: 1.6, z: -5.5 },
+      aimDir: { x: 0, y: -0.5, z: -0.866 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    for (let i = 0; i < 20; i++) {
+      weapons.update(0.04);
+    }
+
+    const active = weapons.getActiveShieldBubbles();
+    expect(active.length).toBe(1);
+    expect(active[0].radius).toBeCloseTo(5.2, 2);
+    expect(bubbleEvents.length).toBe(1);
+    expect(bubbleEvents[0].duration).toBe(18);
+    expect(sounds).toContain('shield_bubble_deploy');
+
+    // Center bubble explicitly at exact (0, 0, -10) for deterministic boundary tests? Or read active[0].position
+    const center = active[0].position;
+    insideTarget.position = { x: center.x, y: 0, z: center.z };
+    insideTarget.eyePos = { x: center.x, y: 1.6, z: center.z };
+    insideShooter.position = { x: center.x, y: 0, z: center.z + 2.0 };
+    insideShooter.eyePos = { x: center.x, y: 1.2, z: center.z + 2.0 };
+    outsideTarget.position = { x: center.x, y: 0, z: center.z - 12 };
+    outsideTarget.eyePos = { x: center.x, y: 1.6, z: center.z - 12 };
+
+    // 1. Outside AR hitscan shot aimed at insideTarget is blocked at dome shell
+    const arRes = weapons.fireWeapon({
+      actor: thrower,
+      item: { uid: 'ar_sb', weaponId: 'ar', rarity: 'rare', magAmmo: 30, stackCount: 1 },
+      origin: { x: center.x, y: 1.1, z: center.z + 10 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(arRes.shotsHit).toBe(0);
+    expect(insideTarget.hp).toBe(100);
+    expect(impactMaterials).toContain('shield');
+
+    // 2. Outside Sniper projectile & RPG rocket are blocked by dome shell
+    weapons.fireWeapon({
+      actor: thrower,
+      item: { uid: 'snip_sb', weaponId: 'sniper', rarity: 'legendary', magAmmo: 1, stackCount: 1 },
+      origin: { x: center.x, y: 1.1, z: center.z + 10 },
+      aimDir: { x: 0, y: 0.01, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    weapons.fireWeapon({
+      actor: thrower,
+      item: { uid: 'rpg_sb', weaponId: 'rocket_launcher', rarity: 'legendary', magAmmo: 1, stackCount: 1 },
+      origin: { x: center.x, y: 1.1, z: center.z + 10 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    for (let i = 0; i < 15; i++) weapons.update(0.03);
+    expect(insideTarget.hp).toBe(100);
+
+    // 3. Inside shooter firing OUT toward outsideTarget is blocked crossing dome shell
+    const outRes = weapons.fireWeapon({
+      actor: insideShooter,
+      item: { uid: 'ar_out', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 },
+      origin: { x: center.x, y: 1.1, z: center.z - 1.5 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: false,
+    });
+    expect(outRes.shotsHit).toBe(0);
+    expect(outsideTarget.hp).toBe(100);
+
+    // 4. Inside shooter firing at insideTarget (both inside dome) hits normally!
+    const inRes = weapons.fireWeapon({
+      actor: insideShooter,
+      item: { uid: 'ar_in', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 },
+      origin: { x: center.x, y: 1.1, z: center.z + 2.0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: false,
+    });
+    expect(inRes.shotsHit).toBe(1);
+    expect(insideTarget.hp).toBe(70);
+
+    // 5. Actors walk through dome shell freely
+    let walkPos: Vec3Like = { x: center.x, y: 0, z: center.z + 7.0 };
+    for (let i = 0; i < 20; i++) {
+      const m = collision.resolveCharacterMovement(
+        walkPos,
+        { x: 0, y: 0, z: -8 },
+        PLAYER_RADIUS,
+        PLAYER_HEIGHT,
+        0.05,
+      );
+      walkPos = m.position;
+    }
+    expect(walkPos.z).toBeLessThan(center.z);
+
+    // 6. Bubble expires after 18s -> subsequent outside shot hits insideTarget
+    for (let i = 0; i < 370; i++) {
+      weapons.update(0.05);
+    }
+    expect(weapons.getActiveShieldBubbles().length).toBe(0);
+
+    insideShooter.alive = false;
+    const afterExpireRes = weapons.fireWeapon({
+      actor: thrower,
+      item: { uid: 'ar_after', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 },
+      origin: { x: center.x, y: 1.1, z: center.z + 10 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(afterExpireRes.shotsHit).toBe(1);
+    expect(insideTarget.hp).toBe(40);
+  });
+
+  it('predicts parabolic Throwable Aim Trajectory Arc only when holding an isThrowable weapon', () => {
+    const { player } = setupWave2Harness();
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, 0.25);
+
+    // Pickaxe -> null
+    expect(player.getThrowableArc()).toBeNull();
+
+    // Non-throwable AR & Grappler -> null
+    player.getInventory().addItem({
+      uid: 'ar_arc',
+      weaponId: 'ar',
+      rarity: 'rare',
+      magAmmo: 30,
+      stackCount: 1,
+    });
+    player.getInventory().setActiveSlot(1);
+    expect(player.getThrowableArc()).toBeNull();
+
+    player.getInventory().addItem({
+      uid: 'grap_arc',
+      weaponId: 'grappler',
+      rarity: 'epic',
+      magAmmo: 10,
+      stackCount: 1,
+    });
+    player.getInventory().setActiveSlot(2);
+    expect(player.getThrowableArc()).toBeNull();
+
+    // Throwable (frag_grenade) -> parabolic gravity arc
+    player.getInventory().addItem({
+      uid: 'frag_arc',
+      weaponId: 'frag_grenade',
+      rarity: 'rare',
+      magAmmo: 0,
+      stackCount: 3,
+    });
+    player.getInventory().setActiveSlot(3);
+    const arc = player.getThrowableArc();
+    expect(arc).not.toBeNull();
+    expect(arc!.length).toBeGreaterThanOrEqual(5);
+    // Rises initially (positive pitch + loft) then curves downward onto terrain y = 0
+    const peakY = Math.max(...arc!.map((p) => p.y));
+    expect(peakY).toBeGreaterThan(arc![0].y);
+    expect(arc![arc!.length - 1].y).toBeCloseTo(0, 1);
+    // Moves forward in -Z
+    expect(arc![arc!.length - 1].z).toBeLessThan(-5);
+
+    // Build mode hides arc
+    player.toggleBuildMode(true);
+    expect(player.getThrowableArc()).toBeNull();
+  });
+
+  it('unlocks Boss Vaults with vaultKeys <= 4.2m and resolves custom keybinds cleanly', () => {
+    const { bus, building, player } = setupWave2Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    const vaults: VaultEntity[] = [
+      {
+        id: 'vault_skyline',
+        poiId: 'skyline_spire',
+        bossName: 'Cyber Warden',
+        x: 0,
+        y: 0,
+        z: -3.9,
+        unlocked: false,
+        opened: false,
+      },
+    ];
+    const unlockedLog: Array<{ lootPos: Vec3Like; poiId: string }> = [];
+    const vaultBridge: VaultBridge = {
+      getVaults: () => vaults,
+      unlockVault: (id) => {
+        const v = vaults.find((item) => item.id === id);
+        if (!v || v.unlocked) return { unlocked: false };
+        v.unlocked = true;
+        return { unlocked: true, lootPos: { x: v.x, y: v.y + 0.4, z: v.z - 2 } };
+      },
+    };
+    player.setVaultBridge(vaultBridge);
+    player.setVaultUnlockHandler((lootPos, poiId) => {
+      unlockedLog.push({ lootPos, poiId });
+    });
+
+    // Out of range (> 4.2m) -> no prompt
+    player.teleport({ x: 0, y: 0, z: 1.0 });
+    player.update(0.016, 0.016);
+    expect(player.getHudSnapshot().interactPrompt).toBeNull();
+
+    // Within 4.2m with 0 keys -> prompt shows, E cannot unlock
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.016, 0.032);
+    expect(player.getHudSnapshot().interactPrompt?.label).toContain('Unlock Boss Vault');
+    expect(player.getVaultKeys()).toBe(0);
+    expect(player.getHudSnapshot().activeVaultKeys).toBe(0);
+
+    player.pressKey('KeyE');
+    expect(vaults[0].unlocked).toBe(false);
+
+    // Add 2 keys, unlock vault -> consumes 1 key, plays vault_unlock, calls handler
+    player.addVaultKey(2);
+    expect(player.getVaultKeys()).toBe(2);
+    expect(player.getHudSnapshot().activeVaultKeys).toBe(2);
+
+    player.update(0.016, 0.048);
+    expect(player.getHudSnapshot().interactPrompt?.label).toBe('Unlock Boss Vault');
+    player.pressKey('KeyE');
+    expect(vaults[0].unlocked).toBe(true);
+    expect(player.getVaultKeys()).toBe(1);
+    expect(player.getHudSnapshot().activeVaultKeys).toBe(1);
+    expect(sounds).toContain('vault_unlock');
+    expect(unlockedLog.length).toBe(1);
+    expect(unlockedLog[0].poiId).toBe('skyline_spire');
+
+    // Custom keybind remapping across all 8 Gameplay bindings
+    player.setSettings({
+      ...DEFAULT_SETTINGS,
+      keybinds: {
+        buildWall: 'KeyU',
+        buildFloor: 'KeyI',
+        buildRamp: 'KeyO',
+        buildRoof: 'KeyP',
+        edit: 'KeyJ',
+        repair: 'KeyN',
+        interact: 'KeyB',
+        crouchSlide: 'KeyL',
+      },
+    });
+    player.getInventory().addMaterial('wood', 200);
+
+    // Old default KeyZ must NOT trigger buildWall
+    player.toggleBuildMode(false);
+    player.pressKey('KeyZ');
+    expect(player.getHudSnapshot().isBuildMode).toBe(false);
+
+    // New custom bindings select pieces
+    player.pressKey('KeyU');
+    expect(player.getHudSnapshot().isBuildMode).toBe(true);
+    expect(player.getHudSnapshot().activeBuildType).toBe('wall');
+
+    player.pressKey('KeyI');
+    expect(player.getHudSnapshot().activeBuildType).toBe('floor');
+
+    player.pressKey('KeyO');
+    expect(player.getHudSnapshot().activeBuildType).toBe('ramp');
+
+    player.pressKey('KeyP');
+    expect(player.getHudSnapshot().activeBuildType).toBe('roof');
+
+    // Custom edit (KeyJ) and repair (KeyN)
+    player.toggleBuildMode(false);
+    player.teleport({ x: 2, y: 0, z: 2 });
+    player.setLook(Math.PI, 0);
+    const wall = building.placePieceForEntity('player', 'wall', 'wood', 0, 0, 0, 'N', 0)!;
+    building.update(4.0, 4.0);
+    building.damagePiece(wall.id, 60);
+
+    // Old KeyF must not repair or select roof
+    player.pressKey('KeyF');
+    expect(wall.hp).toBe(90);
+    expect(player.getHudSnapshot().isBuildMode).toBe(false);
+
+    // New KeyN repairs wall
+    player.pressKey('KeyN');
+    expect(wall.hp).toBe(150);
+
+    // Old KeyG must not enter edit mode; new KeyJ does
+    player.pressKey('KeyG');
+    expect(player.getHudSnapshot().editMode.active).toBe(false);
+    player.pressKey('KeyJ');
+    expect(player.getHudSnapshot().editMode.active).toBe(true);
+    player.pressKey('KeyJ'); // confirms edit
+    expect(player.getHudSnapshot().editMode.active).toBe(false);
+
+    // Custom crouchSlide (KeyL) toggles crouch while old KeyC does not
+    player.pressKey('KeyC');
+    expect(player.getHudSnapshot().isCrouching).toBe(false);
+    player.pressKey('KeyL');
+    expect(player.getHudSnapshot().isCrouching).toBe(true);
+    player.pressKey('KeyL');
+    expect(player.getHudSnapshot().isCrouching).toBe(false);
+
+    // Custom interact (KeyB) unlocks vault & shows key 'B' in prompt
+    player.teleport({ x: 20, y: 0, z: 20 });
+    vaults.push({
+      id: 'vault_2',
+      poiId: 'frostpeak_citadel',
+      bossName: 'Frost King',
+      x: 20,
+      y: 0,
+      z: 18,
+      unlocked: false,
+      opened: false,
+    });
+    player.update(0.016, 0.1);
+    expect(player.getHudSnapshot().interactPrompt?.key).toBe('B');
+    player.pressKey('KeyB');
+    expect(vaults[1].unlocked).toBe(true);
+    expect(player.getVaultKeys()).toBe(0);
   });
 });

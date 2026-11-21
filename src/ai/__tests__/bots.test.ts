@@ -10,6 +10,7 @@ import type {
   StormState,
   TerrainQuery,
   Vec3Like,
+  VehicleEntity,
   WallDir,
 } from '../../types';
 import {
@@ -23,19 +24,25 @@ import {
 } from '../../core';
 import {
   BOT_NAMES,
-  BotManager,
+  BOUNTY_DURATION_SEC,
+  BOUNTY_RESELECT_COOLDOWN_SEC,
   BotBrain,
+  BotManager,
   DIFFICULTY_PROFILES,
   VOLCANO_LAVA_CENTER_X,
   VOLCANO_LAVA_CENTER_Z,
   computeBotSpread,
+  findIncomingVehicleThreat,
   isInVolcanoLavaHazard,
+  isShotBlockedByShieldBubbles,
   pickBotLoadoutCosmetics,
+  segmentIntersectsSphere,
   selectBestWeaponForDistance,
   selectHealingItem,
   selectLaunchPadForRotation,
   selectThrowableForCombat,
   shouldBotBuildDefense,
+  shouldBotDeployShieldBubble,
   updateBot,
   type BotCombatTarget,
   type BotEntity,
@@ -1396,5 +1403,533 @@ describe('Wave 1 Smart World Traversal & Volcano Lava Avoidance', () => {
     expect(brain.isInVolcanoLavaHazard(VOLCANO_LAVA_CENTER_X, VOLCANO_LAVA_CENTER_Z)).toBe(
       true,
     );
+  });
+});
+
+describe('Wave 2 Dynamic Bounty Hunt & Named Boss Vault-Key Eligibility', () => {
+  it('assigns a bounty, updates distance/timer, completes with player reward, and auto-reselects after cooldown', () => {
+    const ctx = makeMockContext();
+    const bountyEvents: Array<{ title: string; targetName: string; tone: string }> = [];
+    const soundEvents: string[] = [];
+
+    ctx.eventBus.on('ui:bounty', (e) => bountyEvents.push(e));
+    ctx.eventBus.on('sound:play', (s) => soundEvents.push(s.id));
+
+    const manager = new BotManager(ctx, 'standard', 1200);
+    manager.spawnBots(6, 20);
+
+    for (const bot of manager.getBots()) {
+      bot.state = 'looting';
+      bot.grounded = true;
+    }
+    const targetBot = manager.getBotById('bot_1')!;
+    targetBot.position = { x: 80, y: 10, z: 0 };
+
+    const playerPos: Vec3Like = { x: 0, y: 10, z: 0 };
+    const assigned = manager.assignBounty(playerPos, 30);
+    expect(assigned).not.toBeNull();
+    expect(assigned!.timeRemaining).toBe(BOUNTY_DURATION_SEC);
+    expect(assigned!.rewardLabel.length).toBeGreaterThan(0);
+    expect(bountyEvents[0].tone).toBe('start');
+    expect(soundEvents).toContain('bounty_alert');
+
+    const activeBot = manager.getActiveBountyBot()!;
+    expect(activeBot).not.toBeNull();
+    activeBot.position = { x: 45, y: 10, z: 0 };
+
+    const midQuery = manager.getBountyTarget(playerPos, 55);
+    expect(midQuery).not.toBeNull();
+    expect(midQuery!.targetName).toBe(activeBot.name);
+    expect(midQuery!.distance).toBeCloseTo(45, 3);
+    expect(midQuery!.timeRemaining).toBeCloseTo(65, 3);
+
+    // Player eliminates the active bounty target -> emits complete + grants reward
+    const lethalHit: DamageEvent = {
+      targetId: activeBot.id,
+      attackerId: 'player',
+      attackerName: 'Player',
+      weaponId: 'ar',
+      rarity: 'epic',
+      damage: 150,
+      hpDamage: 150,
+      shieldDamage: 0,
+      isHeadshot: true,
+      isElimination: true,
+      hitPoint: { ...activeBot.position },
+      distance: 45,
+    };
+    expect(manager.onBotDamaged(activeBot.id, lethalHit, 60)).toBe(true);
+    expect(manager.getBountyTarget(playerPos, 60)).toBeNull();
+
+    expect(bountyEvents.some((e) => e.tone === 'complete' && e.targetName === activeBot.name)).toBe(
+      true,
+    );
+    expect(soundEvents.filter((id) => id === 'bounty_alert').length).toBeGreaterThanOrEqual(2);
+
+    const rewards = manager.consumeBountyRewards();
+    expect(rewards).toHaveLength(1);
+    expect(rewards[0].targetId).toBe(activeBot.id);
+    expect(rewards[0].shield).toBeGreaterThan(0);
+    expect(rewards[0].materials).toBeGreaterThan(0);
+    expect(manager.consumeBountyRewards()).toHaveLength(0);
+    expect(manager.getLastBountyReward()?.targetId).toBe(activeBot.id);
+
+    // Auto-reselection triggers cleanly after cooldown via update()
+    manager.update(
+      0.05,
+      60 + BOUNTY_RESELECT_COOLDOWN_SEC + 0.5,
+      { x: 0, y: 175, z: 0 },
+      playerPos,
+    );
+    const reselected = manager.getBountyTarget(
+      playerPos,
+      60 + BOUNTY_RESELECT_COOLDOWN_SEC + 0.5,
+    );
+    expect(reselected).not.toBeNull();
+    expect(reselected!.targetName).not.toBe(activeBot.name);
+
+    manager.dispose();
+  });
+
+  it('expires bounties after 90s, handles poached bounties without player reward, and auto-reselects', () => {
+    const ctx = makeMockContext();
+    const bountyEvents: Array<{ title: string; targetName: string; tone: string }> = [];
+    const soundEvents: string[] = [];
+
+    ctx.eventBus.on('ui:bounty', (e) => bountyEvents.push(e));
+    ctx.eventBus.on('sound:play', (s) => soundEvents.push(s.id));
+
+    const manager = new BotManager(ctx, 'standard', 3300);
+    manager.spawnBots(5, 20);
+    for (const b of manager.getBots()) {
+      b.state = 'looting';
+      b.grounded = true;
+    }
+
+    const playerPos: Vec3Like = { x: 0, y: 10, z: 0 };
+    const first = manager.assignBounty(playerPos, 10)!;
+    const firstBot = manager.getActiveBountyBot()!;
+    expect(first.targetName).toBe(firstBot.name);
+
+    // Still active at 89.5s elapsed (t = 99.5)
+    expect(manager.getBountyTarget(playerPos, 99.5)).not.toBeNull();
+
+    // Expires at 90s (t = 100.1)
+    expect(manager.getBountyTarget(playerPos, 100.1)).toBeNull();
+    expect(
+      bountyEvents.some((e) => e.tone === 'expired' && e.targetName === firstBot.name),
+    ).toBe(true);
+    expect(soundEvents.filter((id) => id === 'bounty_alert').length).toBeGreaterThanOrEqual(2);
+
+    // Auto-reselection via update after cooldown picks another living bot
+    manager.update(
+      0.05,
+      100.1 + BOUNTY_RESELECT_COOLDOWN_SEC + 0.5,
+      { x: 0, y: 175, z: 0 },
+      playerPos,
+    );
+    const secondBot = manager.getActiveBountyBot();
+    expect(secondBot).not.toBeNull();
+    expect(secondBot!.id).not.toBe(firstBot.id);
+
+    // Poached by another bot -> clears bounty as expired without player reward
+    const killerBot = manager.getBots().find((b) => b.alive && b.id !== secondBot!.id)!;
+    manager.onBotDamaged(
+      secondBot!.id,
+      {
+        targetId: secondBot!.id,
+        attackerId: killerBot.id,
+        attackerName: killerBot.name,
+        weaponId: 'pump_shotgun',
+        rarity: 'rare',
+        damage: 200,
+        hpDamage: 200,
+        shieldDamage: 0,
+        isHeadshot: true,
+        isElimination: true,
+        hitPoint: { ...secondBot!.position },
+        distance: 5,
+      },
+      120,
+    );
+    expect(manager.getBountyTarget(playerPos, 120)).toBeNull();
+    expect(manager.consumeBountyRewards()).toHaveLength(0);
+    expect(bountyEvents[bountyEvents.length - 1].tone).toBe('expired');
+
+    manager.dispose();
+  });
+
+  it('tracks Named Boss player eliminations for Vault Key eligibility while rejecting non-boss, bot-killed, or storm kills', () => {
+    const ctx = makeMockContext();
+    const manager = new BotManager(ctx, 'standard', 7777);
+    const callbackRecords: string[] = [];
+    manager.setOnBossEliminatedByPlayer((rec) => callbackRecords.push(rec.bossId));
+
+    manager.spawnBots(12, 20);
+    const regularBot = manager.getBots().find((b) => !b.isBoss)!;
+    const bosses = manager.getBots().filter((b) => b.isBoss);
+    expect(bosses).toHaveLength(3);
+
+    const [skylineBoss, scorchedBoss, frostBoss] = bosses;
+
+    // 1. Player eliminates regular bot -> NOT eligible for Vault Key
+    manager.onBotDamaged(
+      regularBot.id,
+      {
+        targetId: regularBot.id,
+        attackerId: 'player',
+        attackerName: 'Player',
+        weaponId: 'ar',
+        rarity: 'rare',
+        damage: 150,
+        hpDamage: 150,
+        shieldDamage: 0,
+        isHeadshot: false,
+        isElimination: true,
+        hitPoint: { ...regularBot.position },
+        distance: 20,
+      },
+      15,
+    );
+    expect(manager.wasBossEliminatedByPlayer(regularBot.id)).toBe(false);
+    expect(manager.wasBossEliminatedByPlayer()).toBe(false);
+    expect(manager.consumePlayerEliminatedBosses()).toHaveLength(0);
+
+    // 2. Another bot eliminates scorchedBoss -> NOT eligible for player Vault Key
+    const killerBot = manager.getBots().find((b) => b.alive && !b.isBoss)!;
+    manager.onBotDamaged(
+      scorchedBoss.id,
+      {
+        targetId: scorchedBoss.id,
+        attackerId: killerBot.id,
+        attackerName: killerBot.name,
+        weaponId: 'rocket_launcher',
+        rarity: 'legendary',
+        damage: 400,
+        hpDamage: 250,
+        shieldDamage: 150,
+        isHeadshot: false,
+        isElimination: true,
+        hitPoint: { ...scorchedBoss.position },
+        distance: 12,
+      },
+      18,
+    );
+    expect(manager.wasBossEliminatedByPlayer(scorchedBoss.id)).toBe(false);
+    expect(scorchedBoss.eliminatedByPlayer).toBe(false);
+
+    // 3. Storm eliminates frostBoss -> NOT eligible for player Vault Key
+    frostBoss.hp = 5;
+    frostBoss.shield = 0;
+    frostBoss.position = { x: 350, y: 10, z: 350 };
+    manager.applyStormDamage(5.0);
+    expect(frostBoss.alive).toBe(false);
+    expect(manager.wasBossEliminatedByPlayer(frostBoss.id)).toBe(false);
+
+    // 4. Player eliminates skylineBoss -> ELIGIBLE for Vault Key!
+    manager.onBotDamaged(
+      skylineBoss.id,
+      {
+        targetId: skylineBoss.id,
+        attackerId: 'player',
+        attackerName: 'Player',
+        weaponId: 'heavy_shotgun',
+        rarity: 'legendary',
+        damage: 320,
+        hpDamage: 170,
+        shieldDamage: 150,
+        isHeadshot: true,
+        isElimination: true,
+        hitPoint: { ...skylineBoss.position },
+        distance: 8,
+      },
+      25,
+    );
+    expect(manager.wasBossEliminatedByPlayer(skylineBoss.id)).toBe(true);
+    expect(manager.wasBossEliminatedByPlayer()).toBe(true);
+    expect(skylineBoss.eliminatedByPlayer).toBe(true);
+    expect(callbackRecords).toEqual([skylineBoss.id]);
+
+    const pending = manager.consumePlayerEliminatedBosses();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].bossId).toBe(skylineBoss.id);
+    expect(pending[0].bossName).toBe(skylineBoss.name);
+    expect(pending[0].poiId).toBe(skylineBoss.bossPoiId);
+    // Consuming again drains cleanly without double-awarding Vault Keys
+    expect(manager.consumePlayerEliminatedBosses()).toHaveLength(0);
+
+    manager.dispose();
+  });
+});
+
+describe('Wave 2 Shield Bubble & Vehicle Combat Awareness', () => {
+  it('accurately evaluates segmentIntersectsSphere and blocks external shots while allowing inside-dome CQC', () => {
+    const bubbleCenter = { x: 0, y: 10, z: 15 };
+    const radius = 5.2;
+
+    // External segment passing through sphere -> blocked
+    expect(
+      segmentIntersectsSphere({ x: 0, y: 11, z: 0 }, { x: 0, y: 11, z: 15 }, bubbleCenter, radius),
+    ).toBe(true);
+
+    // External segment tangent/far away -> not blocked
+    expect(
+      segmentIntersectsSphere({ x: 10, y: 11, z: 0 }, { x: 10, y: 11, z: 15 }, bubbleCenter, radius),
+    ).toBe(false);
+
+    // Both endpoints inside the same dome -> NOT blocked by shell
+    expect(
+      isShotBlockedByShieldBubbles(
+        { x: 0, y: 11, z: 12.5 },
+        { x: 0, y: 11, z: 15.5 },
+        [{ position: bubbleCenter, radius }],
+      ),
+    ).toBeNull();
+
+    // Outside shooter vs inside target -> blocked!
+    expect(
+      isShotBlockedByShieldBubbles(
+        { x: 0, y: 11, z: 0 },
+        { x: 0, y: 11, z: 15 },
+        [{ position: bubbleCenter, radius }],
+      ),
+    ).not.toBeNull();
+  });
+
+  it('avoids wasting AR/sniper bursts into an active shield bubble, flanks laterally, or pushes inside with shotgun/SMG', () => {
+    const bubblePos = { x: 0, y: 10, z: 14 };
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { ...bubblePos },
+      eyePos: { x: 0, y: 11.6, z: 14 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+
+    // 1) Ranged-only bot (AR + Sniper) holds fire and flanks laterally around the bubble
+    const rangedCtx = makeMockContext({
+      getCombatTargets: () => [enemy],
+      getActiveShieldBubbles: () => [{ position: bubblePos, radius: 5.2 }],
+    });
+    const rangedBot = makeBotEntity({
+      state: 'combat',
+      personality: 'sniper',
+      position: { x: 0, y: 10, z: -8 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+      strafeDir: 1,
+    });
+    rangedBot.inventory.items[1] = makeItem('ar', 'epic', 30);
+    rangedBot.inventory.items[2] = makeItem('sniper', 'epic', 1);
+    rangedBot.inventory.ammo.medium = 60;
+    rangedBot.inventory.ammo.heavy = 10;
+
+    for (let i = 0; i < 12; i++) {
+      updateBot(rangedBot, rangedCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10 + i * 0.08, 0.08, false);
+    }
+    expect(rangedCtx.firedCalls).toHaveLength(0);
+    expect(Math.abs(rangedBot.position.x)).toBeGreaterThan(1.5);
+
+    // 2) Bot with AR + Pump Shotgun refrains from firing AR outside, switches to shotgun, pushes inside, and shoots!
+    const rushCtx = makeMockContext({
+      getCombatTargets: () => [enemy],
+      getActiveShieldBubbles: () => [{ position: bubblePos, radius: 5.2 }],
+    });
+    const rushBot = makeBotEntity({
+      state: 'combat',
+      personality: 'rusher',
+      position: { x: 0, y: 10, z: 2 }, // 12m outside dome
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    rushBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    rushBot.inventory.items[2] = makeItem('pump_shotgun', 'epic', 5);
+    rushBot.inventory.ammo.medium = 60;
+    rushBot.inventory.ammo.shells = 20;
+
+    for (let i = 0; i < 30; i++) {
+      updateBot(rushBot, rushCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10 + i * 0.08, 0.08, false);
+    }
+
+    // Never wasted AR shots into the dome shell
+    expect(rushCtx.firedCalls.some((c) => c.weaponId === 'ar')).toBe(false);
+    // Pushed inside the dome and fired shotgun!
+    expect(Math.hypot(rushBot.position.x - bubblePos.x, rushBot.position.z - bubblePos.z)).toBeLessThan(
+      5.2,
+    );
+    expect(rushCtx.firedCalls.some((c) => c.weaponId === 'pump_shotgun')).toBe(true);
+  });
+
+  it('throws shield_bubble defensively on heavy damage and ignores shield_bubble/grappler as offensive guns', () => {
+    const fullAmmo = { light: 50, medium: 50, shells: 10, heavy: 5, rockets: 0 };
+    const utilityOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('shield_bubble', 'rare', 0, 2),
+      makeItem('grappler', 'epic', 10, 1),
+    ];
+    expect(selectBestWeaponForDistance(utilityOnly, 25, fullAmmo)).toBeNull();
+
+    const activeBubbles: Array<{ position: Vec3Like; radius: number }> = [];
+    const ctx = makeMockContext({
+      getActiveShieldBubbles: () => activeBubbles,
+    });
+    const manager = new BotManager(ctx, 'standard', 919);
+    manager.spawnBots(2, 20);
+    const bot = manager.getBotById('bot_1')!;
+    bot.state = 'rotating';
+    bot.position = { x: 0, y: 10, z: 0 };
+    bot.grounded = true;
+    bot.shield = 100;
+    bot.hp = 100;
+    bot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    bot.inventory.items[2] = makeItem('shield_bubble', 'rare', 0, 2);
+
+    // Minor 10-damage chip -> should NOT waste shield_bubble
+    manager.onBotDamaged(
+      bot.id,
+      {
+        targetId: bot.id,
+        attackerId: 'player',
+        attackerName: 'Player',
+        weaponId: 'pistol',
+        rarity: 'common',
+        damage: 10,
+        hpDamage: 0,
+        shieldDamage: 10,
+        isHeadshot: false,
+        isElimination: false,
+        hitPoint: { ...bot.position },
+        distance: 30,
+      },
+      10,
+    );
+    expect(shouldBotDeployShieldBubble(bot, ctx, 10.1)).toBeNull();
+
+    // Heavy 65-damage burst -> triggers defensive shield_bubble throw!
+    manager.onBotDamaged(
+      bot.id,
+      {
+        targetId: bot.id,
+        attackerId: 'player',
+        attackerName: 'Player',
+        weaponId: 'sniper',
+        rarity: 'epic',
+        damage: 65,
+        hpDamage: 0,
+        shieldDamage: 65,
+        isHeadshot: false,
+        isElimination: false,
+        hitPoint: { ...bot.position },
+        distance: 55,
+      },
+      10.5,
+    );
+    expect(shouldBotDeployShieldBubble(bot, ctx, 10.6)?.item.weaponId).toBe('shield_bubble');
+
+    manager.update(0.05, 10.6, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 40 });
+    expect(ctx.firedCalls.some((c) => c.weaponId === 'shield_bubble')).toBe(true);
+    expect(bot.inventory.items[2]?.stackCount).toBe(1);
+
+    // If already covered by an active bubble, will not deploy a second bubble immediately
+    bot.shieldBubbleCooldown = 0;
+    bot.recentDamageTaken = 60;
+    activeBubbles.push({ position: { ...bot.position }, radius: 5.2 });
+    expect(shouldBotDeployShieldBubble(bot, ctx, 11.0)).toBeNull();
+
+    manager.dispose();
+  });
+
+  it('evades oncoming enemy vehicles and leads projectile aim against moving vehicles', () => {
+    const brain = new BotBrain();
+    const vehicles: VehicleEntity[] = [
+      {
+        id: 'veh_1',
+        kind: 'hover_atv',
+        x: 0,
+        y: 10,
+        z: 0,
+        yaw: 0,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 18,
+        hp: 300,
+        maxHp: 300,
+        boostCharge: 100,
+        isBoosting: true,
+        driverId: 'player',
+        destroyed: false,
+      },
+    ];
+
+    const threat = findIncomingVehicleThreat({ x: 0.6, y: 10, z: 12 }, 'bot_1', vehicles);
+    expect(threat).not.toBeNull();
+    expect(threat!.evadeDirX).toBeGreaterThan(0.5);
+    expect(brain.findIncomingVehicleThreat({ x: 0.6, y: 10, z: 12 }, 'bot_1', vehicles)).not.toBeNull();
+
+    const evadeCtx = makeMockContext({
+      getVehicles: () => vehicles,
+    });
+    const evadeBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0.6, y: 10, z: 10 },
+      grounded: true,
+      jumpCooldown: 0,
+    });
+    for (let i = 0; i < 6; i++) {
+      updateBot(evadeBot, evadeCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.05, 0.05, false);
+    }
+    expect(evadeBot.position.x).toBeGreaterThan(1.4);
+
+    // Leads sniper projectile ahead along fast-moving lateral vehicle velocity
+    const movingVehicle: VehicleEntity = {
+      ...vehicles[0],
+      x: 0,
+      y: 10,
+      z: 40,
+      vx: 24,
+      vz: 0,
+    };
+    const driverTarget: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 40 },
+      eyePos: { x: 0, y: 11.6, z: 40 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      isPlayer: true,
+    };
+    const leadCtx = makeMockContext({
+      getCombatTargets: () => [driverTarget],
+      getVehicles: () => [movingVehicle],
+    });
+    const sniperBot = makeBotEntity({
+      state: 'combat',
+      personality: 'sniper',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    sniperBot.inventory.items[1] = makeItem('sniper', 'epic', 1);
+    sniperBot.inventory.ammo.heavy = 10;
+
+    updateBot(sniperBot, leadCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(leadCtx.firedCalls).toHaveLength(1);
+    expect(leadCtx.firedCalls[0].weaponId).toBe('sniper');
+    expect(leadCtx.firedCalls[0].aimDir.x).toBeGreaterThan(0.08);
   });
 });

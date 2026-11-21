@@ -88,6 +88,7 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'smg',
   'pistol',
   'sniper',
+  'grappler',
 ];
 
 const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
@@ -100,6 +101,7 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'sniper',
   'rocket_launcher',
   'pistol',
+  'grappler',
 ];
 
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
@@ -109,23 +111,26 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'sniper',
   'rocket_launcher',
   'burst_ar',
+  'grappler',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
-  { id: 'mini_shield', stack: 2, weight: 24 },
-  { id: 'bandages', stack: 5, weight: 20 },
+  { id: 'mini_shield', stack: 2, weight: 22 },
+  { id: 'bandages', stack: 5, weight: 18 },
   { id: 'shield_potion', stack: 1, weight: 12 },
   { id: 'medkit', stack: 1, weight: 10 },
   { id: 'slurp_juice', stack: 1, weight: 6 },
   { id: 'chug_splash', stack: 2, weight: 10 },
-  { id: 'frag_grenade', stack: 3, weight: 10 },
+  { id: 'frag_grenade', stack: 3, weight: 9 },
   { id: 'shockwave_grenade', stack: 2, weight: 8 },
+  { id: 'shield_bubble', stack: 1, weight: 9 },
 ];
 
 const THROWABLE_POOL: Array<{ id: WeaponId; stack: number }> = [
   { id: 'chug_splash', stack: 2 },
   { id: 'frag_grenade', stack: 3 },
   { id: 'shockwave_grenade', stack: 2 },
+  { id: 'shield_bubble', stack: 1 },
 ];
 
 const AMMO_CHEST_AMOUNTS: Record<AmmoType, number> = {
@@ -1583,7 +1588,8 @@ export class PropsAndLoot {
     const pool = fromChest ? WEAPON_LOOT_POOL_CHEST : WEAPON_LOOT_POOL_FLOOR;
     const weaponId = pool[Math.floor(this.rand() * pool.length)];
     const def = WEAPONS[weaponId];
-    const allowed = def.allowedRarities;
+    const nonMythic = def.allowedRarities.filter((r) => r !== 'mythic');
+    const allowed = nonMythic.length > 0 ? nonMythic : def.allowedRarities;
 
     let rarity: Rarity = allowed[0];
     if (fromChest) {
@@ -1693,6 +1699,20 @@ export class PropsAndLoot {
           this.getGeo('loot_potion', () => new THREE.CylinderGeometry(0.18, 0.2, 0.42, 10)),
           itemMat,
         );
+      } else if (def.isGrappler) {
+        const grapGroup = new THREE.Group();
+        const body = new THREE.Mesh(
+          this.getGeo('loot_grapple_body', () => new THREE.BoxGeometry(0.16, 0.2, 0.56)),
+          itemMat,
+        );
+        const claw = new THREE.Mesh(
+          this.getGeo('loot_grapple_claw', () => new THREE.ConeGeometry(0.14, 0.24, 6)),
+          itemMat,
+        );
+        claw.rotation.x = Math.PI * 0.5;
+        claw.position.z = 0.36;
+        grapGroup.add(body, claw);
+        itemMesh = grapGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),
@@ -1865,14 +1885,16 @@ export class PropsAndLoot {
 
     const weaponId = SUPPLY_DROP_WEAPONS[Math.floor(this.rand() * SUPPLY_DROP_WEAPONS.length)];
     const def = WEAPONS[weaponId];
-    const highRarities = def.allowedRarities.filter((r) => r === 'epic' || r === 'legendary');
+    const highRarities = def.allowedRarities.filter(
+      (r) => r === 'epic' || r === 'legendary' || r === 'mythic',
+    );
     const rarity: Rarity =
       highRarities.length > 0
         ? highRarities[Math.floor(this.rand() * highRarities.length)]
         : def.allowedRarities[def.allowedRarities.length - 1];
 
     const scatter = (idx: number): Vec3Like => {
-      const a = (idx / 4) * Math.PI * 2 + this.rand() * 0.4;
+      const a = (idx / 5) * Math.PI * 2 + this.rand() * 0.35;
       return { x: Math.sin(a) * 3.0, y: 4.8, z: Math.cos(a) * 3.0 };
     };
 
@@ -1898,13 +1920,15 @@ export class PropsAndLoot {
       );
     }
 
+    const healId: WeaponId = this.rand() < 0.5 ? 'slurp_juice' : 'shield_potion';
+    const healDef = WEAPONS[healId];
     this.spawnLootDrop(
       pos,
       {
         item: {
           uid: this.nextItemUid(),
-          weaponId: this.rand() < 0.5 ? 'slurp_juice' : 'shield_potion',
-          rarity: this.rand() < 0.5 ? 'epic' : 'rare',
+          weaponId: healId,
+          rarity: healDef.allowedRarities[0],
           magAmmo: 0,
           stackCount: 1,
         },
@@ -1912,10 +1936,35 @@ export class PropsAndLoot {
       scatter(2),
     );
 
+    const utilityRoll = this.rand();
+    const utilWeaponId: WeaponId =
+      utilityRoll < 0.6
+        ? 'shield_bubble'
+        : utilityRoll < 0.85
+          ? 'shockwave_grenade'
+          : 'chug_splash';
+    const utilDef = WEAPONS[utilWeaponId];
+    this.spawnLootDrop(
+      pos,
+      {
+        item: {
+          uid: this.nextItemUid(),
+          weaponId: utilWeaponId,
+          rarity:
+            utilDef.allowedRarities[
+              Math.floor(this.rand() * utilDef.allowedRarities.length)
+            ],
+          magAmmo: utilDef.magSize,
+          stackCount: utilWeaponId === 'shield_bubble' ? 1 : 2,
+        },
+      },
+      scatter(3),
+    );
+
     this.spawnLootDrop(
       pos,
       { materials: { type: 'metal', amount: 60 } },
-      scatter(3),
+      scatter(4),
     );
 
     return true;

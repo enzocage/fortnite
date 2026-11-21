@@ -1,7 +1,20 @@
 import { POIS, WORLD_SIZE } from '../core';
-import type { HUDState, LaunchPadEntity, ZiplineEntity } from '../types';
-import { BOSS_POI_LABELS, mapNormToWorld, worldToMapNorm } from './UIHelpers';
-import { getCrownSvg } from './WeaponIcons';
+import type {
+  GameSettings,
+  HUDState,
+  LaunchPadEntity,
+  VaultEntity,
+  VehicleEntity,
+  ZiplineEntity,
+} from '../types';
+import {
+  BOSS_POI_LABELS,
+  formatKeyCodeLabel,
+  mapNormToWorld,
+  resolveKeybinds,
+  worldToMapNorm,
+} from './UIHelpers';
+import { getCrownSvg, getVaultLockSvg, getVehicleIconSvg } from './WeaponIcons';
 
 export interface FullMapCallbacks {
   onWaypointChange: (waypoint: { x: number; z: number } | null) => void;
@@ -15,11 +28,15 @@ export class FullMapOverlay {
   private callbacks: FullMapCallbacks;
 
   private backdropEl: HTMLDivElement;
+  private hintEl: HTMLDivElement;
+  private closeBtn: HTMLButtonElement;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
   private terrainMapCanvas: HTMLCanvasElement | null = null;
   private launchPads: LaunchPadEntity[] = [];
   private ziplines: ZiplineEntity[] = [];
+  private vehicles: VehicleEntity[] = [];
+  private vaults: VaultEntity[] = [];
 
   private open = false;
   private lastState: HUDState | null = null;
@@ -39,23 +56,27 @@ export class FullMapOverlay {
     head.className = 'fdr-fullmap-head';
 
     const titleWrap = document.createElement('div');
-    titleWrap.innerHTML = `
-      <div class="fdr-fullmap-title">FORTDROP ISLAND — TACTICAL MAP</div>
-      <div class="fdr-fullmap-hint">LEFT CLICK: SET WAYPOINT • RIGHT CLICK: CLEAR WAYPOINT • [M] CLOSE</div>
-    `;
+    const titleEl = document.createElement('div');
+    titleEl.className = 'fdr-fullmap-title';
+    titleEl.textContent = 'FORTDROP ISLAND — TACTICAL MAP';
+    this.hintEl = document.createElement('div');
+    this.hintEl.className = 'fdr-fullmap-hint';
+    this.hintEl.textContent =
+      'LEFT CLICK: SET WAYPOINT • RIGHT CLICK: CLEAR WAYPOINT • [M] CLOSE';
+    titleWrap.append(titleEl, this.hintEl);
 
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'fdr-btn fdr-btn-dark';
-    closeBtn.style.padding = '5px 14px';
-    closeBtn.style.fontSize = '15px';
-    closeBtn.innerHTML = '<span>CLOSE [M]</span>';
-    closeBtn.addEventListener('click', () => {
+    this.closeBtn = document.createElement('button');
+    this.closeBtn.type = 'button';
+    this.closeBtn.className = 'fdr-btn fdr-btn-dark';
+    this.closeBtn.style.padding = '5px 14px';
+    this.closeBtn.style.fontSize = '15px';
+    this.closeBtn.innerHTML = '<span>CLOSE [M]</span>';
+    this.closeBtn.addEventListener('click', () => {
       this.setOpen(false);
       this.callbacks.onCloseRequest?.();
     });
 
-    head.append(titleWrap, closeBtn);
+    head.append(titleWrap, this.closeBtn);
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = 640;
@@ -119,6 +140,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch boss">${getCrownSvg()}</span>
         <span>NAMED POI BOSS ZONE</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch vehicle">${getVehicleIconSvg('hover_atv')}</span>
+        <span>VEHICLE</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch vault">${getVaultLockSvg(false)}</span>
+        <span>BOSS VAULT</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -138,9 +167,29 @@ export class FullMapOverlay {
     }
   }
 
+  setSettings(settings: GameSettings): void {
+    const mapKey = formatKeyCodeLabel(resolveKeybinds(settings.keybinds).map);
+    this.hintEl.textContent = `LEFT CLICK: SET WAYPOINT • RIGHT CLICK: CLEAR WAYPOINT • [${mapKey}] CLOSE`;
+    this.closeBtn.innerHTML = `<span>CLOSE [${mapKey}]</span>`;
+  }
+
   setWorldTraversal(launchPads: LaunchPadEntity[], ziplines: ZiplineEntity[]): void {
     this.launchPads = launchPads;
     this.ziplines = ziplines;
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldVehicles(vehicles: VehicleEntity[]): void {
+    this.vehicles = vehicles;
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldVaults(vaults: VaultEntity[]): void {
+    this.vaults = vaults;
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -325,6 +374,36 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
+    // Driveable Vehicles
+    if (this.vehicles.length > 0) {
+      ctx.save();
+      for (const vehicle of this.vehicles) {
+        if (vehicle.destroyed) continue;
+        const vp = toPx(vehicle.x, vehicle.z);
+        const occupied = vehicle.driverId !== null;
+        ctx.save();
+        ctx.translate(vp.x, vp.y);
+        if (vehicle.kind === 'cyber_bike') {
+          ctx.rotate(Math.PI / 4);
+          ctx.fillStyle = occupied ? '#ffd000' : '#22d3ee';
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 1.6;
+          ctx.fillRect(-4.5, -4.5, 9, 9);
+          ctx.strokeRect(-4.5, -4.5, 9, 9);
+        } else {
+          ctx.fillStyle = occupied ? '#ffd000' : '#34eb5e';
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 1.6;
+          ctx.fillRect(-6, -4.5, 12, 9);
+          ctx.strokeRect(-6, -4.5, 12, 9);
+          ctx.fillStyle = '#e0f2fe';
+          ctx.fillRect(-4, -2.5, 8, 2.5);
+        }
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
     // 10 POI Labels + Named POI Boss Zones
     ctx.save();
     for (const poi of POIS) {
@@ -369,6 +448,54 @@ export class FullMapOverlay {
       }
     }
     ctx.restore();
+
+    // Interactive Boss Vaults (locked gold padlock vs unlocked green/gold padlock)
+    if (this.vaults.length > 0) {
+      ctx.save();
+      for (const vault of this.vaults) {
+        const vp = toPx(vault.x, vault.z);
+        ctx.save();
+        ctx.translate(vp.x, vp.y);
+
+        // Backdrop badge
+        ctx.beginPath();
+        ctx.arc(0, 0, 9.5, 0, Math.PI * 2);
+        ctx.fillStyle = vault.unlocked
+          ? 'rgba(20, 83, 45, 0.92)'
+          : 'rgba(120, 53, 15, 0.92)';
+        ctx.fill();
+        ctx.strokeStyle = vault.unlocked ? '#34eb5e' : '#ffd000';
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+
+        // Padlock shackle
+        ctx.beginPath();
+        if (vault.unlocked) {
+          ctx.arc(2.5, -2.5, 3.2, Math.PI, 0);
+        } else {
+          ctx.arc(0, -2.5, 3.2, Math.PI, 0);
+        }
+        ctx.strokeStyle = '#fef08a';
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+
+        // Padlock body
+        ctx.fillStyle = vault.unlocked ? '#34eb5e' : '#ffd000';
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.2;
+        ctx.fillRect(-4.5, -2, 9, 7.5);
+        ctx.strokeRect(-4.5, -2, 9, 7.5);
+
+        // Keyhole dot
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(0, 1.8, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+      ctx.restore();
+    }
 
     // Supply drops / active blips
     for (const blip of state.audioBlips) {

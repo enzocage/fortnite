@@ -7,6 +7,7 @@ import type {
   MaterialType,
   POIDef,
   Vec3Like,
+  VehicleEntity,
   WeaponId,
 } from '../types';
 import {
@@ -32,6 +33,7 @@ import type {
   BotCombatTarget,
   BotEntity,
   BotWorldContext,
+  ShieldBubbleZone,
 } from './BotTypes';
 
 export interface DifficultyProfile {
@@ -215,7 +217,15 @@ function scoreWeaponForDistance(
   hasLoadedMag: boolean,
 ): number {
   const def = WEAPONS[item.weaponId];
-  if (isHealingItem(item.weaponId)) return -1;
+  if (!def || isHealingItem(item.weaponId)) return -1;
+  if (
+    def.isGrappler ||
+    def.isShieldBubble ||
+    item.weaponId === 'grappler' ||
+    item.weaponId === 'shield_bubble'
+  ) {
+    return -1;
+  }
 
   if (item.weaponId === 'pickaxe') {
     return distance <= def.range + 1.0 ? 5 : -1;
@@ -399,6 +409,222 @@ export function selectThrowableForCombat(
   const slotIndex = shockwaveSlot >= 0 ? shockwaveSlot : fragSlot;
   const item = bot.inventory.items[slotIndex];
   return item ? { slotIndex, item, reason: 'boxed' } : null;
+}
+
+/**
+ * Returns `true` if the line segment `[a, b]` intersects or lies within the sphere
+ * centered at `center` with radius `radius`.
+ */
+export function segmentIntersectsSphere(
+  a: Vec3Like,
+  b: Vec3Like,
+  center: Vec3Like,
+  radius: number,
+): boolean {
+  if (radius <= 0) return false;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dz = b.z - a.z;
+  const lenSq = dx * dx + dy * dy + dz * dz;
+  const rSq = radius * radius;
+  if (lenSq <= 1e-8) {
+    const ox = a.x - center.x;
+    const oy = a.y - center.y;
+    const oz = a.z - center.z;
+    return ox * ox + oy * oy + oz * oz <= rSq;
+  }
+  const t = clamp(
+    ((center.x - a.x) * dx + (center.y - a.y) * dy + (center.z - a.z) * dz) / lenSq,
+    0,
+    1,
+  );
+  const cx = a.x + dx * t - center.x;
+  const cy = a.y + dy * t - center.y;
+  const cz = a.z + dz * t - center.z;
+  return cx * cx + cy * cy + cz * cz <= rSq;
+}
+
+/**
+ * Checks whether a shot from `from` to `to` would cross the shell of any active shield bubble.
+ * When both shooter and target are inside the same dome, the shot is NOT blocked.
+ */
+export function isShotBlockedByShieldBubbles(
+  from: Vec3Like,
+  to: Vec3Like,
+  bubbles: ReadonlyArray<ShieldBubbleZone>,
+): ShieldBubbleZone | null {
+  for (const bubble of bubbles) {
+    if (bubble.radius <= 0) continue;
+    const innerRadius = Math.max(0.1, bubble.radius - 0.15);
+    const fromInside = dist3D(from, bubble.position) < innerRadius;
+    const toInside = dist3D(to, bubble.position) < bubble.radius;
+    if (fromInside && toInside) {
+      continue;
+    }
+    if (segmentIntersectsSphere(from, to, bubble.position, bubble.radius)) {
+      return bubble;
+    }
+  }
+  return null;
+}
+
+/**
+ * Selects the bot's best close-quarters shotgun or SMG with available ammo for pushing
+ * into an enemy's shield bubble dome.
+ */
+export function selectCloseQuartersWeapon(
+  items: (ItemInstance | null)[],
+  ammo?: Record<AmmoType, number>,
+): { slotIndex: number; item: ItemInstance } | null {
+  let bestSlot = -1;
+  let bestItem: ItemInstance | null = null;
+  let bestScore = -1;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item) continue;
+    const def = WEAPONS[item.weaponId];
+    if (!def || (def.category !== 'shotgun' && def.category !== 'smg')) continue;
+
+    if (def.ammoType !== null && ammo !== undefined) {
+      const reserve = ammo[def.ammoType] ?? 0;
+      if (item.magAmmo <= 0 && reserve <= 0) continue;
+    }
+
+    const base =
+      item.weaponId === 'heavy_shotgun'
+        ? 120
+        : item.weaponId === 'pump_shotgun'
+          ? 112
+          : item.weaponId === 'tac_shotgun'
+            ? 104
+            : 92;
+    const rarityMult = RARITY_MULTIPLIER[item.rarity] ?? 1.0;
+    const score = base * rarityMult + (item.magAmmo > 0 ? 15 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestSlot = i;
+      bestItem = item;
+    }
+  }
+
+  return bestSlot >= 0 && bestItem ? { slotIndex: bestSlot, item: bestItem } : null;
+}
+
+/**
+ * Evaluates whether a bot carrying a `shield_bubble` has recently taken heavy damage
+ * and should deploy it defensively at its position.
+ */
+export function shouldBotDeployShieldBubble(
+  bot: Pick<
+    BotEntity,
+    | 'hp'
+    | 'maxHp'
+    | 'shield'
+    | 'maxShield'
+    | 'position'
+    | 'inventory'
+    | 'state'
+    | 'lastDamageTime'
+    | 'shieldBubbleCooldown'
+    | 'recentDamageTaken'
+  >,
+  ctx: Pick<BotWorldContext, 'getActiveShieldBubbles'>,
+  nowSec: number,
+): { slotIndex: number; item: ItemInstance } | null {
+  if (
+    bot.state === 'bus' ||
+    bot.state === 'skydiving' ||
+    bot.state === 'gliding' ||
+    bot.state === 'eliminated'
+  ) {
+    return null;
+  }
+  if ((bot.shieldBubbleCooldown ?? 0) > 0) return null;
+
+  let slotIndex = -1;
+  let item: ItemInstance | null = null;
+  for (let i = 1; i < bot.inventory.items.length; i++) {
+    const it = bot.inventory.items[i];
+    if (it && it.weaponId === 'shield_bubble' && it.stackCount > 0) {
+      slotIndex = i;
+      item = it;
+      break;
+    }
+  }
+  if (slotIndex < 1 || !item) return null;
+
+  const activeBubbles = ctx.getActiveShieldBubbles?.() ?? [];
+  const alreadyCovered = activeBubbles.some(
+    (b) => dist3D(bot.position, b.position) <= Math.max(0.5, b.radius - 0.4),
+  );
+  if (alreadyCovered) return null;
+
+  const recentlyDamaged =
+    bot.lastDamageTime >= 0 && nowSec - bot.lastDamageTime <= 2.5;
+  if (!recentlyDamaged) return null;
+
+  const maxHp = bot.maxHp || 100;
+  const maxShield = bot.maxShield || 100;
+  const heavyBurst = (bot.recentDamageTaken ?? 0) >= 35;
+  const lowAfterHit =
+    bot.hp <= maxHp * 0.65 ||
+    bot.hp + bot.shield <= (maxHp + maxShield) * 0.55 ||
+    (bot.shield <= 0 && bot.hp < maxHp * 0.85);
+
+  if (!heavyBurst && !lowAfterHit) return null;
+  return { slotIndex, item };
+}
+
+/**
+ * Detects an oncoming player- or bot-driven vehicle on a collision course with the bot
+ * and returns a perpendicular sprint-evade vector.
+ */
+export function findIncomingVehicleThreat(
+  botPos: Vec3Like,
+  botId: string,
+  vehicles: ReadonlyArray<VehicleEntity>,
+): { vehicle: VehicleEntity; evadeDirX: number; evadeDirZ: number; distance: number } | null {
+  let closestThreat: {
+    vehicle: VehicleEntity;
+    evadeDirX: number;
+    evadeDirZ: number;
+    distance: number;
+  } | null = null;
+  let bestDist = Infinity;
+
+  for (const v of vehicles) {
+    if (v.destroyed || !v.driverId || v.driverId === botId) continue;
+    if (Math.abs(botPos.y - v.y) > 4.5) continue;
+
+    const spd = Math.hypot(v.vx, v.vz);
+    if (spd < 5.0) continue;
+
+    const dx = botPos.x - v.x;
+    const dz = botPos.z - v.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 22 || dist < 0.2 || dist >= bestDist) continue;
+
+    const vxN = v.vx / spd;
+    const vzN = v.vz / spd;
+    const forwardProj = dx * vxN + dz * vzN;
+    if (forwardProj < 0) continue;
+
+    // Signed perpendicular offset along vehicle right normal (-vzN, vxN)
+    const perp = dx * -vzN + dz * vxN;
+    if (Math.abs(perp) <= 3.8) {
+      const side = perp >= 0 ? 1 : -1;
+      bestDist = dist;
+      closestThreat = {
+        vehicle: v,
+        evadeDirX: -vzN * side,
+        evadeDirZ: vxN * side,
+        distance: dist,
+      };
+    }
+  }
+
+  return closestThreat;
 }
 
 /**
@@ -723,7 +949,7 @@ function countHealingSlots(bot: BotEntity): number {
 
 function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
   const def = WEAPONS[candidate.weaponId];
-  if (!def || candidate.weaponId === 'pickaxe') return -1;
+  if (!def || candidate.weaponId === 'pickaxe' || def.isGrappler) return -1;
 
   // Stack existing consumables and throwables
   if (def.isConsumable || def.isThrowable) {
@@ -1216,17 +1442,42 @@ function handleFireAndBurst(
   dt: number,
 ): void {
   const activeItem = bot.inventory.items[bot.inventory.activeSlot];
-  if (!activeItem || isHealingItem(activeItem.weaponId)) return;
+  if (
+    !activeItem ||
+    isHealingItem(activeItem.weaponId) ||
+    activeItem.weaponId === 'shield_bubble' ||
+    activeItem.weaponId === 'grappler'
+  ) {
+    return;
+  }
   const def = WEAPONS[activeItem.weaponId];
   const profile = DIFFICULTY_PROFILES[difficulty];
 
   const eye = getBotEyePos(bot);
   // Aim at chest, blended slightly toward head based on difficulty
-  const aimY =
-    target.eyePos.y - 0.35 * (1 - profile.headshotAimBias);
-  const dx = target.position.x - eye.x;
-  const dy = aimY - eye.y;
-  const dz = target.position.z - eye.z;
+  let aimTargetX = target.position.x;
+  let aimTargetY = target.eyePos.y - 0.35 * (1 - profile.headshotAimBias);
+  let aimTargetZ = target.position.z;
+
+  if (def.isProjectile) {
+    const vehicle = ctx.getVehicles?.().find(
+      (v) => !v.destroyed && v.driverId === target.id,
+    );
+    const targetVel = vehicle
+      ? { x: vehicle.vx, y: vehicle.vy, z: vehicle.vz }
+      : target.velocity;
+    if (targetVel) {
+      const projSpd = Math.max(12, def.projectileSpeed || 60);
+      const leadSec = clamp(distance / projSpd, 0, 0.75);
+      aimTargetX += targetVel.x * leadSec;
+      aimTargetY += targetVel.y * leadSec * 0.35;
+      aimTargetZ += targetVel.z * leadSec;
+    }
+  }
+
+  const dx = aimTargetX - eye.x;
+  const dy = aimTargetY - eye.y;
+  const dz = aimTargetZ - eye.z;
   const len = Math.hypot(dx, dy, dz) || 1;
   const aimDir: Vec3Like = { x: dx / len, y: dy / len, z: dz / len };
 
@@ -1751,37 +2002,78 @@ function stepCombatState(
   }
 
   const { target, hasLOS, distance } = combatMatch;
-
-  // Check tactical throwables (`frag_grenade` / `shockwave_grenade`) against clustered or boxed enemies
-  const throwDecision =
-    !isFarLOD && bot.reloadTimer <= 0 && bot.burstQueue <= 0
-      ? selectThrowableForCombat(
-          bot,
-          target,
-          ctx.getCombatTargets(),
-          hasLOS,
-          ctx.getBuildPieces?.(),
-        )
+  const eye = getBotEyePos(bot);
+  const activeBubbles = ctx.getActiveShieldBubbles?.() ?? [];
+  const blockingBubble =
+    activeBubbles.length > 0
+      ? isShotBlockedByShieldBubbles(eye, target.eyePos, activeBubbles)
       : null;
+  const targetBubble =
+    activeBubbles.find(
+      (b) =>
+        dist3D(target.eyePos, b.position) < b.radius ||
+        dist3D(target.position, b.position) < b.radius,
+    ) ?? null;
+  const cqcWeapon =
+    activeBubbles.length > 0
+      ? selectCloseQuartersWeapon(bot.inventory.items, bot.inventory.ammo)
+      : null;
+  const bothInsideSameBubble =
+    targetBubble !== null &&
+    blockingBubble === null &&
+    dist3D(eye, targetBubble.position) < Math.max(0.1, targetBubble.radius - 0.15);
 
-  if (throwDecision && bot.fireCooldown <= 0 && bot.reactionTimer <= 0) {
-    if (bot.inventory.activeSlot !== throwDecision.slotIndex) {
-      bot.inventory.activeSlot = throwDecision.slotIndex;
+  if (blockingBubble) {
+    // Avoid wasting AR/sniper bursts into an active shield bubble dome
+    bot.burstQueue = 0;
+    const faceYaw = Math.atan2(target.position.x - eye.x, target.position.z - eye.z);
+    bot.yaw = lerpAngle(bot.yaw, faceYaw, clamp(profile.turnSpeedRadPerSec * safeDt, 0, 1));
+    if (
+      cqcWeapon &&
+      (targetBubble !== null ||
+        dist3D(eye, blockingBubble.position) < blockingBubble.radius ||
+        distance <= 38)
+    ) {
+      bot.inventory.activeSlot = cqcWeapon.slotIndex;
+    }
+  } else if (bothInsideSameBubble && cqcWeapon) {
+    if (bot.inventory.activeSlot !== cqcWeapon.slotIndex) {
+      bot.inventory.activeSlot = cqcWeapon.slotIndex;
       bot.burstQueue = 0;
     }
     handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
   } else {
-    const chosen = selectBestWeaponForDistance(
-      bot.inventory.items,
-      distance,
-      bot.inventory.ammo,
-    );
-    if (chosen) {
-      if (bot.inventory.activeSlot !== chosen.slotIndex) {
-        bot.inventory.activeSlot = chosen.slotIndex;
+    // Check tactical throwables (`frag_grenade` / `shockwave_grenade`) against clustered or boxed enemies
+    const throwDecision =
+      !isFarLOD && bot.reloadTimer <= 0 && bot.burstQueue <= 0
+        ? selectThrowableForCombat(
+            bot,
+            target,
+            ctx.getCombatTargets(),
+            hasLOS,
+            ctx.getBuildPieces?.(),
+          )
+        : null;
+
+    if (throwDecision && bot.fireCooldown <= 0 && bot.reactionTimer <= 0) {
+      if (bot.inventory.activeSlot !== throwDecision.slotIndex) {
+        bot.inventory.activeSlot = throwDecision.slotIndex;
         bot.burstQueue = 0;
       }
       handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
+    } else {
+      const chosen = selectBestWeaponForDistance(
+        bot.inventory.items,
+        distance,
+        bot.inventory.ammo,
+      );
+      if (chosen) {
+        if (bot.inventory.activeSlot !== chosen.slotIndex) {
+          bot.inventory.activeSlot = chosen.slotIndex;
+          bot.burstQueue = 0;
+        }
+        handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
+      }
     }
   }
 
@@ -1809,7 +2101,35 @@ function stepCombatState(
     activeDef?.category === 'rifle' || activeDef?.category === 'sniper';
 
   let radial = 0;
-  if (behindRampCover && isRangedPrecision && horizDist >= 12) {
+  let strafeWeightOverride: number | null = null;
+  let forceBubbleSprint = false;
+
+  if (blockingBubble) {
+    const targetInside = targetBubble !== null;
+    const botInside = dist3D(eye, blockingBubble.position) < blockingBubble.radius;
+    if (targetInside && cqcWeapon) {
+      // Push inside the enemy's shield bubble with shotgun / SMG
+      radial = 1;
+      strafeWeightOverride = 0.2;
+      forceBubbleSprint = horizDist > blockingBubble.radius * 0.6;
+    } else if (botInside && !targetInside) {
+      radial = cqcWeapon && horizDist < 22 ? 1 : 0.35;
+      strafeWeightOverride = cqcWeapon && horizDist < 22 ? 0.45 : 0.95;
+    } else {
+      // Flank laterally around the blocking dome when using ranged guns or intervening bubbles
+      bot.strafeTimer = Math.max(bot.strafeTimer, 0.75);
+      radial = horizDist > 26 ? 0.35 : 0;
+      strafeWeightOverride = 1.0;
+    }
+  } else if (bothInsideSameBubble && targetBubble) {
+    const maxStay = Math.max(2.6, targetBubble.radius - 1.4);
+    const minStay = Math.min(range.min, 2.2);
+    if (horizDist > maxStay) {
+      radial = 0.9;
+    } else if (horizDist < minStay) {
+      radial = -0.6;
+    }
+  } else if (behindRampCover && isRangedPrecision && horizDist >= 12) {
     // Hold 1x1 ramp cover; nudge slightly up the ramp if own wall obscures LOS
     radial = hasLOS ? 0 : 0.42;
   } else if (horizDist > range.max || !hasLOS) {
@@ -1819,7 +2139,10 @@ function stepCombatState(
   }
 
   const strafeWeight =
-    profile.strafeAgility * (isFarLOD ? 0.25 : behindRampCover && isRangedPrecision ? 0.45 : 0.85);
+    strafeWeightOverride !== null
+      ? strafeWeightOverride * (isFarLOD ? 0.25 : 1.0)
+      : profile.strafeAgility *
+        (isFarLOD ? 0.25 : behindRampCover && isRangedPrecision ? 0.45 : 0.85);
   const rawX = fwdX * radial + rightX * bot.strafeDir * strafeWeight;
   const rawZ = fwdZ * radial + rightZ * bot.strafeDir * strafeWeight;
   const rawLen = Math.hypot(rawX, rawZ);
@@ -1876,7 +2199,8 @@ function stepCombatState(
     }
   }
 
-  bot.isSprinting = radial > 0 && horizDist > range.max + 8 && !bot.isCrouching;
+  bot.isSprinting =
+    (forceBubbleSprint || (radial > 0 && horizDist > range.max + 8)) && !bot.isCrouching;
   const speed = bot.isCrouching
     ? CROUCH_SPEED
     : bot.isSprinting
@@ -2392,6 +2716,9 @@ export function updateBot(
   if ((bot.throwCooldown ?? 0) > 0) {
     bot.throwCooldown = Math.max(0, (bot.throwCooldown ?? 0) - safeDt);
   }
+  if ((bot.shieldBubbleCooldown ?? 0) > 0) {
+    bot.shieldBubbleCooldown = Math.max(0, (bot.shieldBubbleCooldown ?? 0) - safeDt);
+  }
   if ((bot.launchPadCooldown ?? 0) > 0) {
     bot.launchPadCooldown = Math.max(0, (bot.launchPadCooldown ?? 0) - safeDt);
   }
@@ -2473,6 +2800,32 @@ export function updateBot(
         z: bot.position.z + Math.cos(bot.yaw) * 15,
       };
     tryBuildCover(bot, ctx, difficulty, threatPos, elapsed);
+  }
+
+  if (!isFarLOD) {
+    const bubbleDeploy = shouldBotDeployShieldBubble(bot, ctx, elapsed);
+    if (bubbleDeploy) {
+      bot.inventory.activeSlot = bubbleDeploy.slotIndex;
+      bot.burstQueue = 0;
+      const eye = getBotEyePos(bot);
+      const throwDir: Vec3Like = {
+        x: Math.sin(bot.yaw) * 0.22,
+        y: -0.95,
+        z: Math.cos(bot.yaw) * 0.22,
+      };
+      const res = ctx.fireWeapon(bot, bubbleDeploy.item, eye, throwDir, 0.01);
+      if (!res || res.fired !== false) {
+        bubbleDeploy.item.stackCount = Math.max(0, bubbleDeploy.item.stackCount - 1);
+        if (bubbleDeploy.item.stackCount <= 0) {
+          bot.inventory.items[bubbleDeploy.slotIndex] = null;
+        }
+        bot.isFiring = true;
+        bot.recoilKick = 0.6;
+        bot.fireCooldown = 1 / Math.max(0.2, WEAPONS.shield_bubble.fireRate);
+        bot.shieldBubbleCooldown = 12.0;
+        bot.recentDamageTaken = 0;
+      }
+    }
   }
 
   const healChoice = selectHealingItem(
@@ -2613,6 +2966,27 @@ export function updateBot(
       break;
   }
 
+  if (!isFarLOD && ctx.getVehicles) {
+    const incomingVehicle = findIncomingVehicleThreat(
+      bot.position,
+      bot.id,
+      ctx.getVehicles(),
+    );
+    if (incomingVehicle) {
+      bot.isSprinting = true;
+      bot.isCrouching = false;
+      intent = {
+        dirX: incomingVehicle.evadeDirX,
+        dirZ: incomingVehicle.evadeDirZ,
+        speed: SPRINT_SPEED,
+        wantsJump:
+          bot.grounded &&
+          bot.jumpCooldown <= 0 &&
+          incomingVehicle.distance < 12,
+      };
+    }
+  }
+
   recoverIfStuck(bot, ctx, intent, elapsed, safeDt, isFarLOD);
   intent = applyVolcanoLavaAvoidance(bot, intent);
   applyMovementStep(
@@ -2650,6 +3024,51 @@ export class BotBrain {
     buildPieces?: BuildPiece[],
   ): ThrowableDecision | null {
     return selectThrowableForCombat(bot, target, allTargets, hasLOS, buildPieces);
+  }
+
+  segmentIntersectsSphere(
+    a: Vec3Like,
+    b: Vec3Like,
+    center: Vec3Like,
+    radius: number,
+  ): boolean {
+    return segmentIntersectsSphere(a, b, center, radius);
+  }
+
+  isShotBlockedByShieldBubbles(
+    from: Vec3Like,
+    to: Vec3Like,
+    bubbles: ReadonlyArray<ShieldBubbleZone>,
+  ): ShieldBubbleZone | null {
+    return isShotBlockedByShieldBubbles(from, to, bubbles);
+  }
+
+  shouldBotDeployShieldBubble(
+    bot: Pick<
+      BotEntity,
+      | 'hp'
+      | 'maxHp'
+      | 'shield'
+      | 'maxShield'
+      | 'position'
+      | 'inventory'
+      | 'state'
+      | 'lastDamageTime'
+      | 'shieldBubbleCooldown'
+      | 'recentDamageTaken'
+    >,
+    ctx: Pick<BotWorldContext, 'getActiveShieldBubbles'>,
+    nowSec: number,
+  ): { slotIndex: number; item: ItemInstance } | null {
+    return shouldBotDeployShieldBubble(bot, ctx, nowSec);
+  }
+
+  findIncomingVehicleThreat(
+    botPos: Vec3Like,
+    botId: string,
+    vehicles: ReadonlyArray<VehicleEntity>,
+  ): { vehicle: VehicleEntity; evadeDirX: number; evadeDirZ: number; distance: number } | null {
+    return findIncomingVehicleThreat(botPos, botId, vehicles);
   }
 
   selectLaunchPadForRotation(

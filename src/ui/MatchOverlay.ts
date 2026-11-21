@@ -4,8 +4,8 @@ import {
   computeCareerLevelProgress,
   recordMatchCareerStats,
 } from './CareerProfile';
-import { formatSurvivalTime } from './UIHelpers';
-import { getCrownSvg, getSkullSvg } from './WeaponIcons';
+import { cloneSettings, formatSurvivalTime } from './UIHelpers';
+import { getBountyTargetSvg, getCrownSvg, getSkullSvg } from './WeaponIcons';
 
 export interface MatchOverlayCallbacks {
   onResume: () => void;
@@ -40,7 +40,7 @@ export class MatchOverlay {
   ) {
     this.root = root;
     this.eventBus = eventBus;
-    this.settings = { ...settings };
+    this.settings = cloneSettings(settings);
     this.callbacks = callbacks;
 
     this.bannerLayerEl = document.createElement('div');
@@ -74,7 +74,7 @@ export class MatchOverlay {
   }
 
   setSettings(settings: GameSettings): void {
-    this.settings = { ...settings };
+    this.settings = cloneSettings(settings);
     if (this.pauseOpen) {
       this.renderPauseMenu();
     }
@@ -118,6 +118,50 @@ export class MatchOverlay {
       this.activeBannerTimers.delete(timer);
       toast.remove();
     }, duration);
+    this.activeBannerTimers.add(timer);
+  }
+
+  showBountyToast(ev: {
+    title: string;
+    targetName: string;
+    tone: 'start' | 'complete' | 'expired';
+  }): void {
+    const toast = document.createElement('div');
+    toast.className = `fdr-bounty-toast tone-${ev.tone}`;
+    toast.dataset.bountyTone = ev.tone;
+
+    const icon = document.createElement('span');
+    icon.className = 'fdr-bounty-toast-icon';
+    icon.innerHTML = getBountyTargetSvg();
+
+    const textCol = document.createElement('div');
+    textCol.className = 'fdr-bounty-toast-text';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'fdr-banner-title';
+    titleEl.textContent = ev.title;
+
+    const targetEl = document.createElement('div');
+    targetEl.className = 'fdr-banner-sub';
+    targetEl.textContent =
+      ev.tone === 'complete'
+        ? `ELIMINATED TARGET: ${ev.targetName}`
+        : ev.tone === 'expired'
+          ? `CONTRACT EXPIRED: ${ev.targetName}`
+          : `HUNT TARGET: ${ev.targetName}`;
+
+    textCol.append(titleEl, targetEl);
+    toast.append(icon, textCol);
+    this.bannerLayerEl.appendChild(toast);
+
+    while (this.bannerLayerEl.children.length > 3) {
+      this.bannerLayerEl.firstElementChild?.remove();
+    }
+
+    const timer = setTimeout(() => {
+      this.activeBannerTimers.delete(timer);
+      toast.remove();
+    }, 3400);
     this.activeBannerTimers.add(timer);
   }
 
@@ -241,7 +285,7 @@ export class MatchOverlay {
         const num = Number(input.value);
         valEl.textContent = format(num);
         onChange(num);
-        this.callbacks.onSettingsChange({ ...this.settings });
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
       });
 
       row.append(lbl, input, valEl);

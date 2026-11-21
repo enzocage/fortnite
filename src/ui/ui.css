@@ -755,11 +755,22 @@
   opacity: 1;
 }
 
-/* Top-Left FPS Badge */
-.fdr-fps-badge {
+/* Top-Left Stack (FPS, Kill-Streak, Vault Keys, Active Bounty) */
+.fdr-top-left-stack {
   position: absolute;
   top: 12px;
   left: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* Top-Left FPS Badge */
+.fdr-fps-badge {
+  position: relative;
   padding: 4px 11px;
   background: rgba(10, 18, 36, 0.78);
   border: 1px solid rgba(52, 235, 94, 0.6);
@@ -890,9 +901,10 @@
   position: absolute;
   top: 12px;
   right: 14px;
-  width: clamp(164px, 14vw, 200px);
+  width: clamp(180px, 14.5vw, 212px);
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 6px;
 }
 
@@ -927,6 +939,7 @@
 }
 
 .fdr-telemetry-row {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -938,14 +951,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 4px 6px;
+  gap: 4px;
+  padding: 4px 5px;
   background: rgba(10, 18, 38, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 4px;
   transform: skewX(-8deg);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
+  white-space: nowrap;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
 }
 
@@ -1717,7 +1731,7 @@
 /* Pointer Lock Prompt */
 .fdr-pointer-prompt {
   position: absolute;
-  top: 106px;
+  top: 130px;
   left: 50%;
   transform: translate(-50%, 0) skewX(-10deg);
   padding: 5px 16px;
@@ -1795,31 +1809,34 @@
 
 .fdr-fullmap-stage {
   position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
 }
 
 .fdr-fullmap-canvas {
   display: block;
-  width: min(76vh, 76vw, 620px);
-  height: min(76vh, 76vw, 620px);
+  width: min(76vh, 66vw, 590px);
+  height: min(76vh, 66vw, 590px);
   border-radius: 6px;
   border: 2px solid rgba(255, 255, 255, 0.25);
   cursor: crosshair;
+  flex-shrink: 0;
 }
 
 .fdr-map-legend {
-  position: absolute;
-  bottom: 10px;
-  left: 10px;
-  padding: 8px 11px;
-  background: rgba(7, 13, 30, 0.88);
+  position: static;
+  padding: 10px 13px;
+  background: rgba(7, 13, 30, 0.9);
   border: 1.5px solid rgba(56, 189, 248, 0.55);
   border-radius: 7px;
   pointer-events: none;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.65);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 164px;
+  gap: 6px;
+  min-width: 176px;
+  flex-shrink: 0;
 }
 
 .fdr-map-legend-title {
@@ -1881,7 +1898,9 @@
   border: 2px dashed #ffffff;
 }
 
-.fdr-legend-swatch.boss svg {
+.fdr-legend-swatch.boss svg,
+.fdr-legend-swatch.vehicle svg,
+.fdr-legend-swatch.vault svg {
   width: 14px;
   height: 14px;
 }
@@ -1891,7 +1910,7 @@
    ============================================================================ */
 .fdr-banner-layer {
   position: absolute;
-  top: 108px;
+  top: 134px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -2109,9 +2128,7 @@
 }
 
 .fdr-killstreak-badge {
-  position: absolute;
-  top: 52px;
-  left: 14px;
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -2155,22 +2172,25 @@
 .fdr-zone-meta-row {
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 4px;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(380px, 34vw);
 }
 
 .fdr-zone-pill {
-  padding: 3px 8px;
+  width: 100%;
+  padding: 3px 10px;
   border-radius: 4px;
   background: rgba(10, 18, 38, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.2);
   transform: skewX(-8deg);
   font-size: 12px;
   font-weight: 800;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   text-align: center;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .fdr-zone-pill.safe-dist {
@@ -2185,6 +2205,11 @@
 }
 
 .fdr-zone-pill.location {
+  width: max-content;
+  min-width: 100%;
+  max-width: min(380px, 34vw);
+  white-space: normal;
+  line-height: 1.15;
   color: #7dd3fc;
   border-color: rgba(56, 189, 248, 0.45);
 }
@@ -2484,4 +2509,699 @@
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+
+/* ============================================================================
+   WAVE 2 HUD: VEHICLE DASHBOARD, BOSS HEALTHBAR, BOUNTY, VAULT KEYS,
+   WEATHER PILL, GRAPPLER BADGE, SPECTATOR BAR & KEYBIND REMAPPER
+   ============================================================================ */
+
+/* Vault Key Badge (Top-Left Stack) */
+.fdr-vault-key-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgba(120, 53, 15, 0.92), rgba(180, 83, 9, 0.92));
+  border: 2px solid #ffd000;
+  transform: skewX(-10deg);
+  font-size: 14px;
+  font-weight: 900;
+  color: #fef08a;
+  box-shadow: 0 0 16px rgba(255, 208, 0, 0.45);
+}
+
+.fdr-vault-key-badge > * {
+  transform: skewX(10deg);
+}
+
+.fdr-vault-key-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-vault-key-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Active Bounty Card (Top-Left Stack) */
+.fdr-bounty-card {
+  width: clamp(205px, 18vw, 256px);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: linear-gradient(155deg, rgba(22, 16, 10, 0.9), rgba(10, 18, 38, 0.92));
+  border: 1.5px solid rgba(255, 208, 0, 0.65);
+  border-left: 5px solid #ffd000;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.52);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fdr-bounty-card.urgent {
+  border-color: #f87171;
+  border-left-color: #ef4444;
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.45);
+}
+
+.fdr-bounty-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #ffd000;
+}
+
+.fdr-bounty-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-bounty-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-bounty-timer {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 208, 0, 0.18);
+  color: #fef08a;
+  font-size: 12px;
+}
+
+.fdr-bounty-card.urgent .fdr-bounty-timer {
+  background: rgba(239, 68, 68, 0.35);
+  color: #fecaca;
+}
+
+.fdr-bounty-target {
+  font-size: 17px;
+  font-weight: 900;
+  color: #ffffff;
+  line-height: 1.1;
+}
+
+.fdr-bounty-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fdr-bounty-dist {
+  color: #38bdf8;
+}
+
+.fdr-bounty-reward {
+  color: #86efac;
+}
+
+/* Bounty Event Toast */
+.fdr-bounty-toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 22px;
+  border-radius: 7px;
+  border: 2px solid #ffd000;
+  transform: skewX(-10deg);
+  background: linear-gradient(90deg, rgba(120, 53, 15, 0.94), rgba(17, 24, 39, 0.94));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+  animation: fdrBannerPop 0.22s ease-out;
+}
+
+.fdr-bounty-toast > * {
+  transform: skewX(10deg);
+}
+
+.fdr-bounty-toast.tone-complete {
+  background: linear-gradient(90deg, rgba(22, 101, 52, 0.95), rgba(180, 83, 9, 0.94));
+  border-color: #86efac;
+}
+
+.fdr-bounty-toast.tone-expired {
+  background: linear-gradient(90deg, rgba(127, 29, 29, 0.94), rgba(30, 41, 59, 0.95));
+  border-color: #fca5a5;
+}
+
+.fdr-bounty-toast-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-bounty-toast-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-bounty-toast-text {
+  text-align: left;
+}
+
+/* Boss Encounter Healthbar (Top-Center below Compass) */
+.fdr-boss-bar {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(290px, 31vw, 430px);
+  padding: 7px 12px 8px;
+  background: linear-gradient(180deg, rgba(16, 12, 34, 0.92), rgba(10, 16, 36, 0.9));
+  border: 2px solid rgba(255, 208, 0, 0.72);
+  border-radius: 7px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.62), 0 0 18px rgba(168, 85, 247, 0.28);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.fdr-boss-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.fdr-boss-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fdr-boss-crown {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-boss-crown svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-boss-name {
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #ffd000;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.85);
+}
+
+.fdr-boss-right-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fdr-boss-stats {
+  color: #e2e8f0;
+}
+
+.fdr-boss-dist {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #38bdf8;
+}
+
+.fdr-boss-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fdr-boss-track {
+  width: 100%;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fdr-boss-track.shield {
+  height: 7px;
+}
+
+.fdr-boss-track.hp {
+  height: 10px;
+}
+
+.fdr-boss-fill {
+  height: 100%;
+  transition: width 0.12s ease-out;
+}
+
+.fdr-boss-fill.shield {
+  background: linear-gradient(90deg, #7e22ce 0%, #c084fc 55%, #e879f9 100%);
+}
+
+.fdr-boss-fill.hp {
+  background: linear-gradient(90deg, #b45309 0%, #f59e0b 45%, #ffd000 100%);
+}
+
+/* Weather Pill (Top-Right Telemetry) */
+.fdr-zone-pill.weather {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  min-width: 100%;
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.fdr-zone-pill.weather.weather-clear,
+.fdr-zone-pill.weather.weather-golden_hour {
+  color: #fde68a;
+  border-color: rgba(251, 191, 36, 0.55);
+}
+
+.fdr-zone-pill.weather.weather-rain {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.65);
+}
+
+.fdr-zone-pill.weather.weather-storm_front {
+  color: #f0abfc;
+  background: rgba(88, 28, 135, 0.85);
+  border-color: #d946ef;
+}
+
+.fdr-weather-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-weather-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Vehicle Dashboard (Bottom-Center above Vitals) */
+.fdr-vehicle-dash {
+  width: 100%;
+  padding: 7px 11px;
+  border-radius: 7px;
+  background: linear-gradient(155deg, rgba(10, 22, 46, 0.92), rgba(7, 13, 28, 0.94));
+  border: 2px solid rgba(34, 211, 238, 0.68);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.58);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fdr-vehicle-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fdr-vehicle-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fdr-vehicle-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+}
+
+.fdr-vehicle-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-vehicle-title {
+  font-size: 15px;
+  font-weight: 900;
+  color: #22d3ee;
+  letter-spacing: 0.06em;
+}
+
+.fdr-vehicle-readouts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fdr-vehicle-speed {
+  font-size: 18px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+.fdr-vehicle-speed.boosting {
+  color: #ffd000;
+  text-shadow: 0 0 10px rgba(255, 208, 0, 0.75);
+}
+
+.fdr-vehicle-hp-text {
+  font-size: 13px;
+  font-weight: 800;
+  color: #86efac;
+}
+
+.fdr-vehicle-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fdr-vehicle-bar-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.fdr-vehicle-bar-lbl {
+  font-size: 11px;
+  font-weight: 800;
+  color: #94a3b8;
+  letter-spacing: 0.06em;
+}
+
+.fdr-vehicle-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fdr-vehicle-fill {
+  height: 100%;
+  transition: width 0.08s linear;
+}
+
+.fdr-vehicle-fill.boost {
+  background: linear-gradient(90deg, #0284c7, #22d3ee);
+}
+
+.fdr-vehicle-fill.boost.boosting {
+  background: linear-gradient(90deg, #f59e0b, #fef08a);
+}
+
+.fdr-vehicle-fill.hp {
+  background: linear-gradient(90deg, #16a34a, #34eb5e);
+}
+
+.fdr-vehicle-fill.hp.low {
+  background: linear-gradient(90deg, #b91c1c, #ef4444);
+}
+
+.fdr-vehicle-hint {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #cbd5e1;
+}
+
+/* Grappler Charges Badge (Bottom-Right beside Hotbar) */
+.fdr-grappler-badge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  background: rgba(10, 22, 46, 0.9);
+  border: 2px solid #22d3ee;
+  border-radius: 5px;
+  transform: skewX(-8deg);
+  margin-right: 2px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-grappler-badge > * {
+  transform: skewX(8deg);
+}
+
+.fdr-grappler-badge.empty {
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+.fdr-grappler-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-grappler-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-grappler-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.fdr-grappler-title {
+  font-size: 10px;
+  font-weight: 800;
+  color: #7dd3fc;
+}
+
+.fdr-grappler-count {
+  font-size: 15px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+/* Live Spectator Bar */
+.fdr-spectator-bar {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(340px, 38vw, 520px);
+  padding: 10px 14px;
+  background: linear-gradient(155deg, rgba(12, 22, 46, 0.94), rgba(7, 13, 28, 0.96));
+  border: 2px solid #ffd000;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.68);
+  pointer-events: auto;
+  z-index: 26;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.fdr-spec-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fdr-spec-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fdr-spec-tag {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #ffd000;
+  color: #161000;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.fdr-spec-name {
+  font-size: 19px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+.fdr-spec-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.fdr-spec-stat.elims {
+  color: #ffd000;
+}
+
+.fdr-spec-stat.alive {
+  color: #38bdf8;
+}
+
+.fdr-spec-bars {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.fdr-spec-bar {
+  position: relative;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.fdr-spec-bar-txt {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 800;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+.fdr-spec-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.fdr-spec-btn {
+  flex: 1;
+  padding: 5px 10px;
+  border-radius: 4px;
+  border: 1.5px solid rgba(255, 255, 255, 0.32);
+  background: rgba(20, 36, 72, 0.9);
+  color: #ffffff;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.fdr-spec-btn.next:hover {
+  border-color: #22d3ee;
+  background: rgba(14, 116, 144, 0.9);
+}
+
+.fdr-spec-btn.summary:hover {
+  border-color: #ffd000;
+  background: rgba(120, 53, 15, 0.9);
+}
+
+/* Settings Keybind Controls Section */
+.fdr-keybinds-section {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: rgba(10, 20, 42, 0.78);
+  border: 1.5px solid rgba(56, 189, 248, 0.38);
+  border-radius: 8px;
+}
+
+.fdr-keybinds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.fdr-keybinds-title {
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #22d3ee;
+}
+
+.fdr-keybinds-sub {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.fdr-keybind-reset-btn {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+.fdr-keybinds-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fdr-keybind-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  background: rgba(15, 28, 56, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+}
+
+.fdr-keybind-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e2e8f0;
+  min-width: 0;
+}
+
+.fdr-keybind-btn {
+  min-width: 58px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1.5px solid #64748b;
+  background: #1e293b;
+  color: #ffd000;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.fdr-keybind-btn:hover {
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.fdr-keybind-btn.listening {
+  border-color: #ffd000;
+  background: rgba(180, 83, 9, 0.9);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(255, 208, 0, 0.5);
 }

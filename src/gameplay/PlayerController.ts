@@ -9,6 +9,7 @@ import type {
   EmoteId,
   GamePhase,
   GameSettings,
+  KeybindMap,
   MaterialType,
   SoundEventId,
   TerrainQuery,
@@ -18,6 +19,7 @@ import type {
 } from '../types';
 import {
   BUILD_COST,
+  DEFAULT_KEYBINDS,
   EventBus,
   GLIDER_FORCE_HEIGHT,
   GRID_XZ,
@@ -43,7 +45,10 @@ import type {
   PlayerHudSnapshot,
   PlayerInteractPrompt,
   PlayerMatchStats,
+  PlayerVehicleSnapshot,
   PropsInteractionBridge,
+  VaultBridge,
+  VehicleBridge,
   WorldTraversalBridge,
 } from './GameplayTypes';
 import { InventorySystem } from './InventorySystem';
@@ -60,12 +65,18 @@ export class PlayerController {
   private weapons: WeaponSystem;
   private propsBridge: PropsInteractionBridge;
   private traversalBridge: WorldTraversalBridge | null = null;
+  private vehicleBridge: VehicleBridge | null = null;
+  private vaultBridge: VaultBridge | null = null;
+  private onVaultUnlocked: ((lootPos: Vec3Like, poiId: string) => void) | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
 
   private activeZipline: { zip: ZiplineEntity; t: number; dir: 1 | -1 } | null = null;
   private ziplineCooldown = 0;
   private launchPadCooldown = 0;
+  private activeVehicleId: string | null = null;
+  private vehicleCooldown = 0;
+  private vaultKeys = 0;
 
   private inventory = new InventorySystem();
 
@@ -197,6 +208,11 @@ export class PlayerController {
     propsBridge: PropsInteractionBridge,
     eventBus: EventBus,
     settings: GameSettings,
+    options?: {
+      vehicleBridge?: VehicleBridge | null;
+      vaultBridge?: VaultBridge | null;
+      onVaultUnlocked?: ((lootPos: Vec3Like, poiId: string) => void) | null;
+    },
   ) {
     this.camera = camera;
     this.terrain = terrain;
@@ -205,8 +221,21 @@ export class PlayerController {
     this.weapons = weapons;
     this.propsBridge = propsBridge;
     this.eventBus = eventBus;
-    this.settings = { ...settings };
+    this.settings = {
+      ...settings,
+      keybinds: settings.keybinds ? { ...settings.keybinds } : undefined,
+    };
     this.currentFov = settings.fov;
+
+    if (options?.vehicleBridge !== undefined) {
+      this.setVehicleBridge(options.vehicleBridge);
+    }
+    if (options?.vaultBridge !== undefined) {
+      this.setVaultBridge(options.vaultBridge);
+    }
+    if (options?.onVaultUnlocked !== undefined) {
+      this.setVaultUnlockHandler(options.onVaultUnlocked);
+    }
 
     this.unsubHitmarker = this.eventBus.on('combat:hitmarker', (ev) => {
       if (ev.attackerId === 'player') {
@@ -248,11 +277,48 @@ export class PlayerController {
   }
 
   setSettings(settings: GameSettings): void {
-    this.settings = { ...settings };
+    this.settings = {
+      ...settings,
+      keybinds: settings.keybinds ? { ...settings.keybinds } : undefined,
+    };
   }
 
   setTraversalBridge(bridge: WorldTraversalBridge): void {
     this.traversalBridge = bridge;
+  }
+
+  setVehicleBridge(bridge: VehicleBridge | null): void {
+    const prev = this.vehicleBridge;
+    this.vehicleBridge = bridge;
+    if (bridge !== null) {
+      this.weapons.setVehicleBridge(bridge);
+    } else if (this.weapons.getVehicleBridge() === prev) {
+      this.weapons.setVehicleBridge(null);
+    }
+  }
+
+  setVaultBridge(bridge: VaultBridge | null): void {
+    this.vaultBridge = bridge;
+  }
+
+  setVaultUnlockHandler(
+    handler: ((lootPos: Vec3Like, poiId: string) => void) | null,
+  ): void {
+    this.onVaultUnlocked = handler;
+  }
+
+  addVaultKey(count = 1): number {
+    const add = Math.max(0, Math.floor(count));
+    this.vaultKeys += add;
+    return this.vaultKeys;
+  }
+
+  getVaultKeys(): number {
+    return this.vaultKeys;
+  }
+
+  getActiveVehicleId(): string | null {
+    return this.activeVehicleId;
   }
 
   setPlayerName(name: string): void {
@@ -278,6 +344,9 @@ export class PlayerController {
   setPhase(phase: GamePhase): void {
     this.phase = phase;
     if (phase !== 'playing') {
+      if (this.activeVehicleId) {
+        this.exitActiveVehicle(false);
+      }
       this.activeZipline = null;
       this.isSliding = false;
       this.isMantling = false;
@@ -512,6 +581,9 @@ export class PlayerController {
     this.activeZipline = null;
     this.ziplineCooldown = 0;
     this.launchPadCooldown = 0;
+    this.activeVehicleId = null;
+    this.vehicleCooldown = 0;
+    this.vaultKeys = 0;
 
     this.kills = 0;
     this.killStreak = 0;
@@ -538,6 +610,9 @@ export class PlayerController {
   }
 
   teleport(pos: Vec3Like): void {
+    if (this.activeVehicleId) {
+      this.exitActiveVehicle(false);
+    }
     this.position = { x: pos.x, y: pos.y, z: pos.z };
     this.velocity = { x: 0, y: 0, z: 0 };
     if (this.phase === 'bus' || this.phase === 'skydiving' || this.phase === 'gliding') {
@@ -679,6 +754,9 @@ export class PlayerController {
   }
 
   private handleEliminated(): void {
+    if (this.activeVehicleId) {
+      this.exitActiveVehicle(false);
+    }
     this.health = 0;
     this.phase = 'eliminated';
     this.isBuildMode = false;
@@ -859,6 +937,9 @@ export class PlayerController {
     }
 
     if (this.phase === 'playing') {
+      if (this.activeVehicleId !== null) {
+        return;
+      }
       const editState = this.building.getEditState();
       if (editState.active) {
         const hovered = this.building.getHoveredEditTileIndex(
@@ -955,6 +1036,52 @@ export class PlayerController {
     this.handleKeyCodeDown(e.code);
   }
 
+  private getResolvedKeybinds(): KeybindMap {
+    const custom = this.settings.keybinds;
+    if (!custom) return { ...DEFAULT_KEYBINDS };
+    return {
+      buildWall: custom.buildWall || DEFAULT_KEYBINDS.buildWall,
+      buildFloor: custom.buildFloor || DEFAULT_KEYBINDS.buildFloor,
+      buildRamp: custom.buildRamp || DEFAULT_KEYBINDS.buildRamp,
+      buildRoof: custom.buildRoof || DEFAULT_KEYBINDS.buildRoof,
+      edit: custom.edit || DEFAULT_KEYBINDS.edit,
+      repair: custom.repair || DEFAULT_KEYBINDS.repair,
+      interact: custom.interact || DEFAULT_KEYBINDS.interact,
+      map: custom.map || DEFAULT_KEYBINDS.map,
+      emote: custom.emote || DEFAULT_KEYBINDS.emote,
+      crouchSlide: custom.crouchSlide || DEFAULT_KEYBINDS.crouchSlide,
+    };
+  }
+
+  private formatKeyLabel(code: string): string {
+    if (code.startsWith('Key')) return code.slice(3).toUpperCase();
+    if (code.startsWith('Digit')) return code.slice(5);
+    if (code === 'Space') return 'SPACE';
+    if (code === 'ControlLeft' || code === 'ControlRight') return 'CTRL';
+    if (code === 'ShiftLeft' || code === 'ShiftRight') return 'SHIFT';
+    return code.toUpperCase();
+  }
+
+  private handleCrouchSlideKey(): void {
+    if (this.isSliding) {
+      this.isSliding = false;
+      this.slideTimer = 0;
+      this.isCrouching = true;
+      return;
+    }
+    const sprintingNow =
+      this.isSprinting ||
+      ((this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight')) &&
+        (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) &&
+        !this.isAiming &&
+        this.stamina > 1.5);
+    if (sprintingNow && this.startSlide()) {
+      return;
+    }
+    this.isCrouching = !this.isCrouching;
+    if (this.isCrouching) this.isSprinting = false;
+  }
+
   private handleKeyCodeDown(code: string): void {
     if (this.phase === 'bus') {
       if (code === 'Space') {
@@ -983,6 +1110,61 @@ export class PlayerController {
 
     if (this.phase !== 'playing') return;
 
+    const kb = this.getResolvedKeybinds();
+
+    if (this.activeVehicleId !== null) {
+      if (code === kb.interact || code === 'Space') {
+        this.exitActiveVehicle(true);
+        return;
+      }
+      if (code === 'KeyH') {
+        this.eventBus.emit('sound:play', {
+          id: 'vehicle_horn',
+          position: { ...this.position },
+          spatial: true,
+        });
+      }
+      return;
+    }
+
+    if (code === kb.repair && this.repairTargetedBuild()) {
+      return;
+    }
+    if (code === kb.interact) {
+      this.tryInteract();
+      return;
+    }
+    if (code === kb.repair) {
+      if (code === kb.buildRoof) {
+        this.selectBuildPiece('roof');
+      }
+      return;
+    }
+    if (code === kb.buildWall) {
+      this.selectBuildPiece('wall');
+      return;
+    }
+    if (code === kb.buildFloor) {
+      this.selectBuildPiece('floor');
+      return;
+    }
+    if (code === kb.buildRamp) {
+      this.selectBuildPiece('ramp');
+      return;
+    }
+    if (code === kb.buildRoof) {
+      this.selectBuildPiece('roof');
+      return;
+    }
+    if (code === kb.edit) {
+      this.enterEditMode();
+      return;
+    }
+    if (code === kb.crouchSlide) {
+      this.handleCrouchSlideKey();
+      return;
+    }
+
     switch (code) {
       case 'Digit1':
         this.selectSlot(0);
@@ -1005,21 +1187,14 @@ export class PlayerController {
       case 'KeyQ':
         this.toggleBuildMode();
         break;
-      case 'KeyZ':
       case 'F1':
         this.selectBuildPiece('wall');
         break;
-      case 'KeyX':
       case 'F2':
         this.selectBuildPiece('floor');
         break;
-      case 'KeyV':
       case 'F3':
         this.selectBuildPiece('ramp');
-        break;
-      case 'KeyF':
-        if (this.repairTargetedBuild()) break;
-        this.selectBuildPiece('roof');
         break;
       case 'KeyT':
       case 'F4':
@@ -1033,33 +1208,9 @@ export class PlayerController {
           this.startReload();
         }
         break;
-      case 'KeyG':
-        this.enterEditMode();
+      case 'ControlLeft':
+        this.handleCrouchSlideKey();
         break;
-      case 'KeyE':
-        this.tryInteract();
-        break;
-      case 'KeyC':
-      case 'ControlLeft': {
-        if (this.isSliding) {
-          this.isSliding = false;
-          this.slideTimer = 0;
-          this.isCrouching = true;
-          break;
-        }
-        const sprintingNow =
-          this.isSprinting ||
-          ((this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight')) &&
-            (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) &&
-            !this.isAiming &&
-            this.stamina > 1.5);
-        if (sprintingNow && this.startSlide()) {
-          break;
-        }
-        this.isCrouching = !this.isCrouching;
-        if (this.isCrouching) this.isSprinting = false;
-        break;
-      }
       case 'KeyK':
         this.enterTestEmote();
         break;
@@ -1225,7 +1376,9 @@ export class PlayerController {
       if (isInitialPress) {
         this.eventBus.emit('sound:play', { id: 'dryfire' });
       }
-      this.startReload();
+      if (!def.isGrappler) {
+        this.startReload();
+      }
       return;
     }
     if (def.isThrowable && item.stackCount <= 0) {
@@ -1254,6 +1407,7 @@ export class PlayerController {
       muzzlePos: this.muzzleWorldPos ?? eye,
       spreadRad,
       isPlayer: true,
+      vehicleBridge: this.vehicleBridge,
       onAmmoConsumed: () => {
         if (def.magSize > 0 && item.magAmmo > 0) {
           item.magAmmo -= 1;
@@ -1268,7 +1422,7 @@ export class PlayerController {
 
     if (res.fired) {
       this.fireCooldown = 1 / def.fireRate;
-      if (item.weaponId !== 'pickaxe') {
+      if (item.weaponId !== 'pickaxe' && !def.isGrappler && !def.isThrowable) {
         this.stats.shotsFired += 1;
         if (res.shotsHit > 0) this.stats.shotsHit += 1;
         this.stats.headshots += res.headshots;
@@ -1280,7 +1434,7 @@ export class PlayerController {
       this.yaw += (Math.random() - 0.5) * 2 * def.recoilYaw;
       this.recoilKick = 1.0;
 
-      if (def.magSize > 0 && item.magAmmo <= 0) {
+      if (def.magSize > 0 && item.magAmmo <= 0 && !def.isGrappler) {
         this.startReload();
       }
     }
@@ -1293,6 +1447,11 @@ export class PlayerController {
       y: this.camera.position.y,
       z: this.camera.position.z,
     };
+
+    // If camera has not been synced to the current player position yet (e.g. headless test after teleport/setLook), aim directly along lookDir
+    if (dist3D(camPos, fireOrigin) > 10) {
+      return camDir;
+    }
 
     const hit = this.collision.raycastWorld(camPos, camDir, 240, {
       checkBuilds: true,
@@ -1469,104 +1628,298 @@ export class PlayerController {
     return false;
   }
 
+  private getActiveVehicleEntity() {
+    if (!this.activeVehicleId || !this.vehicleBridge) return null;
+    const vehicles = this.vehicleBridge.getVehicles();
+    for (let i = 0; i < vehicles.length; i++) {
+      if (vehicles[i].id === this.activeVehicleId) {
+        return vehicles[i];
+      }
+    }
+    return null;
+  }
+
+  private exitActiveVehicle(withCooldown: boolean): boolean {
+    if (!this.activeVehicleId) return false;
+    const exitPos =
+      this.vehicleBridge?.exitVehicle(this.activeVehicleId, 'player') ?? null;
+    this.activeVehicleId = null;
+    if (withCooldown) {
+      this.vehicleCooldown = 0.35;
+    }
+    if (exitPos) {
+      const groundY = this.collision.getFloorHeightAt(
+        exitPos.x,
+        exitPos.z,
+        exitPos.y + 0.5,
+      );
+      this.position = {
+        x: clamp(exitPos.x, -390, 390),
+        y: Math.max(exitPos.y, groundY),
+        z: clamp(exitPos.z, -390, 390),
+      };
+    }
+    this.velocity = { x: 0, y: 0, z: 0 };
+    this.moveSpeed = 0;
+    this.grounded = true;
+    this.wasAirborne = false;
+    this.fallPeakY = this.position.y;
+    return true;
+  }
+
+  private findNearestInteractable(): {
+    kind: 'chest' | 'llama' | 'supply_drop' | 'loot_drop' | 'vault' | 'vehicle';
+    id: string;
+    prompt: PlayerInteractPrompt;
+  } | null {
+    const interactKey = this.formatKeyLabel(this.getResolvedKeybinds().interact);
+    let bestDist = Infinity;
+    let best: {
+      kind: 'chest' | 'llama' | 'supply_drop' | 'loot_drop' | 'vault' | 'vehicle';
+      id: string;
+      prompt: PlayerInteractPrompt;
+    } | null = null;
+
+    const chests = this.propsBridge.getChests();
+    for (let i = 0; i < chests.length; i++) {
+      const c = chests[i];
+      if (c.opened) continue;
+      const d = dist3D(this.position, { x: c.x, y: c.y, z: c.z });
+      if (d <= 3.0 && d < bestDist) {
+        bestDist = d;
+        best = {
+          kind: 'chest',
+          id: c.id,
+          prompt: { label: 'Open Chest', key: interactKey, rarity: 'rare' },
+        };
+      }
+    }
+
+    const llamas = this.propsBridge.getLlamas?.() ?? [];
+    for (let i = 0; i < llamas.length; i++) {
+      const l = llamas[i];
+      if (l.opened) continue;
+      const d = dist3D(this.position, { x: l.x, y: l.y, z: l.z });
+      if (d <= 3.2 && d < bestDist) {
+        bestDist = d;
+        best = {
+          kind: 'llama',
+          id: l.id,
+          prompt: { label: 'Open Loot Llama', key: interactKey, rarity: 'legendary' },
+        };
+      }
+    }
+
+    const sds = this.propsBridge.getSupplyDrops();
+    for (let i = 0; i < sds.length; i++) {
+      const sd = sds[i];
+      if (sd.state !== 'landed') continue;
+      const d = dist3D(this.position, { x: sd.x, y: sd.y, z: sd.z });
+      if (d <= 3.4 && d < bestDist) {
+        bestDist = d;
+        best = {
+          kind: 'supply_drop',
+          id: sd.id,
+          prompt: { label: 'Open Supply Drop', key: interactKey, rarity: 'legendary' },
+        };
+      }
+    }
+
+    const drops = this.propsBridge.getLootDrops();
+    for (let i = 0; i < drops.length; i++) {
+      const drop = drops[i];
+      const d = dist3D(this.position, { x: drop.x, y: drop.y, z: drop.z });
+      if (d <= 2.8 && d < bestDist) {
+        bestDist = d;
+        let prompt: PlayerInteractPrompt = { label: 'Pick up', key: interactKey };
+        if (drop.item) {
+          const def = WEAPONS[drop.item.weaponId];
+          prompt = {
+            label: `Pick up ${def.name}`,
+            key: interactKey,
+            rarity: drop.item.rarity,
+          };
+        } else if (drop.materials) {
+          prompt = {
+            label: `+${drop.materials.amount} ${drop.materials.type.toUpperCase()}`,
+            key: interactKey,
+          };
+        } else if (drop.ammo) {
+          prompt = {
+            label: `+${drop.ammo.amount} ${drop.ammo.type.toUpperCase()} Ammo`,
+            key: interactKey,
+          };
+        }
+        best = { kind: 'loot_drop', id: drop.id, prompt };
+      }
+    }
+
+    const vaults = this.vaultBridge?.getVaults() ?? [];
+    for (let i = 0; i < vaults.length; i++) {
+      const vault = vaults[i];
+      if (vault.unlocked) continue;
+      const d = dist3D(this.position, { x: vault.x, y: vault.y, z: vault.z });
+      if (d <= 4.2 && d < bestDist) {
+        bestDist = d;
+        best = {
+          kind: 'vault',
+          id: vault.id,
+          prompt: {
+            label:
+              this.vaultKeys > 0
+                ? 'Unlock Boss Vault'
+                : 'Unlock Boss Vault (Need Key)',
+            key: interactKey,
+            rarity: this.vaultKeys > 0 ? 'mythic' : 'legendary',
+          },
+        };
+      }
+    }
+
+    if (this.vehicleCooldown <= 0 && this.vehicleBridge) {
+      const vehicles = this.vehicleBridge.getVehicles();
+      for (let i = 0; i < vehicles.length; i++) {
+        const veh = vehicles[i];
+        if (veh.destroyed || veh.hp <= 0 || veh.driverId !== null) continue;
+        const d = dist3D(this.position, { x: veh.x, y: veh.y, z: veh.z });
+        if (d <= 3.8 && d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'vehicle',
+            id: veh.id,
+            prompt: {
+              label: veh.kind === 'cyber_bike' ? 'Drive Cyber Bike' : 'Drive Hover ATV',
+              key: interactKey,
+              rarity: 'rare',
+            },
+          };
+        }
+      }
+    }
+
+    return best;
+  }
+
   private tryInteract(): void {
     if (this.phase !== 'playing') return;
+
+    if (this.activeVehicleId !== null) {
+      this.exitActiveVehicle(true);
+      return;
+    }
 
     if (this.activeZipline) {
       this.detachZipline(true);
       return;
     }
 
-    // 1. Check nearby unopened chests
-    const chests = this.propsBridge.getChests();
-    let bestChestId: string | null = null;
-    let bestDist = 3.0;
-    for (let i = 0; i < chests.length; i++) {
-      const c = chests[i];
-      if (c.opened) continue;
-      const d = dist3D(this.position, { x: c.x, y: c.y, z: c.z });
-      if (d < bestDist) {
-        bestDist = d;
-        bestChestId = c.id;
-      }
-    }
-    if (bestChestId) {
-      if (this.propsBridge.openChest(bestChestId)) {
-        this.stats.chestsOpened += 1;
-        const chest = chests.find((c) => c.id === bestChestId);
-        const pos = chest ? { x: chest.x, y: chest.y, z: chest.z } : this.position;
-        this.eventBus.emit('sound:play', { id: 'chest_open', position: pos, spatial: true });
-        this.eventBus.emit('vfx:chest_open', { position: pos });
-        this.eventBus.emit('audio:noise', {
-          position: pos,
-          kind: 'chest',
-          sourceId: 'player',
-          radius: 26,
-        });
-      }
-      return;
-    }
-
-    // 1b. Check nearby Loot Llamas
-    const llamas = this.propsBridge.getLlamas?.() ?? [];
-    let bestLlamaId: string | null = null;
-    let bestLlamaDist = 3.2;
-    for (let i = 0; i < llamas.length; i++) {
-      const l = llamas[i];
-      if (l.opened) continue;
-      const d = dist3D(this.position, { x: l.x, y: l.y, z: l.z });
-      if (d < bestLlamaDist) {
-        bestLlamaDist = d;
-        bestLlamaId = l.id;
-      }
-    }
-    if (bestLlamaId && this.propsBridge.openLlama?.(bestLlamaId)) {
-      this.stats.chestsOpened += 1;
-      const llama = llamas.find((l) => l.id === bestLlamaId);
-      const pos = llama ? { x: llama.x, y: llama.y, z: llama.z } : this.position;
-      this.eventBus.emit('sound:play', { id: 'chest_open', position: pos, spatial: true });
-      this.eventBus.emit('vfx:chest_open', { position: pos });
-      return;
-    }
-
-    // 2. Check nearby landed supply drops
-    const supplyDrops = this.propsBridge.getSupplyDrops();
-    for (let i = 0; i < supplyDrops.length; i++) {
-      const sd = supplyDrops[i];
-      if (sd.state !== 'landed') continue;
-      const d = dist3D(this.position, { x: sd.x, y: sd.y, z: sd.z });
-      if (d <= 3.4) {
-        if (this.propsBridge.openSupplyDrop(sd.id)) {
+    const candidate = this.findNearestInteractable();
+    if (candidate) {
+      if (candidate.kind === 'chest') {
+        if (this.propsBridge.openChest(candidate.id)) {
           this.stats.chestsOpened += 1;
+          const chest = this.propsBridge.getChests().find((c) => c.id === candidate.id);
+          const pos = chest ? { x: chest.x, y: chest.y, z: chest.z } : this.position;
+          this.eventBus.emit('sound:play', { id: 'chest_open', position: pos, spatial: true });
+          this.eventBus.emit('vfx:chest_open', { position: pos });
+          this.eventBus.emit('audio:noise', {
+            position: pos,
+            kind: 'chest',
+            sourceId: 'player',
+            radius: 26,
+          });
+        }
+        return;
+      }
+
+      if (candidate.kind === 'llama') {
+        if (this.propsBridge.openLlama?.(candidate.id)) {
+          this.stats.chestsOpened += 1;
+          const llama = (this.propsBridge.getLlamas?.() ?? []).find(
+            (l) => l.id === candidate.id,
+          );
+          const pos = llama ? { x: llama.x, y: llama.y, z: llama.z } : this.position;
+          this.eventBus.emit('sound:play', { id: 'chest_open', position: pos, spatial: true });
+          this.eventBus.emit('vfx:chest_open', { position: pos });
+        }
+        return;
+      }
+
+      if (candidate.kind === 'supply_drop') {
+        if (this.propsBridge.openSupplyDrop(candidate.id)) {
+          this.stats.chestsOpened += 1;
+          const sd = this.propsBridge.getSupplyDrops().find((s) => s.id === candidate.id);
+          const pos = sd ? { x: sd.x, y: sd.y, z: sd.z } : this.position;
           this.eventBus.emit('sound:play', {
             id: 'chest_open',
-            position: { x: sd.x, y: sd.y, z: sd.z },
+            position: pos,
             spatial: true,
           });
-          this.eventBus.emit('vfx:chest_open', { position: { x: sd.x, y: sd.y, z: sd.z } });
+          this.eventBus.emit('vfx:chest_open', { position: pos });
+        }
+        return;
+      }
+
+      if (candidate.kind === 'loot_drop') {
+        this.pickupLootDropById(candidate.id);
+        return;
+      }
+
+      if (candidate.kind === 'vault' && this.vaultBridge) {
+        if (this.vaultKeys <= 0) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        const vault = this.vaultBridge.getVaults().find((v) => v.id === candidate.id);
+        const unlockRes = this.vaultBridge.unlockVault(candidate.id);
+        if (unlockRes.unlocked) {
+          this.vaultKeys -= 1;
+          const lootPos = unlockRes.lootPos ?? (vault ? { x: vault.x, y: vault.y, z: vault.z } : { ...this.position });
+          this.eventBus.emit('sound:play', {
+            id: 'vault_unlock',
+            position: lootPos,
+            spatial: true,
+          });
+          this.eventBus.emit('vfx:chest_open', { position: lootPos });
+          this.onVaultUnlocked?.(lootPos, vault?.poiId ?? '');
+        }
+        return;
+      }
+
+      if (candidate.kind === 'vehicle' && this.vehicleBridge) {
+        if (this.vehicleBridge.enterVehicle(candidate.id, 'player')) {
+          const veh = this.vehicleBridge
+            .getVehicles()
+            .find((v) => v.id === candidate.id);
+          this.activeVehicleId = candidate.id;
+          this.isBuildMode = false;
+          this.building.setPreviewVisible(false);
+          this.building.cancelEdit();
+          this.cancelActionsOnModeChange();
+          this.isSliding = false;
+          this.isCrouching = false;
+          this.isMantling = false;
+          this.isAiming = false;
+          this.isScoped = false;
+          if (veh) {
+            this.position = { x: veh.x, y: veh.y + 0.15, z: veh.z };
+            this.velocity = { x: veh.vx, y: veh.vy, z: veh.vz };
+            this.characterYaw = veh.yaw;
+          }
+          this.grounded = true;
+          this.wasAirborne = false;
+          this.fallPeakY = this.position.y;
+          this.eventBus.emit('sound:play', { id: 'ui_click', volume: 0.5 });
         }
         return;
       }
     }
 
-    // 3. Check nearby loot drops
-    const drops = this.propsBridge.getLootDrops();
-    let bestDropId: string | null = null;
-    let bestDropDist = 2.8;
-    for (let i = 0; i < drops.length; i++) {
-      const drop = drops[i];
-      const d = dist3D(this.position, { x: drop.x, y: drop.y, z: drop.z });
-      if (d < bestDropDist) {
-        bestDropDist = d;
-        bestDropId = drop.id;
-      }
-    }
-    if (bestDropId) {
-      this.pickupLootDropById(bestDropId);
-      return;
-    }
-
-    // 4. Attach to nearby overhead Energy Zipline
+    // Fallback: Attach to nearby overhead Energy Zipline
     if (this.ziplineCooldown <= 0) {
       const nearestZip = this.findNearestZipline();
       if (nearestZip) {
@@ -1631,76 +1984,23 @@ export class PlayerController {
     }
 
     // Find nearest interact prompt
+    const interactKey = this.formatKeyLabel(this.getResolvedKeybinds().interact);
+    if (this.activeVehicleId !== null) {
+      this.interactPrompt = { label: 'Exit Vehicle', key: interactKey, rarity: 'rare' };
+      this.canRepairBuild = false;
+      return;
+    }
+
     if (this.activeZipline) {
       this.interactPrompt = { label: 'Drop Zipline', key: 'SPACE', rarity: 'rare' };
       return;
     }
 
-    let prompt: PlayerInteractPrompt | null = null;
-    let bestDist = 3.2;
-
-    const chests = this.propsBridge.getChests();
-    for (let i = 0; i < chests.length; i++) {
-      const c = chests[i];
-      if (c.opened) continue;
-      const d = dist3D(this.position, { x: c.x, y: c.y, z: c.z });
-      if (d < bestDist) {
-        bestDist = d;
-        prompt = { label: 'Open Chest', key: 'E', rarity: 'rare' };
-      }
-    }
-
-    const llamas = this.propsBridge.getLlamas?.() ?? [];
-    for (let i = 0; i < llamas.length; i++) {
-      const l = llamas[i];
-      if (l.opened) continue;
-      const d = dist3D(this.position, { x: l.x, y: l.y, z: l.z });
-      if (d < bestDist) {
-        bestDist = d;
-        prompt = { label: 'Open Loot Llama', key: 'E', rarity: 'legendary' };
-      }
-    }
-
-    const sds = this.propsBridge.getSupplyDrops();
-    for (let i = 0; i < sds.length; i++) {
-      const sd = sds[i];
-      if (sd.state !== 'landed') continue;
-      const d = dist3D(this.position, { x: sd.x, y: sd.y, z: sd.z });
-      if (d < bestDist) {
-        bestDist = d;
-        prompt = { label: 'Open Supply Drop', key: 'E', rarity: 'legendary' };
-      }
-    }
-
-    const remainingDrops = this.propsBridge.getLootDrops();
-    for (let i = 0; i < remainingDrops.length; i++) {
-      const drop = remainingDrops[i];
-      const d = dist3D(this.position, { x: drop.x, y: drop.y, z: drop.z });
-      if (d < bestDist && d <= 2.8) {
-        bestDist = d;
-        if (drop.item) {
-          const def = WEAPONS[drop.item.weaponId];
-          prompt = {
-            label: `Pick up ${def.name}`,
-            key: 'E',
-            rarity: drop.item.rarity,
-          };
-        } else if (drop.materials) {
-          prompt = {
-            label: `+${drop.materials.amount} ${drop.materials.type.toUpperCase()}`,
-            key: 'E',
-          };
-        } else if (drop.ammo) {
-          prompt = {
-            label: `+${drop.ammo.amount} ${drop.ammo.type.toUpperCase()} Ammo`,
-            key: 'E',
-          };
-        }
-      }
-    }
+    const candidate = this.findNearestInteractable();
+    let prompt: PlayerInteractPrompt | null = candidate ? candidate.prompt : null;
 
     if (!prompt && this.ziplineCooldown <= 0 && this.findNearestZipline()) {
-      prompt = { label: 'Ride Zipline', key: 'E', rarity: 'rare' };
+      prompt = { label: 'Ride Zipline', key: interactKey, rarity: 'rare' };
     }
 
     this.interactPrompt = prompt;
@@ -1747,6 +2047,7 @@ export class PlayerController {
     if (this.launchPadCooldown > 0) {
       this.launchPadCooldown = Math.max(0, this.launchPadCooldown - safeDt);
     }
+    if (this.vehicleCooldown > 0) this.vehicleCooldown = Math.max(0, this.vehicleCooldown - safeDt);
     if (this.lavaCooldown > 0) this.lavaCooldown = Math.max(0, this.lavaCooldown - safeDt);
     if (this.cameraShakeTimer > 0) {
       this.cameraShakeTimer = Math.max(0, this.cameraShakeTimer - safeDt);
@@ -1780,7 +2081,9 @@ export class PlayerController {
     }
 
     if (this.phase === 'playing') {
-      if (this.isMantling) {
+      if (this.activeVehicleId !== null) {
+        this.updateVehicleDriving(safeDt);
+      } else if (this.isMantling) {
         this.updateMantle(safeDt);
       } else if (this.activeZipline) {
         this.updateZiplineRide(safeDt);
@@ -1799,6 +2102,63 @@ export class PlayerController {
     this.leanAngle = damp(this.leanAngle, 0, 10, safeDt);
     this.prevYaw = this.yaw;
     this.updateCamera(safeDt);
+  }
+
+  private updateVehicleDriving(dt: number): void {
+    const veh = this.getActiveVehicleEntity();
+    if (!veh || veh.destroyed || veh.hp <= 0 || veh.driverId !== 'player') {
+      this.exitActiveVehicle(true);
+      return;
+    }
+
+    const { forwardInput, rightInput } = this.getMoveAxes();
+    const boost =
+      this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight');
+
+    this.vehicleBridge!.driveVehicle(
+      veh.id,
+      forwardInput,
+      rightInput,
+      boost,
+      dt,
+    );
+
+    const updated = this.getActiveVehicleEntity();
+    if (
+      !updated ||
+      updated.destroyed ||
+      updated.hp <= 0 ||
+      updated.driverId !== 'player'
+    ) {
+      this.exitActiveVehicle(true);
+      return;
+    }
+
+    this.position = {
+      x: clamp(updated.x, -390, 390),
+      y: updated.y + 0.15,
+      z: clamp(updated.z, -390, 390),
+    };
+    this.velocity = { x: updated.vx, y: updated.vy, z: updated.vz };
+    this.moveSpeed = Math.hypot(updated.vx, updated.vz);
+    this.grounded = true;
+    this.isSprinting = false;
+    this.isCrouching = false;
+    this.isSliding = false;
+    this.isAiming = false;
+    this.isScoped = false;
+    this.isFiring = false;
+    this.wasAirborne = false;
+    this.fallPeakY = this.position.y;
+    this.characterYaw = updated.yaw;
+
+    const targetLean = clamp(
+      -rightInput * 0.28 + (updated.roll || 0),
+      -0.38,
+      0.38,
+    );
+    this.leanAngle = damp(this.leanAngle, targetLean, 10, dt);
+    this.prevYaw = this.yaw;
   }
 
   private updateMantle(dt: number): void {
@@ -2081,7 +2441,7 @@ export class PlayerController {
 
       const targetVx = wishX * targetSpeed;
       const targetVz = wishZ * targetSpeed;
-      const accel = this.grounded ? 16.0 : 5.5;
+      const accel = this.grounded ? 16.0 : this.fallImmune ? 1.2 : 5.5;
       this.velocity.x = damp(this.velocity.x, targetVx, accel, dt);
       this.velocity.z = damp(this.velocity.z, targetVz, accel, dt);
     }
@@ -2480,6 +2840,13 @@ export class PlayerController {
       }
     }
 
+    if (this.activeVehicleId !== null) {
+      this.building.setPreviewVisible(false);
+      this.lastBuildPreview = null;
+      this.isFiring = false;
+      return;
+    }
+
     const editState = this.building.getEditState();
     if (editState.active) {
       const hovered = this.building.getHoveredEditTileIndex(
@@ -2588,6 +2955,17 @@ export class PlayerController {
       rightOffset = 0;
       upOffset = 0.9;
       targetFov = this.phase === 'skydiving' ? this.settings.fov + 8 : this.settings.fov + 2;
+    } else if (this.activeVehicleId !== null) {
+      const veh = this.getActiveVehicleEntity();
+      pivot = {
+        x: this.position.x,
+        y: this.position.y + 1.25,
+        z: this.position.z,
+      };
+      backDist = 5.8;
+      rightOffset = 0;
+      upOffset = 1.05;
+      targetFov = this.settings.fov + (veh?.isBoosting ? 12 : 6);
     } else if (this.isEmoting) {
       pivot = {
         x: this.position.x,
@@ -2680,6 +3058,82 @@ export class PlayerController {
     );
   }
 
+  getThrowableArc(): Vec3Like[] | null {
+    if (
+      this.phase !== 'playing' ||
+      this.isBuildMode ||
+      this.building.getEditState().active ||
+      this.activeVehicleId !== null
+    ) {
+      return null;
+    }
+    const item = this.inventory.getActiveItem();
+    if (!item || item.stackCount <= 0) return null;
+    const def = WEAPONS[item.weaponId];
+    if (!def || !def.isThrowable || def.projectileSpeed <= 0) return null;
+
+    const origin = this.getEyePosition();
+    const look = this.getLookDirection();
+    const lookLen = Math.hypot(look.x, look.y, look.z) || 1;
+    const aimDir = {
+      x: look.x / lookLen,
+      y: look.y / lookLen,
+      z: look.z / lookLen,
+    };
+    let shotDir = aimDir;
+    if (Math.abs(aimDir.y) < 0.72) {
+      const sx = aimDir.x;
+      const sy = aimDir.y + 0.15;
+      const sz = aimDir.z;
+      const sLen = Math.hypot(sx, sy, sz) || 1;
+      shotDir = { x: sx / sLen, y: sy / sLen, z: sz / sLen };
+    }
+
+    let pos: Vec3Like = {
+      x: origin.x + shotDir.x * 0.45,
+      y: origin.y + shotDir.y * 0.45,
+      z: origin.z + shotDir.z * 0.45,
+    };
+    const vx = shotDir.x * def.projectileSpeed;
+    let vy = shotDir.y * def.projectileSpeed;
+    const vz = shotDir.z * def.projectileSpeed;
+
+    const points: Vec3Like[] = [{ ...pos }];
+    const dtStep = 0.05;
+    const maxSteps = 50;
+    const props = this.propsBridge.getProps();
+
+    for (let i = 0; i < maxSteps; i++) {
+      vy -= def.projectileGravity * dtStep;
+      const dx = vx * dtStep;
+      const dy = vy * dtStep;
+      const dz = vz * dtStep;
+      const stepLen = Math.hypot(dx, dy, dz);
+      if (stepLen <= 1e-6) break;
+
+      const hit = this.collision.raycastWorld(
+        pos,
+        { x: dx / stepLen, y: dy / stepLen, z: dz / stepLen },
+        stepLen,
+        { checkBuilds: true, checkProps: true, props },
+      );
+      if (hit.hit) {
+        points.push({ ...hit.point });
+        break;
+      }
+
+      pos = { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz };
+      const terrainY = this.terrain.getHeightAt(pos.x, pos.z);
+      if (pos.y <= terrainY) {
+        points.push({ x: pos.x, y: terrainY, z: pos.z });
+        break;
+      }
+      points.push({ ...pos });
+    }
+
+    return points;
+  }
+
   getCharacterRenderState(): CharacterRenderState {
     const activeItem = this.inventory.getActiveItem();
     const weaponId: WeaponId = activeItem ? activeItem.weaponId : 'pickaxe';
@@ -2689,6 +3143,8 @@ export class PlayerController {
       animState = 'skydive';
     } else if (this.phase === 'gliding') {
       animState = 'glide';
+    } else if (this.activeVehicleId !== null) {
+      animState = 'drive';
     } else if (this.isEmoting) {
       animState = 'emote';
     } else if (this.isMantling) {
@@ -2758,11 +3214,25 @@ export class PlayerController {
         ? clamp((35 - this.health) / 25, 0.25, 1.0) *
           (0.65 + 0.35 * Math.sin(this.elapsedTime * 7.0))
         : 0;
+    const activeVeh = this.getActiveVehicleEntity();
+    const vehicleSnap: PlayerVehicleSnapshot | null =
+      activeVeh && !activeVeh.destroyed && activeVeh.hp > 0
+        ? {
+            kind: activeVeh.kind,
+            speedKmh: Math.round(Math.hypot(activeVeh.vx, activeVeh.vz) * 3.6),
+            hp: Math.ceil(activeVeh.hp),
+            maxHp: activeVeh.maxHp,
+            boostCharge: activeVeh.boostCharge,
+            isBoosting: activeVeh.isBoosting,
+          }
+        : null;
+
     const showSpeedLines =
       this.phase === 'skydiving' ||
       this.isSliding ||
       this.activeZipline !== null ||
-      this.moveSpeed > 11.5;
+      this.moveSpeed > 11.5 ||
+      Boolean(vehicleSnap?.isBoosting);
 
     return {
       phase: this.phase,
@@ -2812,6 +3282,9 @@ export class PlayerController {
       lowHealthPulse,
       showSpeedLines,
       leanAngle: this.leanAngle,
+      vehicle: vehicleSnap,
+      activeVaultKeys: this.vaultKeys,
+      grapplerCharges: activeItem?.weaponId === 'grappler' ? activeItem.magAmmo : null,
     };
   }
 }

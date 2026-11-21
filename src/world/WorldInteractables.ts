@@ -1,8 +1,10 @@
 import * as THREE from 'three';
-import { POIS } from '../core';
+import { EventBus, POIS } from '../core';
 import type {
+  ColliderBox,
   LaunchPadEntity,
   TerrainQuery,
+  VaultEntity,
   Vec3Like,
   ZiplineEntity,
 } from '../types';
@@ -20,19 +22,42 @@ interface ZiplineOrb {
   t: number;
 }
 
+interface VaultVisual {
+  data: VaultEntity;
+  lootPos: Vec3Like;
+  doorPivot: THREE.Group;
+  wheelGroup: THREE.Group;
+  keypadRing: THREE.Mesh;
+  keypadMat: THREE.MeshStandardMaterial;
+  interiorGlow: THREE.Mesh;
+  openProgress: number;
+  wallColliders: ColliderBox[];
+  doorCollider: ColliderBox;
+}
+
+export interface UnlockVaultResult {
+  unlocked: boolean;
+  lootPos?: Vec3Like;
+}
+
 export class WorldInteractables {
   private group = new THREE.Group();
+  private eventBus?: EventBus;
   private launchPads: LaunchPadEntity[] = [];
   private ziplines: ZiplineEntity[] = [];
+  private vaults: VaultEntity[] = [];
+  private vaultsMap = new Map<string, VaultVisual>();
   private padVisuals: PadVisual[] = [];
   private ziplineOrbs: ZiplineOrb[] = [];
   private geometries: THREE.BufferGeometry[] = [];
   private materials: THREE.Material[] = [];
 
-  constructor(terrain: TerrainQuery) {
+  constructor(terrain: TerrainQuery, eventBus?: EventBus) {
     this.group.name = 'WorldInteractables';
+    this.eventBus = eventBus;
     this.buildLaunchPads(terrain);
     this.buildZiplines(terrain);
+    this.buildVaults(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -63,17 +88,12 @@ export class WorldInteractables {
       boostVy: number;
       boostForward: number;
     }> = [
-      // Two high-power ground Launch Pads at Skyline Spire launching straight onto Floating Sky-Island (y=44m)!
       { id: 'pad_sky_1', kind: 'launch_pad', x: skyline.x + 8, z: skyline.z + 10, boostVy: 34, boostForward: 8 },
       { id: 'pad_sky_2', kind: 'launch_pad', x: skyline.x - 8, z: skyline.z + 10, boostVy: 34, boostForward: 8 },
-      // Launch Pad ON TOP of the Floating Sky-Island (y=44.2m) for rapid cross-map redeploys!
       { id: 'pad_sky_top', kind: 'launch_pad', x: skyline.x, z: skyline.z + 10, yOverride: 44.16, boostVy: 26, boostForward: 24 },
-      // Two Volcanic Thermal Geysers at Scorched Caldera
       { id: 'geyser_volc_1', kind: 'geyser', x: scorched.x - 16, z: scorched.z - 6, boostVy: 30, boostForward: 14 },
       { id: 'geyser_volc_2', kind: 'geyser', x: scorched.x + 3, z: scorched.z + 6, boostVy: 30, boostForward: 14 },
-      // Frostpeak Alpine Overlook Launch Pad
       { id: 'pad_frost', kind: 'launch_pad', x: frostpeak.x + 12, z: frostpeak.z + 23, boostVy: 28, boostForward: 20 },
-      // Metro Towers Rooftop Helipad Launch Pad
       {
         id: 'pad_metro_heli',
         kind: 'launch_pad',
@@ -83,11 +103,8 @@ export class WorldInteractables {
         boostVy: 27,
         boostForward: 22,
       },
-      // Crystal Basin Central Island Pad
       { id: 'pad_crystal', kind: 'launch_pad', x: crystal.x, z: crystal.z + 11, boostVy: 27, boostForward: 18 },
-      // Sunken Oasis Mesa Pad
       { id: 'pad_oasis', kind: 'launch_pad', x: oasis.x + 12, z: oasis.z + 4, boostVy: 27, boostForward: 18 },
-      // Crater Depot Meteor Rim Pad
       { id: 'pad_crater', kind: 'launch_pad', x: crater.x + 6, z: crater.z + 4, boostVy: 27, boostForward: 18 },
     ];
 
@@ -208,7 +225,6 @@ export class WorldInteractables {
       };
       this.ziplines.push(zEntity);
 
-      // Build start & end steel pylons
       for (const [gx, gy, gz, h] of [
         [p.ax, groundA, p.az, p.hA],
         [p.bx, groundB, p.bz, p.hB],
@@ -224,7 +240,6 @@ export class WorldInteractables {
         this.group.add(cap);
       }
 
-      // Tensioned glowing energy cable between start & end
       const vStart = new THREE.Vector3(start.x, start.y, start.z);
       const vEnd = new THREE.Vector3(end.x, end.y, end.z);
       const dir = new THREE.Vector3().subVectors(vEnd, vStart);
@@ -237,12 +252,287 @@ export class WorldInteractables {
       cable.quaternion.setFromUnitVectors(up, dir.normalize());
       this.group.add(cable);
 
-      // Animated pulse orbs riding along the zipline
       for (const offset of [0.15, 0.65]) {
         const orb = new THREE.Mesh(orbGeo, orbMat);
         this.group.add(orb);
         this.ziplineOrbs.push({ mesh: orb, zipline: zEntity, t: offset });
       }
+    }
+  }
+
+  private buildVaults(terrain: TerrainQuery): void {
+    const skyline = POIS.find((p) => p.id === 'skyline_spire')!;
+    const scorched = POIS.find((p) => p.id === 'scorched_caldera')!;
+    const frostpeak = POIS.find((p) => p.id === 'frostpeak_citadel')!;
+
+    const vaultSpecs: Array<{
+      id: string;
+      poiId: string;
+      bossName: string;
+      x: number;
+      z: number;
+      yOverride?: number;
+    }> = [
+      {
+        id: 'vault_skyline_spire',
+        poiId: 'skyline_spire',
+        bossName: 'Skyline Warden',
+        x: skyline.x + 8,
+        z: skyline.z - 9,
+      },
+      {
+        id: 'vault_scorched_caldera',
+        poiId: 'scorched_caldera',
+        bossName: 'Obsidian Titan',
+        x: scorched.x - 3,
+        z: scorched.z - 11,
+      },
+      {
+        id: 'vault_frostpeak_citadel',
+        poiId: 'frostpeak_citadel',
+        bossName: 'Glacier Monarch',
+        x: frostpeak.x + 12,
+        z: frostpeak.z + 8,
+      },
+    ];
+
+    const bunkerSteelMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#1e293b',
+        roughness: 0.45,
+        metalness: 0.78,
+      }),
+    );
+    const bunkerTrimMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#334155',
+        roughness: 0.38,
+        metalness: 0.82,
+      }),
+    );
+    const doorSteelMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#475569',
+        roughness: 0.32,
+        metalness: 0.88,
+      }),
+    );
+    const goldMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#b45309',
+        emissiveIntensity: 0.48,
+        roughness: 0.25,
+        metalness: 0.85,
+      }),
+    );
+    const interiorGlowMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#fde047',
+        transparent: true,
+        opacity: 0.36,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const floorGeo = this.addGeo(new THREE.BoxGeometry(4.8, 0.2, 4.2));
+    const sideWallGeo = this.addGeo(new THREE.BoxGeometry(0.65, 3.4, 4.2));
+    const backWallGeo = this.addGeo(new THREE.BoxGeometry(4.8, 3.4, 0.65));
+    const roofGeo = this.addGeo(new THREE.BoxGeometry(5.2, 0.55, 4.5));
+    const lintelTrimGeo = this.addGeo(new THREE.BoxGeometry(3.8, 0.22, 0.24));
+    const doorSlabGeo = this.addGeo(new THREE.BoxGeometry(2.7, 3.0, 0.34));
+    const hatchPlateGeo = this.addGeo(new THREE.CylinderGeometry(1.05, 1.05, 0.44, 16));
+    hatchPlateGeo.rotateX(Math.PI * 0.5);
+    const spokeGeo = this.addGeo(new THREE.BoxGeometry(1.5, 0.1, 0.14));
+    const hubGeo = this.addGeo(new THREE.CylinderGeometry(0.24, 0.24, 0.56, 12));
+    hubGeo.rotateX(Math.PI * 0.5);
+    const pedestalGeo = this.addGeo(new THREE.BoxGeometry(1.4, 0.42, 1.2));
+    const auraGeo = this.addGeo(new THREE.CylinderGeometry(0.85, 1.15, 2.2, 14, 1, true));
+    const keypadPostGeo = this.addGeo(new THREE.BoxGeometry(0.42, 1.25, 0.42));
+    const keypadRingGeo = this.addGeo(new THREE.TorusGeometry(0.32, 0.06, 8, 24));
+
+    for (const spec of vaultSpecs) {
+      const y = spec.yOverride ?? terrain.getHeightAt(spec.x, spec.z);
+      const data: VaultEntity = {
+        id: spec.id,
+        poiId: spec.poiId,
+        bossName: spec.bossName,
+        x: spec.x,
+        y,
+        z: spec.z,
+        unlocked: false,
+        opened: false,
+      };
+      this.vaults.push(data);
+
+      const vaultGroup = new THREE.Group();
+      vaultGroup.name = `BossVault_${spec.id}`;
+      vaultGroup.position.set(spec.x, y, spec.z);
+
+      // Steel Bunker Alcove (opening on +Z face)
+      const floor = new THREE.Mesh(floorGeo, bunkerTrimMat);
+      floor.position.set(0, 0.1, 0);
+      floor.receiveShadow = true;
+
+      const leftWall = new THREE.Mesh(sideWallGeo, bunkerSteelMat);
+      leftWall.position.set(-2.075, 1.7, 0);
+      leftWall.castShadow = true;
+      leftWall.receiveShadow = true;
+
+      const rightWall = new THREE.Mesh(sideWallGeo, bunkerSteelMat);
+      rightWall.position.set(2.075, 1.7, 0);
+      rightWall.castShadow = true;
+      rightWall.receiveShadow = true;
+
+      const backWall = new THREE.Mesh(backWallGeo, bunkerSteelMat);
+      backWall.position.set(0, 1.7, -1.775);
+      backWall.castShadow = true;
+      backWall.receiveShadow = true;
+
+      const roof = new THREE.Mesh(roofGeo, bunkerTrimMat);
+      roof.position.set(0, 3.6, 0);
+      roof.castShadow = true;
+      roof.receiveShadow = true;
+
+      const goldLintel = new THREE.Mesh(lintelTrimGeo, goldMat);
+      goldLintel.position.set(0, 3.25, 2.12);
+
+      // Interior golden vault pedestal & treasure aura
+      const pedestal = new THREE.Mesh(pedestalGeo, goldMat);
+      pedestal.position.set(0, 0.41, -0.85);
+      const interiorGlow = new THREE.Mesh(auraGeo, interiorGlowMat);
+      interiorGlow.position.set(0, 1.55, -0.85);
+
+      vaultGroup.add(
+        floor,
+        leftWall,
+        rightWall,
+        backWall,
+        roof,
+        goldLintel,
+        pedestal,
+        interiorGlow,
+      );
+
+      // Hinged Armored Steel Vault Door (pivots from left jamb x=-1.35, z=+1.65)
+      const doorPivot = new THREE.Group();
+      doorPivot.position.set(-1.35, 1.65, 1.65);
+
+      const doorSlab = new THREE.Mesh(doorSlabGeo, doorSteelMat);
+      doorSlab.position.set(1.35, 0, 0);
+      doorSlab.castShadow = true;
+      doorSlab.receiveShadow = true;
+      doorPivot.add(doorSlab);
+
+      const hatchPlate = new THREE.Mesh(hatchPlateGeo, bunkerTrimMat);
+      hatchPlate.position.set(1.35, 0, 0.08);
+      doorPivot.add(hatchPlate);
+
+      const wheelGroup = new THREE.Group();
+      wheelGroup.position.set(1.35, 0, 0.34);
+      for (let s = 0; s < 3; s++) {
+        const spoke = new THREE.Mesh(spokeGeo, goldMat);
+        spoke.rotation.z = (s * Math.PI) / 3;
+        wheelGroup.add(spoke);
+      }
+      const hub = new THREE.Mesh(hubGeo, goldMat);
+      wheelGroup.add(hub);
+      doorPivot.add(wheelGroup);
+      vaultGroup.add(doorPivot);
+
+      // Glowing Golden Keypad Ring mounted on right jamb pillar
+      const keypadPost = new THREE.Mesh(keypadPostGeo, bunkerTrimMat);
+      keypadPost.position.set(2.02, 0.625, 2.28);
+      keypadPost.castShadow = true;
+      vaultGroup.add(keypadPost);
+
+      const keypadMat = this.addMat(
+        new THREE.MeshStandardMaterial({
+          color: '#facc15',
+          emissive: '#f59e0b',
+          emissiveIntensity: 1.55,
+          roughness: 0.2,
+          metalness: 0.5,
+        }),
+      );
+      const keypadRing = new THREE.Mesh(keypadRingGeo, keypadMat);
+      keypadRing.position.set(2.02, 1.48, 2.38);
+      vaultGroup.add(keypadRing);
+
+      this.group.add(vaultGroup);
+
+      const wallColliders: ColliderBox[] = [
+        {
+          id: `${spec.id}_wall_l`,
+          minX: spec.x - 2.4,
+          minY: y,
+          minZ: spec.z - 2.1,
+          maxX: spec.x - 1.75,
+          maxY: y + 3.8,
+          maxZ: spec.z + 2.1,
+          material: 'metal',
+          tag: `vault_wall:${spec.id}`,
+        },
+        {
+          id: `${spec.id}_wall_r`,
+          minX: spec.x + 1.75,
+          minY: y,
+          minZ: spec.z - 2.1,
+          maxX: spec.x + 2.4,
+          maxY: y + 3.8,
+          maxZ: spec.z + 2.1,
+          material: 'metal',
+          tag: `vault_wall:${spec.id}`,
+        },
+        {
+          id: `${spec.id}_wall_back`,
+          minX: spec.x - 2.4,
+          minY: y,
+          minZ: spec.z - 2.1,
+          maxX: spec.x + 2.4,
+          maxY: y + 3.8,
+          maxZ: spec.z - 1.45,
+          material: 'metal',
+          tag: `vault_wall:${spec.id}`,
+        },
+        {
+          id: `${spec.id}_roof`,
+          minX: spec.x - 2.6,
+          minY: y + 3.32,
+          minZ: spec.z - 2.25,
+          maxX: spec.x + 2.6,
+          maxY: y + 3.88,
+          maxZ: spec.z + 2.25,
+          material: 'metal',
+          tag: `vault_roof:${spec.id}`,
+        },
+      ];
+
+      const doorCollider: ColliderBox = {
+        id: `${spec.id}_door`,
+        minX: spec.x - 1.45,
+        minY: y + 0.15,
+        minZ: spec.z + 1.45,
+        maxX: spec.x + 1.45,
+        maxY: y + 3.2,
+        maxZ: spec.z + 1.85,
+        material: 'metal',
+        tag: `vault_door:${spec.id}`,
+      };
+
+      this.vaultsMap.set(spec.id, {
+        data,
+        lootPos: { x: spec.x, y: y + 0.65, z: spec.z - 0.85 },
+        doorPivot,
+        wheelGroup,
+        keypadRing,
+        keypadMat,
+        interiorGlow,
+        openProgress: 0,
+        wallColliders,
+        doorCollider,
+      });
     }
   }
 
@@ -258,10 +548,53 @@ export class WorldInteractables {
     return this.ziplines;
   }
 
+  getVaults(): VaultEntity[] {
+    return this.vaults;
+  }
+
+  getVaultColliders(): ColliderBox[] {
+    const out: ColliderBox[] = [];
+    for (const v of this.vaultsMap.values()) {
+      out.push(...v.wallColliders);
+      if (!v.data.unlocked) {
+        out.push(v.doorCollider);
+      }
+    }
+    return out;
+  }
+
+  unlockVault(vaultId: string): UnlockVaultResult {
+    const entry = this.vaultsMap.get(vaultId);
+    if (!entry || entry.data.unlocked) {
+      return { unlocked: false };
+    }
+
+    entry.data.unlocked = true;
+    entry.keypadMat.color.set('#22d3ee');
+    entry.keypadMat.emissive.set('#06b6d4');
+    entry.keypadMat.emissiveIntensity = 1.9;
+
+    this.eventBus?.emit('sound:play', {
+      id: 'vault_unlock',
+      position: { x: entry.data.x, y: entry.data.y + 1.4, z: entry.data.z },
+      spatial: true,
+    });
+    this.eventBus?.emit('vfx:chest_open', {
+      position: { ...entry.lootPos },
+    });
+
+    return {
+      unlocked: true,
+      lootPos: { ...entry.lootPos },
+    };
+  }
+
   update(dt: number, elapsed: number): void {
+    const safeDt = Math.max(0, dt);
+
     for (let i = 0; i < this.padVisuals.length; i++) {
       const pv = this.padVisuals[i];
-      pv.spinner.rotation.y += dt * (pv.data.kind === 'launch_pad' ? 2.4 : 1.8);
+      pv.spinner.rotation.y += safeDt * (pv.data.kind === 'launch_pad' ? 2.4 : 1.8);
       const phase = (elapsed * 1.4 + i * 0.31) % 1;
       pv.pulseRing.position.y = pv.baseY + phase * (pv.data.kind === 'launch_pad' ? 1.4 : 2.6);
       const scale = 1.0 + phase * 0.4;
@@ -270,7 +603,7 @@ export class WorldInteractables {
 
     for (let i = 0; i < this.ziplineOrbs.length; i++) {
       const o = this.ziplineOrbs[i];
-      o.t = (o.t + dt * 0.22) % 1;
+      o.t = (o.t + safeDt * 0.22) % 1;
       const s = o.zipline.start;
       const e = o.zipline.end;
       o.mesh.position.set(
@@ -278,6 +611,26 @@ export class WorldInteractables {
         s.y + (e.y - s.y) * o.t,
         s.z + (e.z - s.z) * o.t,
       );
+    }
+
+    // Animate Boss Vaults (armored door swing + wheel spin + keypad pulse)
+    let vaultIdx = 0;
+    for (const v of this.vaultsMap.values()) {
+      const pulse = 1.0 + Math.sin(elapsed * 3.8 + vaultIdx * 1.2) * 0.1;
+      v.keypadRing.scale.set(pulse, pulse, pulse);
+      v.interiorGlow.rotation.y = elapsed * 1.2;
+
+      if (v.data.unlocked && v.openProgress < 1) {
+        v.openProgress = Math.min(1, v.openProgress + safeDt * 0.95);
+        const eased = 1 - Math.pow(1 - v.openProgress, 3);
+        v.doorPivot.rotation.y = -eased * 1.95;
+        v.wheelGroup.rotation.z = eased * Math.PI * 3.0;
+        if (v.openProgress >= 0.999) {
+          v.openProgress = 1;
+          v.data.opened = true;
+        }
+      }
+      vaultIdx++;
     }
   }
 
@@ -291,5 +644,7 @@ export class WorldInteractables {
     this.ziplineOrbs = [];
     this.launchPads = [];
     this.ziplines = [];
+    this.vaults = [];
+    this.vaultsMap.clear();
   }
 }

@@ -73,9 +73,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 19 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 21 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds.length).toBeGreaterThanOrEqual(19);
+    expect(allIds).toHaveLength(21);
 
     const seenNames = new Set<string>();
 
@@ -83,6 +83,7 @@ describe('WeaponModels', () => {
       const grp = createWeaponModel(id);
       expect(grp).toBeInstanceOf(THREE.Group);
       expect(countMeshes(grp)).toBeGreaterThan(0);
+      expect(grp.name).not.toContain('stub');
       expect(seenNames.has(grp.name)).toBe(false);
       seenNames.add(grp.name);
 
@@ -107,7 +108,7 @@ describe('WeaponModels', () => {
       disposeObject3D(grp);
     }
 
-    // Verify new high-detail models have rich multi-part mesh counts
+    // Verify high-detail models have rich multi-part mesh counts
     const heavySg = createWeaponModel('heavy_shotgun');
     expect(heavySg.name).toBe('weapon_heavy_shotgun');
     expect(countMeshes(heavySg)).toBeGreaterThanOrEqual(12);
@@ -132,6 +133,20 @@ describe('WeaponModels', () => {
     expect(chug.name).toBe('weapon_chug_splash');
     expect(countMeshes(chug)).toBeGreaterThanOrEqual(18);
     disposeObject3D(chug);
+
+    const grappler = createWeaponModel('grappler');
+    expect(grappler.name).toBe('weapon_grappler');
+    expect(countMeshes(grappler)).toBeGreaterThanOrEqual(16);
+    expect(hasMuzzleOffset('grappler')).toBe(true);
+    expect((grappler.userData.muzzleOffset as THREE.Vector3).z).toBeGreaterThan(0.35);
+    disposeObject3D(grappler);
+
+    const shieldBubble = createWeaponModel('shield_bubble');
+    expect(shieldBubble.name).toBe('weapon_shield_bubble');
+    expect(countMeshes(shieldBubble)).toBeGreaterThanOrEqual(14);
+    expect(hasMuzzleOffset('shield_bubble')).toBe(true);
+    expect((shieldBubble.userData.muzzleOffset as THREE.Vector3).z).toBeGreaterThan(0.15);
+    disposeObject3D(shieldBubble);
   });
 
   it('builds all 6 pickaxes (including plasma_katana & magma_axe) and blueprint model', () => {
@@ -300,10 +315,49 @@ describe('CharacterRig', () => {
 
     rig.dispose();
   });
+
+  it('adds, animates, toggles, and disposes golden Boss Crown aura cleanly', () => {
+    const rig = new CharacterRig(SKINS[4], PICKAXES[4], GLIDERS[4]);
+    expect(rig.isBossAuraEnabled()).toBe(false);
+    expect(rig.getGroup().getObjectByName('boss_crown_aura')).toBeUndefined();
+
+    // Enabling adds glowing crown ring + vertical beacon above boss
+    rig.setBossAura(true, 0.25);
+    expect(rig.isBossAuraEnabled()).toBe(true);
+    const aura = rig.getGroup().getObjectByName('boss_crown_aura') as THREE.Group;
+    expect(aura).toBeDefined();
+    expect(aura.visible).toBe(true);
+    expect(countMeshes(aura)).toBeGreaterThanOrEqual(9);
+
+    const crownRing = aura.getObjectByName('boss_crown_ring') as THREE.Group;
+    expect(crownRing).toBeDefined();
+    const rotA = crownRing.rotation.y;
+    const yA = aura.position.y;
+
+    const bossBox = assertFiniteBox(rig.getGroup());
+    expect(bossBox.max.y - bossBox.min.y).toBeGreaterThan(2.5);
+
+    // Updating elapsed animates crown spin & floating bob
+    rig.setBossAura(true, 1.35);
+    expect(crownRing.rotation.y).not.toBeCloseTo(rotA, 3);
+    expect(aura.position.y).not.toBeCloseTo(yA, 3);
+
+    // Disabling hides aura and restores standard ~1.85m bounds
+    rig.setBossAura(false);
+    expect(rig.isBossAuraEnabled()).toBe(false);
+    expect(aura.visible).toBe(false);
+    const normalBox = assertFiniteBox(rig.getGroup());
+    expect(normalBox.max.y - normalBox.min.y).toBeLessThan(1.98);
+
+    // Re-enabling then disposing tears down without throwing
+    rig.setBossAura(true, 2.0);
+    rig.dispose();
+    expect(rig.getGroup().getObjectByName('boss_crown_aura')).toBeUndefined();
+  });
 });
 
 describe('CharacterAnimator', () => {
-  it('animates all 19 AnimStates and all 6 EmoteIds without NaN transforms or invalid bounding boxes', () => {
+  it('animates all 20 AnimStates (including drive) and all 6 EmoteIds without NaN transforms or invalid bounding boxes', () => {
     const animator = new CharacterAnimator();
     const rig = new CharacterRig();
 
@@ -320,6 +374,7 @@ describe('CharacterAnimator', () => {
       'mantle',
       'swim',
       'zipline',
+      'drive',
       'skydive',
       'glide',
       'harvest',
@@ -328,7 +383,7 @@ describe('CharacterAnimator', () => {
       'build',
       'emote',
     ];
-    expect(states).toHaveLength(19);
+    expect(states).toHaveLength(20);
     expect(EMOTES).toHaveLength(6);
 
     for (const animState of states) {
@@ -350,7 +405,8 @@ describe('CharacterAnimator', () => {
             animState === 'run' ||
             animState === 'sprint' ||
             animState === 'slide' ||
-            animState === 'swim'
+            animState === 'swim' ||
+            animState === 'drive'
               ? 6.5
               : 0,
           grounded:
@@ -360,7 +416,8 @@ describe('CharacterAnimator', () => {
             animState !== 'glide' &&
             animState !== 'zipline',
           harvestSwingTimer: animState === 'harvest' ? 0.25 : 0,
-          leanAngle: animState === 'sprint' || animState === 'slide' ? 0.25 : 0,
+          leanAngle:
+            animState === 'sprint' || animState === 'slide' || animState === 'drive' ? 0.25 : 0,
           velocityY: animState === 'jump' ? 6.5 : animState === 'fall' ? -9.0 : 0,
         });
 
@@ -463,6 +520,81 @@ describe('CharacterAnimator', () => {
       0,
     );
     expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.5);
+
+    // Wave-2 weapons: shield_bubble throw wind-up & grappler pistol aim
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'shield_bubble', isAiming: true }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.5);
+
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'grappler', isAiming: true }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.9);
+
+    rig.dispose();
+  });
+
+  it('animates vehicle drive seated pose with handlebar grip, banking lean, and syncs isBoss aura', () => {
+    const animator = new CharacterAnimator();
+    const rig = new CharacterRig();
+
+    // Seated drive pose: lowered hips, bent hips & knees, hands reaching forward to handlebars, forward lean
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'drive', moveSpeed: 18, leanAngle: 0 }),
+      0,
+    );
+    expect(rig.joints.hips.position.y).toBeLessThan(0.72);
+    expect(rig.joints.leftHip.rotation.x).toBeLessThan(-1.0);
+    expect(rig.joints.rightHip.rotation.x).toBeLessThan(-1.0);
+    expect(rig.joints.leftKnee.rotation.x).toBeGreaterThan(1.2);
+    expect(rig.joints.rightKnee.rotation.x).toBeGreaterThan(1.2);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.spine.rotation.x).toBeGreaterThan(0.2);
+
+    // Banking left/right while driving rolls hips and tilts handlebars cleanly
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'drive', moveSpeed: 20, leanAngle: 0.4 }),
+      0,
+    );
+    const driveRightBank = rig.joints.hips.rotation.z;
+    const driveRightHeadZ = rig.joints.head.rotation.z;
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'drive', moveSpeed: 20, leanAngle: -0.4 }),
+      0,
+    );
+    const driveLeftBank = rig.joints.hips.rotation.z;
+    expect(driveRightBank).toBeGreaterThan(0.15);
+    expect(driveLeftBank).toBeLessThan(-0.15);
+    expect(driveRightHeadZ).toBeLessThan(-0.08);
+
+    // CharacterRenderState.isBoss automatically activates and animates Boss Crown Aura
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', isBoss: true }),
+      0.05,
+    );
+    expect(rig.isBossAuraEnabled()).toBe(true);
+    const crownRing = rig.getGroup().getObjectByName('boss_crown_ring') as THREE.Group;
+    expect(crownRing).toBeDefined();
+    const rotStart = crownRing.rotation.y;
+
+    for (let i = 0; i < 6; i++) {
+      animator.update(rig, makeRenderState({ animState: 'run', isBoss: true }), 0.05);
+    }
+    expect(crownRing.rotation.y).toBeGreaterThan(rotStart);
+
+    // Clearing isBoss disables aura cleanly
+    animator.update(rig, makeRenderState({ animState: 'idle', isBoss: false }), 0.05);
+    expect(rig.isBossAuraEnabled()).toBe(false);
 
     rig.dispose();
   });
@@ -786,5 +918,143 @@ describe('VFXManager', () => {
     });
 
     vfx.dispose();
+  });
+
+  it('handles Wave-2 VFX channels (grapple_line, shield_bubble, vehicle_boost) and updateThrowArc cleanly', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. Grapple line
+    bus.emit('vfx:grapple_line', {
+      from: { x: 0, y: 1.4, z: 0 },
+      to: { x: 12, y: 8.5, z: 16 },
+      duration: 0.4,
+    });
+    expect(vfx.getActiveGrappleLineCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(1);
+
+    // 2. Shield bubble dome
+    bus.emit('vfx:shield_bubble', {
+      id: 'sb_1',
+      position: { x: 4, y: 0.2, z: -6 },
+      radius: 5.2,
+      duration: 0.8,
+    });
+    // Re-emitting same id updates existing bubble rather than duplicating
+    bus.emit('vfx:shield_bubble', {
+      id: 'sb_1',
+      position: { x: 4, y: 0.2, z: -6 },
+      radius: 5.2,
+      duration: 0.8,
+    });
+    expect(vfx.getActiveShieldBubbleCount()).toBe(1);
+
+    // 3. Vehicle twin boost exhaust sparks
+    bus.emit('vfx:vehicle_boost', {
+      position: { x: -3, y: 0.7, z: 2 },
+      direction: { x: 0, y: 0, z: -1 },
+    });
+    expect(vfx.getActiveVehicleBoostCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(3);
+
+    // Step forward past grapple_line (0.4s) & vehicle_boost (0.28s) while shield_bubble (0.8s) stays pulsing
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveGrappleLineCount()).toBe(0);
+    expect(vfx.getActiveVehicleBoostCount()).toBe(0);
+    expect(vfx.getActiveShieldBubbleCount()).toBe(1);
+
+    // Step forward past shield_bubble expiration
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveShieldBubbleCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // 4. Throwable trajectory arc preview + landing ring
+    expect(vfx.isThrowArcVisible()).toBe(false);
+    expect(vfx.getThrowArcPointCount()).toBe(0);
+
+    const arcPoints = [
+      { x: 0, y: 1.6, z: 0 },
+      { x: 0, y: 2.8, z: 3 },
+      { x: 0, y: 3.1, z: 6 },
+      { x: 0, y: 2.3, z: 9 },
+      { x: 0, y: 0.1, z: 12 },
+    ];
+    vfx.updateThrowArc(arcPoints);
+    expect(vfx.isThrowArcVisible()).toBe(true);
+    expect(vfx.getThrowArcPointCount()).toBe(arcPoints.length);
+
+    const arcGroup = scene.getObjectByName('vfx_throw_arc');
+    expect(arcGroup).toBeDefined();
+    expect(arcGroup?.visible).toBe(true);
+    vfx.update(0.05);
+
+    // Degenerate / null inputs hide throw arc cleanly
+    vfx.updateThrowArc([{ x: 0, y: 0, z: 0 }]);
+    expect(vfx.isThrowArcVisible()).toBe(false);
+    expect(vfx.getThrowArcPointCount()).toBe(0);
+
+    vfx.updateThrowArc(arcPoints);
+    expect(vfx.isThrowArcVisible()).toBe(true);
+    vfx.updateThrowArc(null);
+    expect(vfx.isThrowArcVisible()).toBe(false);
+    expect(vfx.getThrowArcPointCount()).toBe(0);
+
+    // Edge cases: zero-length grapple / zero direction boost / NaN arc points do not produce NaN transforms
+    bus.emit('vfx:grapple_line', {
+      from: { x: 1, y: 1, z: 1 },
+      to: { x: 1, y: 1, z: 1 },
+      duration: 0,
+    });
+    bus.emit('vfx:vehicle_boost', {
+      position: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 0, z: 0 },
+    });
+    vfx.updateThrowArc([
+      { x: Number.NaN, y: 1, z: 1 },
+      { x: 0, y: 1, z: 0 },
+      { x: 2, y: 0, z: 4 },
+    ]);
+    expect(vfx.isThrowArcVisible()).toBe(true);
+    expect(vfx.getThrowArcPointCount()).toBe(2);
+
+    vfx.update(0.03);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+    });
+
+    // Clear resets active arc and pools
+    vfx.clear();
+    expect(vfx.isThrowArcVisible()).toBe(false);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Dispose unsubscribes Wave-2 channels cleanly
+    vfx.dispose();
+    bus.emit('vfx:grapple_line', {
+      from: { x: 0, y: 1, z: 0 },
+      to: { x: 5, y: 3, z: 5 },
+      duration: 0.4,
+    });
+    bus.emit('vfx:shield_bubble', {
+      id: 'sb_after',
+      position: { x: 0, y: 0, z: 0 },
+      radius: 5,
+      duration: 5,
+    });
+    bus.emit('vfx:vehicle_boost', {
+      position: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+    });
+    vfx.updateThrowArc(arcPoints);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+    expect(vfx.isThrowArcVisible()).toBe(false);
   });
 });

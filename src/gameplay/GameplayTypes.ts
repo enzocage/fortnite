@@ -13,10 +13,48 @@ import type {
   ItemInstance,
   MaterialType,
   Rarity,
+  VaultEntity,
   Vec3Like,
+  VehicleEntity,
+  VehicleKind,
   WeaponId,
   ZiplineEntity,
 } from '../types';
+
+export interface VehicleBridge {
+  getVehicles(): VehicleEntity[];
+  enterVehicle(id: string, driverId: string): boolean;
+  exitVehicle(id: string, driverId: string): Vec3Like | null;
+  driveVehicle(
+    id: string,
+    throttle: number,
+    steer: number,
+    boost: boolean,
+    dt: number,
+  ): void;
+  damageVehicle(id: string, dmg: number, hitPos: Vec3Like): boolean;
+}
+
+export interface VaultBridge {
+  getVaults(): VaultEntity[];
+  unlockVault(id: string): { unlocked: boolean; lootPos?: Vec3Like };
+}
+
+export interface ShieldBubbleState {
+  id: string;
+  position: Vec3Like;
+  radius: number;
+  remaining: number;
+}
+
+export interface PlayerVehicleSnapshot {
+  kind: VehicleKind;
+  speedKmh: number;
+  hp: number;
+  maxHp: number;
+  boostCharge: number;
+  isBoosting: boolean;
+}
 
 export interface WorldTraversalBridge {
   getLaunchPads(): LaunchPadEntity[];
@@ -110,6 +148,7 @@ export interface FireWeaponParams {
   muzzlePos?: Vec3Like;
   spreadRad: number;
   isPlayer: boolean;
+  vehicleBridge?: VehicleBridge | null;
   onAmmoConsumed?: () => void;
   onHarvest?: (matType: MaterialType, amount: number, isCrit: boolean) => void;
 }
@@ -190,4 +229,7 @@ export interface PlayerHudSnapshot {
   lowHealthPulse: number;
   showSpeedLines: boolean;
   leanAngle: number;
+  vehicle: PlayerVehicleSnapshot | null;
+  activeVaultKeys: number;
+  grapplerCharges: number | null;
 }

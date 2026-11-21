@@ -6,6 +6,7 @@ import type {
   Rarity,
   SoundEventId,
   Vec3Like,
+  VehicleEntity,
   WeaponId,
 } from '../types';
 import {
@@ -25,6 +26,8 @@ import type {
   FireWeaponParams,
   FireWeaponResult,
   PropsInteractionBridge,
+  ShieldBubbleState,
+  VehicleBridge,
 } from './GameplayTypes';
 
 const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
@@ -141,9 +144,12 @@ export class WeaponSystem {
   private eventBus: EventBus;
 
   private actorsProvider: (() => CombatActor[]) | null = null;
+  private vehicleBridge: VehicleBridge | null = null;
   private projectiles: ActiveProjectile[] = [];
   private pendingBursts: PendingBurst[] = [];
+  private shieldBubbles: ShieldBubbleState[] = [];
   private nextProjId = 1;
+  private nextBubbleId = 1;
   private dmgNumSeq = 1;
 
   constructor(
@@ -162,8 +168,30 @@ export class WeaponSystem {
     this.actorsProvider = fn;
   }
 
+  setVehicleBridge(bridge: VehicleBridge | null): void {
+    this.vehicleBridge = bridge;
+  }
+
+  getVehicleBridge(): VehicleBridge | null {
+    return this.vehicleBridge;
+  }
+
   getProjectiles(): ProjectileState[] {
     return this.projectiles;
+  }
+
+  getActiveShieldBubbles(): Array<{ position: Vec3Like; radius: number }> {
+    const active: Array<{ position: Vec3Like; radius: number }> = [];
+    for (let i = 0; i < this.shieldBubbles.length; i++) {
+      const b = this.shieldBubbles[i];
+      if (b.remaining > 0) {
+        active.push({
+          position: { ...b.position },
+          radius: b.radius,
+        });
+      }
+    }
+    return active;
   }
 
   private raycastActors(
@@ -351,6 +379,10 @@ export class WeaponSystem {
       return this.executePickaxeSwing(params, aimDir);
     }
 
+    if (def.isGrappler || params.item.weaponId === 'grappler') {
+      return this.executeGrapplerShot(params, aimDir);
+    }
+
     if (def.isProjectile) {
       return this.launchProjectile(params, aimDir);
     }
@@ -370,6 +402,67 @@ export class WeaponSystem {
     return res;
   }
 
+  private intersectRayAABB(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
+    maxDist: number,
+  ): { distance: number; point: Vec3Like; normal: Vec3Like } | null {
+    const invDx = Math.abs(dir.x) > 1e-9 ? 1 / dir.x : 1e9;
+    const invDy = Math.abs(dir.y) > 1e-9 ? 1 / dir.y : 1e9;
+    const invDz = Math.abs(dir.z) > 1e-9 ? 1 / dir.z : 1e9;
+
+    const tx1 = (minX - origin.x) * invDx;
+    const tx2 = (maxX - origin.x) * invDx;
+    let tmin = Math.min(tx1, tx2);
+    let tmax = Math.max(tx1, tx2);
+    let nx = tx1 < tx2 ? -1 : 1;
+    let ny = 0;
+    let nz = 0;
+
+    const ty1 = (minY - origin.y) * invDy;
+    const ty2 = (maxY - origin.y) * invDy;
+    const tyMin = Math.min(ty1, ty2);
+    const tyMax = Math.max(ty1, ty2);
+    if (tyMin > tmin) {
+      tmin = tyMin;
+      nx = 0;
+      ny = ty1 < ty2 ? -1 : 1;
+      nz = 0;
+    }
+    tmax = Math.min(tmax, tyMax);
+
+    const tz1 = (minZ - origin.z) * invDz;
+    const tz2 = (maxZ - origin.z) * invDz;
+    const tzMin = Math.min(tz1, tz2);
+    const tzMax = Math.max(tz1, tz2);
+    if (tzMin > tmin) {
+      tmin = tzMin;
+      nx = 0;
+      ny = 0;
+      nz = tz1 < tz2 ? -1 : 1;
+    }
+    tmax = Math.min(tmax, tzMax);
+
+    if (tmax >= Math.max(0, tmin) && tmin >= 0 && tmin < maxDist) {
+      return {
+        distance: tmin,
+        point: {
+          x: origin.x + dir.x * tmin,
+          y: origin.y + dir.y * tmin,
+          z: origin.z + dir.z * tmin,
+        },
+        normal: { x: nx, y: ny, z: nz },
+      };
+    }
+    return null;
+  }
+
   private raycastLlamas(
     origin: Vec3Like,
     dir: Vec3Like,
@@ -378,73 +471,138 @@ export class WeaponSystem {
     const llamas = this.propsBridge.getLlamas?.();
     if (!llamas || llamas.length === 0) return null;
 
-    const invDx = Math.abs(dir.x) > 1e-9 ? 1 / dir.x : 1e9;
-    const invDy = Math.abs(dir.y) > 1e-9 ? 1 / dir.y : 1e9;
-    const invDz = Math.abs(dir.z) > 1e-9 ? 1 / dir.z : 1e9;
     const r = 0.78;
     const h = 1.65;
-
     let bestDist = maxDist;
     let best: { llama: LootLlamaEntity; distance: number; point: Vec3Like; normal: Vec3Like } | null = null;
 
     for (let i = 0; i < llamas.length; i++) {
       const llama = llamas[i];
       if (llama.opened) continue;
-      const minX = llama.x - r;
-      const maxX = llama.x + r;
-      const minY = llama.y;
-      const maxY = llama.y + h;
-      const minZ = llama.z - r;
-      const maxZ = llama.z + r;
-
-      const tx1 = (minX - origin.x) * invDx;
-      const tx2 = (maxX - origin.x) * invDx;
-      let tmin = Math.min(tx1, tx2);
-      let tmax = Math.max(tx1, tx2);
-      let nx = tx1 < tx2 ? -1 : 1;
-      let ny = 0;
-      let nz = 0;
-
-      const ty1 = (minY - origin.y) * invDy;
-      const ty2 = (maxY - origin.y) * invDy;
-      const tyMin = Math.min(ty1, ty2);
-      const tyMax = Math.max(ty1, ty2);
-      if (tyMin > tmin) {
-        tmin = tyMin;
-        nx = 0;
-        ny = ty1 < ty2 ? -1 : 1;
-        nz = 0;
-      }
-      tmax = Math.min(tmax, tyMax);
-
-      const tz1 = (minZ - origin.z) * invDz;
-      const tz2 = (maxZ - origin.z) * invDz;
-      const tzMin = Math.min(tz1, tz2);
-      const tzMax = Math.max(tz1, tz2);
-      if (tzMin > tmin) {
-        tmin = tzMin;
-        nx = 0;
-        ny = 0;
-        nz = tz1 < tz2 ? -1 : 1;
-      }
-      tmax = Math.min(tmax, tzMax);
-
-      if (tmax >= Math.max(0, tmin) && tmin >= 0 && tmin < bestDist) {
-        bestDist = tmin;
-        best = {
-          llama,
-          distance: tmin,
-          point: {
-            x: origin.x + dir.x * tmin,
-            y: origin.y + dir.y * tmin,
-            z: origin.z + dir.z * tmin,
-          },
-          normal: { x: nx, y: ny, z: nz },
-        };
+      const hit = this.intersectRayAABB(
+        origin,
+        dir,
+        llama.x - r,
+        llama.y,
+        llama.z - r,
+        llama.x + r,
+        llama.y + h,
+        llama.z + r,
+        bestDist,
+      );
+      if (hit) {
+        bestDist = hit.distance;
+        best = { llama, ...hit };
       }
     }
 
     return best;
+  }
+
+  private raycastVehicles(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+    bridge?: VehicleBridge | null,
+    excludeDriverId?: string,
+  ): { vehicle: VehicleEntity; distance: number; point: Vec3Like; normal: Vec3Like } | null {
+    const activeBridge = bridge ?? this.vehicleBridge;
+    const vehicles = activeBridge?.getVehicles();
+    if (!vehicles || vehicles.length === 0) return null;
+
+    let bestDist = maxDist;
+    let best: { vehicle: VehicleEntity; distance: number; point: Vec3Like; normal: Vec3Like } | null = null;
+
+    for (let i = 0; i < vehicles.length; i++) {
+      const veh = vehicles[i];
+      if (veh.destroyed || veh.hp <= 0) continue;
+      if (excludeDriverId && veh.driverId === excludeDriverId) continue;
+      const r = veh.kind === 'hover_atv' ? 1.25 : 0.95;
+      const hit = this.intersectRayAABB(
+        origin,
+        dir,
+        veh.x - r,
+        veh.y - 0.2,
+        veh.z - r,
+        veh.x + r,
+        veh.y + 1.35,
+        veh.z + r,
+        bestDist,
+      );
+      if (hit) {
+        bestDist = hit.distance;
+        best = { vehicle: veh, ...hit };
+      }
+    }
+
+    return best;
+  }
+
+  private raycastShieldBubbles(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+  ): { bubble: ShieldBubbleState; distance: number; point: Vec3Like; normal: Vec3Like } | null {
+    if (this.shieldBubbles.length === 0) return null;
+    let bestDist = maxDist;
+    let best: { bubble: ShieldBubbleState; distance: number; point: Vec3Like; normal: Vec3Like } | null = null;
+
+    for (let i = 0; i < this.shieldBubbles.length; i++) {
+      const bubble = this.shieldBubbles[i];
+      if (bubble.remaining <= 0) continue;
+      const ox = origin.x - bubble.position.x;
+      const oy = origin.y - bubble.position.y;
+      const oz = origin.z - bubble.position.z;
+      const b = ox * dir.x + oy * dir.y + oz * dir.z;
+      const c = ox * ox + oy * oy + oz * oz - bubble.radius * bubble.radius;
+      const disc = b * b - c;
+      if (disc < 0) continue;
+
+      const sqrtDisc = Math.sqrt(disc);
+      const t0 = -b - sqrtDisc;
+      const t1 = -b + sqrtDisc;
+      const eps = 1e-4;
+      let t = -1;
+      if (t0 > eps && t0 <= bestDist) {
+        t = t0;
+      } else if (t1 > eps && t1 <= bestDist) {
+        t = t1;
+      }
+      if (t < 0) continue;
+
+      const px = origin.x + dir.x * t;
+      const py = origin.y + dir.y * t;
+      const pz = origin.z + dir.z * t;
+      let nx = (px - bubble.position.x) / bubble.radius;
+      let ny = (py - bubble.position.y) / bubble.radius;
+      let nz = (pz - bubble.position.z) / bubble.radius;
+      if (nx * dir.x + ny * dir.y + nz * dir.z > 0) {
+        nx = -nx;
+        ny = -ny;
+        nz = -nz;
+      }
+
+      bestDist = t;
+      best = {
+        bubble,
+        distance: t,
+        point: { x: px, y: py, z: pz },
+        normal: { x: nx, y: ny, z: nz },
+      };
+    }
+
+    return best;
+  }
+
+  private isBlockedByShieldBubble(from: Vec3Like, to: Vec3Like): boolean {
+    if (this.shieldBubbles.length === 0) return false;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < 1e-4) return false;
+    const dir = { x: dx / dist, y: dy / dist, z: dz / dist };
+    return this.raycastShieldBubbles(from, dir, dist - 1e-3) !== null;
   }
 
   private executePickaxeSwing(
@@ -458,6 +616,7 @@ export class WeaponSystem {
       spatial: true,
     });
 
+    const vBridge = params.vehicleBridge ?? this.vehicleBridge;
     const props = this.propsBridge.getProps();
     const worldHit = this.collision.raycastWorld(params.origin, aimDir, def.range, {
       checkBuilds: true,
@@ -471,11 +630,19 @@ export class WeaponSystem {
       params.actor.id,
     );
     const llamaHit = this.raycastLlamas(params.origin, aimDir, def.range);
+    const vehicleHit = this.raycastVehicles(
+      params.origin,
+      aimDir,
+      def.range,
+      vBridge,
+      params.actor.id,
+    );
 
     if (
       actorHit &&
       (!worldHit.hit || actorHit.distance <= worldHit.distance) &&
-      (!llamaHit || actorHit.distance <= llamaHit.distance)
+      (!llamaHit || actorHit.distance <= llamaHit.distance) &&
+      (!vehicleHit || actorHit.distance <= vehicleHit.distance)
     ) {
       const ev = this.applyActorDamage(
         params.actor,
@@ -496,7 +663,11 @@ export class WeaponSystem {
       };
     }
 
-    if (llamaHit && (!worldHit.hit || llamaHit.distance <= worldHit.distance)) {
+    if (
+      llamaHit &&
+      (!worldHit.hit || llamaHit.distance <= worldHit.distance) &&
+      (!vehicleHit || llamaHit.distance <= vehicleHit.distance)
+    ) {
       this.propsBridge.damageLlama?.(
         llamaHit.llama.id,
         def.structureDamage,
@@ -510,6 +681,30 @@ export class WeaponSystem {
       this.eventBus.emit('sound:play', {
         id: 'hit_wood',
         position: llamaHit.point,
+        spatial: true,
+      });
+      return {
+        fired: true,
+        shotsHit: 1,
+        headshots: 0,
+        damageDealt: def.structureDamage,
+      };
+    }
+
+    if (vehicleHit && (!worldHit.hit || vehicleHit.distance <= worldHit.distance)) {
+      vBridge?.damageVehicle(
+        vehicleHit.vehicle.id,
+        def.structureDamage,
+        vehicleHit.point,
+      );
+      this.eventBus.emit('vfx:impact', {
+        position: vehicleHit.point,
+        normal: vehicleHit.normal,
+        material: 'metal',
+      });
+      this.eventBus.emit('sound:play', {
+        id: 'hit_metal',
+        position: vehicleHit.point,
         spatial: true,
       });
       return {
@@ -594,6 +789,110 @@ export class WeaponSystem {
     return { fired: true, shotsHit: 0, headshots: 0, damageDealt: 0 };
   }
 
+  private executeGrapplerShot(
+    params: FireWeaponParams,
+    aimDir: Vec3Like,
+  ): FireWeaponResult {
+    const def = WEAPONS.grappler;
+    if (params.item.magAmmo <= 0) {
+      if (params.isPlayer) {
+        this.eventBus.emit('sound:play', {
+          id: 'dryfire',
+          position: params.origin,
+          spatial: true,
+        });
+      }
+      return { fired: false, shotsHit: 0, headshots: 0, damageDealt: 0 };
+    }
+
+    const vBridge = params.vehicleBridge ?? this.vehicleBridge;
+    const props = this.propsBridge.getProps();
+    const worldHit = this.collision.raycastWorld(params.origin, aimDir, def.range, {
+      checkBuilds: true,
+      checkProps: true,
+      props,
+    });
+    const maxCheck = worldHit.hit ? worldHit.distance : def.range;
+    const llamaHit = this.raycastLlamas(params.origin, aimDir, maxCheck);
+    const vehicleHit = this.raycastVehicles(
+      params.origin,
+      aimDir,
+      maxCheck,
+      vBridge,
+      params.actor.id,
+    );
+
+    let anchorPoint: Vec3Like | null = null;
+    let anchorDist = maxCheck;
+    if (llamaHit && llamaHit.distance <= anchorDist) {
+      anchorDist = llamaHit.distance;
+      anchorPoint = llamaHit.point;
+    }
+    if (vehicleHit && vehicleHit.distance <= anchorDist) {
+      anchorDist = vehicleHit.distance;
+      anchorPoint = vehicleHit.point;
+    }
+    if (!anchorPoint && worldHit.hit) {
+      anchorPoint = worldHit.point;
+      anchorDist = worldHit.distance;
+    }
+
+    if (!anchorPoint || anchorDist > def.range) {
+      if (params.isPlayer) {
+        this.eventBus.emit('sound:play', {
+          id: 'dryfire',
+          position: params.origin,
+          spatial: true,
+        });
+      }
+      return { fired: false, shotsHit: 0, headshots: 0, damageDealt: 0 };
+    }
+
+    params.onAmmoConsumed?.();
+
+    const muzzle = params.muzzlePos ?? params.origin;
+    this.eventBus.emit('sound:play', {
+      id: 'grappler_fire',
+      position: muzzle,
+      spatial: true,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'grappler_reel',
+      position: params.origin,
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:grapple_line', {
+      from: muzzle,
+      to: anchorPoint,
+      duration: 0.45,
+    });
+
+    const dx = anchorPoint.x - params.origin.x;
+    const dy = anchorPoint.y - params.origin.y;
+    const dz = anchorPoint.z - params.origin.z;
+    const dist = Math.max(0.1, Math.hypot(dx, dy, dz));
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const nz = dz / dist;
+    const pullSpeed = clamp(20 + dist * 0.3, 22, 34);
+    const impulse: Vec3Like = {
+      x: nx * pullSpeed,
+      y: clamp(ny * pullSpeed + 8.5, 9.5, 25),
+      z: nz * pullSpeed,
+    };
+
+    params.actor.fallImmune = true;
+    if (params.actor.onImpulse) {
+      params.actor.onImpulse(impulse, true);
+    } else if (params.actor.velocity) {
+      params.actor.velocity.x += impulse.x;
+      params.actor.velocity.y = Math.max(params.actor.velocity.y, 0) + impulse.y;
+      params.actor.velocity.z += impulse.z;
+    }
+
+    return { fired: true, shotsHit: 0, headshots: 0, damageDealt: 0 };
+  }
+
   private launchProjectile(
     params: FireWeaponParams,
     aimDir: Vec3Like,
@@ -648,6 +947,9 @@ export class WeaponSystem {
     const isFrag = params.item.weaponId === 'frag_grenade';
     const isShockwave = params.item.weaponId === 'shockwave_grenade';
     const isSplashHeal = params.item.weaponId === 'chug_splash';
+    const isShieldBubble = Boolean(
+      def.isShieldBubble || params.item.weaponId === 'shield_bubble',
+    );
 
     const proj: ActiveProjectile = {
       id: `proj_${this.nextProjId++}`,
@@ -685,6 +987,7 @@ export class WeaponSystem {
       fuseRemaining: def.fuseTime,
       isShockwave,
       isSplashHeal,
+      isShieldBubble,
       settled: false,
       bounceSoundCooldown: 0,
     };
@@ -693,11 +996,50 @@ export class WeaponSystem {
     return { fired: true, shotsHit: 0, headshots: 0, damageDealt: 0 };
   }
 
+  private applyWorldHitDamage(
+    worldHit: {
+      targetType: string;
+      targetId?: string;
+      point: Vec3Like;
+      normal: Vec3Like;
+      material?: MaterialType;
+    },
+    structDmg: number,
+  ): void {
+    if (worldHit.targetType === 'build' && worldHit.targetId) {
+      this.building.damagePiece(worldHit.targetId, structDmg);
+      this.eventBus.emit('vfx:impact', {
+        position: worldHit.point,
+        normal: worldHit.normal,
+        material: worldHit.material ?? 'wood',
+      });
+    } else if (worldHit.targetType === 'prop' && worldHit.targetId) {
+      const propRes = this.propsBridge.damageProp(
+        worldHit.targetId,
+        structDmg,
+        worldHit.point,
+        false,
+      );
+      this.eventBus.emit('vfx:impact', {
+        position: worldHit.point,
+        normal: worldHit.normal,
+        material: propRes.matType,
+      });
+    } else {
+      this.eventBus.emit('vfx:impact', {
+        position: worldHit.point,
+        normal: worldHit.normal,
+        material: worldHit.material ?? 'dirt',
+      });
+    }
+  }
+
   private executeHitscanShot(
     params: FireWeaponParams,
     aimDir: Vec3Like,
   ): FireWeaponResult {
     const def = WEAPONS[params.item.weaponId];
+    const vBridge = params.vehicleBridge ?? this.vehicleBridge;
     params.onAmmoConsumed?.();
 
     const muzzle = params.muzzlePos ?? params.origin;
@@ -750,32 +1092,69 @@ export class WeaponSystem {
       const effectiveSpread = p === 0 && pellets > 1 ? params.spreadRad * 0.35 : params.spreadRad;
       const rayDir = applySpreadToDir(aimDir, effectiveSpread);
 
-      const worldHit = this.collision.raycastWorld(params.origin, rayDir, def.range, {
+      const bubbleHit = this.raycastShieldBubbles(params.origin, rayDir, def.range);
+      const bubbleMaxDist = bubbleHit ? bubbleHit.distance : def.range;
+
+      const worldHit = this.collision.raycastWorld(params.origin, rayDir, bubbleMaxDist, {
         checkBuilds: true,
         checkProps: true,
         props,
       });
 
-      const actorMaxDist = worldHit.hit ? worldHit.distance : def.range;
+      const entityMaxDist = worldHit.hit ? worldHit.distance : bubbleMaxDist;
       const actorHit = this.raycastActors(
         params.origin,
         rayDir,
-        actorMaxDist,
+        entityMaxDist,
         params.actor.id,
       );
-      const llamaHit = this.raycastLlamas(params.origin, rayDir, actorMaxDist);
+      const llamaHit = this.raycastLlamas(params.origin, rayDir, entityMaxDist);
+      const vehicleHit = this.raycastVehicles(
+        params.origin,
+        rayDir,
+        entityMaxDist,
+        vBridge,
+        params.actor.id,
+      );
 
-      const endPoint = actorHit
-        ? actorHit.point
-        : llamaHit && (!worldHit.hit || llamaHit.distance <= worldHit.distance)
-          ? llamaHit.point
-          : worldHit.hit
-            ? worldHit.point
-            : {
-                x: params.origin.x + rayDir.x * def.range,
-                y: params.origin.y + rayDir.y * def.range,
-                z: params.origin.z + rayDir.z * def.range,
-              };
+      let chosenType: 'actor' | 'llama' | 'vehicle' | 'world' | 'bubble' | 'none' = 'none';
+      let chosenDist = bubbleMaxDist;
+      if (worldHit.hit && worldHit.distance <= chosenDist) {
+        chosenType = 'world';
+        chosenDist = worldHit.distance;
+      }
+      if (vehicleHit && vehicleHit.distance <= chosenDist) {
+        chosenType = 'vehicle';
+        chosenDist = vehicleHit.distance;
+      }
+      if (llamaHit && llamaHit.distance <= chosenDist) {
+        chosenType = 'llama';
+        chosenDist = llamaHit.distance;
+      }
+      if (actorHit && actorHit.distance <= chosenDist) {
+        chosenType = 'actor';
+        chosenDist = actorHit.distance;
+      }
+      if (chosenType === 'none' && bubbleHit) {
+        chosenType = 'bubble';
+      }
+
+      const endPoint =
+        chosenType === 'actor'
+          ? actorHit!.point
+          : chosenType === 'llama'
+            ? llamaHit!.point
+            : chosenType === 'vehicle'
+              ? vehicleHit!.point
+              : chosenType === 'world'
+                ? worldHit.point
+                : chosenType === 'bubble'
+                  ? bubbleHit!.point
+                  : {
+                      x: params.origin.x + rayDir.x * def.range,
+                      y: params.origin.y + rayDir.y * def.range,
+                      z: params.origin.z + rayDir.z * def.range,
+                    };
 
       const isMythicPulse = params.item.weaponId === 'mythic_blade_rifle';
       this.eventBus.emit('vfx:tracer', {
@@ -785,7 +1164,12 @@ export class WeaponSystem {
         width: isMythicPulse ? 0.09 : undefined,
       });
 
-      if (actorHit) {
+      const structDmg = Math.max(
+        1,
+        Math.round((def.structureDamage * (RARITY_MULTIPLIER[params.item.rarity] ?? 1)) / pellets),
+      );
+
+      if (chosenType === 'actor' && actorHit) {
         const pelletDmg =
           computeWeaponDamage(
             params.item.weaponId,
@@ -807,49 +1191,33 @@ export class WeaponSystem {
             distance: actorHit.distance,
           });
         }
-      } else if (llamaHit && (!worldHit.hit || llamaHit.distance <= worldHit.distance)) {
-        const structDmg = Math.max(
-          1,
-          Math.round((def.structureDamage * (RARITY_MULTIPLIER[params.item.rarity] ?? 1)) / pellets),
-        );
+      } else if (chosenType === 'llama' && llamaHit) {
         this.propsBridge.damageLlama?.(llamaHit.llama.id, structDmg, llamaHit.point);
         this.eventBus.emit('vfx:impact', {
           position: llamaHit.point,
           normal: llamaHit.normal,
           material: 'wood',
         });
-      } else if (worldHit.hit) {
-        const structDmg = Math.max(
-          1,
-          Math.round((def.structureDamage * (RARITY_MULTIPLIER[params.item.rarity] ?? 1)) / pellets),
-        );
-
-        if (worldHit.targetType === 'build' && worldHit.targetId) {
-          this.building.damagePiece(worldHit.targetId, structDmg);
-          this.eventBus.emit('vfx:impact', {
-            position: worldHit.point,
-            normal: worldHit.normal,
-            material: worldHit.material ?? 'wood',
-          });
-        } else if (worldHit.targetType === 'prop' && worldHit.targetId) {
-          const propRes = this.propsBridge.damageProp(
-            worldHit.targetId,
-            structDmg,
-            worldHit.point,
-            false,
-          );
-          this.eventBus.emit('vfx:impact', {
-            position: worldHit.point,
-            normal: worldHit.normal,
-            material: propRes.matType,
-          });
-        } else {
-          this.eventBus.emit('vfx:impact', {
-            position: worldHit.point,
-            normal: worldHit.normal,
-            material: worldHit.material ?? 'dirt',
-          });
-        }
+      } else if (chosenType === 'vehicle' && vehicleHit) {
+        vBridge?.damageVehicle(vehicleHit.vehicle.id, structDmg, vehicleHit.point);
+        this.eventBus.emit('vfx:impact', {
+          position: vehicleHit.point,
+          normal: vehicleHit.normal,
+          material: 'metal',
+        });
+      } else if (chosenType === 'world' && worldHit.hit) {
+        this.applyWorldHitDamage(worldHit, structDmg);
+      } else if (chosenType === 'bubble' && bubbleHit) {
+        this.eventBus.emit('vfx:impact', {
+          position: bubbleHit.point,
+          normal: bubbleHit.normal,
+          material: 'shield',
+        });
+        this.eventBus.emit('sound:play', {
+          id: 'shield_hit',
+          position: bubbleHit.point,
+          spatial: true,
+        });
       }
     }
 
@@ -940,7 +1308,7 @@ export class WeaponSystem {
         z: (p.gz + 0.5) * GRID_XZ,
       };
       const d = dist3D(impactPos, center);
-      if (d <= proj.splashRadius + 2.2) {
+      if (d <= proj.splashRadius + 2.2 && !this.isBlockedByShieldBubble(impactPos, center)) {
         const falloff = clamp(1 - (d / (proj.splashRadius + 2.2)) * 0.5, 0.4, 1.0);
         this.building.damagePiece(p.id, Math.round(proj.structureDamage * falloff));
       }
@@ -951,8 +1319,9 @@ export class WeaponSystem {
     for (let i = 0; i < props.length; i++) {
       const prop = props[i];
       if (prop.destroyed) continue;
-      const d = dist3D(impactPos, { x: prop.x, y: prop.y + prop.height * 0.5, z: prop.z });
-      if (d <= proj.splashRadius + prop.radius) {
+      const center = { x: prop.x, y: prop.y + prop.height * 0.5, z: prop.z };
+      const d = dist3D(impactPos, center);
+      if (d <= proj.splashRadius + prop.radius && !this.isBlockedByShieldBubble(impactPos, center)) {
         this.propsBridge.damageProp(prop.id, proj.structureDamage, impactPos, false);
       }
     }
@@ -962,9 +1331,27 @@ export class WeaponSystem {
     for (let i = 0; i < llamas.length; i++) {
       const llama = llamas[i];
       if (llama.opened) continue;
-      const d = dist3D(impactPos, { x: llama.x, y: llama.y + 0.8, z: llama.z });
-      if (d <= proj.splashRadius + 1.0) {
+      const center = { x: llama.x, y: llama.y + 0.8, z: llama.z };
+      const d = dist3D(impactPos, center);
+      if (d <= proj.splashRadius + 1.0 && !this.isBlockedByShieldBubble(impactPos, center)) {
         this.propsBridge.damageLlama?.(llama.id, proj.structureDamage, impactPos);
+      }
+    }
+
+    // Damage Vehicles within splash radius
+    const vehicles = this.vehicleBridge?.getVehicles() ?? [];
+    for (let i = 0; i < vehicles.length; i++) {
+      const veh = vehicles[i];
+      if (veh.destroyed || veh.hp <= 0) continue;
+      const center = { x: veh.x, y: veh.y + 0.65, z: veh.z };
+      const d = dist3D(impactPos, center);
+      if (d <= proj.splashRadius + 1.4 && !this.isBlockedByShieldBubble(impactPos, center)) {
+        const falloff = clamp(1 - (d / (proj.splashRadius + 1.4)) * 0.5, 0.4, 1.0);
+        this.vehicleBridge?.damageVehicle(
+          veh.id,
+          Math.round(proj.structureDamage * falloff),
+          impactPos,
+        );
       }
     }
 
@@ -980,7 +1367,7 @@ export class WeaponSystem {
           z: actor.position.z,
         };
         const d = dist3D(impactPos, center);
-        if (d <= proj.splashRadius) {
+        if (d <= proj.splashRadius && !this.isBlockedByShieldBubble(impactPos, center)) {
           const falloff = clamp(1 - (d / proj.splashRadius) * 0.65, 0.35, 1.0);
           const splashDmg = Math.round(proj.damage * falloff);
           this.applyActorDamage(
@@ -1115,8 +1502,39 @@ export class WeaponSystem {
     }
   }
 
+  private deployShieldBubble(proj: ActiveProjectile, impactPos: Vec3Like): void {
+    const radius = proj.splashRadius > 0 ? proj.splashRadius : 5.2;
+    const duration = 18;
+    const id = `shield_bubble_${this.nextBubbleId++}`;
+    this.shieldBubbles.push({
+      id,
+      position: { ...impactPos },
+      radius,
+      remaining: duration,
+    });
+    this.eventBus.emit('vfx:shield_bubble', {
+      id,
+      position: { ...impactPos },
+      radius,
+      duration,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'shield_bubble_deploy',
+      position: { ...impactPos },
+      spatial: true,
+    });
+  }
+
   update(dt: number): void {
     const safeDt = clamp(dt, 0, 0.05);
+
+    // 0. Tick active Shield Bubbles (18s duration)
+    for (let i = this.shieldBubbles.length - 1; i >= 0; i--) {
+      this.shieldBubbles[i].remaining -= safeDt;
+      if (this.shieldBubbles[i].remaining <= 0) {
+        this.shieldBubbles.splice(i, 1);
+      }
+    }
 
     // 1. Update queued burst shots (Burst AR)
     for (let i = this.pendingBursts.length - 1; i >= 0; i--) {
@@ -1188,38 +1606,76 @@ export class WeaponSystem {
           z: stepDz / stepLen,
         };
 
-        const worldHit = this.collision.raycastWorld(prevPos, stepDir, stepLen, {
+        const bubbleHit = proj.isShieldBubble
+          ? null
+          : this.raycastShieldBubbles(prevPos, stepDir, stepLen);
+        const maxStepDist = bubbleHit ? bubbleHit.distance : stepLen;
+
+        const worldHit = this.collision.raycastWorld(prevPos, stepDir, maxStepDist, {
           checkBuilds: true,
           checkProps: true,
           props,
         });
+        const entityMaxDist = worldHit.hit ? worldHit.distance : maxStepDist;
         const actorHit = this.raycastActors(
           prevPos,
           stepDir,
-          worldHit.hit ? worldHit.distance : stepLen,
+          entityMaxDist,
+          proj.ownerId,
+        );
+        const vehicleHit = this.raycastVehicles(
+          prevPos,
+          stepDir,
+          entityMaxDist,
+          this.vehicleBridge,
           proj.ownerId,
         );
 
-        const nextPos = actorHit
-          ? actorHit.point
-          : worldHit.hit
-            ? worldHit.point
-            : {
-                x: prevPos.x + stepDx,
-                y: prevPos.y + stepDy,
-                z: prevPos.z + stepDz,
-              };
+        let hitType: 'actor' | 'vehicle' | 'world' | 'bubble' | 'none' = 'none';
+        let chosenDist = maxStepDist;
+        if (worldHit.hit && worldHit.distance <= chosenDist) {
+          hitType = 'world';
+          chosenDist = worldHit.distance;
+        }
+        if (vehicleHit && vehicleHit.distance <= chosenDist) {
+          hitType = 'vehicle';
+          chosenDist = vehicleHit.distance;
+        }
+        if (actorHit && actorHit.distance <= chosenDist) {
+          hitType = 'actor';
+          chosenDist = actorHit.distance;
+        }
+        if (hitType === 'none' && bubbleHit) {
+          hitType = 'bubble';
+        }
+
+        const nextPos =
+          hitType === 'actor'
+            ? actorHit!.point
+            : hitType === 'vehicle'
+              ? vehicleHit!.point
+              : hitType === 'world'
+                ? worldHit.point
+                : hitType === 'bubble'
+                  ? bubbleHit!.point
+                  : {
+                      x: prevPos.x + stepDx,
+                      y: prevPos.y + stepDy,
+                      z: prevPos.z + stepDz,
+                    };
 
         const tracerColor =
           proj.weaponId === 'rocket_launcher'
             ? 0xff5a2a
-            : proj.isShockwave
-              ? 0xa855f7
-              : proj.isSplashHeal
-                ? 0x22d3ee
-                : proj.isThrowable
-                  ? 0xf59e0b
-                  : 0xfff3b0;
+            : proj.isShieldBubble
+              ? 0x38bdf8
+              : proj.isShockwave
+                ? 0xa855f7
+                : proj.isSplashHeal
+                  ? 0x22d3ee
+                  : proj.isThrowable
+                    ? 0xf59e0b
+                    : 0xfff3b0;
         const tracerWidth =
           proj.weaponId === 'rocket_launcher'
             ? 0.14
@@ -1236,10 +1692,17 @@ export class WeaponSystem {
 
         proj.position = nextPos;
 
-        if (actorHit || worldHit.hit) {
+        if (hitType !== 'none') {
           if (proj.fuseRemaining !== undefined) {
-            // Bouncing frag grenade
-            const n = actorHit ? actorHit.normal : worldHit.normal;
+            // Bouncing frag grenade (including off shield bubble shell!)
+            const n =
+              hitType === 'actor'
+                ? actorHit!.normal
+                : hitType === 'vehicle'
+                  ? vehicleHit!.normal
+                  : hitType === 'bubble'
+                    ? bubbleHit!.normal
+                    : worldHit.normal;
             const vn = proj.velocity.x * n.x + proj.velocity.y * n.y + proj.velocity.z * n.z;
             if (vn < 0) {
               const restitution = 0.35;
@@ -1268,6 +1731,10 @@ export class WeaponSystem {
               proj.velocity = { x: 0, y: 0, z: 0 };
               proj.settled = true;
             }
+          } else if (proj.isShieldBubble) {
+            this.deployShieldBubble(proj, nextPos);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
           } else if (proj.isShockwave) {
             this.detonateShockwave(proj, nextPos);
             proj.alive = false;
@@ -1277,11 +1744,30 @@ export class WeaponSystem {
             proj.alive = false;
             this.projectiles.splice(i, 1);
           } else if (proj.splashRadius > 0) {
-            this.detonateExplosive(proj, nextPos);
+            const impactPos =
+              hitType === 'bubble' && bubbleHit
+                ? {
+                    x: nextPos.x + bubbleHit.normal.x * 0.08,
+                    y: nextPos.y + bubbleHit.normal.y * 0.08,
+                    z: nextPos.z + bubbleHit.normal.z * 0.08,
+                  }
+                : nextPos;
+            this.detonateExplosive(proj, impactPos);
             proj.alive = false;
             this.projectiles.splice(i, 1);
           } else {
-            if (actorHit) {
+            if (hitType === 'bubble' && bubbleHit) {
+              this.eventBus.emit('vfx:impact', {
+                position: bubbleHit.point,
+                normal: bubbleHit.normal,
+                material: 'shield',
+              });
+              this.eventBus.emit('sound:play', {
+                id: 'shield_hit',
+                position: bubbleHit.point,
+                spatial: true,
+              });
+            } else if (hitType === 'actor' && actorHit) {
               const travelDist = dist3D(proj.startPos, nextPos);
               const dmg = computeWeaponDamage(
                 proj.weaponId,
@@ -1311,33 +1797,19 @@ export class WeaponSystem {
                 travelDist,
                 proj.isPlayer,
               );
-            } else if (worldHit.hit) {
-              if (worldHit.targetType === 'build' && worldHit.targetId) {
-                this.building.damagePiece(worldHit.targetId, proj.structureDamage);
-                this.eventBus.emit('vfx:impact', {
-                  position: worldHit.point,
-                  normal: worldHit.normal,
-                  material: worldHit.material ?? 'wood',
-                });
-              } else if (worldHit.targetType === 'prop' && worldHit.targetId) {
-                const propRes = this.propsBridge.damageProp(
-                  worldHit.targetId,
-                  proj.structureDamage,
-                  worldHit.point,
-                  false,
-                );
-                this.eventBus.emit('vfx:impact', {
-                  position: worldHit.point,
-                  normal: worldHit.normal,
-                  material: propRes.matType,
-                });
-              } else {
-                this.eventBus.emit('vfx:impact', {
-                  position: worldHit.point,
-                  normal: worldHit.normal,
-                  material: worldHit.material ?? 'dirt',
-                });
-              }
+            } else if (hitType === 'vehicle' && vehicleHit) {
+              this.vehicleBridge?.damageVehicle(
+                vehicleHit.vehicle.id,
+                proj.structureDamage,
+                vehicleHit.point,
+              );
+              this.eventBus.emit('vfx:impact', {
+                position: vehicleHit.point,
+                normal: vehicleHit.normal,
+                material: 'metal',
+              });
+            } else if (hitType === 'world' && worldHit.hit) {
+              this.applyWorldHitDamage(worldHit, proj.structureDamage);
             }
             proj.alive = false;
             this.projectiles.splice(i, 1);
@@ -1350,5 +1822,6 @@ export class WeaponSystem {
   clear(): void {
     this.projectiles = [];
     this.pendingBursts = [];
+    this.shieldBubbles = [];
   }
 }

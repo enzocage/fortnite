@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   EMOTES,
   EventBus,
@@ -18,10 +19,14 @@ import type {
   HUDState,
   MaterialType,
   MatchSummary,
+  VaultEntity,
+  VehicleEntity,
   WeaponId,
+  WeatherKind,
 } from '../../types';
 import {
   BOSS_POI_LABELS,
+  cloneSettings,
   computeCareerLevelProgress,
   computeFallbackStormDistance,
   computeLevelFromXp,
@@ -29,11 +34,15 @@ import {
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
+  formatKeyCodeLabel,
   formatSafeZoneDistance,
   formatSurvivalTime,
+  formatVehicleKindLabel,
+  formatWeatherLabel,
   FullMapOverlay,
   getAmmoIconSvg,
   getBearingDeg,
+  getBountyTargetSvg,
   getBuildIconSvg,
   getContextualHudHints,
   getCrownSvg,
@@ -45,15 +54,22 @@ import {
   getSkullSvg,
   getStormEyeSvg,
   getTotalXpForLevel,
+  getVaultKeySvg,
+  getVaultLockSvg,
+  getVehicleIconSvg,
   getWeaponSvg,
+  getWeatherIconSvg,
+  KEYBIND_ACTION_DEFS,
   loadCareerStats,
   loadStoredLobbyConfig,
   loadStoredSettings,
   mapNormToWorld,
   MAX_CAREER_LEVEL,
+  normalizeBoostChargePct,
   normalizeDegrees,
   recordMatchCareerStats,
   resetCareerStats,
+  resolveKeybinds,
   UIManager,
   worldToMapNorm,
   xpForLevelStep,
@@ -237,13 +253,52 @@ describe('UIHelpers', () => {
     for (const poiId of Object.keys(BOSS_POI_LABELS)) {
       expect(POIS.some((p) => p.id === poiId)).toBe(true);
     }
+
+    // Wave-2 helpers: keybinds, weather, vehicles, boost normalization
+    expect(formatKeyCodeLabel('KeyZ')).toBe('Z');
+    expect(formatKeyCodeLabel('Digit4')).toBe('4');
+    expect(formatKeyCodeLabel('ShiftLeft')).toBe('L-SHIFT');
+    expect(formatKeyCodeLabel('ControlLeft')).toBe('CTRL');
+    expect(formatKeyCodeLabel('Space')).toBe('SPACE');
+
+    const resolved = resolveKeybinds({ buildWall: 'KeyQ', repair: 'KeyR' });
+    expect(resolved.buildWall).toBe('KeyQ');
+    expect(resolved.repair).toBe('KeyR');
+    expect(resolved.interact).toBe(DEFAULT_KEYBINDS.interact);
+
+    const customHints = getContextualHudHints(
+      { canRepairBuild: true, isSliding: false, isZiplining: false },
+      { repair: 'KeyT' },
+    );
+    expect(customHints[0].key).toBe('T');
+
+    const cloned = cloneSettings(DEFAULT_SETTINGS);
+    cloned.keybinds!.map = 'Tab';
+    expect(DEFAULT_KEYBINDS.map).toBe('KeyM');
+
+    const weathers: WeatherKind[] = [
+      'clear',
+      'golden_hour',
+      'overcast',
+      'rain',
+      'storm_front',
+    ];
+    for (const w of weathers) {
+      expect(formatWeatherLabel(w).length).toBeGreaterThan(2);
+    }
+    expect(formatVehicleKindLabel('hover_atv')).toBe('HOVER ATV');
+    expect(formatVehicleKindLabel('cyber_bike')).toBe('CYBER BIKE');
+    expect(normalizeBoostChargePct(0.65)).toBeCloseTo(65, 5);
+    expect(normalizeBoostChargePct(1)).toBeCloseTo(100, 5);
+    expect(normalizeBoostChargePct(82)).toBeCloseTo(82, 5);
+    expect(normalizeBoostChargePct(-0.5)).toBe(0);
   });
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 21 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBeGreaterThanOrEqual(19);
+    expect(weaponIds.length).toBe(21);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -255,13 +310,15 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all 5 Wave-1 icons have rich multi-element custom artwork
+    // Verify all 5 Wave-1 + 2 Wave-2 icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
       'shockwave_grenade',
       'frag_grenade',
       'chug_splash',
+      'grappler',
+      'shield_bubble',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -271,7 +328,7 @@ describe('WeaponIcons & SVG assets', () => {
     }
   });
 
-  it('returns valid <svg> markup for build pieces, materials, ammo, and HUD emblems', () => {
+  it('returns valid <svg> markup for build pieces, materials, ammo, and Wave-1/Wave-2 HUD emblems', () => {
     const builds: BuildPieceType[] = ['wall', 'floor', 'ramp', 'roof'];
     for (const b of builds) {
       const svg = getBuildIconSvg(b);
@@ -293,7 +350,22 @@ describe('WeaponIcons & SVG assets', () => {
       expect(svg.includes('</svg>')).toBe(true);
     }
 
-    for (const emblem of [getSkullSvg(), getStormEyeSvg(), getCrownSvg()]) {
+    for (const emblem of [
+      getSkullSvg(),
+      getStormEyeSvg(),
+      getCrownSvg(),
+      getVaultKeySvg(),
+      getVaultLockSvg(false),
+      getVaultLockSvg(true),
+      getBountyTargetSvg(),
+      getVehicleIconSvg('hover_atv'),
+      getVehicleIconSvg('cyber_bike'),
+      getWeatherIconSvg('clear'),
+      getWeatherIconSvg('golden_hour'),
+      getWeatherIconSvg('overcast'),
+      getWeatherIconSvg('rain'),
+      getWeatherIconSvg('storm_front'),
+    ]) {
       expect(emblem.trim().startsWith('<svg')).toBe(true);
       expect(emblem.includes('</svg>')).toBe(true);
     }
@@ -840,8 +912,450 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
     expect(legend?.textContent).toContain('ENERGY ZIPLINE');
     expect(legend?.textContent).toContain('SAFE ZONE');
     expect(legend?.textContent).toContain('NAMED POI BOSS ZONE');
+    expect(legend?.textContent).toContain('VEHICLE');
+    expect(legend?.textContent).toContain('BOSS VAULT');
 
     fullMap.dispose();
     ui.dispose();
+  });
+
+  it('renders Wave 2 HUD elements (Vehicle, Boss Bar, Bounty Card & Toast, Vault Keys, Weather, Grappler, Spectator Bar)', () => {
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    let spectateNextCalls = 0;
+    let spectateSummaryCalls = 0;
+
+    const ui = new UIManager(root as unknown as HTMLElement, bus, {
+      onSpectateNext: () => {
+        spectateNextCalls++;
+      },
+      onSpectateMatchSummary: () => {
+        spectateSummaryCalls++;
+      },
+    });
+    ui.setPhase('playing');
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        currentBiome: 'volcanic',
+        currentPoiName: 'SCORCHED CALDERA',
+        weather: 'storm_front',
+        activeVaultKeys: 2,
+        grapplerCharges: 7,
+        vehicle: {
+          kind: 'cyber_bike',
+          speedKmh: 88,
+          hp: 320,
+          maxHp: 400,
+          boostCharge: 0.75,
+          isBoosting: true,
+        },
+        nearbyBoss: {
+          name: 'Obsidian Titan',
+          hp: 120,
+          maxHp: 150,
+          shield: 90,
+          maxShield: 150,
+          distance: 28,
+        },
+        activeBounty: {
+          targetName: 'NEON_VIPER',
+          distance: 95,
+          timeRemaining: 12,
+          rewardLabel: '+150 GOLD',
+        },
+      }),
+    );
+
+    // Location chip shows full name without truncation
+    const locChip = root.findByClass('location');
+    expect(locChip?.textContent).toBe('SCORCHED CALDERA • VOLCANIC RIFT');
+
+    // Weather pill
+    const weatherPill = root.findByClass('weather');
+    expect(weatherPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(weatherPill?.classList.contains('weather-storm_front')).toBe(true);
+    expect(weatherPill?.textContent).toContain('STORM FRONT');
+
+    // Vault Key Badge
+    const vaultBadge = root.findByClass('fdr-vault-key-badge');
+    expect(vaultBadge?.classList.contains('fdr-hidden')).toBe(false);
+    expect(vaultBadge?.textContent).toContain('2 VAULT KEYS');
+
+    // Grappler Charges Badge
+    const grapplerBadge = root.findByClass('fdr-grappler-badge');
+    expect(grapplerBadge?.classList.contains('fdr-hidden')).toBe(false);
+    expect(grapplerBadge?.textContent).toContain('7 CHARGES');
+
+    // Vehicle Dashboard
+    const vehDash = root.findByClass('fdr-vehicle-dash');
+    expect(vehDash?.classList.contains('fdr-hidden')).toBe(false);
+    expect(vehDash?.textContent).toContain('CYBER BIKE');
+    expect(vehDash?.textContent).toContain('88 KM/H');
+    expect(vehDash?.textContent).toContain('320 / 400');
+    expect(vehDash?.textContent).toContain('[E] EXIT');
+
+    // Boss Encounter Healthbar
+    const bossBar = root.findByClass('fdr-boss-bar');
+    expect(bossBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(bossBar?.textContent).toContain('OBSIDIAN TITAN');
+    expect(bossBar?.textContent).toContain('HP 120/150');
+    expect(bossBar?.textContent).toContain('SHD 90/150');
+    expect(bossBar?.textContent).toContain('28M');
+    const bossShieldFill = bossBar?.findByClass('fdr-boss-fill');
+    expect(bossShieldFill?.style.width).toBe('60.0%');
+
+    // Active Bounty Card
+    const bountyCard = root.findByClass('fdr-bounty-card');
+    expect(bountyCard?.classList.contains('fdr-hidden')).toBe(false);
+    expect(bountyCard?.classList.contains('urgent')).toBe(true);
+    expect(bountyCard?.textContent).toContain('NEON_VIPER');
+    expect(bountyCard?.textContent).toContain('95M');
+    expect(bountyCard?.textContent).toContain('0:12');
+    expect(bountyCard?.textContent).toContain('+150 GOLD');
+
+    // Bounty EventBus toast
+    bus.emit('ui:bounty', {
+      title: 'BOUNTY CONTRACT',
+      targetName: 'NEON_VIPER',
+      tone: 'start',
+    });
+    const bountyToast = root.findByClass('fdr-bounty-toast');
+    expect(bountyToast?.dataset.bountyTone).toBe('start');
+    expect(bountyToast?.textContent).toContain('BOUNTY CONTRACT');
+    expect(bountyToast?.textContent).toContain('NEON_VIPER');
+
+    // Live Spectator Bar + Interactive Buttons
+    ui.setPhase('eliminated');
+    ui.updateHUD(
+      makeBaseHUDState({
+        phase: 'eliminated',
+        vehicle: null,
+        nearbyBoss: null,
+        activeBounty: null,
+        activeVaultKeys: 0,
+        grapplerCharges: null,
+        spectating: {
+          targetName: 'CYBER_ACE',
+          targetHp: 74,
+          targetShield: 45,
+          targetKills: 6,
+          aliveCount: 4,
+        },
+      }),
+    );
+
+    const specBar = root.findByClass('fdr-spectator-bar');
+    expect(specBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(specBar?.textContent).toContain('CYBER_ACE');
+    expect(specBar?.textContent).toContain('74 / 100');
+    expect(specBar?.textContent).toContain('45 / 100');
+    expect(specBar?.textContent).toContain('6 ELIMS');
+    expect(specBar?.textContent).toContain('4 ALIVE');
+    expect(root.findByClass('fdr-vitals-stack')?.classList.contains('fdr-hidden')).toBe(
+      true,
+    );
+    expect(vehDash?.classList.contains('fdr-hidden')).toBe(true);
+    expect(bossBar?.classList.contains('fdr-hidden')).toBe(true);
+
+    const nextBtn = specBar?.findByClass('next');
+    const summaryBtn = specBar?.findByClass('summary');
+    nextBtn?.click();
+    summaryBtn?.click();
+    expect(spectateNextCalls).toBe(1);
+    expect(spectateSummaryCalls).toBe(1);
+
+    ui.dispose();
+  });
+
+  it('draws vehicles and vaults on FullMapOverlay when forwarded from UIManager', () => {
+    const drawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const mockCtx = {
+      clearRect: (...args: unknown[]) => drawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => drawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => drawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => drawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => drawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      arc: (...args: unknown[]) => drawCalls.push({ op: 'arc', args }),
+      fill: () => drawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => drawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => drawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => drawCalls.push({ op: 'rotate', args }),
+      setLineDash: () => {},
+      fillText: (...args: unknown[]) => drawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => drawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => mockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+    ui.setPhase('playing');
+
+    const vehicles: VehicleEntity[] = [
+      {
+        id: 'v1',
+        kind: 'hover_atv',
+        x: 100,
+        y: 10,
+        z: 50,
+        yaw: 0,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 400,
+        maxHp: 400,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: null,
+        destroyed: false,
+      },
+      {
+        id: 'v2',
+        kind: 'cyber_bike',
+        x: -120,
+        y: 10,
+        z: -80,
+        yaw: 0,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 0,
+        maxHp: 300,
+        boostCharge: 0,
+        isBoosting: false,
+        driverId: null,
+        destroyed: true,
+      },
+    ];
+    const vaults: VaultEntity[] = [
+      {
+        id: 'vault-1',
+        poiId: 'scorched_caldera',
+        bossName: 'Obsidian Titan',
+        x: -175,
+        y: 20,
+        z: 125,
+        unlocked: false,
+        opened: false,
+      },
+      {
+        id: 'vault-2',
+        poiId: 'frostpeak_citadel',
+        bossName: 'Glacier Monarch',
+        x: -10,
+        y: 36,
+        z: -245,
+        unlocked: true,
+        opened: true,
+      },
+    ];
+
+    // Forward through UIManager directly -> opens FullMapOverlay and renders canvas
+    ui.setWorldVehicles(vehicles);
+    ui.setWorldVaults(vaults);
+    ui.toggleFullMap(true);
+    drawCalls.length = 0;
+    ui.updateHUD(makeBaseHUDState());
+
+    const v1Norm = worldToMapNorm(100, 50);
+    const vault1Norm = worldToMapNorm(-175, 125);
+    const v2Norm = worldToMapNorm(-120, -80);
+
+    const translatedToV1 = drawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - v1Norm.nx * 640) < 0.5 &&
+        Math.abs((c.args[1] as number) - v1Norm.nz * 640) < 0.5,
+    );
+    const translatedToVault1 = drawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - vault1Norm.nx * 640) < 0.5 &&
+        Math.abs((c.args[1] as number) - vault1Norm.nz * 640) < 0.5,
+    );
+    const translatedToDestroyedV2 = drawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - v2Norm.nx * 640) < 0.5 &&
+        Math.abs((c.args[1] as number) - v2Norm.nz * 640) < 0.5,
+    );
+
+    expect(translatedToV1).toBe(true);
+    expect(translatedToVault1).toBe(true);
+    expect(translatedToDestroyedV2).toBe(false);
+
+    ui.dispose();
+  });
+
+  it('supports Settings Keybind Remapping, persistence via onSettingsChange, HUD label sync, and RESET KEYBINDS', () => {
+    const prevWindow = (globalThis as Record<string, unknown>).window;
+    const store = new Map<string, string>();
+    const windowListeners = new Map<string, Array<(e: unknown) => void>>();
+
+    (globalThis as Record<string, unknown>).window = {
+      innerWidth: 1280,
+      innerHeight: 720,
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+      addEventListener: (type: string, fn: (e: unknown) => void) => {
+        const arr = windowListeners.get(type) ?? [];
+        arr.push(fn);
+        windowListeners.set(type, arr);
+      },
+      removeEventListener: (type: string, fn: (e: unknown) => void) => {
+        const arr = windowListeners.get(type);
+        if (!arr) return;
+        const idx = arr.indexOf(fn);
+        if (idx >= 0) arr.splice(idx, 1);
+      },
+    };
+
+    try {
+      const root = new MockElement('div');
+      const bus = new EventBus();
+      const changes: Array<ReturnType<UIManager['getSettings']>> = [];
+      const ui = new UIManager(root as unknown as HTMLElement, bus, {
+        onSettingsChange: (s) => changes.push(s),
+      });
+
+      // Switch to SETTINGS tab
+      const navTabs = root.findAllByClass('fdr-nav-tab');
+      navTabs[3].click();
+
+      const keybindBtns = root.findAllByClass('fdr-keybind-btn');
+      expect(keybindBtns.length).toBe(KEYBIND_ACTION_DEFS.length);
+
+      const wallBtn = keybindBtns.find(
+        (b) => b.dataset.keybindAction === 'buildWall',
+      );
+      expect(wallBtn?.textContent).toBe('Z');
+
+      // Click to enter listening state
+      wallBtn?.click();
+      const wallBtnListening = root
+        .findAllByClass('fdr-keybind-btn')
+        .find((b) => b.dataset.keybindAction === 'buildWall');
+      expect(wallBtnListening?.classList.contains('listening')).toBe(true);
+      expect(wallBtnListening?.textContent).toBe('PRESS A KEY...');
+
+      // Dispatch keydown 'KeyU'
+      for (const fn of [...(windowListeners.get('keydown') ?? [])]) {
+        fn({
+          code: 'KeyU',
+          key: 'u',
+          preventDefault: () => {},
+          stopPropagation: () => {},
+        });
+      }
+
+      expect(changes.length).toBeGreaterThanOrEqual(1);
+      expect(changes[changes.length - 1].keybinds?.buildWall).toBe('KeyU');
+      expect(ui.getSettings().keybinds?.buildWall).toBe('KeyU');
+
+      // Remap interact -> KeyH and verify Escape cancels listening cleanly
+      const interactBtn = root
+        .findAllByClass('fdr-keybind-btn')
+        .find((b) => b.dataset.keybindAction === 'interact');
+      interactBtn?.click();
+      for (const fn of [...(windowListeners.get('keydown') ?? [])]) {
+        fn({
+          code: 'Escape',
+          key: 'Escape',
+          preventDefault: () => {},
+          stopPropagation: () => {},
+        });
+      }
+      expect(ui.getSettings().keybinds?.interact).toBe(DEFAULT_KEYBINDS.interact);
+
+      const interactBtn2 = root
+        .findAllByClass('fdr-keybind-btn')
+        .find((b) => b.dataset.keybindAction === 'interact');
+      interactBtn2?.click();
+      for (const fn of [...(windowListeners.get('keydown') ?? [])]) {
+        fn({
+          code: 'KeyJ',
+          key: 'j',
+          preventDefault: () => {},
+          stopPropagation: () => {},
+        });
+      }
+      expect(ui.getSettings().keybinds?.interact).toBe('KeyJ');
+
+      // Remapped button updates and storage persists
+      const wallBtnUpdated = root
+        .findAllByClass('fdr-keybind-btn')
+        .find((b) => b.dataset.keybindAction === 'buildWall');
+      expect(wallBtnUpdated?.textContent).toBe('U');
+      expect(loadStoredSettings().keybinds?.buildWall).toBe('KeyU');
+
+      // HUD reflects remapped buildWall & interact keys
+      ui.setPhase('playing');
+      ui.updateHUD(
+        makeBaseHUDState({
+          vehicle: {
+            kind: 'hover_atv',
+            speedKmh: 45,
+            hp: 400,
+            maxHp: 400,
+            boostCharge: 1,
+            isBoosting: false,
+          },
+        }),
+      );
+      const buildKeys = root.findAllByClass('fdr-build-key');
+      expect(buildKeys[0]?.textContent).toBe('U');
+      expect(root.findByClass('fdr-vehicle-hint')?.textContent).toContain(
+        '[J] EXIT',
+      );
+
+      // Return to lobby -> Reset keybinds restores defaults
+      ui.setPhase('lobby');
+      const resetKbBtn = root.findByClass('fdr-keybind-reset-btn');
+      expect(resetKbBtn).not.toBeNull();
+      resetKbBtn?.click();
+
+      expect(ui.getSettings().keybinds?.buildWall).toBe(
+        DEFAULT_KEYBINDS.buildWall,
+      );
+      expect(buildKeys[0]?.textContent).toBe('Z');
+
+      ui.dispose();
+    } finally {
+      if (prevWindow === undefined) {
+        delete (globalThis as Record<string, unknown>).window;
+      } else {
+        (globalThis as Record<string, unknown>).window = prevWindow;
+      }
+    }
   });
 });

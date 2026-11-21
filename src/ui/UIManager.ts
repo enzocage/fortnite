@@ -11,6 +11,8 @@ import type {
   LaunchPadEntity,
   LobbyConfig,
   MatchSummary,
+  VaultEntity,
+  VehicleEntity,
   ZiplineEntity,
 } from '../types';
 import { type CareerStats, loadCareerStats } from './CareerProfile';
@@ -18,6 +20,7 @@ import { FullMapOverlay } from './FullMapOverlay';
 import { HUDManager } from './HUDManager';
 import { LobbyScreen, saveStoredSettings } from './LobbyScreen';
 import { MatchOverlay } from './MatchOverlay';
+import { cloneSettings } from './UIHelpers';
 
 export interface UIManagerCallbacks {
   onStartMatch?: (config: LobbyConfig) => void;
@@ -37,6 +40,8 @@ export interface UIManagerCallbacks {
   onEditConfirm?: () => void;
   onEditReset?: () => void;
   onPreviewEmote?: (emoteId: EmoteId) => void;
+  onSpectateNext?: () => void;
+  onSpectateMatchSummary?: () => void;
 }
 
 export class UIManager {
@@ -85,12 +90,15 @@ export class UIManager {
         this.callbacks.onEditTileToggle?.(tileIndex),
       onEditConfirm: () => this.callbacks.onEditConfirm?.(),
       onEditReset: () => this.callbacks.onEditReset?.(),
+      onSpectateNext: () => this.callbacks.onSpectateNext?.(),
+      onSpectateMatchSummary: () => this.callbacks.onSpectateMatchSummary?.(),
     });
 
     this.fullMap = new FullMapOverlay(this.containerEl, {
       onWaypointChange: (wp) => this.callbacks.onWaypointChange?.(wp),
       onCloseRequest: () => this.syncOverlaySuppression(),
     });
+    this.fullMap.setSettings(initialSettings);
 
     this.matchOverlay = new MatchOverlay(
       this.containerEl,
@@ -128,6 +136,14 @@ export class UIManager {
 
   setWorldTraversal(launchPads: LaunchPadEntity[], ziplines: ZiplineEntity[]): void {
     this.fullMap.setWorldTraversal(launchPads, ziplines);
+  }
+
+  setWorldVehicles(vehicles: VehicleEntity[]): void {
+    this.fullMap.setWorldVehicles(vehicles);
+  }
+
+  setWorldVaults(vaults: VaultEntity[]): void {
+    this.fullMap.setWorldVaults(vaults);
   }
 
   setPhase(phase: GamePhase): void {
@@ -174,6 +190,11 @@ export class UIManager {
     this.fullMap.setOpen(false);
     this.hud.setEmoteWheelOpen(false);
     this.matchOverlay.showMatchSummary(summary);
+    this.syncOverlaySuppression();
+  }
+
+  hideMatchSummary(): void {
+    this.matchOverlay.hideMatchSummary();
     this.syncOverlaySuppression();
   }
 
@@ -235,6 +256,14 @@ export class UIManager {
     this.matchOverlay.showPoiDiscover(poiName, subtitle);
   }
 
+  showBountyToast(ev: {
+    title: string;
+    targetName: string;
+    tone: 'start' | 'complete' | 'expired';
+  }): void {
+    this.matchOverlay.showBountyToast(ev);
+  }
+
   getCareerStats(): CareerStats {
     return loadCareerStats();
   }
@@ -248,10 +277,11 @@ export class UIManager {
   }
 
   private handleSettingsUpdate(settings: GameSettings): void {
-    const copy = { ...settings };
+    const copy = cloneSettings(settings);
     saveStoredSettings(copy);
     this.lobby.syncSettings(copy);
     this.hud.setSettings(copy);
+    this.fullMap.setSettings(copy);
     this.matchOverlay.setSettings(copy);
     this.callbacks.onSettingsChange?.(copy);
   }
@@ -273,6 +303,9 @@ export class UIManager {
       }),
       this.eventBus.on('ui:poi_discover', (ev) => {
         this.showPoiDiscover(ev.poiName, ev.subtitle);
+      }),
+      this.eventBus.on('ui:bounty', (ev) => {
+        this.showBountyToast(ev);
       }),
       this.eventBus.on('combat:siphon', (ev) => {
         this.hud.triggerSiphonFlash(ev.amount, ev.healthAdded, ev.shieldAdded, true);

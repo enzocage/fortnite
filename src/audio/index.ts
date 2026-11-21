@@ -4,6 +4,8 @@ export {
   CHEST_HUM_RADIUS,
   computeBusGains,
   getBiomeAmbienceProfile,
+  getMaxHearDistance,
+  getSoundPriority,
   MAX_CHEST_LOOPS,
   MAX_POLYPHONY,
   type AudioEngineOptions,

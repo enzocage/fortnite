@@ -1,4 +1,5 @@
 import {
+  DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   EMOTES,
   EventBus,
@@ -11,10 +12,17 @@ import type {
   EmoteId,
   GameSettings,
   GraphicsQuality,
+  KeybindMap,
   LobbyConfig,
 } from '../types';
 import { computeCareerLevelProgress, loadCareerStats } from './CareerProfile';
-import { getRarityMeta } from './UIHelpers';
+import {
+  cloneSettings,
+  formatKeyCodeLabel,
+  getRarityMeta,
+  KEYBIND_ACTION_DEFS,
+  resolveKeybinds,
+} from './UIHelpers';
 import { getCrownSvg, getWeaponSvg } from './WeaponIcons';
 
 export type LobbyTabId = 'play' | 'locker' | 'controls' | 'settings';
@@ -45,17 +53,21 @@ function getSafeStorage(): Storage | null {
 
 export function loadStoredSettings(): GameSettings {
   const storage = getSafeStorage();
-  if (!storage) return { ...DEFAULT_SETTINGS };
+  if (!storage) return cloneSettings(DEFAULT_SETTINGS);
   try {
     const raw = storage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
+    if (!raw) return cloneSettings(DEFAULT_SETTINGS);
     const parsed = JSON.parse(raw) as Partial<GameSettings>;
-    return {
+    return cloneSettings({
       ...DEFAULT_SETTINGS,
       ...parsed,
-    };
+      keybinds: {
+        ...DEFAULT_KEYBINDS,
+        ...(parsed.keybinds ?? {}),
+      },
+    });
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return cloneSettings(DEFAULT_SETTINGS);
   }
 }
 
@@ -125,6 +137,21 @@ export class LobbyScreen {
   private careerMetaEl: HTMLSpanElement;
   private careerXpTextEl: HTMLSpanElement;
   private careerXpFillEl: HTMLDivElement;
+
+  private listeningKeybindAction: keyof KeybindMap | null = null;
+  private keybindListener: ((e: KeyboardEvent) => void) | null = null;
+  private keybindListenerTarget: {
+    addEventListener: (
+      type: string,
+      fn: (e: KeyboardEvent) => void,
+      capture?: boolean,
+    ) => void;
+    removeEventListener: (
+      type: string,
+      fn: (e: KeyboardEvent) => void,
+      capture?: boolean,
+    ) => void;
+  } | null = null;
 
   constructor(
     root: HTMLElement,
@@ -254,24 +281,129 @@ export class LobbyScreen {
   }
 
   getSettings(): GameSettings {
-    return { ...this.settings };
+    return cloneSettings(this.settings);
   }
 
   syncSettings(next: GameSettings): void {
-    this.settings = { ...next };
+    this.settings = cloneSettings(next);
     saveStoredSettings(this.settings);
-    if (this.activeTab === 'settings') {
+    if (this.activeTab === 'settings' || this.activeTab === 'controls') {
       this.renderTab();
     }
   }
 
   private setTab(tab: LobbyTabId): void {
     if (this.activeTab === tab) return;
+    this.stopListeningKeybind(false);
     this.activeTab = tab;
     for (const [id, btn] of this.tabButtons) {
       btn.classList.toggle('active', id === tab);
     }
     this.renderTab();
+  }
+
+  private getKeyEventTarget() {
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.addEventListener === 'function' &&
+      typeof window.removeEventListener === 'function'
+    ) {
+      return window as unknown as {
+        addEventListener: (
+          type: string,
+          fn: (e: KeyboardEvent) => void,
+          capture?: boolean,
+        ) => void;
+        removeEventListener: (
+          type: string,
+          fn: (e: KeyboardEvent) => void,
+          capture?: boolean,
+        ) => void;
+      };
+    }
+    if (
+      typeof document !== 'undefined' &&
+      typeof (document as unknown as EventTarget).addEventListener === 'function' &&
+      typeof (document as unknown as EventTarget).removeEventListener === 'function'
+    ) {
+      return document as unknown as {
+        addEventListener: (
+          type: string,
+          fn: (e: KeyboardEvent) => void,
+          capture?: boolean,
+        ) => void;
+        removeEventListener: (
+          type: string,
+          fn: (e: KeyboardEvent) => void,
+          capture?: boolean,
+        ) => void;
+      };
+    }
+    return null;
+  }
+
+  private stopListeningKeybind(rerender = false): void {
+    if (this.keybindListener && this.keybindListenerTarget) {
+      this.keybindListenerTarget.removeEventListener(
+        'keydown',
+        this.keybindListener,
+        true,
+      );
+    }
+    this.keybindListener = null;
+    this.keybindListenerTarget = null;
+    const hadAction = this.listeningKeybindAction !== null;
+    this.listeningKeybindAction = null;
+    if (rerender && hadAction && this.activeTab === 'settings') {
+      this.renderTab();
+    }
+  }
+
+  private startListeningKeybind(action: keyof KeybindMap): void {
+    this.stopListeningKeybind(false);
+    this.listeningKeybindAction = action;
+    const target = this.getKeyEventTarget();
+    if (target) {
+      const handler = (e: KeyboardEvent) => {
+        if (this.listeningKeybindAction !== action) return;
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        if (e.code === 'Escape' || e.key === 'Escape') {
+          this.stopListeningKeybind(true);
+          return;
+        }
+        const rawCode =
+          typeof e.code === 'string' && e.code.trim().length > 0
+            ? e.code.trim()
+            : typeof e.key === 'string' && e.key.trim().length > 0
+              ? e.key.trim().length === 1
+                ? `Key${e.key.trim().toUpperCase()}`
+                : e.key.trim()
+              : '';
+        if (!rawCode) return;
+
+        const nextKeybinds: KeybindMap = {
+          ...resolveKeybinds(this.settings.keybinds),
+          [action]: rawCode,
+        };
+        this.settings = cloneSettings({
+          ...this.settings,
+          keybinds: nextKeybinds,
+        });
+        saveStoredSettings(this.settings);
+        this.stopListeningKeybind(false);
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
+        if (this.activeTab === 'settings') {
+          this.renderTab();
+        }
+      };
+      this.keybindListener = handler;
+      this.keybindListenerTarget = target;
+      target.addEventListener('keydown', handler, true);
+    }
+    if (this.activeTab === 'settings') {
+      this.renderTab();
+    }
   }
 
   private updateBadge(): void {
@@ -660,6 +792,7 @@ export class LobbyScreen {
   }
 
   private renderControlsTab(): void {
+    const kb = resolveKeybinds(this.settings.keybinds);
     const panel = document.createElement('div');
     panel.className = 'fdr-wide-panel';
     panel.innerHTML = `
@@ -669,34 +802,35 @@ export class LobbyScreen {
       </div>
       <div class="fdr-controls-grid">
         <div class="fdr-controls-box">
-          <h4>MOVEMENT &amp; AIRDROP</h4>
-          <div class="fdr-key-row"><span>Move</span><span class="fdr-keycap">W A S D</span></div>
+          <h4>MOVEMENT &amp; VEHICLES</h4>
+          <div class="fdr-key-row"><span>Move / Drive Vehicle</span><span class="fdr-keycap">W A S D</span></div>
           <div class="fdr-key-row"><span>Jump / Mantle / Glider</span><span class="fdr-keycap">SPACE</span></div>
-          <div class="fdr-key-row"><span>Sprint</span><span class="fdr-keycap">SHIFT</span></div>
-          <div class="fdr-key-row"><span>Crouch / Sprint-to-Slide</span><span class="fdr-keycap">C / CTRL</span></div>
+          <div class="fdr-key-row"><span>Sprint / Vehicle Boost</span><span class="fdr-keycap">SHIFT</span></div>
+          <div class="fdr-key-row"><span>Crouch / Sprint-to-Slide</span><span class="fdr-keycap">${formatKeyCodeLabel(kb.crouchSlide)} / CTRL</span></div>
+          <div class="fdr-key-row"><span>Vehicle Horn</span><span class="fdr-keycap">H</span></div>
         </div>
         <div class="fdr-controls-box">
           <h4>COMBAT &amp; LOOTING</h4>
-          <div class="fdr-key-row"><span>Fire / Throw / Swing Pickaxe</span><span class="fdr-keycap">LEFT CLICK</span></div>
+          <div class="fdr-key-row"><span>Fire / Throw / Grappler / Pickaxe</span><span class="fdr-keycap">LEFT CLICK</span></div>
           <div class="fdr-key-row"><span>Aim Down Sights / Scope</span><span class="fdr-keycap">RIGHT CLICK</span></div>
           <div class="fdr-key-row"><span>Reload Weapon</span><span class="fdr-keycap">R</span></div>
-          <div class="fdr-key-row"><span>Interact / Chest / Llama / Zipline</span><span class="fdr-keycap">E</span></div>
+          <div class="fdr-key-row"><span>Interact / Vehicle / Vault</span><span class="fdr-keycap">${formatKeyCodeLabel(kb.interact)}</span></div>
           <div class="fdr-key-row"><span>Inventory Slots (Pickaxe + 5)</span><span class="fdr-keycap">1 - 6 / WHEEL</span></div>
         </div>
         <div class="fdr-controls-box">
           <h4>BUILDING &amp; EDITING</h4>
           <div class="fdr-key-row"><span>Toggle Build Mode</span><span class="fdr-keycap">Q</span></div>
-          <div class="fdr-key-row"><span>Wall / Floor / Ramp / Roof</span><span class="fdr-keycap">Z / X / V / F</span></div>
-          <div class="fdr-key-row"><span>Repair Damaged Structure</span><span class="fdr-keycap">F</span></div>
+          <div class="fdr-key-row"><span>Wall / Floor / Ramp / Roof</span><span class="fdr-keycap">${formatKeyCodeLabel(kb.buildWall)} / ${formatKeyCodeLabel(kb.buildFloor)} / ${formatKeyCodeLabel(kb.buildRamp)} / ${formatKeyCodeLabel(kb.buildRoof)}</span></div>
+          <div class="fdr-key-row"><span>Repair Damaged Structure</span><span class="fdr-keycap">${formatKeyCodeLabel(kb.repair)}</span></div>
           <div class="fdr-key-row"><span>Switch Material (Wood/Brick/Metal)</span><span class="fdr-keycap">RIGHT CLICK</span></div>
-          <div class="fdr-key-row"><span>Rotate Piece / Edit Structure</span><span class="fdr-keycap">R / G</span></div>
+          <div class="fdr-key-row"><span>Rotate Piece / Edit Structure</span><span class="fdr-keycap">R / ${formatKeyCodeLabel(kb.edit)}</span></div>
         </div>
         <div class="fdr-controls-box">
           <h4>TACTICAL &amp; SOCIAL</h4>
-          <div class="fdr-key-row"><span>Full Tactical Island Map</span><span class="fdr-keycap">M</span></div>
+          <div class="fdr-key-row"><span>Full Tactical Island Map</span><span class="fdr-keycap">${formatKeyCodeLabel(kb.map)}</span></div>
           <div class="fdr-key-row"><span>Set / Clear Map Waypoint</span><span class="fdr-keycap">LMB / RMB</span></div>
-          <div class="fdr-key-row"><span>Emote Dance Wheel</span><span class="fdr-keycap">B</span></div>
-          <div class="fdr-key-row"><span>Pause / Settings Menu</span><span class="fdr-keycap">ESC / P</span></div>
+          <div class="fdr-key-row"><span>Emote Dance Wheel</span><span class="fdr-keycap">${formatKeyCodeLabel(kb.emote)}</span></div>
+          <div class="fdr-key-row"><span>Spectate Next / Match Summary</span><span class="fdr-keycap">TAB / ESC</span></div>
         </div>
       </div>
     `;
@@ -745,7 +879,7 @@ export class LobbyScreen {
         valEl.textContent = format(num);
         onChange(num);
         saveStoredSettings(this.settings);
-        this.callbacks.onSettingsChange({ ...this.settings });
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
       });
 
       row.append(lbl, input, valEl);
@@ -837,7 +971,7 @@ export class LobbyScreen {
         this.playClick();
         this.settings.graphicsQuality = q;
         saveStoredSettings(this.settings);
-        this.callbacks.onSettingsChange({ ...this.settings });
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
         this.renderTab();
       });
       gfxGroup.appendChild(btn);
@@ -874,14 +1008,14 @@ export class LobbyScreen {
         this.playClick();
         onToggle(true);
         saveStoredSettings(this.settings);
-        this.callbacks.onSettingsChange({ ...this.settings });
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
         this.renderTab();
       });
       offBtn.addEventListener('click', () => {
         this.playClick();
         onToggle(false);
         saveStoredSettings(this.settings);
-        this.callbacks.onSettingsChange({ ...this.settings });
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
         this.renderTab();
       });
 
@@ -900,6 +1034,72 @@ export class LobbyScreen {
       this.settings.invertY = next;
     });
 
+    // Keybind Controls Section
+    const keybindsSection = document.createElement('div');
+    keybindsSection.className = 'fdr-keybinds-section';
+
+    const kbHead = document.createElement('div');
+    kbHead.className = 'fdr-keybinds-head';
+    const kbTitleGroup = document.createElement('div');
+    kbTitleGroup.innerHTML = `
+      <div class="fdr-keybinds-title">KEYBIND CONTROLS</div>
+      <div class="fdr-keybinds-sub">CLICK ANY BINDING THEN PRESS A NEW KEY (ESC TO CANCEL)</div>
+    `;
+
+    const resetKeybindsBtn = document.createElement('button');
+    resetKeybindsBtn.type = 'button';
+    resetKeybindsBtn.className = 'fdr-btn fdr-btn-dark fdr-keybind-reset-btn';
+    resetKeybindsBtn.innerHTML = '<span>RESET KEYBINDS</span>';
+    resetKeybindsBtn.addEventListener('click', () => {
+      this.playClick();
+      this.stopListeningKeybind(false);
+      this.settings = cloneSettings({
+        ...this.settings,
+        keybinds: { ...DEFAULT_KEYBINDS },
+      });
+      saveStoredSettings(this.settings);
+      this.callbacks.onSettingsChange(cloneSettings(this.settings));
+      this.renderTab();
+    });
+
+    kbHead.append(kbTitleGroup, resetKeybindsBtn);
+
+    const kbGrid = document.createElement('div');
+    kbGrid.className = 'fdr-keybinds-grid';
+    const activeKeybinds = resolveKeybinds(this.settings.keybinds);
+
+    for (const def of KEYBIND_ACTION_DEFS) {
+      const row = document.createElement('div');
+      row.className = 'fdr-keybind-row';
+
+      const lbl = document.createElement('span');
+      lbl.className = 'fdr-keybind-label';
+      lbl.textContent = def.label;
+
+      const isListening = this.listeningKeybindAction === def.key;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `fdr-keybind-btn${isListening ? ' listening' : ''}`;
+      btn.dataset.keybindAction = def.key;
+      btn.textContent = isListening
+        ? 'PRESS A KEY...'
+        : formatKeyCodeLabel(activeKeybinds[def.key]);
+
+      btn.addEventListener('click', () => {
+        this.playClick();
+        if (this.listeningKeybindAction === def.key) {
+          this.stopListeningKeybind(true);
+        } else {
+          this.startListeningKeybind(def.key);
+        }
+      });
+
+      row.append(lbl, btn);
+      kbGrid.appendChild(row);
+    }
+
+    keybindsSection.append(kbHead, kbGrid);
+
     const resetBtn = document.createElement('button');
     resetBtn.type = 'button';
     resetBtn.className = 'fdr-btn fdr-btn-dark';
@@ -907,17 +1107,19 @@ export class LobbyScreen {
     resetBtn.innerHTML = '<span>RESET TO DEFAULTS</span>';
     resetBtn.addEventListener('click', () => {
       this.playClick();
-      this.settings = { ...DEFAULT_SETTINGS };
+      this.stopListeningKeybind(false);
+      this.settings = cloneSettings(DEFAULT_SETTINGS);
       saveStoredSettings(this.settings);
-      this.callbacks.onSettingsChange({ ...this.settings });
+      this.callbacks.onSettingsChange(cloneSettings(this.settings));
       this.renderTab();
     });
 
-    panel.append(header, list, resetBtn);
+    panel.append(header, list, keybindsSection, resetBtn);
     this.contentEl.appendChild(panel);
   }
 
   dispose(): void {
+    this.stopListeningKeybind(false);
     this.containerEl.remove();
   }
 }

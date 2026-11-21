@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, EventBus } from '../../core';
-import type { BiomeType, ChestEntity, MusicTrackId, SoundEventId } from '../../types';
+import type { BiomeType, ChestEntity, MusicTrackId, SoundEventId, WeatherKind } from '../../types';
 import {
   AudioEngine,
   BIOME_AMBIENCE_PROFILES,
   CHEST_HUM_RADIUS,
   computeBusGains,
   getBiomeAmbienceProfile,
+  getMaxHearDistance,
+  getSoundPriority,
   MAX_CHEST_LOOPS,
   MAX_POLYPHONY,
   MUSIC_PATTERNS,
@@ -121,6 +123,16 @@ const BIOME_MAP: Record<BiomeType, true> = {
 };
 
 const ALL_BIOMES = Object.keys(BIOME_MAP) as BiomeType[];
+
+const WEATHER_KIND_MAP: Record<WeatherKind, true> = {
+  clear: true,
+  golden_hour: true,
+  overcast: true,
+  rain: true,
+  storm_front: true,
+};
+
+const ALL_WEATHER_KINDS = Object.keys(WEATHER_KIND_MAP) as WeatherKind[];
 
 class MockAudioParam {
   value: number;
@@ -398,14 +410,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 63 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 72 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(63);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(72);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -418,6 +430,64 @@ describe('SoundSynthesizer', () => {
       const createdSources =
         mockCtx.oscillators.length - oscBefore + (mockCtx.bufferSources.length - srcBefore);
       expect(createdSources).toBeGreaterThan(0);
+    }
+
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 2 SFX with safe positive ramps across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave2Ids: SoundEventId[] = [
+      'vehicle_boost',
+      'vehicle_horn',
+      'vehicle_crash',
+      'grappler_fire',
+      'grappler_reel',
+      'shield_bubble_deploy',
+      'vault_unlock',
+      'weather_thunder',
+      'bounty_alert',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave2Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      // Each bespoke Wave 2 synth layers >= 2 oscillators and/or noise buffers (never a 1-tone stub)
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      expect(oscCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(3);
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.weather_thunder).toBeGreaterThan(1.2);
+    expect(durations.vault_unlock).toBeGreaterThan(0.7);
+    expect(durations.shield_bubble_deploy).toBeGreaterThan(0.5);
+    expect(durations.vehicle_boost).toBeGreaterThan(0.5);
+    expect(durations.bounty_alert).toBeGreaterThan(0.4);
+    expect(durations.vehicle_horn).toBeGreaterThan(0.35);
+    expect(durations.grappler_reel).toBeGreaterThan(0.3);
+    expect(durations.vehicle_crash).toBeGreaterThan(0.28);
+    expect(durations.grappler_fire).toBeGreaterThan(0.14);
+
+    // Every scheduled exponential ramp across all Wave 2 synths stayed strictly > 0
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') {
+          expect(ev.value).toBeGreaterThan(0);
+        }
+      }
     }
 
     synth.dispose();
@@ -826,6 +896,7 @@ describe('AudioEngine', () => {
     expect(minimalEngine.getBiomeAmbienceState()).toEqual({
       biome: 'volcanic',
       inStorm: true,
+      weather: 'clear',
       active: true,
     });
     expect(minimalEngine.getActiveVoiceCount()).toBe(1);
@@ -856,9 +927,19 @@ describe('AudioEngine', () => {
     // Switching across all 10 biomes and storm states updates existing nodes cleanly
     for (const biome of ALL_BIOMES) {
       engine.updateBiomeAmbience(biome, false);
-      expect(engine.getBiomeAmbienceState()).toEqual({ biome, inStorm: false, active: true });
+      expect(engine.getBiomeAmbienceState()).toEqual({
+        biome,
+        inStorm: false,
+        weather: 'clear',
+        active: true,
+      });
       engine.updateBiomeAmbience(biome, true);
-      expect(engine.getBiomeAmbienceState()).toEqual({ biome, inStorm: true, active: true });
+      expect(engine.getBiomeAmbienceState()).toEqual({
+        biome,
+        inStorm: true,
+        weather: 'clear',
+        active: true,
+      });
     }
     expect(mockCtx.oscillators.length).toBe(oscCountAfterStart);
     expect(mockCtx.bufferSources.length).toBe(srcCountAfterStart);
@@ -887,5 +968,109 @@ describe('AudioEngine', () => {
     expect(mockCtx.oscillators.every((o) => o.stopped)).toBe(true);
     expect(mockCtx.bufferSources[0].loop).toBe(true);
     expect(mockCtx.bufferSources[0].stopped).toBe(true);
+  });
+
+  it('modulates biome ambience smoothly across all WeatherKind states and applies Wave-2 priorities/distances', async () => {
+    // 1. Headless weather safety + profile checks across all 5 WeatherKind states
+    const bus = new EventBus();
+    const headless = new AudioEngine(bus);
+    for (const weather of ALL_WEATHER_KINDS) {
+      expect(() => headless.updateBiomeAmbience('grassland', false, weather)).not.toThrow();
+      expect(headless.getBiomeAmbienceState().weather).toBe(weather);
+
+      const calm = getBiomeAmbienceProfile('grassland', false, 'clear');
+      const weathered = getBiomeAmbienceProfile('grassland', false, weather);
+      expect(weathered.noiseFilterFreq).toBeGreaterThan(20);
+      expect(weathered.noiseGain).toBeGreaterThan(0);
+      expect(weathered.stormFilterFreq).toBeGreaterThan(25);
+      if (weather === 'rain' || weather === 'storm_front') {
+        expect(weathered.noiseFilterFreq).toBeGreaterThan(calm.noiseFilterFreq);
+        expect(weathered.noiseGain).toBeGreaterThan(calm.noiseGain);
+        expect(weathered.stormOverlayGain).toBeGreaterThan(calm.stormOverlayGain);
+        expect(weathered.stormFilterFreq).toBeGreaterThan(calm.stormFilterFreq);
+      }
+    }
+    headless.dispose();
+
+    // 2. Active AudioContext: verify deferred weather on unlock & smooth node modulation without extra nodes
+    const mockCtx = new MockAudioContext();
+    mockCtx.state = 'suspended';
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+
+    engine.updateBiomeAmbience('highland', false, 'rain');
+    expect(engine.getBiomeAmbienceState()).toEqual({
+      biome: 'highland',
+      inStorm: false,
+      weather: 'rain',
+      active: false,
+    });
+
+    await engine.unlock();
+    expect(engine.getBiomeAmbienceState()).toEqual({
+      biome: 'highland',
+      inStorm: false,
+      weather: 'rain',
+      active: true,
+    });
+
+    const oscCount = mockCtx.oscillators.length;
+    const srcCount = mockCtx.bufferSources.length;
+    expect(oscCount).toBe(3);
+    expect(srcCount).toBe(1);
+
+    // Filter & gain nodes modulate cleanly across all 5 WeatherKinds with zero leaks
+    for (const weather of ALL_WEATHER_KINDS) {
+      engine.updateBiomeAmbience('highland', false, weather);
+      engine.updateBiomeAmbience('highland', false, weather);
+      expect(engine.getBiomeAmbienceState().weather).toBe(weather);
+    }
+
+    engine.updateBiomeAmbience('highland', false, 'storm_front');
+    const stormFrontProfile = getBiomeAmbienceProfile('highland', false, 'storm_front');
+    // ambience rig noiseFilter is filters[0], stormFilter is filters[2]
+    const noiseFilterNode = mockCtx.filters[0];
+    const stormFilterNode = mockCtx.filters[2];
+    const stormGainNode = mockCtx.gains[mockCtx.gains.length - 1];
+    expect(noiseFilterNode.frequency.value).toBeCloseTo(stormFrontProfile.noiseFilterFreq, 2);
+    expect(stormFilterNode.frequency.value).toBeCloseTo(stormFrontProfile.stormFilterFreq, 2);
+    expect(stormGainNode.gain.value).toBeCloseTo(stormFrontProfile.stormOverlayGain, 4);
+
+    // Transition back to clear reduces filter freq and overlay gain
+    engine.updateBiomeAmbience('highland', false, 'clear');
+    const clearProfile = getBiomeAmbienceProfile('highland', false, 'clear');
+    expect(noiseFilterNode.frequency.value).toBeCloseTo(clearProfile.noiseFilterFreq, 2);
+    expect(stormGainNode.gain.value).toBeCloseTo(clearProfile.stormOverlayGain, 4);
+    expect(mockCtx.oscillators.length).toBe(oscCount);
+    expect(mockCtx.bufferSources.length).toBe(srcCount);
+
+    // Wave-2 spatial distance & priority verification
+    expect(getSoundPriority('weather_thunder')).toBe(3);
+    expect(getSoundPriority('vault_unlock')).toBe(3);
+    expect(getSoundPriority('bounty_alert')).toBe(3);
+    expect(getSoundPriority('vehicle_crash')).toBe(3);
+    expect(getSoundPriority('shield_bubble_deploy')).toBe(3);
+    expect(getSoundPriority('vehicle_boost')).toBe(2);
+    expect(getSoundPriority('vehicle_horn')).toBe(2);
+    expect(getSoundPriority('grappler_fire')).toBe(2);
+    expect(getSoundPriority('grappler_reel')).toBe(1);
+
+    expect(getMaxHearDistance('weather_thunder')).toBe(350);
+    expect(getMaxHearDistance('vault_unlock')).toBe(220);
+    expect(getMaxHearDistance('grappler_reel')).toBe(110);
+
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+    expect(engine.playSound({ id: 'weather_thunder', position: { x: 300, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'grappler_reel', position: { x: 150, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'vault_unlock', position: { x: 200, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Polyphony stays <= MAX_POLYPHONY even under heavy Wave-2 SFX load
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'vehicle_boost' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+
+    engine.dispose();
   });
 });

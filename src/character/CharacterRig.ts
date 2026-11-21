@@ -104,6 +104,15 @@ export class CharacterRig {
   private activeWeaponGroup: THREE.Group | null = null;
   private gliderVisualGroup: THREE.Group | null = null;
   private backblingParts: BackblingParts = { style: 'none' };
+  private bossAuraEnabled = false;
+  private bossAuraTime = 0;
+  private bossAuraGroup: THREE.Group | null = null;
+  private bossCrownRing: THREE.Group | null = null;
+  private bossBeaconMesh: THREE.Mesh | null = null;
+  private bossBeaconMat: THREE.MeshBasicMaterial | null = null;
+  private bossCoreBeamMat: THREE.MeshBasicMaterial | null = null;
+  private bossAuraHaloMesh: THREE.Mesh | null = null;
+  private bossAuraHaloMat: THREE.MeshBasicMaterial | null = null;
   private disposed = false;
 
   constructor(skin?: SkinDef, pickaxe?: PickaxeDef, glider?: GliderDef) {
@@ -980,6 +989,147 @@ export class CharacterRig {
     this.setGliderOpen(this.gliderOpen, this.gliderOpenFactor);
   }
 
+  private buildBossAuraGroup(): void {
+    const auraGroup = new THREE.Group();
+    auraGroup.name = 'boss_crown_aura';
+
+    const crownGroup = new THREE.Group();
+    crownGroup.name = 'boss_crown_ring';
+
+    const goldRingMat = makeMat('#fbbf24', 0.18, 0.85, '#f59e0b', 0.95);
+    const innerGoldMat = makeMat('#fef08a', 0.14, 0.35, '#fde047', 1.1);
+
+    const outerRing = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.022, 8, 24), goldRingMat);
+    outerRing.rotation.x = Math.PI / 2;
+    outerRing.castShadow = false;
+    crownGroup.add(outerRing);
+
+    const innerRing = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.012, 6, 20), innerGoldMat);
+    innerRing.rotation.x = Math.PI / 2;
+    innerRing.castShadow = false;
+    crownGroup.add(innerRing);
+
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2;
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.085, 4), goldRingMat);
+      spike.position.set(Math.sin(ang) * 0.25, 0.055, Math.cos(ang) * 0.25);
+      spike.castShadow = false;
+      crownGroup.add(spike);
+    }
+
+    auraGroup.add(crownGroup);
+
+    const haloMat = new THREE.MeshBasicMaterial({
+      color: 0xfde047,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const haloMesh = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.36, 24), haloMat);
+    haloMesh.rotation.x = -Math.PI / 2;
+    haloMesh.position.y = -0.02;
+    haloMesh.castShadow = false;
+    auraGroup.add(haloMesh);
+
+    const beaconMat = new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const beaconMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15, 0.26, 2.4, 16, 1, true),
+      beaconMat,
+    );
+    beaconMesh.position.y = 1.2;
+    beaconMesh.castShadow = false;
+    auraGroup.add(beaconMesh);
+
+    const coreBeamMat = new THREE.MeshBasicMaterial({
+      color: 0xfef9c3,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const coreBeamMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.09, 2.7, 12, 1, true),
+      coreBeamMat,
+    );
+    coreBeamMesh.position.y = 1.35;
+    coreBeamMesh.castShadow = false;
+    auraGroup.add(coreBeamMesh);
+
+    this.joints.root.add(auraGroup);
+    this.bossAuraGroup = auraGroup;
+    this.bossCrownRing = crownGroup;
+    this.bossBeaconMesh = beaconMesh;
+    this.bossBeaconMat = beaconMat;
+    this.bossCoreBeamMat = coreBeamMat;
+    this.bossAuraHaloMesh = haloMesh;
+    this.bossAuraHaloMat = haloMat;
+  }
+
+  public setBossAura(enabled: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    if (!enabled) {
+      this.bossAuraEnabled = false;
+      if (this.bossAuraGroup) {
+        this.bossAuraGroup.visible = false;
+        this.bossAuraGroup.position.set(0, 1.0, 0);
+        this.bossAuraGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.bossAuraGroup) {
+      this.buildBossAuraGroup();
+    }
+
+    this.bossAuraEnabled = true;
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.bossAuraTime = elapsed;
+    }
+
+    const t = this.bossAuraTime;
+    const aura = this.bossAuraGroup!;
+    const bob = Math.sin(t * 2.8) * 0.055;
+    const headTrackY = this.joints.hips.position.y + 1.24;
+
+    aura.visible = true;
+    aura.position.set(this.joints.hips.position.x, headTrackY + bob, this.joints.hips.position.z);
+    aura.scale.setScalar(1);
+
+    if (this.bossCrownRing) {
+      this.bossCrownRing.rotation.y = t * 1.4;
+      this.bossCrownRing.scale.setScalar(1 + Math.sin(t * 4.2) * 0.05);
+    }
+    if (this.bossBeaconMesh) {
+      const xz = 1 + 0.14 * Math.sin(t * 3.5);
+      this.bossBeaconMesh.scale.set(xz, 1, xz);
+    }
+    if (this.bossBeaconMat) {
+      this.bossBeaconMat.opacity = 0.22 + 0.10 * Math.sin(t * 3.5);
+    }
+    if (this.bossCoreBeamMat) {
+      this.bossCoreBeamMat.opacity = 0.34 + 0.12 * Math.cos(t * 4.0);
+    }
+    if (this.bossAuraHaloMesh && this.bossAuraHaloMat) {
+      this.bossAuraHaloMesh.scale.setScalar(1 + 0.16 * Math.sin(t * 3.5));
+      this.bossAuraHaloMat.opacity = 0.52 + 0.22 * Math.sin(t * 3.5);
+    }
+  }
+
+  public isBossAuraEnabled(): boolean {
+    return this.bossAuraEnabled;
+  }
+
   public setVisible(visible: boolean): void {
     this.joints.root.visible = visible;
   }
@@ -1033,6 +1183,18 @@ export class CharacterRig {
       disposeObject3D(this.gliderVisualGroup);
       this.joints.gliderSocket.remove(this.gliderVisualGroup);
       this.gliderVisualGroup = null;
+    }
+
+    if (this.bossAuraGroup) {
+      disposeObject3D(this.bossAuraGroup);
+      this.bossAuraGroup.parent?.remove(this.bossAuraGroup);
+      this.bossAuraGroup = null;
+      this.bossCrownRing = null;
+      this.bossBeaconMesh = null;
+      this.bossBeaconMat = null;
+      this.bossCoreBeamMat = null;
+      this.bossAuraHaloMesh = null;
+      this.bossAuraHaloMat = null;
     }
 
     disposeObject3D(this.joints.root);
