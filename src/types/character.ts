@@ -97,6 +97,15 @@ export interface WeaponWrapDef {
   pattern: 'solid' | 'camo' | 'neon_grid' | 'carbon' | 'magma' | 'gold_foil';
 }
 
+export interface ContrailDef {
+  id: string;
+  name: string;
+  rarity: Rarity;
+  primaryColor: string;
+  secondaryColor: string;
+  style: 'wind' | 'plasma' | 'solar' | 'frost' | 'sakura' | 'void';
+}
+
 export interface CharacterRenderState {
   position: Vec3Like;
   yaw: number;
@@ -104,6 +113,7 @@ export interface CharacterRenderState {
   animState: AnimState;
   weaponId: WeaponId;
   weaponWrapId?: string;
+  contrailId?: string;
   isAiming: boolean;
   isFiring: boolean;
   isBuilding: boolean;

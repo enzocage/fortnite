@@ -95,6 +95,13 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   slurp_barrel_break: true,
   quest_complete: true,
   overshield_recharge: true,
+  rift_teleport: true,
+  augment_ready: true,
+  augment_select: true,
+  flag_tick: true,
+  flag_captured: true,
+  tactical_ping: true,
+  barrel_explode: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -425,14 +432,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 78 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 85 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(78);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(85);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;

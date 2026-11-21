@@ -23,6 +23,24 @@ export type Difficulty = 'casual' | 'standard' | 'sweaty';
 
 export type GameModeId = 'solo' | 'zero_build' | 'blitz';
 
+export type AugmentId =
+  | 'parkour_boost'
+  | 'light_fingers'
+  | 'siphon_master'
+  | 'aerialist'
+  | 'storm_mark'
+  | 'demolisher'
+  | 'first_assault'
+  | 'mechanic_overdrive';
+
+export interface AugmentDef {
+  id: AugmentId;
+  name: string;
+  subtitle: string;
+  badge: string;
+  accentColor: string;
+}
+
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
 export type BiomeType =

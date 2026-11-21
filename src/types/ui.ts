@@ -1,5 +1,6 @@
 import type {
   AmmoType,
+  AugmentId,
   BiomeType,
   Difficulty,
   GameModeId,
@@ -134,6 +135,25 @@ export interface HUDState {
   activeQuests?: MatchQuest[];
   visualSoundCues?: VisualSoundCue[];
   nearCampfireHealing?: boolean;
+  activeAugments?: AugmentId[];
+  pendingAugmentChoices?: [AugmentId, AugmentId] | null;
+  captureStatus?: {
+    poiName: string;
+    progress: number;
+    captured: boolean;
+    contested?: boolean;
+  } | null;
+  tacticalPing?: {
+    x: number;
+    y: number;
+    z: number;
+    label: string;
+    kind: 'move' | 'danger' | 'loot';
+    distance: number;
+    screenX?: number;
+    screenY?: number;
+    visible?: boolean;
+  } | null;
 }
 
 export interface MatchQuest {
@@ -174,6 +194,7 @@ export interface LobbyConfig {
   selectedEmote: EmoteId;
   gameMode?: GameModeId;
   weaponWrapId?: string;
+  contrailId?: string;
 }
 
 export interface MatchSummary {
@@ -193,6 +214,8 @@ export interface MatchSummary {
   gameMode?: GameModeId;
   questsCompleted?: number;
   bonusXp?: number;
+  activeAugments?: AugmentId[];
+  poisCaptured?: number;
 }
 
 export interface BannerMessage {

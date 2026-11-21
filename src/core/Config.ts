@@ -1,4 +1,6 @@
 import type {
+  AugmentDef,
+  ContrailDef,
   EmoteDef,
   GameModeId,
   GameSettings,
@@ -1362,6 +1364,116 @@ export const WEAPON_WRAPS: WeaponWrapDef[] = [
     metalness: 0.88,
     roughness: 0.22,
     pattern: 'gold_foil',
+  },
+];
+
+export const AUGMENTS: readonly AugmentDef[] = [
+  {
+    id: 'parkour_boost',
+    name: 'SOARING SPRINT',
+    subtitle: '+35% Sprint Jump Height & Low-Gravity Vaulting',
+    badge: 'MOBILITY',
+    accentColor: '#38bdf8',
+  },
+  {
+    id: 'light_fingers',
+    name: 'LIGHT FINGERS',
+    subtitle: 'Reload Weapons 30% Faster',
+    badge: 'RELOAD',
+    accentColor: '#fbbf24',
+  },
+  {
+    id: 'siphon_master',
+    name: 'SIPHON OVERDRIVE',
+    subtitle: '+75 Health & Shield Restored on Eliminations',
+    badge: 'COMBAT',
+    accentColor: '#34d399',
+  },
+  {
+    id: 'aerialist',
+    name: 'GLIDER REDEPLOY',
+    subtitle: 'Press [SPACE] While Airborne >6m to Deploy Glider',
+    badge: 'AERIAL',
+    accentColor: '#60a5fa',
+  },
+  {
+    id: 'storm_mark',
+    name: 'STORM FORECAST',
+    subtitle: 'Storm Phase Changes Ping Opponents Within 60m',
+    badge: 'RECON',
+    accentColor: '#c084fc',
+  },
+  {
+    id: 'demolisher',
+    name: 'DEMOLISHER',
+    subtitle: '+30% Damage Against Structures & Vehicles',
+    badge: 'SIEGE',
+    accentColor: '#fb923c',
+  },
+  {
+    id: 'first_assault',
+    name: 'FIRST ASSAULT',
+    subtitle: '+25% First Bullet Damage When Magazine Is Full',
+    badge: 'PRECISION',
+    accentColor: '#f472b6',
+  },
+  {
+    id: 'mechanic_overdrive',
+    name: 'OVERDRIVE TURBO',
+    subtitle: '+25% Vehicle Speed & Passive 4 HP/s Self-Repair',
+    badge: 'VEHICLE',
+    accentColor: '#22d3ee',
+  },
+];
+
+export const CONTRAILS: readonly ContrailDef[] = [
+  {
+    id: 'wind_stream',
+    name: 'Aero Vapor',
+    rarity: 'common',
+    primaryColor: '#e0f2fe',
+    secondaryColor: '#38bdf8',
+    style: 'wind',
+  },
+  {
+    id: 'plasma_arcs',
+    name: 'Cyber Plasma',
+    rarity: 'epic',
+    primaryColor: '#22d3ee',
+    secondaryColor: '#a855f7',
+    style: 'plasma',
+  },
+  {
+    id: 'solar_flares',
+    name: 'Solar Flare',
+    rarity: 'legendary',
+    primaryColor: '#fde047',
+    secondaryColor: '#f97316',
+    style: 'solar',
+  },
+  {
+    id: 'frost_shards',
+    name: 'Glacier Shards',
+    rarity: 'rare',
+    primaryColor: '#bae6fd',
+    secondaryColor: '#0284c7',
+    style: 'frost',
+  },
+  {
+    id: 'sakura_petals',
+    name: 'Cherry Drift',
+    rarity: 'epic',
+    primaryColor: '#fbcfe8',
+    secondaryColor: '#ec4899',
+    style: 'sakura',
+  },
+  {
+    id: 'void_lightning',
+    name: 'Storm Rift Arcs',
+    rarity: 'mythic',
+    primaryColor: '#e879f9',
+    secondaryColor: '#6d28d9',
+    style: 'void',
   },
 ];
 

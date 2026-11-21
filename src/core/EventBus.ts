@@ -117,6 +117,23 @@ export interface GameEventMap {
   'ui:quest_complete': {
     quest: MatchQuest;
   };
+  'vfx:rift_tear': {
+    position: Vec3Like;
+    skyPosition: Vec3Like;
+  };
+  'vfx:flag_captured': {
+    position: Vec3Like;
+    poiName: string;
+  };
+  'vfx:augment_activate': {
+    position: Vec3Like;
+    color: string;
+  };
+  'vfx:tactical_ping': {
+    position: Vec3Like;
+    kind: 'move' | 'danger' | 'loot';
+    label: string;
+  };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

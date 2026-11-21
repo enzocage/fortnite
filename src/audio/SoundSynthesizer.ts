@@ -220,6 +220,20 @@ export class SoundSynthesizer {
         return this.playQuestComplete(t, targetNode, vol, pitch);
       case 'overshield_recharge':
         return this.playOvershieldRecharge(t, targetNode, vol, pitch);
+      case 'rift_teleport':
+        return this.playVaultUnlock(t, targetNode, vol, pitch);
+      case 'augment_ready':
+        return this.playPoiDiscover(t, targetNode, vol, pitch);
+      case 'augment_select':
+        return this.playQuestComplete(t, targetNode, vol, pitch);
+      case 'flag_tick':
+        return this.playUiClick(t, targetNode, vol, pitch);
+      case 'flag_captured':
+        return this.playVictoryFanfare(t, targetNode, vol, pitch);
+      case 'tactical_ping':
+        return this.playBountyAlert(t, targetNode, vol, pitch);
+      case 'barrel_explode':
+        return this.playExplosion(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
         return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':

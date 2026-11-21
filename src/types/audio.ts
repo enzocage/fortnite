@@ -78,7 +78,14 @@ export type SoundEventId =
   | 'campfire_heal'
   | 'slurp_barrel_break'
   | 'quest_complete'
-  | 'overshield_recharge';
+  | 'overshield_recharge'
+  | 'rift_teleport'
+  | 'augment_ready'
+  | 'augment_select'
+  | 'flag_tick'
+  | 'flag_captured'
+  | 'tactical_ping'
+  | 'barrel_explode';
 
 export type MusicTrackId =
   | 'none'

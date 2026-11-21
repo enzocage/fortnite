@@ -175,6 +175,43 @@ export interface SlurpBarrelEntity {
   destroyed: boolean;
 }
 
+export interface RiftEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  active: boolean;
+  openRemainingSec: number;
+  cooldownSec: number;
+}
+
+export interface CapturePointEntity {
+  id: string;
+  poiId: string;
+  poiName: string;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  progress: number;
+  captured: boolean;
+  ownerId: string | null;
+  ownerName: string | null;
+}
+
+export interface ExplosiveBarrelEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  hp: number;
+  maxHp: number;
+  blastRadius: number;
+  blastDamage: number;
+  exploded: boolean;
+}
+
 export interface SupplyDrop {
   id: string;
   x: number;
