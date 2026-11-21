@@ -93,8 +93,10 @@ export class EnvironmentFX {
           }
 
           float sunDot = max(dot(dir, normalize(uSunDir)), 0.0);
-          col += vec3(1.0, 0.88, 0.58) * pow(sunDot, 10.0) * (0.32 + uDayPhase * 0.16);
-          col += vec3(1.0, 0.97, 0.85) * smoothstep(0.9965, 0.9992, sunDot) * 1.1;
+          float horizonBand = 1.0 - smoothstep(-0.08, 0.44, abs(h));
+          col += vec3(1.0, 0.78, 0.46) * pow(sunDot, 4.0) * horizonBand * (0.28 + uDayPhase * 0.34);
+          col += vec3(1.0, 0.88, 0.58) * pow(sunDot, 12.0) * (0.36 + uDayPhase * 0.22);
+          col += vec3(1.0, 0.98, 0.88) * smoothstep(0.9965, 0.9992, sunDot) * 1.15;
 
           gl_FragColor = vec4(col, 1.0);
         }
@@ -105,7 +107,7 @@ export class EnvironmentFX {
     this.skyMesh.name = 'SkyDome';
     this.group.add(this.skyMesh);
 
-    // 2. Animated Shimmering Turquoise Ocean Plane (circular with smooth horizon blend + river glow)
+    // 2. Animated Shimmering Turquoise Ocean Plane (Fresnel reflection + dual-layer caustics + shore/river foam)
     const oceanGeo = new THREE.CircleGeometry(2200, 96);
     oceanGeo.rotateX(-Math.PI * 0.5);
     this.geometries.push(oceanGeo);
@@ -116,6 +118,8 @@ export class EnvironmentFX {
       uniforms: {
         uTime: { value: 0 },
         uIslandRadius: { value: ISLAND_RADIUS },
+        uSunDir: { value: this.sunDir.clone() },
+        uDayPhase: { value: 0 },
       },
       vertexShader: `
         uniform float uTime;
@@ -132,33 +136,93 @@ export class EnvironmentFX {
       fragmentShader: `
         uniform float uTime;
         uniform float uIslandRadius;
+        uniform vec3 uSunDir;
+        uniform float uDayPhase;
         varying vec3 vWorldPos;
-        void main() {
-          float r = length(vWorldPos.xz);
-          float shallowMix = 1.0 - smoothstep(uIslandRadius - 25.0, uIslandRadius + 95.0, r);
-          // Crystal Basin & interior River Gorge turquoise shallows
-          float basinDist = length(vWorldPos.xz - vec2(25.0, -115.0));
-          float basinMix = 1.0 - smoothstep(42.0, 68.0, basinDist);
-          float insideIsland = 1.0 - smoothstep(uIslandRadius - 20.0, uIslandRadius + 10.0, r);
-          float coastal = clamp(max(max(shallowMix, basinMix), insideIsland), 0.0, 1.0);
 
-          vec3 deepBlue = vec3(0.05, 0.34, 0.68);
-          vec3 turquoise = vec3(0.11, 0.75, 0.85);
+        float segDist2D(vec2 p, vec2 a, vec2 b) {
+          vec2 ab = b - a;
+          float lenSq = dot(ab, ab);
+          float t = clamp(dot(p - a, ab) / max(lenSq, 0.0001), 0.0, 1.0);
+          return length(p - (a + ab * t));
+        }
+
+        void main() {
+          vec2 xz = vWorldPos.xz;
+          float r = length(xz);
+          float shallowMix = 1.0 - smoothstep(uIslandRadius - 25.0, uIslandRadius + 95.0, r);
+
+          // Crystal Basin & interior River Gorge distance & masks
+          float basinDist = length(xz - vec2(25.0, -115.0));
+          float basinMix = 1.0 - smoothstep(42.0, 68.0, basinDist);
+
+          float riverDist = 999.0;
+          riverDist = min(riverDist, segDist2D(xz, vec2(44.0, -74.0), vec2(70.0, -40.0)));
+          riverDist = min(riverDist, segDist2D(xz, vec2(70.0, -40.0), vec2(92.0, -6.0)));
+          riverDist = min(riverDist, segDist2D(xz, vec2(92.0, -6.0), vec2(102.0, 34.0)));
+          riverDist = min(riverDist, segDist2D(xz, vec2(102.0, 34.0), vec2(104.0, 88.0)));
+          riverDist = min(riverDist, segDist2D(xz, vec2(104.0, 88.0), vec2(98.0, 158.0)));
+          riverDist = min(riverDist, segDist2D(xz, vec2(98.0, 158.0), vec2(94.0, 240.0)));
+          riverDist = min(riverDist, segDist2D(xz, vec2(94.0, 240.0), vec2(90.0, 348.0)));
+          float riverMask = 1.0 - smoothstep(4.0, 12.0, riverDist);
+
+          float insideIsland = 1.0 - smoothstep(uIslandRadius - 20.0, uIslandRadius + 10.0, r);
+          float coastal = clamp(max(max(shallowMix, basinMix), max(insideIsland, riverMask)), 0.0, 1.0);
+
+          vec3 deepBlue = vec3(0.04, 0.30, 0.64);
+          vec3 turquoise = vec3(0.10, 0.76, 0.86);
           vec3 col = mix(deepBlue, turquoise, coastal);
 
-          float rippleA = sin(vWorldPos.x * 0.28 + vWorldPos.z * 0.22 + uTime * 2.1);
-          float rippleB = cos(vWorldPos.x * 0.19 - vWorldPos.z * 0.31 + uTime * 1.7);
-          float glint = smoothstep(0.62, 0.98, (rippleA + rippleB) * 0.5);
-          col += vec3(0.55, 0.88, 0.96) * glint * 0.18 * (1.0 - smoothstep(420.0, 900.0, r));
+          // Analytic perturbed water normal for Fresnel sky reflection & sun specularity
+          float rippleA = sin(xz.x * 0.28 + xz.y * 0.22 + uTime * 2.1);
+          float rippleB = cos(xz.x * 0.19 - xz.y * 0.31 + uTime * 1.7);
+          float nx = cos(xz.x * 0.24 + xz.y * 0.15 + uTime * 1.9) * 0.08 + cos(xz.x * 0.43 - xz.y * 0.35 - uTime * 1.4) * 0.05;
+          float nz = sin(xz.y * 0.26 - xz.x * 0.16 + uTime * 1.7) * 0.08 + sin(xz.y * 0.38 + xz.x * 0.28 - uTime * 1.5) * 0.05;
+          vec3 waterNormal = normalize(vec3(nx, 1.0, nz));
 
-          float coastRing = smoothstep(14.0, 0.0, abs(r - uIslandRadius));
-          float foamWave = 0.5 + 0.5 * sin(r * 0.4 - uTime * 2.4);
-          col = mix(col, vec3(0.86, 0.97, 1.0), coastRing * foamWave * 0.22);
+          // Dual-layer scrolling caustic highlights
+          vec2 cUv1 = xz * 0.22 + vec2(uTime * 0.28, uTime * 0.20);
+          vec2 cUv2 = xz * 0.33 + vec2(-uTime * 0.23, uTime * 0.27);
+          float c1 = abs(sin(cUv1.x + sin(cUv1.y * 1.3 + uTime * 0.8)) + cos(cUv1.y + cos(cUv1.x * 1.2 - uTime * 0.6)));
+          float c2 = abs(sin(cUv2.x * 1.15 - cos(cUv2.y * 1.25)) + cos(cUv2.y * 1.1 + sin(cUv2.x * 1.3)));
+          float causticA = pow(1.0 - clamp(c1 * 0.5, 0.0, 1.0), 4.0);
+          float causticB = pow(1.0 - clamp(c2 * 0.5, 0.0, 1.0), 4.0);
+          float causticMask = (0.35 + 0.65 * coastal) * (1.0 - smoothstep(420.0, 960.0, r));
+          float caustics = clamp((causticA + causticB) * 0.55, 0.0, 1.0) * causticMask;
+          col += vec3(0.45, 0.90, 0.98) * caustics * 0.36;
+
+          // Turquoise shore, Crystal Basin & downstream river rapids foam
+          float coastRing = smoothstep(16.0, 0.0, abs(r - uIslandRadius));
+          float foamWave = 0.5 + 0.5 * sin(r * 0.42 - uTime * 2.5);
+          float basinShore = clamp(smoothstep(4.5, 0.0, abs(basinDist - 45.0)) + smoothstep(3.5, 0.0, abs(basinDist - 19.0)), 0.0, 1.0);
+          float riverBank = smoothstep(2.6, 0.0, abs(riverDist - 4.4));
+          float riverFlowFoam = riverMask * pow(0.5 + 0.5 * sin(xz.y * 0.45 - uTime * 4.8 + sin(xz.x * 0.8) * 2.0), 4.0);
+          float foamAmount = clamp(coastRing * foamWave * 0.34 + basinShore * (0.45 + 0.4 * foamWave) * 0.28 + riverBank * 0.32 + riverFlowFoam * 0.24, 0.0, 0.72);
+          col = mix(col, vec3(0.76, 0.98, 1.0), foamAmount);
+
+          // Fresnel horizon sky reflection + warm sun scattering glitter
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          float fresnel = pow(1.0 - max(dot(viewDir, waterNormal), 0.0), 3.4);
+          vec3 reflDir = reflect(-viewDir, waterNormal);
+          float reflH = clamp(reflDir.y, 0.0, 1.0);
+          vec3 skyHorizon = mix(vec3(0.76, 0.93, 1.0), vec3(0.98, 0.82, 0.66), uDayPhase);
+          vec3 skyMid = mix(vec3(0.28, 0.72, 0.98), vec3(0.45, 0.64, 0.92), uDayPhase);
+          vec3 skyRefl = mix(skyHorizon, skyMid, smoothstep(0.0, 0.45, reflH));
+
+          vec3 sunDir = normalize(uSunDir);
+          float sunSpec = pow(max(dot(reflDir, sunDir), 0.0), 64.0);
+          float sunScatter = pow(max(dot(reflDir, sunDir), 0.0), 5.0);
+          vec3 warmScatter = vec3(1.0, 0.85, 0.56) * (sunScatter * (0.22 + uDayPhase * 0.25) + sunSpec * 0.85);
+          skyRefl += warmScatter;
+
+          col = mix(col, skyRefl, clamp(fresnel * 0.68 + 0.06, 0.0, 0.82));
+
+          float glint = smoothstep(0.65, 0.98, (rippleA + rippleB) * 0.5);
+          col += vec3(0.55, 0.88, 0.96) * glint * 0.14 * (1.0 - smoothstep(420.0, 900.0, r));
 
           float horizonFog = smoothstep(520.0, 1550.0, r);
-          vec3 skyHorizon = vec3(0.76, 0.93, 1.0);
           col = mix(col, skyHorizon, horizonFog * 0.92);
-          float edgeAlpha = mix(0.88, 0.0, smoothstep(1700.0, 2180.0, r));
+          float edgeAlpha = mix(0.90, 0.0, smoothstep(1700.0, 2180.0, r));
 
           gl_FragColor = vec4(col, edgeAlpha);
         }
@@ -272,15 +336,29 @@ export class EnvironmentFX {
   private buildClouds(seed: number): void {
     const rand = mulberry32(seed + 515);
     const puffGeo = new THREE.DodecahedronGeometry(1, 0);
-    const cloudMat = new THREE.MeshStandardMaterial({
+    const cloudTopMat = new THREE.MeshStandardMaterial({
       color: '#ffffff',
-      emissive: '#e0f2fe',
-      emissiveIntensity: 0.22,
+      emissive: '#f0f9ff',
+      emissiveIntensity: 0.25,
+      roughness: 0.92,
+      metalness: 0.0,
+    });
+    const cloudMidMat = new THREE.MeshStandardMaterial({
+      color: '#e2eefc',
+      emissive: '#bae6fd',
+      emissiveIntensity: 0.18,
       roughness: 0.95,
       metalness: 0.0,
     });
+    const cloudUnderMat = new THREE.MeshStandardMaterial({
+      color: '#9db8d8',
+      emissive: '#64748b',
+      emissiveIntensity: 0.12,
+      roughness: 0.98,
+      metalness: 0.0,
+    });
     this.geometries.push(puffGeo);
-    this.materials.push(cloudMat);
+    this.materials.push(cloudTopMat, cloudMidMat, cloudUnderMat);
 
     const cloudCount = 42;
     for (let i = 0; i < cloudCount; i++) {
@@ -293,15 +371,30 @@ export class EnvironmentFX {
         (rand() - 0.5) * 1050,
       );
 
+      // Multi-shade cloud cluster: broad shaded underside shelf + sunlit billowy crowns
+      const underCount = 2 + Math.floor(rand() * 2);
+      for (let u = 0; u < underCount; u++) {
+        const under = new THREE.Mesh(puffGeo, cloudUnderMat);
+        const s = 5.6 + rand() * 5.8;
+        under.scale.set(s * 1.55, s * 0.42, s * 1.18);
+        under.position.set(
+          (u - underCount * 0.5 + 0.5) * 7.2 + (rand() - 0.5) * 2.4,
+          -1.2 - rand() * 0.65,
+          (rand() - 0.5) * 4.2,
+        );
+        cg.add(under);
+      }
+
       const puffCount = 3 + Math.floor(rand() * 3);
       for (let p = 0; p < puffCount; p++) {
-        const puff = new THREE.Mesh(puffGeo, cloudMat);
-        const s = 5.5 + rand() * 7.5;
-        puff.scale.set(s * 1.4, s * 0.68, s * 1.05);
+        const isCrown = p === Math.floor(puffCount * 0.5) || rand() > 0.52;
+        const puff = new THREE.Mesh(puffGeo, isCrown ? cloudTopMat : cloudMidMat);
+        const s = 5.2 + rand() * 6.8;
+        puff.scale.set(s * 1.35, s * (isCrown ? 0.78 : 0.62), s * 1.05);
         puff.position.set(
-          (p - puffCount * 0.5) * 7.5 + (rand() - 0.5) * 3.0,
-          (rand() - 0.5) * 1.8,
-          (rand() - 0.5) * 5.0,
+          (p - puffCount * 0.5 + 0.5) * 6.8 + (rand() - 0.5) * 2.8,
+          isCrown ? 0.95 + rand() * 1.2 : (rand() - 0.5) * 1.1,
+          (rand() - 0.5) * 4.5,
         );
         cg.add(puff);
       }
@@ -525,13 +618,16 @@ export class EnvironmentFX {
 
     // Gentle Time-of-Day cycle across 6 minutes (bright sunlit morning -> golden afternoon)
     const dayPhase = 0.5 - 0.5 * Math.cos(elapsed * 0.018);
-    this.skyMat.uniforms.uDayPhase.value = dayPhase * 0.65;
+    const scaledDayPhase = dayPhase * 0.65;
+    this.skyMat.uniforms.uDayPhase.value = scaledDayPhase;
+    this.oceanMat.uniforms.uDayPhase.value = scaledDayPhase;
     this.sunDir.set(
       0.55 - dayPhase * 0.25,
       0.52 - dayPhase * 0.14,
       -0.65 + dayPhase * 0.2,
     ).normalize();
     (this.skyMat.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
+    (this.oceanMat.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
 
     // Drift clouds gently across sky and wrap
     const wrapLimit = 560;

@@ -61,7 +61,7 @@ import {
   type BotWorldContext,
 } from '../ai';
 import { AudioEngine } from '../audio';
-import { UIManager } from '../ui';
+import { loadCareerStats, recordMatchCareerStats, UIManager } from '../ui';
 
 interface ActiveBotVisual {
   id: string;
@@ -90,6 +90,9 @@ export interface FortdropDebugAPI {
   getStats(): MatchSummary | null;
   teleportToPOI(poiId: string): boolean;
   getWorldStats(): Record<string, unknown>;
+  spawnLlamaNearby(distance?: number): boolean;
+  triggerShockwave(): boolean;
+  giveMythicLoadout(): void;
 }
 
 declare global {
@@ -166,6 +169,8 @@ export class GameEngine {
   private lastPlayerDamageAt = 0;
   private lastStormDamageAt = 0;
   private activeEmoteMusic: EmoteId | null = null;
+  private discoveredPois = new Set<string>();
+  private intenseCombatMusicActive = false;
 
   private busStart: Vec3Like = { x: -340, y: BUS_HEIGHT, z: -200 };
   private busEnd: Vec3Like = { x: 340, y: BUS_HEIGHT, z: 200 };
@@ -332,7 +337,10 @@ export class GameEngine {
     // 8. Collision, Building, Weapons, Player, VFX
     this.collision = new CollisionSystem(this.terrain);
     this.collision.setStaticColliders(this.worldBuildResult.colliders);
-    this.collision.setPropColliders(this.propsAndLoot.getActivePropColliders());
+    this.collision.setPropColliders([
+      ...this.propsAndLoot.getActivePropColliders(),
+      ...this.propsAndLoot.getActiveLlamaColliders(),
+    ]);
 
     this.buildingSystem = new BuildingSystem(this.scene, this.terrain, this.eventBus);
     this.collision.setBuildPiecesProvider(() => this.buildingSystem.getPieces());
@@ -381,11 +389,20 @@ export class GameEngine {
     // 12. Start in Lobby (or jump directly to a POI in headless/URL QA mode)
     this.enterLobby();
     if (typeof window !== 'undefined') {
-      const qaPoi = new URLSearchParams(window.location.search).get('qaPoi');
+      const search = new URLSearchParams(window.location.search);
+      const qaPoi = search.get('qaPoi');
       if (qaPoi && POIS.some((p) => p.id === qaPoi)) {
         this.startMatch(this.uiManager.getLobbyConfig(), true);
+        this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        window.__GAME__?.giveLoadout();
+        if (qaPoi === 'skyline_spire' || search.has('qaMythic')) {
+          window.__GAME__?.giveMythicLoadout();
+        } else {
+          window.__GAME__?.giveLoadout();
+        }
+        if (search.has('qaLlama')) {
+          window.__GAME__?.spawnLlamaNearby(7);
+        }
       }
     }
     this.startLoop();
@@ -586,6 +603,8 @@ export class GameEngine {
         return targets;
       },
       dropBotLoot: (bot) => this.dropBotLoot(bot),
+      getLaunchPads: () => this.worldInteractables.getLaunchPads(),
+      getBuildPieces: () => this.buildingSystem.getPieces(),
       eventBus: this.eventBus,
     };
   }
@@ -602,11 +621,24 @@ export class GameEngine {
       },
       hp: bot.hp,
       shield: bot.shield,
+      maxHp: bot.maxHp,
+      maxShield: bot.maxShield,
+      velocity: { ...bot.velocity },
       radius: bot.radius,
       height: bot.height,
       alive: bot.alive,
       onDamage: (ev) => {
         this.botManager.onBotDamaged(bot.id, ev, this.matchElapsed);
+      },
+      onHeal: (hpAdded, shieldAdded) => {
+        bot.hp = Math.min(bot.maxHp, bot.hp + hpAdded);
+        bot.shield = Math.min(bot.maxShield, bot.shield + shieldAdded);
+      },
+      onImpulse: (imp) => {
+        bot.velocity.x += imp.x;
+        bot.velocity.y += imp.y;
+        bot.velocity.z += imp.z;
+        bot.grounded = false;
       },
     };
   }
@@ -929,6 +961,8 @@ export class GameEngine {
     this.victoryPendingSummary = false;
     this.matchSummaryShown = false;
     this.activeEmoteMusic = null;
+    this.discoveredPois.clear();
+    this.intenseCombatMusicActive = false;
     this.setWaypoint(null);
 
     this.buildingSystem.clearAll();
@@ -980,6 +1014,8 @@ export class GameEngine {
     this.lastPlayerDamageAt = 0;
     this.lastStormDamageAt = 0;
     this.audioBlips = [];
+    this.discoveredPois.clear();
+    this.intenseCombatMusicActive = false;
     this.setWaypoint(null);
 
     // Reset world entities
@@ -991,7 +1027,10 @@ export class GameEngine {
       this.worldBuildResult.floorLootSpots,
       this.worldBuildResult.colliders,
     );
-    this.collision.setPropColliders(this.propsAndLoot.getActivePropColliders());
+    this.collision.setPropColliders([
+      ...this.propsAndLoot.getActivePropColliders(),
+      ...this.propsAndLoot.getActiveLlamaColliders(),
+    ]);
 
     this.stormSystem.reset(this.matchSeed);
     this.stormSystem.getMesh().visible = true;
@@ -1152,7 +1191,10 @@ export class GameEngine {
     this.worldInteractables.update(dt, this.totalElapsed);
     this.environmentDetail.update(dt, this.totalElapsed);
     this.propsAndLoot.update(dt, this.totalElapsed);
-    this.collision.setPropColliders(this.propsAndLoot.getActivePropColliders());
+    this.collision.setPropColliders([
+      ...this.propsAndLoot.getActivePropColliders(),
+      ...this.propsAndLoot.getActiveLlamaColliders(),
+    ]);
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
       this.nextSupplyDropTime += 55;
@@ -1210,11 +1252,12 @@ export class GameEngine {
 
     const pRender = this.playerController.getCharacterRenderState();
     this.syncPlayerRig(pRender, dt);
+    const playerBiome = this.terrain.getBiomeAt(pRender.position.x, pRender.position.z);
     this.environmentFX.update(
       dt,
       this.totalElapsed,
       pRender.position,
-      this.terrain.getBiomeAt(pRender.position.x, pRender.position.z),
+      playerBiome,
     );
 
     // Player Storm DPS tick
@@ -1223,6 +1266,38 @@ export class GameEngine {
       currPlayerPhase !== 'victory' &&
       currPlayerPhase !== 'eliminated' &&
       this.stormSystem.isInStorm(pRender.position.x, pRender.position.z);
+
+    this.audioEngine.updateBiomeAmbience(playerBiome, inStorm);
+
+    if (currPlayerPhase === 'playing' || currPlayerPhase === 'gliding') {
+      for (let i = 0; i < POIS.length; i++) {
+        const poi = POIS[i];
+        if (
+          !this.discoveredPois.has(poi.id) &&
+          dist2D(pRender.position.x, pRender.position.z, poi.x, poi.z) <= poi.radius * 0.72
+        ) {
+          this.discoveredPois.add(poi.id);
+          this.eventBus.emit('ui:poi_discover', {
+            poiName: poi.name,
+            subtitle: poi.subtitle,
+          });
+          this.eventBus.emit('sound:play', { id: 'poi_discover', volume: 0.7 });
+          break;
+        }
+      }
+    }
+
+    const aliveCountNow =
+      this.botManager.getAliveCount() + (this.playerController.isAlive() ? 1 : 0);
+    if (
+      currPlayerPhase === 'playing' &&
+      !this.activeEmoteMusic &&
+      !this.intenseCombatMusicActive &&
+      (this.stormSystem.getState().phase >= 5 || (aliveCountNow <= 4 && this.totalPlayers > 4))
+    ) {
+      this.intenseCombatMusicActive = true;
+      this.eventBus.emit('music:set', { track: 'combat_intense' });
+    }
 
     if (inStorm && this.playerController.isAlive()) {
       this.stormTickAccum += dt;
@@ -1275,12 +1350,14 @@ export class GameEngine {
     this.worldBuilder.update(dt, this.totalElapsed);
     this.worldInteractables.update(dt, this.totalElapsed);
     this.environmentDetail.update(dt, this.totalElapsed);
+    const lobbyBiome = this.terrain.getBiomeAt(this.lobbyPos.x, this.lobbyPos.z);
     this.environmentFX.update(
       dt,
       this.totalElapsed,
       this.lobbyPos,
-      this.terrain.getBiomeAt(this.lobbyPos.x, this.lobbyPos.z),
+      lobbyBiome,
     );
+    this.audioEngine.updateBiomeAmbience(lobbyBiome, false);
 
     // Gentle Lobby Bus cruise bob
     this.environmentFX.setBusTransform(
@@ -1556,6 +1633,7 @@ export class GameEngine {
       eliminatedBy,
     };
     this.lastMatchSummary = summary;
+    recordMatchCareerStats(summary);
     this.uiManager.showMatchSummary(summary);
   }
 
@@ -1564,6 +1642,18 @@ export class GameEngine {
     const inv = this.playerController.getInventory();
     const aliveCount =
       this.botManager.getAliveCount() + (this.playerController.isAlive() ? 1 : 0);
+    const stormSt = this.stormSystem.getState();
+    const currentBiome = this.terrain.getBiomeAt(snap.playerPos.x, snap.playerPos.z);
+    const currentPoi = POIS.find(
+      (poi) => dist2D(snap.playerPos.x, snap.playerPos.z, poi.x, poi.z) <= poi.radius * 0.85,
+    );
+    const stormDistance = Math.round(
+      Math.hypot(
+        snap.playerPos.x - stormSt.currentCenterX,
+        snap.playerPos.z - stormSt.currentCenterZ,
+      ) - stormSt.currentRadius,
+    );
+    const career = loadCareerStats();
 
     // Combine audio blips + landed/descending supply drops for radar
     const blips: MinimapBlip[] = [...this.audioBlips];
@@ -1625,6 +1715,19 @@ export class GameEngine {
       damageDirection: snap.damageDirection,
       audioBlips: blips,
       inStorm,
+      isSliding: snap.isSliding,
+      isZiplining: snap.isZiplining,
+      isSwimming: snap.isSwimming,
+      currentBiome,
+      currentPoiName: currentPoi ? currentPoi.name : null,
+      killStreak: snap.killStreak,
+      siphonFlashAt: snap.siphonFlashAt,
+      lowHealthPulse: snap.lowHealthPulse,
+      stormDistance,
+      canRepairBuild: snap.canRepairBuild,
+      showSpeedLines: snap.showSpeedLines,
+      careerXp: career.xp,
+      careerLevel: career.level,
     };
 
     this.uiManager.updateHUD(hudState);
@@ -1858,8 +1961,58 @@ export class GameEngine {
           ziplines: engine.worldInteractables.getZiplines().length,
           instancedDetailMeshes: engine.environmentDetail.getInstancedMeshCount(),
           birds: engine.environmentDetail.getBirdCount(),
+          llamas: engine.propsAndLoot.getLlamas().length,
+          bosses: engine.botManager.getBotSummaries().filter((b) => b.isBoss).length,
           fps: Math.round(engine.fps),
         };
+      },
+      spawnLlamaNearby(distance = 6) {
+        const p = engine.playerController.getPosition();
+        const yaw = engine.playerController.getYaw();
+        const lx = p.x + Math.sin(yaw) * distance;
+        const lz = p.z + Math.cos(yaw) * distance;
+        engine.propsAndLoot.spawnLlamaAt(lx, lz, yaw + Math.PI);
+        engine.collision.setPropColliders([
+          ...engine.propsAndLoot.getActivePropColliders(),
+          ...engine.propsAndLoot.getActiveLlamaColliders(),
+        ]);
+        return true;
+      },
+      triggerShockwave() {
+        const p = engine.playerController.getPosition();
+        engine.eventBus.emit('vfx:shockwave', { position: { ...p }, radius: 9.5 });
+        engine.eventBus.emit('sound:play', { id: 'shockwave_blast', position: p, spatial: true });
+        engine.eventBus.emit('vfx:camera_shake', { intensity: 0.75, duration: 0.3 });
+        engine.playerController.applyExternalImpulse({ x: 0, y: 18, z: 0 }, true);
+        return true;
+      },
+      giveMythicLoadout() {
+        const inv = engine.playerController.getInventory();
+        const items: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic' | 'rare'; stack: number }> = [
+          { id: 'mythic_blade_rifle', rarity: 'mythic', stack: 1 },
+          { id: 'heavy_shotgun', rarity: 'legendary', stack: 1 },
+          { id: 'shockwave_grenade', rarity: 'epic', stack: 4 },
+          { id: 'frag_grenade', rarity: 'rare', stack: 4 },
+          { id: 'chug_splash', rarity: 'rare', stack: 4 },
+        ];
+        inv.reset();
+        items.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_mythic_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('medium', 240);
+        inv.addAmmo('shells', 48);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
       },
     };
   }

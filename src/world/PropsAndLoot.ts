@@ -15,6 +15,7 @@ import type {
   HarvestableProp,
   ItemInstance,
   LootDrop,
+  LootLlamaEntity,
   MaterialType,
   PropKind,
   Rarity,
@@ -23,6 +24,7 @@ import type {
   Vec3Like,
   WeaponId,
 } from '../types';
+import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from './TerrainSystem';
 import { TextureFactory } from './TextureFactory';
 import type { ChestSpot, FloorLootSpot } from './WorldBuilder';
 
@@ -68,11 +70,21 @@ interface SupplyEntry {
   beaconMesh: THREE.Mesh;
 }
 
+interface LlamaEntry {
+  data: LootLlamaEntity;
+  group: THREE.Group;
+  bodyMesh: THREE.Group;
+  auraMesh: THREE.Mesh;
+  collider: ColliderBox;
+  hitWobble: number;
+}
+
 const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'ar',
   'burst_ar',
   'pump_shotgun',
   'tac_shotgun',
+  'heavy_shotgun',
   'smg',
   'pistol',
   'sniper',
@@ -83,6 +95,7 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'burst_ar',
   'pump_shotgun',
   'tac_shotgun',
+  'heavy_shotgun',
   'smg',
   'sniper',
   'rocket_launcher',
@@ -92,17 +105,27 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'ar',
   'pump_shotgun',
+  'heavy_shotgun',
   'sniper',
   'rocket_launcher',
   'burst_ar',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
-  { id: 'mini_shield', stack: 2, weight: 32 },
-  { id: 'bandages', stack: 5, weight: 30 },
-  { id: 'shield_potion', stack: 1, weight: 16 },
-  { id: 'medkit', stack: 1, weight: 14 },
-  { id: 'slurp_juice', stack: 1, weight: 8 },
+  { id: 'mini_shield', stack: 2, weight: 24 },
+  { id: 'bandages', stack: 5, weight: 20 },
+  { id: 'shield_potion', stack: 1, weight: 12 },
+  { id: 'medkit', stack: 1, weight: 10 },
+  { id: 'slurp_juice', stack: 1, weight: 6 },
+  { id: 'chug_splash', stack: 2, weight: 10 },
+  { id: 'frag_grenade', stack: 3, weight: 10 },
+  { id: 'shockwave_grenade', stack: 2, weight: 8 },
+];
+
+const THROWABLE_POOL: Array<{ id: WeaponId; stack: number }> = [
+  { id: 'chug_splash', stack: 2 },
+  { id: 'frag_grenade', stack: 3 },
+  { id: 'shockwave_grenade', stack: 2 },
 ];
 
 const AMMO_CHEST_AMOUNTS: Record<AmmoType, number> = {
@@ -128,6 +151,8 @@ export class PropsAndLoot {
   private lootList: LootDrop[] = [];
   private supplyMap = new Map<string, SupplyEntry>();
   private supplyList: SupplyDrop[] = [];
+  private llamasMap = new Map<string, LlamaEntry>();
+  private llamasList: LootLlamaEntity[] = [];
 
   private staticColliders: ColliderBox[] = [];
   private buildingZones: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }> = [];
@@ -393,6 +418,229 @@ export class PropsAndLoot {
 
       this.createProp(`prop_${propIdx++}`, kind, x, z);
     }
+
+    // 4. Spawn 3 Deterministic Supply Loot Llamas across distinct dry open areas
+    this.spawnDeterministicLlamas(allChestSpots);
+  }
+
+  private spawnDeterministicLlamas(allChestSpots: ChestSpot[]): void {
+    const llamaRand = mulberry32(this.seed + 31337);
+    const targetLlamas = 3;
+    const minSpacing = [95, 55, 25];
+
+    for (const minDist of minSpacing) {
+      let attempts = 0;
+      while (this.llamasList.length < targetLlamas && attempts < 1400) {
+        attempts++;
+        const angle = llamaRand() * Math.PI * 2;
+        const dist = 35 + Math.sqrt(llamaRand()) * (ISLAND_RADIUS - 55);
+        const x = Math.cos(angle) * dist;
+        const z = Math.sin(angle) * dist;
+
+        if (this.terrain.isWater(x, z)) continue;
+        const y = this.terrain.getHeightAt(x, z);
+        if (y < 0.8) continue;
+        const n = this.terrain.getNormalAt(x, z);
+        if (n.y < 0.85) continue;
+        if (this.isInsideBuildingZone(x, z, 3.0)) continue;
+        if (Math.hypot(x - VOLCANO_CENTER_X, z - VOLCANO_CENTER_Z) < 18) continue;
+        if (allChestSpots.some((c) => Math.hypot(c.x - x, c.z - z) < 4.5)) continue;
+        if (this.propsList.some((p) => Math.hypot(p.x - x, p.z - z) < 3.5)) continue;
+        if (this.llamasList.some((l) => Math.hypot(l.x - x, l.z - z) < minDist)) continue;
+
+        this.createLlama(`llama_${this.llamasList.length}`, x, z, llamaRand() * Math.PI * 2);
+      }
+      if (this.llamasList.length >= targetLlamas) break;
+    }
+  }
+
+  private createLlama(id: string, x: number, z: number, rotY: number): void {
+    const y = this.terrain.getHeightAt(x, z);
+    const group = new THREE.Group();
+    group.position.set(x, y, z);
+    group.rotation.y = rotY;
+    group.name = `LootLlama_${id}`;
+
+    const bodyMesh = new THREE.Group();
+    group.add(bodyMesh);
+
+    const purpleMat = this.getMat('llama_purple', () =>
+      new THREE.MeshStandardMaterial({ color: '#7c3aed', roughness: 0.72 }),
+    );
+    const lavenderMat = this.getMat('llama_lavender', () =>
+      new THREE.MeshStandardMaterial({ color: '#a855f7', roughness: 0.7 }),
+    );
+    const pinkMat = this.getMat('llama_pink', () =>
+      new THREE.MeshStandardMaterial({ color: '#ec4899', roughness: 0.6 }),
+    );
+    const cyanMat = this.getMat('llama_cyan', () =>
+      new THREE.MeshStandardMaterial({ color: '#22d3ee', roughness: 0.55 }),
+    );
+    const blueLegMat = this.getMat('llama_blue', () =>
+      new THREE.MeshStandardMaterial({ color: '#2563eb', roughness: 0.7 }),
+    );
+    const goldMat = this.getMat('llama_gold', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#ca8a04',
+        emissiveIntensity: 0.3,
+        roughness: 0.35,
+        metalness: 0.5,
+      }),
+    );
+    const snoutMat = this.getMat('llama_snout', () =>
+      new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.8 }),
+    );
+    const eyeMat = this.getMat('llama_eye', () =>
+      new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.4 }),
+    );
+    const auraMat = this.getMat('llama_aura', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#c084fc',
+        transparent: true,
+        opacity: 0.25,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    // 4 blocky piñata legs
+    const legGeo = this.getGeo('llama_leg', () => new THREE.BoxGeometry(0.18, 0.56, 0.18));
+    for (const [lx, lz] of [
+      [-0.22, -0.34],
+      [0.22, -0.34],
+      [-0.22, 0.34],
+      [0.22, 0.34],
+    ]) {
+      const leg = new THREE.Mesh(legGeo, blueLegMat);
+      leg.position.set(lx, 0.28, lz);
+      leg.castShadow = true;
+      bodyMesh.add(leg);
+    }
+
+    // Torso + colorful striped saddle blanket + side loot saddlebags
+    const torso = new THREE.Mesh(
+      this.getGeo('llama_torso', () => new THREE.BoxGeometry(0.68, 0.62, 1.08)),
+      purpleMat,
+    );
+    torso.position.set(0, 0.84, 0);
+    torso.castShadow = true;
+    torso.receiveShadow = true;
+    bodyMesh.add(torso);
+
+    const blanketPink = new THREE.Mesh(
+      this.getGeo('llama_blanket_pink', () => new THREE.BoxGeometry(0.74, 0.36, 0.58)),
+      pinkMat,
+    );
+    blanketPink.position.set(0, 0.98, -0.04);
+    bodyMesh.add(blanketPink);
+
+    const blanketCyan = new THREE.Mesh(
+      this.getGeo('llama_blanket_cyan', () => new THREE.BoxGeometry(0.76, 0.14, 0.42)),
+      cyanMat,
+    );
+    blanketCyan.position.set(0, 1.08, -0.04);
+    bodyMesh.add(blanketCyan);
+
+    const bagGeo = this.getGeo('llama_bag', () => new THREE.BoxGeometry(0.16, 0.32, 0.4));
+    const trimGeo = this.getGeo('llama_bag_trim', () => new THREE.BoxGeometry(0.18, 0.08, 0.42));
+    for (const sx of [-0.41, 0.41]) {
+      const bag = new THREE.Mesh(bagGeo, cyanMat);
+      bag.position.set(sx, 0.84, -0.05);
+      bag.castShadow = true;
+      const trim = new THREE.Mesh(trimGeo, goldMat);
+      trim.position.set(sx, 0.96, -0.05);
+      bodyMesh.add(bag, trim);
+    }
+
+    // Tail
+    const tail = new THREE.Mesh(
+      this.getGeo('llama_tail', () => new THREE.BoxGeometry(0.18, 0.24, 0.22)),
+      pinkMat,
+    );
+    tail.position.set(0, 1.02, -0.62);
+    bodyMesh.add(tail);
+
+    // Tall neck, lavender head, cream snout, eyes, and tall ears
+    const neck = new THREE.Mesh(
+      this.getGeo('llama_neck', () => new THREE.BoxGeometry(0.34, 0.72, 0.34)),
+      lavenderMat,
+    );
+    neck.position.set(0, 1.42, 0.38);
+    neck.castShadow = true;
+    bodyMesh.add(neck);
+
+    const head = new THREE.Mesh(
+      this.getGeo('llama_head', () => new THREE.BoxGeometry(0.42, 0.38, 0.46)),
+      lavenderMat,
+    );
+    head.position.set(0, 1.84, 0.46);
+    head.castShadow = true;
+    bodyMesh.add(head);
+
+    const snout = new THREE.Mesh(
+      this.getGeo('llama_snout', () => new THREE.BoxGeometry(0.32, 0.24, 0.28)),
+      snoutMat,
+    );
+    snout.position.set(0, 1.78, 0.74);
+    bodyMesh.add(snout);
+
+    const eyeGeo = this.getGeo('llama_eye', () => new THREE.BoxGeometry(0.07, 0.08, 0.06));
+    for (const ex of [-0.18, 0.18]) {
+      const eye = new THREE.Mesh(eyeGeo, eyeMat);
+      eye.position.set(ex, 1.88, 0.64);
+      bodyMesh.add(eye);
+    }
+
+    const earGeo = this.getGeo('llama_ear', () => new THREE.BoxGeometry(0.11, 0.34, 0.12));
+    for (const ex of [-0.14, 0.14]) {
+      const ear = new THREE.Mesh(earGeo, pinkMat);
+      ear.position.set(ex, 2.16, 0.38);
+      ear.rotation.z = ex < 0 ? 0.18 : -0.18;
+      bodyMesh.add(ear);
+    }
+
+    const auraMesh = new THREE.Mesh(
+      this.getGeo('llama_aura_geo', () => new THREE.CylinderGeometry(0.85, 1.05, 2.4, 12, 1, true)),
+      auraMat,
+    );
+    auraMesh.position.y = 1.2;
+    group.add(auraMesh);
+
+    this.group.add(group);
+
+    const data: LootLlamaEntity = {
+      id,
+      x,
+      y,
+      z,
+      rotationY: rotY,
+      hp: 200,
+      maxHp: 200,
+      opened: false,
+    };
+
+    const collider: ColliderBox = {
+      id: `llama_col_${id}`,
+      minX: x - 0.75,
+      minY: y,
+      minZ: z - 0.75,
+      maxX: x + 0.75,
+      maxY: y + 2.25,
+      maxZ: z + 0.75,
+      material: 'wood',
+      tag: `llama:${id}`,
+    };
+
+    this.llamasList.push(data);
+    this.llamasMap.set(id, {
+      data,
+      group,
+      bodyMesh,
+      auraMesh,
+      collider,
+      hitWobble: 0,
+    });
   }
 
   private createProp(id: string, kind: PropKind, x: number, z: number): void {
@@ -412,13 +660,28 @@ export class PropsAndLoot {
     visual.scale.setScalar(scale);
 
     const barkMat = this.getMat('bark', () =>
-      new THREE.MeshStandardMaterial({ map: this.textures.getBarkTexture(), roughness: 0.9 }),
+      new THREE.MeshStandardMaterial({
+        map: this.textures.getBarkTexture(),
+        bumpMap: this.textures.getBumpTexture('bark'),
+        bumpScale: 0.12,
+        roughness: 0.9,
+      }),
     );
     const woodMat = this.getMat('wood', () =>
-      new THREE.MeshStandardMaterial({ map: this.textures.getWoodTexture(), roughness: 0.85 }),
+      new THREE.MeshStandardMaterial({
+        map: this.textures.getWoodTexture(),
+        bumpMap: this.textures.getBumpTexture('wood'),
+        bumpScale: 0.09,
+        roughness: 0.85,
+      }),
     );
     const rockMat = this.getMat('rock', () =>
-      new THREE.MeshStandardMaterial({ map: this.textures.getRockTexture(), roughness: 0.92 }),
+      new THREE.MeshStandardMaterial({
+        map: this.textures.getRockTexture(),
+        bumpMap: this.textures.getBumpTexture('rock'),
+        bumpScale: 0.14,
+        roughness: 0.92,
+      }),
     );
 
     if (kind === 'tree_pine') {
@@ -770,6 +1033,8 @@ export class PropsAndLoot {
       const contMat = this.getMat(`container:${col}`, () =>
         new THREE.MeshStandardMaterial({
           map: this.textures.getCorrugatedTexture(col),
+          bumpMap: this.textures.getBumpTexture('metal'),
+          bumpScale: 0.1,
           roughness: 0.55,
           metalness: 0.35,
         }),
@@ -857,6 +1122,8 @@ export class PropsAndLoot {
     const chestMat = this.getMat('chest_mat', () =>
       new THREE.MeshStandardMaterial({
         map: this.textures.getChestTexture(),
+        bumpMap: this.textures.getBumpTexture('metal'),
+        bumpScale: 0.08,
         roughness: 0.35,
         metalness: 0.45,
         emissive: '#f59e0b',
@@ -948,6 +1215,146 @@ export class PropsAndLoot {
 
   getSupplyDrops(): SupplyDrop[] {
     return this.supplyList;
+  }
+
+  getLlamas(): LootLlamaEntity[] {
+    return this.llamasList;
+  }
+
+  spawnLlamaAt(x: number, z: number, rotationY = 0): LootLlamaEntity {
+    const id = `llama_custom_${this.llamasList.length}`;
+    this.createLlama(id, x, z, rotationY);
+    return this.llamasList[this.llamasList.length - 1];
+  }
+
+  getActiveLlamaColliders(): ColliderBox[] {
+    const out: ColliderBox[] = [];
+    for (const l of this.llamasList) {
+      if (l.opened) continue;
+      const entry = this.llamasMap.get(l.id);
+      if (entry) out.push(entry.collider);
+    }
+    return out;
+  }
+
+  damageLlama(id: string, dmg: number, hitPos: Vec3Like): boolean {
+    const entry = this.llamasMap.get(id);
+    if (!entry || entry.data.opened || entry.data.hp <= 0) {
+      return false;
+    }
+
+    const llama = entry.data;
+    const damage = Math.max(0, dmg);
+    llama.hp = Math.max(0, llama.hp - damage);
+    entry.hitWobble = 0.28;
+
+    const dx = hitPos.x - llama.x;
+    const dz = hitPos.z - llama.z;
+    const len = Math.hypot(dx, dz) || 1;
+    this.eventBus.emit('vfx:impact', {
+      position: { ...hitPos },
+      normal: { x: dx / len, y: 0.2, z: dz / len },
+      material: 'wood',
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'hit_wood',
+      position: { ...hitPos },
+      spatial: true,
+    });
+
+    if (llama.hp <= 0) {
+      this.burstLlama(entry);
+      return true;
+    }
+
+    return false;
+  }
+
+  openLlama(id: string): boolean {
+    const entry = this.llamasMap.get(id);
+    if (!entry || entry.data.opened) return false;
+    this.burstLlama(entry);
+    return true;
+  }
+
+  private burstLlama(entry: LlamaEntry): void {
+    const llama = entry.data;
+    if (llama.opened) return;
+
+    llama.opened = true;
+    llama.hp = 0;
+    entry.group.visible = false;
+
+    const pos = { x: llama.x, y: llama.y + 0.85, z: llama.z };
+    this.eventBus.emit('vfx:chest_open', { position: pos });
+    this.eventBus.emit('sound:play', {
+      id: 'chest_open',
+      position: pos,
+      spatial: true,
+    });
+    this.eventBus.emit('audio:noise', {
+      position: pos,
+      kind: 'chest',
+      sourceId: llama.id,
+      radius: 30,
+    });
+
+    const totalDrops = 10;
+    let dropIdx = 0;
+    const scatter = (): Vec3Like => {
+      const a = llama.rotationY + (dropIdx++ / totalDrops) * Math.PI * 2 + (this.rand() - 0.5) * 0.25;
+      const spd = 2.0 + this.rand() * 1.3;
+      return {
+        x: Math.sin(a) * spd,
+        y: 3.8 + this.rand() * 1.2,
+        z: Math.cos(a) * spd,
+      };
+    };
+
+    // Wood + Brick + Metal burst
+    for (const matType of ['wood', 'brick', 'metal'] as MaterialType[]) {
+      this.spawnLootDrop(pos, { materials: { type: matType, amount: 150 } }, scatter());
+    }
+
+    // All 5 Ammo types burst
+    const llamaAmmo: Array<[AmmoType, number]> = [
+      ['light', 45],
+      ['medium', 40],
+      ['shells', 14],
+      ['heavy', 8],
+      ['rockets', 2],
+    ];
+    for (const [ammoType, amount] of llamaAmmo) {
+      this.spawnLootDrop(pos, { ammo: { type: ammoType, amount } }, scatter());
+    }
+
+    // Tactical throwable burst: chug_splash + shockwave_grenade
+    this.spawnLootDrop(
+      pos,
+      {
+        item: {
+          uid: this.nextItemUid(),
+          weaponId: 'chug_splash',
+          rarity: WEAPONS.chug_splash.allowedRarities[0],
+          magAmmo: 0,
+          stackCount: 2,
+        },
+      },
+      scatter(),
+    );
+    this.spawnLootDrop(
+      pos,
+      {
+        item: {
+          uid: this.nextItemUid(),
+          weaponId: 'shockwave_grenade',
+          rarity: WEAPONS.shockwave_grenade.allowedRarities[0],
+          magAmmo: 0,
+          stackCount: 2,
+        },
+      },
+      scatter(),
+    );
   }
 
   damageProp(
@@ -1113,7 +1520,8 @@ export class PropsAndLoot {
       );
     }
 
-    this.spawnLootDrop(pos, { item: this.rollConsumable() }, scatter(2));
+    const utilItem = this.rollConsumable();
+    this.spawnLootDrop(pos, { item: utilItem }, scatter(2));
 
     const matPool: MaterialType[] = ['wood', 'brick', 'metal'];
     this.spawnLootDrop(
@@ -1127,10 +1535,28 @@ export class PropsAndLoot {
       scatter(3),
     );
 
+    if (!WEAPONS[utilItem.weaponId].isThrowable && this.rand() < 0.35) {
+      const tPick = THROWABLE_POOL[Math.floor(this.rand() * THROWABLE_POOL.length)];
+      const tDef = WEAPONS[tPick.id];
+      this.spawnLootDrop(
+        pos,
+        {
+          item: {
+            uid: this.nextItemUid(),
+            weaponId: tPick.id,
+            rarity: tDef.allowedRarities[Math.floor(this.rand() * tDef.allowedRarities.length)],
+            magAmmo: 0,
+            stackCount: tPick.stack,
+          },
+        },
+        scatter(4),
+      );
+    }
+
     return true;
   }
 
-  private rollConsumable(): ItemInstance {
+  rollConsumable(): ItemInstance {
     let total = 0;
     for (const c of CONSUMABLE_POOL) total += c.weight;
     let r = this.rand() * total;
@@ -1143,10 +1569,11 @@ export class PropsAndLoot {
       }
     }
     const def = WEAPONS[chosen.id];
+    const rarity = def.allowedRarities[Math.floor(this.rand() * def.allowedRarities.length)];
     return {
       uid: this.nextItemUid(),
       weaponId: chosen.id,
-      rarity: def.allowedRarities[0],
+      rarity,
       magAmmo: 0,
       stackCount: chosen.stack,
     };
@@ -1264,6 +1691,11 @@ export class PropsAndLoot {
       if (def.isConsumable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_potion', () => new THREE.CylinderGeometry(0.18, 0.2, 0.42, 10)),
+          itemMat,
+        );
+      } else if (def.isThrowable) {
+        itemMesh = new THREE.Mesh(
+          this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),
           itemMat,
         );
       } else {
@@ -1545,6 +1977,20 @@ export class PropsAndLoot {
         entry.group.position.set(s.x, s.y, s.z);
       }
     }
+
+    // 4. Loot llamas subtle idle bob, aura rotation & hit wobble
+    for (const entry of this.llamasMap.values()) {
+      if (entry.data.opened) continue;
+      entry.auraMesh.rotation.y = elapsed * 0.95;
+      if (entry.hitWobble > 0) {
+        entry.hitWobble = Math.max(0, entry.hitWobble - dt);
+        const s = entry.hitWobble * 0.45;
+        entry.bodyMesh.rotation.z = Math.sin(elapsed * 42) * s;
+      } else {
+        entry.bodyMesh.rotation.z = 0;
+      }
+      entry.bodyMesh.position.y = Math.sin(elapsed * 2.2 + entry.data.x) * 0.04;
+    }
   }
 
   private clearEntities(): void {
@@ -1557,6 +2003,8 @@ export class PropsAndLoot {
     this.lootList = [];
     this.supplyMap.clear();
     this.supplyList = [];
+    this.llamasMap.clear();
+    this.llamasList = [];
   }
 
   reset(

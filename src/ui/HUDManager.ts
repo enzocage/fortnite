@@ -11,14 +11,20 @@ import type {
   MaterialType,
 } from '../types';
 import {
+  computeFallbackStormDistance,
+  formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
+  formatSafeZoneDistance,
   getBearingDeg,
+  getContextualHudHints,
+  getKillStreakCallout,
   getRarityMeta,
   worldToMapNorm,
 } from './UIHelpers';
 import {
   getBuildIconSvg,
+  getCrownSvg,
   getMaterialIconSvg,
   getSkullSvg,
   getStormEyeSvg,
@@ -63,7 +69,10 @@ export class HUDManager {
 
   private containerEl: HTMLDivElement;
   private stormVignetteEl: HTMLDivElement;
+  private speedLinesEl: HTMLDivElement;
+  private lowHealthVignetteEl: HTMLDivElement;
   private fpsBadgeEl: HTMLDivElement;
+  private killStreakEl: HTMLDivElement;
 
   // Compass
   private compassTapeEl: HTMLDivElement;
@@ -77,6 +86,8 @@ export class HUDManager {
   private terrainMapCanvas: HTMLCanvasElement | null = null;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
+  private stormDistEl: HTMLDivElement;
+  private locationChipEl: HTMLDivElement;
   private aliveTextEl: HTMLSpanElement;
   private elimsTextEl: HTMLSpanElement;
 
@@ -85,6 +96,8 @@ export class HUDManager {
   private killFeedItems: ActiveKillFeedItem[] = [];
 
   // Bottom center
+  private contextHintsEl: HTMLDivElement;
+  private siphonBadgeEl: HTMLDivElement;
   private interactEl: HTMLDivElement;
   private interactKeyEl: HTMLSpanElement;
   private interactLabelEl: HTMLSpanElement;
@@ -158,6 +171,15 @@ export class HUDManager {
   private lastEditKey = '';
   private lastPointerPromptVisible: boolean | null = null;
   private lastInStorm: boolean | null = null;
+  private lastSpeedLines: boolean | null = null;
+  private lastLowHealthPulse = -1;
+  private lastKillStreak = 0;
+  private lastStormDistKey = '';
+  private lastLocationKey = '';
+  private lastContextHintKey = '';
+  private lastSiphonFlashAt = 0;
+  private lastSiphonBusMs = 0;
+  private siphonHideAt = 0;
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -176,14 +198,24 @@ export class HUDManager {
     this.containerEl = document.createElement('div');
     this.containerEl.className = 'fdr-hud fdr-hidden';
 
-    // Storm vignette
+    // Storm vignette, speed lines, low-health heartbeat
     this.stormVignetteEl = document.createElement('div');
     this.stormVignetteEl.className = 'fdr-storm-vignette';
+
+    this.speedLinesEl = document.createElement('div');
+    this.speedLinesEl.className = 'fdr-speed-lines';
+
+    this.lowHealthVignetteEl = document.createElement('div');
+    this.lowHealthVignetteEl.className = 'fdr-low-health-vignette';
 
     // FPS Badge
     this.fpsBadgeEl = document.createElement('div');
     this.fpsBadgeEl.className = 'fdr-fps-badge fdr-hidden';
     this.fpsBadgeEl.textContent = '60 FPS';
+
+    // Kill-Streak Callout Badge
+    this.killStreakEl = document.createElement('div');
+    this.killStreakEl.className = 'fdr-killstreak-badge fdr-hidden';
 
     // Compass
     const compassWrap = document.createElement('div');
@@ -247,7 +279,19 @@ export class HUDManager {
     elimsPill.append(skullIcon, this.elimsTextEl);
 
     teleRow.append(this.stormPillEl, alivePill, elimsPill);
-    minimapCluster.append(minimapFrame, teleRow);
+
+    const zoneMetaRow = document.createElement('div');
+    zoneMetaRow.className = 'fdr-zone-meta-row';
+
+    this.stormDistEl = document.createElement('div');
+    this.stormDistEl.className = 'fdr-zone-pill safe-dist';
+    this.stormDistEl.textContent = 'IN SAFE';
+
+    this.locationChipEl = document.createElement('div');
+    this.locationChipEl.className = 'fdr-zone-pill location fdr-hidden';
+
+    zoneMetaRow.append(this.stormDistEl, this.locationChipEl);
+    minimapCluster.append(minimapFrame, teleRow, zoneMetaRow);
 
     // Bottom-Left Kill Feed
     this.killFeedEl = document.createElement('div');
@@ -256,6 +300,13 @@ export class HUDManager {
     // Bottom-Center Vitals
     const bottomCenter = document.createElement('div');
     bottomCenter.className = 'fdr-bottom-center';
+
+    this.contextHintsEl = document.createElement('div');
+    this.contextHintsEl.className = 'fdr-context-hints fdr-hidden';
+
+    this.siphonBadgeEl = document.createElement('div');
+    this.siphonBadgeEl.className = 'fdr-siphon-badge fdr-hidden';
+    this.siphonBadgeEl.textContent = '+50 SIPHON';
 
     this.interactEl = document.createElement('div');
     this.interactEl.className = 'fdr-interact-prompt fdr-hidden';
@@ -314,7 +365,13 @@ export class HUDManager {
     healthBar.append(this.healthFillEl, healthTxt);
 
     vitalsStack.append(this.staminaWrapEl, shieldBar, healthBar);
-    bottomCenter.append(this.interactEl, this.channelEl, vitalsStack);
+    bottomCenter.append(
+      this.contextHintsEl,
+      this.siphonBadgeEl,
+      this.interactEl,
+      this.channelEl,
+      vitalsStack,
+    );
 
     // Bottom-Right Build & Hotbar
     const bottomRight = document.createElement('div');
@@ -454,27 +511,38 @@ export class HUDManager {
     editActions.append(confirmBtn, resetBtn);
     this.editOverlayEl.append(editHead, editGrid, editActions);
 
-    // Radial Emote Wheel
+    // Radial Emote Wheel (supports 6 radial slices cleanly around center)
     this.emoteBackdropEl = document.createElement('div');
     this.emoteBackdropEl.className = 'fdr-emote-wheel-backdrop fdr-hidden';
     const wheel = document.createElement('div');
     wheel.className = 'fdr-emote-wheel';
-    for (const emote of EMOTES) {
+    const wheelCenter = 195;
+    const wheelRadius = 128;
+    const sliceW = 108;
+    const sliceH = 62;
+    EMOTES.forEach((emote, idx) => {
       const meta = getRarityMeta(emote.rarity);
+      const angle = -Math.PI / 2 + (idx / Math.max(1, EMOTES.length)) * Math.PI * 2;
+      const leftPx = wheelCenter + Math.cos(angle) * wheelRadius - sliceW / 2;
+      const topPx = wheelCenter + Math.sin(angle) * wheelRadius - sliceH / 2;
       const slice = document.createElement('button');
       slice.type = 'button';
       slice.className = `fdr-emote-slice rarity-${emote.rarity}`;
+      slice.style.left = `${leftPx.toFixed(1)}px`;
+      slice.style.top = `${topPx.toFixed(1)}px`;
+      slice.style.width = `${sliceW}px`;
+      slice.style.height = `${sliceH}px`;
       slice.innerHTML = `
-        <span style="font-size:11px;font-weight:800;opacity:0.9">${meta.label}</span>
-        <span style="font-size:17px;font-weight:800">${emote.name}</span>
-        <span style="font-size:11px;opacity:0.85">${emote.bpm} BPM</span>
+        <span style="font-size:10px;font-weight:800;opacity:0.9">${meta.label}</span>
+        <span style="font-size:14px;font-weight:800;line-height:1.05">${emote.name}</span>
+        <span style="font-size:10px;opacity:0.85">${emote.bpm} BPM</span>
       `;
       slice.addEventListener('click', () => {
         this.setEmoteWheelOpen(false);
         this.callbacks.onEmoteSelect(emote.id);
       });
       wheel.appendChild(slice);
-    }
+    });
     const centerCancel = document.createElement('button');
     centerCancel.type = 'button';
     centerCancel.className = 'fdr-emote-center';
@@ -499,8 +567,11 @@ export class HUDManager {
     `;
 
     this.containerEl.append(
+      this.speedLinesEl,
+      this.lowHealthVignetteEl,
       this.stormVignetteEl,
       this.fpsBadgeEl,
+      this.killStreakEl,
       compassWrap,
       this.phaseHintEl,
       minimapCluster,
@@ -563,6 +634,42 @@ export class HUDManager {
     this.damageArcHideAt = 0;
     this.lastDamageDirTs = 0;
     this.damageArcWrapEl.style.opacity = '0';
+    this.siphonHideAt = 0;
+    this.lastSiphonFlashAt = 0;
+    this.lastSiphonBusMs = 0;
+    this.siphonBadgeEl.classList.add('fdr-hidden');
+    this.killStreakEl.classList.add('fdr-hidden');
+    this.lastKillStreak = 0;
+    this.speedLinesEl.classList.remove('active');
+    this.lastSpeedLines = null;
+    this.lowHealthVignetteEl.classList.remove('active');
+    this.lowHealthVignetteEl.style.opacity = '0';
+    this.lastLowHealthPulse = -1;
+    this.contextHintsEl.classList.add('fdr-hidden');
+    this.lastContextHintKey = '';
+  }
+
+  triggerSiphonFlash(
+    amount = 50,
+    healthAdded = 0,
+    shieldAdded = 0,
+    fromBus = false,
+  ): void {
+    const now = performance.now();
+    if (fromBus) {
+      this.lastSiphonBusMs = now;
+    }
+    const safeAmt = Math.max(1, Math.round(Number.isFinite(amount) ? amount : 50));
+    const parts: string[] = [];
+    if (healthAdded > 0) parts.push(`+${Math.round(healthAdded)} HP`);
+    if (shieldAdded > 0) parts.push(`+${Math.round(shieldAdded)} SHD`);
+    const sub = parts.length > 0 ? ` (${parts.join(' ')})` : '';
+    this.siphonBadgeEl.textContent = `+${safeAmt} SIPHON${sub}`;
+    this.siphonBadgeEl.classList.remove('fdr-hidden', 'pop');
+    // Force reflow when running in DOM to replay pop animation
+    void this.siphonBadgeEl.offsetWidth;
+    this.siphonBadgeEl.classList.add('pop');
+    this.siphonHideAt = now + 1850;
   }
 
   setOverlaySuppressed(suppressed: boolean): void {
@@ -691,6 +798,7 @@ export class HUDManager {
 
     this.updateTransientAnimations(now);
     this.updateStormVignette(state.inStorm);
+    this.updateTacticalOverlays(state, now);
     this.updateFps(state.fps, now);
     this.updateCompass(state);
     this.updatePhaseHint(state);
@@ -743,6 +851,13 @@ export class HUDManager {
       this.hitmarkerEl.classList.remove('active');
     }
 
+    // Hide expired siphon badge
+    if (this.siphonHideAt > 0 && now >= this.siphonHideAt) {
+      this.siphonHideAt = 0;
+      this.siphonBadgeEl.classList.add('fdr-hidden');
+      this.siphonBadgeEl.classList.remove('pop');
+    }
+
     // Fade directional damage arc
     if (this.damageArcHideAt > 0) {
       const rem = this.damageArcHideAt - now;
@@ -759,6 +874,67 @@ export class HUDManager {
     if (this.lastInStorm === inStorm) return;
     this.lastInStorm = inStorm;
     this.stormVignetteEl.classList.toggle('active', inStorm);
+  }
+
+  private updateTacticalOverlays(state: HUDState, now: number): void {
+    const showSpeed = Boolean(state.showSpeedLines);
+    if (this.lastSpeedLines !== showSpeed) {
+      this.lastSpeedLines = showSpeed;
+      this.speedLinesEl.classList.toggle('active', showSpeed);
+    }
+
+    const pulseRaw = state.lowHealthPulse ?? 0;
+    const pulse =
+      typeof pulseRaw === 'number' && Number.isFinite(pulseRaw)
+        ? Math.max(0, Math.min(1, pulseRaw))
+        : 0;
+    const pulseRounded = Math.round(pulse * 100);
+    if (pulseRounded !== this.lastLowHealthPulse) {
+      this.lastLowHealthPulse = pulseRounded;
+      if (pulse > 0) {
+        this.lowHealthVignetteEl.classList.add('active');
+        this.lowHealthVignetteEl.style.opacity = (0.35 + pulse * 0.65).toFixed(2);
+      } else {
+        this.lowHealthVignetteEl.classList.remove('active');
+        this.lowHealthVignetteEl.style.opacity = '0';
+      }
+    }
+
+    if (
+      typeof state.siphonFlashAt === 'number' &&
+      Number.isFinite(state.siphonFlashAt) &&
+      state.siphonFlashAt > this.lastSiphonFlashAt
+    ) {
+      this.lastSiphonFlashAt = state.siphonFlashAt;
+      if (now - this.lastSiphonBusMs > 150) {
+        this.triggerSiphonFlash(50, 0, 0, false);
+      }
+    }
+
+    const ks = Math.max(0, Math.floor(state.killStreak ?? 0));
+    if (ks !== this.lastKillStreak) {
+      this.lastKillStreak = ks;
+      const callout = getKillStreakCallout(ks);
+      if (!callout) {
+        this.killStreakEl.classList.add('fdr-hidden');
+      } else {
+        this.killStreakEl.className = `fdr-killstreak-badge tier-${callout.tier.toLowerCase()}`;
+        this.killStreakEl.innerHTML = `<span class="fdr-ks-count">${callout.streak}X</span><span class="fdr-ks-label">${callout.label}</span>`;
+      }
+    }
+
+    const hints = getContextualHudHints(state);
+    const hintKey = hints.map((h) => h.id).join(':');
+    if (hintKey !== this.lastContextHintKey) {
+      this.lastContextHintKey = hintKey;
+      this.contextHintsEl.classList.toggle('fdr-hidden', hints.length === 0);
+      this.contextHintsEl.innerHTML = hints
+        .map(
+          (h) =>
+            `<div class="fdr-ctx-chip tone-${h.tone}"><span class="fdr-keycap">${h.key}</span><span>${h.label}</span></div>`,
+        )
+        .join('');
+    }
   }
 
   private updateFps(fps: number, now: number): void {
@@ -851,6 +1027,42 @@ export class HUDManager {
     if (state.kills !== this.lastKills) {
       this.lastKills = state.kills;
       this.elimsTextEl.textContent = String(state.kills);
+    }
+
+    const rawDist =
+      typeof state.stormDistance === 'number' &&
+      Number.isFinite(state.stormDistance)
+        ? state.stormDistance
+        : computeFallbackStormDistance(
+            state.playerPos.x,
+            state.playerPos.z,
+            s,
+          );
+    const zoneInfo = formatSafeZoneDistance(rawDist, state.inStorm);
+    const zoneKey = `${zoneInfo.text}:${zoneInfo.isOutside ? 1 : 0}`;
+    if (zoneKey !== this.lastStormDistKey) {
+      this.lastStormDistKey = zoneKey;
+      this.stormDistEl.textContent = zoneInfo.text;
+      this.stormDistEl.classList.toggle('outside', zoneInfo.isOutside);
+    }
+
+    const poiName = state.currentPoiName
+      ? state.currentPoiName.trim().toUpperCase()
+      : '';
+    const biomeLabel = formatBiomeLabel(state.currentBiome);
+    const locKey = `${poiName}:${biomeLabel}`;
+    if (locKey !== this.lastLocationKey) {
+      this.lastLocationKey = locKey;
+      if (!poiName && !biomeLabel) {
+        this.locationChipEl.classList.add('fdr-hidden');
+      } else {
+        this.locationChipEl.classList.remove('fdr-hidden');
+        this.locationChipEl.classList.toggle('poi', Boolean(poiName));
+        this.locationChipEl.textContent =
+          poiName && biomeLabel
+            ? `${poiName} • ${biomeLabel}`
+            : poiName || biomeLabel;
+      }
     }
   }
 
@@ -989,14 +1201,19 @@ export class HUDManager {
 
       const wDef = WEAPONS[item.weaponId];
       let countBadge = '';
-      if (wDef.isConsumable) {
+      if (wDef.isConsumable || wDef.isThrowable) {
         countBadge = `<span class="fdr-slot-count">x${item.stackCount}</span>`;
       } else if (wDef.magSize > 0) {
         countBadge = `<span class="fdr-slot-count">${item.magAmmo}</span>`;
       }
+      const crownBadge =
+        item.rarity === 'mythic'
+          ? `<span class="fdr-slot-crown" title="Mythic Boss Gear">${getCrownSvg()}</span>`
+          : '';
 
       card.innerHTML = `
         <span class="fdr-slot-key">${i + 1}</span>
+        ${crownBadge}
         <div class="fdr-slot-svg">${getWeaponSvg(item.weaponId)}</div>
         ${countBadge}
       `;

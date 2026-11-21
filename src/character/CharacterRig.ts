@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { GliderDef, PickaxeDef, SkinDef, WeaponId } from '../types';
+import type { BackblingStyle, GliderDef, PickaxeDef, SkinDef, WeaponId } from '../types';
 import { GLIDERS, PICKAXES, SKINS, clamp } from '../core';
 import {
   createBlueprintModel,
@@ -31,6 +31,16 @@ export interface CharacterJoints {
   gliderSocket: THREE.Group;
 }
 
+interface BackblingParts {
+  style: BackblingStyle;
+  capeUpper?: THREE.Group;
+  capeLower?: THREE.Group;
+  leftWing?: THREE.Group;
+  rightWing?: THREE.Group;
+  packAntenna?: THREE.Group;
+  shieldPivot?: THREE.Group;
+}
+
 function makeMat(
   color: THREE.ColorRepresentation,
   roughness = 0.58,
@@ -57,10 +67,16 @@ function createPart(
   rx = 0,
   ry = 0,
   rz = 0,
+  sx = 1,
+  sy = 1,
+  sz = 1,
 ): THREE.Mesh {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(x, y, z);
   mesh.rotation.set(rx, ry, rz);
+  if (sx !== 1 || sy !== 1 || sz !== 1) {
+    mesh.scale.set(sx, sy, sz);
+  }
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   parent.add(mesh);
@@ -68,7 +84,7 @@ function createPart(
 }
 
 /**
- * Stylized ~1.85m cartoon-tactical humanoid character rig.
+ * Stylized ~1.85m cartoon-tactical sculpted humanoid character rig.
  * Root sits at feet (y = 0); local +Z is forward (yaw = 0 faces +Z).
  */
 export class CharacterRig {
@@ -87,6 +103,7 @@ export class CharacterRig {
   private readonly weaponCache = new Map<string, THREE.Group>();
   private activeWeaponGroup: THREE.Group | null = null;
   private gliderVisualGroup: THREE.Group | null = null;
+  private backblingParts: BackblingParts = { style: 'none' };
   private disposed = false;
 
   constructor(skin?: SkinDef, pickaxe?: PickaxeDef, glider?: GliderDef) {
@@ -137,7 +154,7 @@ export class CharacterRig {
 
     const leftShoulder = new THREE.Group();
     leftShoulder.name = 'leftShoulder';
-    leftShoulder.position.set(0.23, 0.16, 0);
+    leftShoulder.position.set(0.235, 0.16, 0);
     chest.add(leftShoulder);
 
     const leftElbow = new THREE.Group();
@@ -152,7 +169,7 @@ export class CharacterRig {
 
     const rightShoulder = new THREE.Group();
     rightShoulder.name = 'rightShoulder';
-    rightShoulder.position.set(-0.23, 0.16, 0);
+    rightShoulder.position.set(-0.235, 0.16, 0);
     chest.add(rightShoulder);
 
     const rightElbow = new THREE.Group();
@@ -242,6 +259,7 @@ export class CharacterRig {
       grp.parent?.remove(grp);
     }
     this.skinVisualRoots.length = 0;
+    this.backblingParts = { style: 'none' };
   }
 
   private attachVisualGroup(parent: THREE.Object3D, name: string): THREE.Group {
@@ -255,84 +273,135 @@ export class CharacterRig {
   private buildSkinVisuals(): void {
     this.clearSkinVisuals();
 
-    const primary = makeMat(this.skin.primaryColor, 0.52, 0.14);
-    const secondary = makeMat(this.skin.secondaryColor, 0.62, 0.18);
-    const accent = makeMat(this.skin.accentColor, 0.35, 0.35, this.skin.accentColor, 0.12);
+    const primary = makeMat(this.skin.primaryColor, 0.48, 0.16);
+    const secondary = makeMat(this.skin.secondaryColor, 0.56, 0.22);
+    const accent = makeMat(this.skin.accentColor, 0.30, 0.38, this.skin.accentColor, 0.16);
     const skinMat = makeMat(this.skin.skinTone, 0.72, 0.02);
     const hairMat = makeMat(this.skin.hairColor, 0.78, 0.05);
-    const darkTrim = makeMat('#0f172a', 0.6, 0.25);
-    const bootMat = makeMat('#1e293b', 0.68, 0.15);
+    const darkTrim = makeMat('#0f172a', 0.55, 0.3);
+    const armorSteel = makeMat('#334155', 0.36, 0.58);
+    const bootMat = makeMat('#1e293b', 0.65, 0.18);
     const soleMat = makeMat('#0f172a', 0.85, 0.05);
-    const scleraMat = makeMat('#f8fafc', 0.3, 0.0);
-    const irisMat = makeMat('#1d4ed8', 0.25, 0.1);
-    const pupilMat = makeMat('#020617', 0.2, 0.0);
+    const scleraMat = makeMat('#f8fafc', 0.25, 0.0);
+    const irisMat = makeMat('#0ea5e9', 0.22, 0.12);
+    const pupilMat = makeMat('#020617', 0.18, 0.0);
+    const catchlightMat = makeMat('#ffffff', 0.1, 0.0, '#ffffff', 0.45);
 
-    // --- Hips & Tactical Utility Belt ---
+    // --- Hips & Tactical Utility Belt + Pouches ---
     const hipVis = this.attachVisualGroup(this.joints.hips, 'hips_visual');
-    createPart(hipVis, new THREE.BoxGeometry(0.32, 0.15, 0.20), secondary, 0, 0.01, 0);
-    // Belt + buckle + pouches
-    createPart(hipVis, new THREE.BoxGeometry(0.345, 0.055, 0.225), darkTrim, 0, 0.06, 0);
-    createPart(hipVis, new THREE.BoxGeometry(0.08, 0.062, 0.03), accent, 0, 0.06, 0.112);
-    createPart(hipVis, new THREE.BoxGeometry(0.065, 0.085, 0.09), secondary, 0.185, 0.035, 0.02);
-    createPart(hipVis, new THREE.BoxGeometry(0.065, 0.085, 0.09), secondary, -0.185, 0.035, 0.02);
-    createPart(hipVis, new THREE.BoxGeometry(0.11, 0.075, 0.065), primary, 0, 0.04, -0.125);
-
-    // --- Spine / Waist ---
-    const spineVis = this.attachVisualGroup(this.joints.spine, 'spine_visual');
-    createPart(spineVis, new THREE.BoxGeometry(0.28, 0.20, 0.18), primary, 0, 0.06, 0);
-    createPart(spineVis, new THREE.BoxGeometry(0.295, 0.06, 0.195), secondary, 0, 0.02, 0);
-
-    // --- Chest & Tactical Vest ---
-    const chestVis = this.attachVisualGroup(this.joints.chest, 'chest_visual');
-    createPart(chestVis, new THREE.BoxGeometry(0.36, 0.27, 0.22), primary, 0, 0.10, 0);
-    // Armor vest plates + glowing core strip
-    createPart(chestVis, new THREE.BoxGeometry(0.30, 0.21, 0.245), secondary, 0, 0.11, 0.005);
-    createPart(chestVis, new THREE.BoxGeometry(0.12, 0.045, 0.256), accent, 0, 0.15, 0.01);
-    createPart(chestVis, new THREE.BoxGeometry(0.05, 0.12, 0.256), accent, 0.09, 0.10, 0.005);
-    createPart(chestVis, new THREE.BoxGeometry(0.05, 0.12, 0.256), accent, -0.09, 0.10, 0.005);
-    // Collar ring
-    createPart(chestVis, new THREE.CylinderGeometry(0.09, 0.11, 0.045, 10), secondary, 0, 0.23, 0);
-
-    // --- Neck ---
-    const neckVis = this.attachVisualGroup(this.joints.neck, 'neck_visual');
-    createPart(neckVis, new THREE.CylinderGeometry(0.058, 0.068, 0.10, 10), skinMat, 0, 0.04, 0);
-
-    // --- Head & Expressive Face ---
-    const headVis = this.attachVisualGroup(this.joints.head, 'head_visual');
-    // Stylized rounded-tactical head (cranium + jawline)
-    createPart(headVis, new THREE.BoxGeometry(0.24, 0.24, 0.24), skinMat, 0, 0.15, 0);
-    createPart(headVis, new THREE.BoxGeometry(0.20, 0.07, 0.21), skinMat, 0, 0.045, 0.01);
-    // Ears
-    createPart(headVis, new THREE.BoxGeometry(0.035, 0.075, 0.05), skinMat, 0.132, 0.145, -0.01);
-    createPart(headVis, new THREE.BoxGeometry(0.035, 0.075, 0.05), skinMat, -0.132, 0.145, -0.01);
-    // Nose bridge
-    createPart(headVis, new THREE.BoxGeometry(0.034, 0.055, 0.045), skinMat, 0, 0.135, 0.128);
-    // Expressive eyes (sclera + iris + pupil) facing +Z
+    createPart(hipVis, new THREE.CylinderGeometry(0.155, 0.166, 0.15, 12), secondary, 0, 0.01, 0, 0, 0, 0, 1.04, 1, 0.68);
+    // Belt webbing + metallic clasp buckle
+    createPart(hipVis, new THREE.CylinderGeometry(0.168, 0.172, 0.055, 12), darkTrim, 0, 0.06, 0, 0, 0, 0, 1.05, 1, 0.72);
+    createPart(hipVis, new THREE.BoxGeometry(0.082, 0.060, 0.03), armorSteel, 0, 0.06, 0.118);
+    createPart(hipVis, new THREE.BoxGeometry(0.052, 0.036, 0.036), accent, 0, 0.06, 0.122);
+    // Tactical dual side ammo pouches + flap + rear utility pack + canteen
     for (const side of [1, -1]) {
-      const ex = side * 0.055;
-      createPart(headVis, new THREE.BoxGeometry(0.046, 0.036, 0.016), scleraMat, ex, 0.17, 0.118);
-      createPart(headVis, new THREE.BoxGeometry(0.026, 0.028, 0.018), irisMat, ex, 0.168, 0.122);
-      createPart(headVis, new THREE.BoxGeometry(0.014, 0.016, 0.02), pupilMat, ex, 0.168, 0.124);
-      // Expressive tilted brow
+      createPart(hipVis, new THREE.BoxGeometry(0.062, 0.09, 0.095), secondary, side * 0.185, 0.035, 0.02, 0, 0, side * -0.1);
+      createPart(hipVis, new THREE.BoxGeometry(0.066, 0.026, 0.098), accent, side * 0.188, 0.068, 0.02, 0, 0, side * -0.1);
+    }
+    createPart(hipVis, new THREE.BoxGeometry(0.125, 0.082, 0.068), primary, 0, 0.04, -0.128);
+    createPart(hipVis, new THREE.BoxGeometry(0.09, 0.024, 0.072), darkTrim, 0, 0.068, -0.13);
+    createPart(hipVis, new THREE.CylinderGeometry(0.028, 0.028, 0.085, 8), armorSteel, -0.11, 0.035, -0.115);
+
+    // --- Spine / Sculpted Tapered Waist ---
+    const spineVis = this.attachVisualGroup(this.joints.spine, 'spine_visual');
+    createPart(spineVis, new THREE.CylinderGeometry(0.156, 0.138, 0.21, 12), primary, 0, 0.06, 0, 0, 0, 0, 1.04, 1, 0.68);
+    // Tactical rib-brace belt & abdominal armor strips
+    createPart(spineVis, new THREE.CylinderGeometry(0.152, 0.146, 0.058, 12), secondary, 0, 0.02, 0, 0, 0, 0, 1.05, 1, 0.72);
+    createPart(spineVis, new THREE.BoxGeometry(0.16, 0.055, 0.03), secondary, 0, 0.09, 0.098);
+    createPart(spineVis, new THREE.BoxGeometry(0.12, 0.045, 0.028), armorSteel, 0, 0.035, 0.098);
+
+    // --- Chest & Layered Armor Plates ---
+    const chestVis = this.attachVisualGroup(this.joints.chest, 'chest_visual');
+    createPart(chestVis, new THREE.CylinderGeometry(0.190, 0.152, 0.27, 12), primary, 0, 0.105, 0, 0, 0, 0, 1.08, 1, 0.68);
+    // Angled front pectoral armor plates + sternum power core
+    for (const side of [1, -1]) {
       createPart(
-        headVis,
-        new THREE.BoxGeometry(0.056, 0.016, 0.02),
-        hairMat,
-        ex,
-        0.205,
-        0.124,
+        chestVis,
+        new THREE.BoxGeometry(0.145, 0.145, 0.055),
+        secondary,
+        side * 0.088,
+        0.135,
+        0.105,
+        -0.12,
+        side * -0.18,
+        side * 0.06,
+      );
+      createPart(
+        chestVis,
+        new THREE.BoxGeometry(0.052, 0.115, 0.062),
+        accent,
+        side * 0.098,
+        0.12,
+        0.108,
+        -0.12,
+        side * -0.18,
+        0,
+      );
+      // Clavicle tactical harness straps
+      createPart(
+        chestVis,
+        new THREE.BoxGeometry(0.048, 0.045, 0.225),
+        darkTrim,
+        side * 0.105,
+        0.225,
+        0,
         0,
         0,
         side * -0.14,
       );
     }
-    // Confident mouth smile/smirk line
-    createPart(headVis, new THREE.BoxGeometry(0.065, 0.012, 0.014), darkTrim, 0, 0.082, 0.122);
+    // Central sternum core & dorsal backplate
+    createPart(chestVis, new THREE.BoxGeometry(0.085, 0.095, 0.045), armorSteel, 0, 0.135, 0.115);
+    createPart(chestVis, new THREE.BoxGeometry(0.052, 0.045, 0.052), accent, 0, 0.14, 0.118);
+    createPart(chestVis, new THREE.BoxGeometry(0.24, 0.20, 0.045), secondary, 0, 0.115, -0.108);
+    // Sculpted collar armor ring
+    createPart(chestVis, new THREE.CylinderGeometry(0.092, 0.118, 0.052, 12), secondary, 0, 0.235, 0);
+    createPart(chestVis, new THREE.CylinderGeometry(0.096, 0.105, 0.02, 12), accent, 0, 0.25, 0);
+
+    // --- Neck ---
+    const neckVis = this.attachVisualGroup(this.joints.neck, 'neck_visual');
+    createPart(neckVis, new THREE.CylinderGeometry(0.056, 0.068, 0.105, 10), skinMat, 0, 0.042, 0);
+
+    // --- Head & Expressive Sculpted Face ---
+    const headVis = this.attachVisualGroup(this.joints.head, 'head_visual');
+    // Rounded sculpted cranium + cheek/jawline taper
+    createPart(headVis, new THREE.SphereGeometry(0.130, 14, 12), skinMat, 0, 0.175, 0, 0, 0, 0, 0.96, 1.02, 1.0);
+    createPart(headVis, new THREE.CylinderGeometry(0.116, 0.084, 0.125, 10), skinMat, 0, 0.095, 0.008, 0, 0, 0, 0.98, 1, 0.96);
+    createPart(headVis, new THREE.BoxGeometry(0.085, 0.042, 0.085), skinMat, 0, 0.042, 0.045, 0.14, 0, 0);
+    // Sculpted ears
+    createPart(headVis, new THREE.BoxGeometry(0.032, 0.072, 0.046), skinMat, 0.128, 0.145, -0.01, 0, 0, -0.1);
+    createPart(headVis, new THREE.BoxGeometry(0.032, 0.072, 0.046), skinMat, -0.128, 0.145, -0.01, 0, 0, 0.1);
+    // Nose bridge
+    createPart(headVis, new THREE.BoxGeometry(0.030, 0.055, 0.044), skinMat, 0, 0.135, 0.126, -0.12, 0, 0);
+
+    // Expressive eyes (sclera + iris + pupil + specular catchlight + sculpted tilted brow) facing +Z
+    for (const side of [1, -1]) {
+      const ex = side * 0.052;
+      createPart(headVis, new THREE.BoxGeometry(0.046, 0.034, 0.016), scleraMat, ex, 0.168, 0.116);
+      createPart(headVis, new THREE.BoxGeometry(0.025, 0.026, 0.018), irisMat, ex, 0.166, 0.120);
+      createPart(headVis, new THREE.BoxGeometry(0.013, 0.015, 0.020), pupilMat, ex, 0.166, 0.122);
+      createPart(headVis, new THREE.BoxGeometry(0.006, 0.006, 0.022), catchlightMat, ex + 0.005, 0.172, 0.123);
+      // Expressive angled brow ridge
+      createPart(
+        headVis,
+        new THREE.BoxGeometry(0.056, 0.016, 0.024),
+        hairMat,
+        ex,
+        0.200,
+        0.122,
+        0.1,
+        side * -0.15,
+        side * -0.16,
+      );
+    }
+    // Confident smirk / mouth line
+    createPart(headVis, new THREE.BoxGeometry(0.062, 0.011, 0.014), darkTrim, 0, 0.084, 0.118, 0, 0, 0.05);
 
     // --- Headgear & Hair ---
-    this.buildHeadgear(headVis, primary, secondary, accent, hairMat, darkTrim);
+    this.buildHeadgear(headVis, primary, secondary, accent, hairMat, darkTrim, armorSteel);
 
-    // --- Arms, Shoulder Pads, Gauntlets, Gloves ---
+    // --- Arms, Shoulder Pauldrons, Gauntlets, Gloves ---
     this.buildArmVisuals(
       this.joints.leftShoulder,
       this.joints.leftElbow,
@@ -342,6 +411,7 @@ export class CharacterRig {
       secondary,
       accent,
       skinMat,
+      armorSteel,
     );
     this.buildArmVisuals(
       this.joints.rightShoulder,
@@ -352,9 +422,10 @@ export class CharacterRig {
       secondary,
       accent,
       skinMat,
+      armorSteel,
     );
 
-    // --- Legs, Knee Pads, Boots ---
+    // --- Legs, Knee Guards, Boots ---
     this.buildLegVisuals(
       this.joints.leftHip,
       this.joints.leftKnee,
@@ -365,6 +436,7 @@ export class CharacterRig {
       accent,
       bootMat,
       soleMat,
+      armorSteel,
     );
     this.buildLegVisuals(
       this.joints.rightHip,
@@ -376,11 +448,12 @@ export class CharacterRig {
       accent,
       bootMat,
       soleMat,
+      armorSteel,
     );
 
-    // --- Backbling ---
+    // --- Articulated Backbling ---
     const backVis = this.attachVisualGroup(this.joints.backblingSocket, 'backbling_visual');
-    this.buildBackbling(backVis, primary, secondary, accent);
+    this.buildBackbling(backVis, primary, secondary, accent, armorSteel);
   }
 
   private buildHeadgear(
@@ -390,83 +463,95 @@ export class CharacterRig {
     accent: THREE.Material,
     hairMat: THREE.Material,
     darkTrim: THREE.Material,
+    armorSteel: THREE.Material,
   ): void {
     const style = this.skin.headgear;
 
-    // Base hair for styles that leave hair visible
     if (style === 'none' || style === 'cap' || style === 'visor' || style === 'crown' || style === 'bandana') {
-      createPart(headVis, new THREE.BoxGeometry(0.255, 0.075, 0.255), hairMat, 0, 0.265, -0.005);
-      createPart(headVis, new THREE.BoxGeometry(0.255, 0.14, 0.08), hairMat, 0, 0.19, -0.095);
+      createPart(headVis, new THREE.SphereGeometry(0.136, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.56), hairMat, 0, 0.185, -0.005);
+      createPart(headVis, new THREE.CylinderGeometry(0.125, 0.112, 0.13, 10), hairMat, 0, 0.185, -0.045);
     }
 
     switch (style) {
       case 'none': {
-        // Swept hero hair tufts
-        createPart(headVis, new THREE.BoxGeometry(0.18, 0.07, 0.16), hairMat, 0.02, 0.305, 0.03, -0.2, 0.15, -0.15);
-        createPart(headVis, new THREE.BoxGeometry(0.11, 0.055, 0.10), hairMat, -0.04, 0.29, 0.09, 0.2, -0.2, 0.1);
+        // Swept sculpted hero hair tufts
+        createPart(headVis, new THREE.BoxGeometry(0.17, 0.065, 0.15), hairMat, 0.02, 0.295, 0.03, -0.22, 0.15, -0.15);
+        createPart(headVis, new THREE.BoxGeometry(0.11, 0.052, 0.10), hairMat, -0.045, 0.278, 0.088, 0.22, -0.2, 0.12);
+        createPart(headVis, new THREE.BoxGeometry(0.08, 0.042, 0.09), accent, 0.06, 0.26, 0.06, -0.1, 0.2, -0.2);
         break;
       }
       case 'cap': {
-        // Tactical baseball cap + front brim facing +Z
-        createPart(headVis, new THREE.BoxGeometry(0.265, 0.095, 0.265), primary, 0, 0.275, -0.005);
-        createPart(headVis, new THREE.BoxGeometry(0.23, 0.022, 0.16), secondary, 0, 0.238, 0.145, 0.12, 0, 0);
-        createPart(headVis, new THREE.BoxGeometry(0.08, 0.045, 0.02), accent, 0, 0.275, 0.132);
+        // Rounded tactical baseball cap + curved visor brim + badge
+        createPart(headVis, new THREE.SphereGeometry(0.142, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.52), primary, 0, 0.205, -0.005);
+        createPart(headVis, new THREE.CylinderGeometry(0.142, 0.144, 0.055, 12), primary, 0, 0.225, -0.005);
+        createPart(headVis, new THREE.BoxGeometry(0.22, 0.020, 0.15), secondary, 0, 0.220, 0.142, 0.12, 0, 0);
+        createPart(headVis, new THREE.BoxGeometry(0.075, 0.042, 0.02), accent, 0, 0.258, 0.136);
         break;
       }
       case 'visor': {
-        // Spiky hair + glowing cyber fox visor
-        createPart(headVis, new THREE.BoxGeometry(0.21, 0.08, 0.18), hairMat, 0, 0.305, 0.01, -0.18, 0, 0);
-        createPart(headVis, new THREE.BoxGeometry(0.262, 0.062, 0.16), darkTrim, 0, 0.18, 0.065);
-        createPart(headVis, new THREE.BoxGeometry(0.254, 0.044, 0.03), accent, 0, 0.18, 0.14);
+        // Spiky hair + wraparound glowing cyber visor + side ear comms
+        createPart(headVis, new THREE.BoxGeometry(0.19, 0.075, 0.17), hairMat, 0, 0.298, 0.01, -0.18, 0, 0);
+        createPart(headVis, new THREE.BoxGeometry(0.11, 0.055, 0.12), hairMat, 0.04, 0.312, -0.04, -0.28, 0.18, -0.12);
+        createPart(headVis, new THREE.CylinderGeometry(0.144, 0.144, 0.064, 14, 1, false, -Math.PI * 0.42, Math.PI * 0.84), darkTrim, 0, 0.174, 0.008);
+        createPart(headVis, new THREE.CylinderGeometry(0.147, 0.147, 0.042, 14, 1, false, -Math.PI * 0.38, Math.PI * 0.76), accent, 0, 0.174, 0.012);
+        // Side ear comms pods
+        for (const side of [1, -1]) {
+          createPart(headVis, new THREE.CylinderGeometry(0.038, 0.038, 0.032, 8), secondary, side * 0.138, 0.17, 0.0, 0, 0, Math.PI / 2);
+          createPart(headVis, new THREE.CylinderGeometry(0.022, 0.022, 0.036, 8), accent, side * 0.142, 0.17, 0.0, 0, 0, Math.PI / 2);
+        }
         break;
       }
       case 'hood': {
-        // Tactical cowl/hood wrapping back, sides & top
-        createPart(headVis, new THREE.BoxGeometry(0.29, 0.28, 0.26), primary, 0, 0.175, -0.02);
-        createPart(headVis, new THREE.BoxGeometry(0.27, 0.05, 0.12), accent, 0, 0.305, 0.06, 0.18, 0, 0);
-        createPart(headVis, new THREE.BoxGeometry(0.03, 0.22, 0.08), secondary, 0.14, 0.16, 0.08);
-        createPart(headVis, new THREE.BoxGeometry(0.03, 0.22, 0.08), secondary, -0.14, 0.16, 0.08);
+        // Sculpted cowl/hood wrapping back, sides & top peak
+        createPart(headVis, new THREE.SphereGeometry(0.158, 12, 10), primary, 0, 0.185, -0.025, 0, 0, 0, 0.98, 1.06, 1.04);
+        createPart(headVis, new THREE.BoxGeometry(0.25, 0.048, 0.12), accent, 0, 0.305, 0.055, 0.20, 0, 0);
+        createPart(headVis, new THREE.BoxGeometry(0.034, 0.22, 0.09), secondary, 0.138, 0.16, 0.07);
+        createPart(headVis, new THREE.BoxGeometry(0.034, 0.22, 0.09), secondary, -0.138, 0.16, 0.07);
         break;
       }
       case 'crown': {
         // Golden spiked royal crown
         const crownGold = makeMat(this.skin.accentColor, 0.22, 0.78, this.skin.accentColor, 0.15);
-        createPart(headVis, new THREE.CylinderGeometry(0.135, 0.13, 0.055, 8), crownGold, 0, 0.315, 0);
+        createPart(headVis, new THREE.CylinderGeometry(0.132, 0.126, 0.052, 10), crownGold, 0, 0.305, 0);
         for (let i = 0; i < 6; i++) {
           const ang = (i / 6) * Math.PI * 2;
           createPart(
             headVis,
-            new THREE.ConeGeometry(0.028, 0.065, 4),
+            new THREE.ConeGeometry(0.026, 0.062, 4),
             crownGold,
-            Math.sin(ang) * 0.115,
-            0.365,
-            Math.cos(ang) * 0.115,
+            Math.sin(ang) * 0.112,
+            0.352,
+            Math.cos(ang) * 0.112,
           );
         }
-        createPart(headVis, new THREE.BoxGeometry(0.03, 0.03, 0.025), primary, 0, 0.318, 0.132);
+        createPart(headVis, new THREE.BoxGeometry(0.03, 0.03, 0.025), primary, 0, 0.308, 0.13);
         break;
       }
       case 'bandana': {
-        // Tied tactical headband + twin fluttering rear tails
-        createPart(headVis, new THREE.BoxGeometry(0.262, 0.055, 0.262), primary, 0, 0.23, 0);
-        createPart(headVis, new THREE.BoxGeometry(0.05, 0.05, 0.04), accent, 0, 0.23, -0.14);
-        createPart(headVis, new THREE.BoxGeometry(0.038, 0.13, 0.02), primary, 0.035, 0.16, -0.165, 0.35, 0, 0.22);
-        createPart(headVis, new THREE.BoxGeometry(0.038, 0.11, 0.02), primary, -0.035, 0.165, -0.165, 0.3, 0, -0.2);
+        // Tied tactical headband + armored forehead plate + twin fluttering rear tails
+        createPart(headVis, new THREE.CylinderGeometry(0.142, 0.142, 0.052, 12), primary, 0, 0.225, 0);
+        createPart(headVis, new THREE.BoxGeometry(0.11, 0.038, 0.022), armorSteel, 0, 0.225, 0.138);
+        createPart(headVis, new THREE.BoxGeometry(0.05, 0.05, 0.04), accent, 0, 0.225, -0.142);
+        createPart(headVis, new THREE.BoxGeometry(0.036, 0.13, 0.02), primary, 0.035, 0.155, -0.165, 0.35, 0, 0.22);
+        createPart(headVis, new THREE.BoxGeometry(0.036, 0.11, 0.02), primary, -0.035, 0.160, -0.165, 0.3, 0, -0.2);
         break;
       }
       case 'helmet': {
-        // Full combat/knight helmet with glowing visor slit
-        createPart(headVis, new THREE.BoxGeometry(0.28, 0.29, 0.29), primary, 0, 0.165, 0);
-        createPart(headVis, new THREE.BoxGeometry(0.10, 0.07, 0.31), secondary, 0, 0.305, -0.01);
-        createPart(headVis, new THREE.BoxGeometry(0.22, 0.04, 0.04), accent, 0, 0.175, 0.14);
-        createPart(headVis, new THREE.BoxGeometry(0.20, 0.09, 0.03), secondary, 0, 0.085, 0.14);
+        // Full faceted tactical/knight combat helmet with glowing visor eye slit & crest ridge
+        createPart(headVis, new THREE.SphereGeometry(0.158, 12, 10), primary, 0, 0.185, 0, 0, 0, 0, 0.98, 1.06, 1.02);
+        createPart(headVis, new THREE.BoxGeometry(0.24, 0.16, 0.24), primary, 0, 0.12, 0.015);
+        createPart(headVis, new THREE.BoxGeometry(0.085, 0.065, 0.28), secondary, 0, 0.305, -0.01);
+        // Glowing visor eye-slit + cheek vents
+        createPart(headVis, new THREE.BoxGeometry(0.20, 0.036, 0.045), darkTrim, 0, 0.175, 0.128);
+        createPart(headVis, new THREE.BoxGeometry(0.185, 0.024, 0.048), accent, 0, 0.175, 0.132);
+        createPart(headVis, new THREE.BoxGeometry(0.18, 0.085, 0.035), secondary, 0, 0.085, 0.132);
         break;
       }
       case 'beanie': {
-        // Snug knit beanie + folded cuff
-        createPart(headVis, new THREE.BoxGeometry(0.265, 0.12, 0.275), primary, 0, 0.275, -0.015, -0.08, 0, 0);
-        createPart(headVis, new THREE.BoxGeometry(0.275, 0.055, 0.282), accent, 0, 0.225, -0.01, -0.08, 0, 0);
-        createPart(headVis, new THREE.SphereGeometry(0.042, 8, 8), secondary, 0, 0.355, -0.04);
+        // Snug knit beanie + folded cuff + pom-pom
+        createPart(headVis, new THREE.SphereGeometry(0.146, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.56), primary, 0, 0.215, -0.012, -0.08, 0, 0);
+        createPart(headVis, new THREE.CylinderGeometry(0.148, 0.148, 0.056, 12), accent, 0, 0.218, -0.01, -0.08, 0, 0);
+        createPart(headVis, new THREE.SphereGeometry(0.040, 8, 8), secondary, 0, 0.355, -0.035);
         break;
       }
     }
@@ -481,44 +566,59 @@ export class CharacterRig {
     secondary: THREE.Material,
     accent: THREE.Material,
     skinMat: THREE.Material,
+    armorSteel: THREE.Material,
   ): void {
     const shVis = this.attachVisualGroup(shoulder, `shoulder_vis_${sideSign}`);
-    // Tactical angled shoulder pad
+    // Sculpted layered shoulder pauldron
     createPart(
       shVis,
-      new THREE.BoxGeometry(0.14, 0.11, 0.16),
+      new THREE.BoxGeometry(0.135, 0.095, 0.155),
       secondary,
-      sideSign * 0.025,
-      0.01,
+      sideSign * 0.028,
+      0.012,
       0,
       0,
       0,
-      sideSign * -0.22,
+      sideSign * -0.24,
     );
     createPart(
       shVis,
-      new THREE.BoxGeometry(0.145, 0.032, 0.165),
-      accent,
-      sideSign * 0.028,
-      0.045,
+      new THREE.BoxGeometry(0.115, 0.042, 0.145),
+      armorSteel,
+      sideSign * 0.036,
+      0.048,
       0,
       0,
       0,
-      sideSign * -0.22,
+      sideSign * -0.28,
     );
-    // Upper arm sleeve
-    createPart(shVis, new THREE.BoxGeometry(0.105, 0.23, 0.105), primary, sideSign * 0.005, -0.12, 0);
+    createPart(
+      shVis,
+      new THREE.BoxGeometry(0.125, 0.022, 0.16),
+      accent,
+      sideSign * 0.030,
+      0.036,
+      0,
+      0,
+      0,
+      sideSign * -0.24,
+    );
+    // Tapered upper arm sleeve + elbow guard cap
+    createPart(shVis, new THREE.CylinderGeometry(0.056, 0.047, 0.23, 10), primary, sideSign * 0.005, -0.12, 0);
+    createPart(shVis, new THREE.SphereGeometry(0.048, 8, 8), armorSteel, sideSign * 0.005, -0.24, -0.01);
 
     const elVis = this.attachVisualGroup(elbow, `elbow_vis_${sideSign}`);
-    // Forearm (skin + tactical wrist bracer)
-    createPart(elVis, new THREE.BoxGeometry(0.09, 0.14, 0.09), skinMat, 0, -0.075, 0);
-    createPart(elVis, new THREE.BoxGeometry(0.098, 0.10, 0.098), secondary, 0, -0.18, 0);
-    createPart(elVis, new THREE.BoxGeometry(0.102, 0.025, 0.102), accent, 0, -0.145, 0);
+    // Tapered forearm + armored wrist bracer/gauntlet
+    createPart(elVis, new THREE.CylinderGeometry(0.046, 0.038, 0.145, 10), skinMat, 0, -0.072, 0);
+    createPart(elVis, new THREE.CylinderGeometry(0.050, 0.044, 0.105, 10), secondary, 0, -0.175, 0);
+    createPart(elVis, new THREE.BoxGeometry(0.032, 0.075, 0.058), armorSteel, sideSign * 0.022, -0.175, 0.005);
+    createPart(elVis, new THREE.CylinderGeometry(0.052, 0.052, 0.022, 10), accent, 0, -0.142, 0);
 
     const haVis = this.attachVisualGroup(hand, `hand_vis_${sideSign}`);
-    // Tactical glove
-    createPart(haVis, new THREE.BoxGeometry(0.088, 0.095, 0.092), secondary, 0, -0.045, 0.01);
-    createPart(haVis, new THREE.BoxGeometry(0.092, 0.03, 0.05), accent, 0, -0.03, 0.04);
+    // Tactical armored glove + knuckle guard
+    createPart(haVis, new THREE.BoxGeometry(0.084, 0.090, 0.088), secondary, 0, -0.045, 0.01);
+    createPart(haVis, new THREE.BoxGeometry(0.088, 0.028, 0.048), accent, 0, -0.03, 0.04);
+    createPart(haVis, new THREE.BoxGeometry(0.024, 0.042, 0.034), secondary, sideSign * -0.038, -0.038, 0.032, 0.3, 0, 0);
   }
 
   private buildLegVisuals(
@@ -531,27 +631,34 @@ export class CharacterRig {
     accent: THREE.Material,
     bootMat: THREE.Material,
     soleMat: THREE.Material,
+    armorSteel: THREE.Material,
   ): void {
     const hipVis = this.attachVisualGroup(hip, `hip_vis_${sideSign}`);
-    // Thigh
-    createPart(hipVis, new THREE.BoxGeometry(0.145, 0.38, 0.155), primary, 0, -0.19, 0);
-    // Tactical thigh strap / holster on right thigh (-1)
-    createPart(hipVis, new THREE.BoxGeometry(0.155, 0.045, 0.165), secondary, 0, -0.16, 0);
+    // Tapered athletic thigh
+    createPart(hipVis, new THREE.CylinderGeometry(0.080, 0.064, 0.385, 10), primary, 0, -0.19, 0, 0, 0, 0, 1.02, 1, 1.06);
+    // Front quad armor plate & tactical thigh strap
+    createPart(hipVis, new THREE.BoxGeometry(0.092, 0.15, 0.035), armorSteel, 0, -0.18, 0.064);
+    createPart(hipVis, new THREE.CylinderGeometry(0.078, 0.074, 0.042, 10), secondary, 0, -0.16, 0, 0, 0, 0, 1.04, 1, 1.08);
+    // Drop-leg holster on right thigh (-1)
     if (sideSign === -1) {
-      createPart(hipVis, new THREE.BoxGeometry(0.04, 0.11, 0.08), accent, -0.085, -0.17, 0.01);
+      createPart(hipVis, new THREE.BoxGeometry(0.044, 0.115, 0.082), accent, -0.084, -0.17, 0.01);
+      createPart(hipVis, new THREE.BoxGeometry(0.036, 0.045, 0.065), armorSteel, -0.09, -0.125, 0.015);
     }
 
     const kneeVis = this.attachVisualGroup(knee, `knee_vis_${sideSign}`);
-    // Shin + sculpted knee pad
-    createPart(kneeVis, new THREE.BoxGeometry(0.125, 0.35, 0.135), secondary, 0, -0.18, 0);
-    createPart(kneeVis, new THREE.BoxGeometry(0.11, 0.105, 0.055), bootMat, 0, -0.02, 0.065);
-    createPart(kneeVis, new THREE.BoxGeometry(0.07, 0.035, 0.06), accent, 0, -0.02, 0.072);
+    // Tapered calf/shin + multi-piece sculpted knee guard + shin plate
+    createPart(kneeVis, new THREE.CylinderGeometry(0.064, 0.049, 0.355, 10), secondary, 0, -0.18, 0, 0, 0, 0, 1.0, 1, 1.05);
+    createPart(kneeVis, new THREE.BoxGeometry(0.112, 0.105, 0.056), bootMat, 0, -0.015, 0.056);
+    createPart(kneeVis, new THREE.BoxGeometry(0.088, 0.072, 0.038), armorSteel, 0, -0.015, 0.072);
+    createPart(kneeVis, new THREE.BoxGeometry(0.068, 0.028, 0.044), accent, 0, -0.015, 0.076);
+    createPart(kneeVis, new THREE.BoxGeometry(0.076, 0.16, 0.032), armorSteel, 0, -0.19, 0.052);
 
     const footVis = this.attachVisualGroup(foot, `foot_vis_${sideSign}`);
-    // Boot cuff + main upper + thick tread sole (bottom sits cleanly at world y = 0!)
-    createPart(footVis, new THREE.BoxGeometry(0.135, 0.045, 0.145), accent, 0, 0.02, 0);
-    createPart(footVis, new THREE.BoxGeometry(0.13, 0.085, 0.215), bootMat, 0, -0.035, 0.035);
-    createPart(footVis, new THREE.BoxGeometry(0.14, 0.038, 0.235), soleMat, 0, -0.081, 0.038);
+    // Boot cuff + sculpted toe & heel + thick lugged tread sole (bottom sits cleanly at world y = 0!)
+    createPart(footVis, new THREE.CylinderGeometry(0.064, 0.068, 0.048, 10), accent, 0, 0.02, 0);
+    createPart(footVis, new THREE.BoxGeometry(0.126, 0.084, 0.215), bootMat, 0, -0.035, 0.035);
+    createPart(footVis, new THREE.BoxGeometry(0.116, 0.052, 0.09), armorSteel, 0, -0.044, 0.11, 0.14, 0, 0);
+    createPart(footVis, new THREE.BoxGeometry(0.138, 0.038, 0.235), soleMat, 0, -0.081, 0.038);
   }
 
   private buildBackbling(
@@ -559,69 +666,115 @@ export class CharacterRig {
     primary: THREE.Material,
     secondary: THREE.Material,
     accent: THREE.Material,
+    armorSteel: THREE.Material,
   ): void {
-    switch (this.skin.backblingStyle) {
+    const style = this.skin.backblingStyle;
+    const parts: BackblingParts = { style };
+
+    switch (style) {
       case 'none':
         break;
       case 'pack': {
         createPart(backVis, new THREE.BoxGeometry(0.24, 0.30, 0.12), secondary, 0, 0, -0.05);
         createPart(backVis, new THREE.BoxGeometry(0.20, 0.12, 0.14), primary, 0, 0.06, -0.06);
         createPart(backVis, new THREE.BoxGeometry(0.14, 0.035, 0.148), accent, 0, 0.06, -0.065);
-        createPart(backVis, new THREE.CylinderGeometry(0.01, 0.01, 0.16, 6), accent, 0.085, 0.20, -0.07);
+        createPart(backVis, new THREE.CylinderGeometry(0.038, 0.038, 0.22, 8), armorSteel, 0, -0.14, -0.07, 0, 0, Math.PI / 2);
+        // Articulated swaying radio antenna
+        const antennaPivot = new THREE.Group();
+        antennaPivot.position.set(0.088, 0.14, -0.07);
+        createPart(antennaPivot, new THREE.CylinderGeometry(0.008, 0.012, 0.18, 6), accent, 0, 0.09, 0);
+        createPart(antennaPivot, new THREE.SphereGeometry(0.016, 6, 6), accent, 0, 0.18, 0);
+        backVis.add(antennaPivot);
+        parts.packAntenna = antennaPivot;
         break;
       }
       case 'cape': {
-        createPart(backVis, new THREE.BoxGeometry(0.32, 0.05, 0.08), accent, 0, 0.14, 0.02);
-        createPart(backVis, new THREE.BoxGeometry(0.34, 0.56, 0.028), primary, 0, -0.14, -0.05, 0.14, 0, 0);
-        createPart(backVis, new THREE.BoxGeometry(0.22, 0.48, 0.032), secondary, 0, -0.14, -0.055, 0.14, 0, 0);
-        createPart(backVis, new THREE.BoxGeometry(0.35, 0.04, 0.034), accent, 0, -0.39, -0.09, 0.14, 0, 0);
+        // Armored shoulder mantle clasps
+        createPart(backVis, new THREE.BoxGeometry(0.34, 0.055, 0.085), accent, 0, 0.14, 0.02);
+        // Upper articulated cape segment
+        const capeUpper = new THREE.Group();
+        capeUpper.position.set(0, 0.12, -0.02);
+        createPart(capeUpper, new THREE.BoxGeometry(0.33, 0.28, 0.028), primary, 0, -0.14, -0.02, 0.08, 0, 0);
+        createPart(capeUpper, new THREE.BoxGeometry(0.21, 0.24, 0.032), secondary, 0, -0.14, -0.024, 0.08, 0, 0);
+        // Lower articulated cape hem segment
+        const capeLower = new THREE.Group();
+        capeLower.position.set(0, -0.27, -0.042);
+        createPart(capeLower, new THREE.BoxGeometry(0.35, 0.28, 0.026), primary, 0, -0.14, 0, 0.08, 0, 0);
+        createPart(capeLower, new THREE.BoxGeometry(0.22, 0.24, 0.030), secondary, 0, -0.14, -0.004, 0.08, 0, 0);
+        createPart(capeLower, new THREE.BoxGeometry(0.36, 0.04, 0.034), accent, 0, -0.27, -0.01, 0.08, 0, 0);
+        capeUpper.add(capeLower);
+        backVis.add(capeUpper);
+        parts.capeUpper = capeUpper;
+        parts.capeLower = capeLower;
         break;
       }
       case 'wings': {
-        createPart(backVis, new THREE.BoxGeometry(0.14, 0.16, 0.06), secondary, 0, 0.03, -0.03);
+        // Central cyber wing hub
+        createPart(backVis, new THREE.BoxGeometry(0.14, 0.16, 0.065), armorSteel, 0, 0.03, -0.03);
+        createPart(backVis, new THREE.SphereGeometry(0.042, 8, 8), accent, 0, 0.04, -0.06);
+
         for (const side of [1, -1]) {
-          createPart(
-            backVis,
-            new THREE.BoxGeometry(0.42, 0.14, 0.03),
-            secondary,
-            side * 0.24,
-            0.10,
-            -0.08,
-            0.1,
-            side * -0.25,
-            side * 0.32,
-          );
-          createPart(
-            backVis,
-            new THREE.BoxGeometry(0.34, 0.07, 0.035),
-            accent,
-            side * 0.26,
-            0.05,
-            -0.09,
-            0.1,
-            side * -0.25,
-            side * 0.22,
-          );
-          createPart(
-            backVis,
-            new THREE.BoxGeometry(0.28, 0.08, 0.025),
-            primary,
-            side * 0.20,
-            -0.05,
-            -0.07,
-            0.1,
-            side * -0.2,
-            side * 0.08,
-          );
+          const wingPivot = new THREE.Group();
+          wingPivot.position.set(side * 0.07, 0.04, -0.05);
+          createPart(wingPivot, new THREE.BoxGeometry(0.42, 0.13, 0.028), secondary, side * 0.18, 0.06, -0.03, 0.08, side * -0.24, side * 0.30);
+          createPart(wingPivot, new THREE.BoxGeometry(0.36, 0.065, 0.034), accent, side * 0.20, 0.01, -0.04, 0.08, side * -0.24, side * 0.20);
+          createPart(wingPivot, new THREE.BoxGeometry(0.28, 0.075, 0.024), primary, side * 0.14, -0.08, -0.02, 0.08, side * -0.20, side * 0.06);
+          backVis.add(wingPivot);
+          if (side === 1) parts.leftWing = wingPivot;
+          else parts.rightWing = wingPivot;
         }
         break;
       }
       case 'shield': {
-        createPart(backVis, new THREE.BoxGeometry(0.30, 0.38, 0.045), secondary, 0, -0.02, -0.03, 0, 0, 0.15);
-        createPart(backVis, new THREE.BoxGeometry(0.24, 0.31, 0.054), primary, 0, -0.02, -0.035, 0, 0, 0.15);
-        createPart(backVis, new THREE.BoxGeometry(0.11, 0.14, 0.064), accent, 0, -0.01, -0.04, 0, 0, 0.15);
+        const shieldPivot = new THREE.Group();
+        shieldPivot.position.set(0, -0.01, -0.03);
+        shieldPivot.rotation.set(0, 0, 0.15);
+        createPart(shieldPivot, new THREE.BoxGeometry(0.30, 0.38, 0.042), secondary, 0, 0, 0);
+        createPart(shieldPivot, new THREE.BoxGeometry(0.24, 0.31, 0.052), primary, 0, 0, -0.005);
+        createPart(shieldPivot, new THREE.CylinderGeometry(0.058, 0.058, 0.062, 6), armorSteel, 0, 0.01, -0.012, Math.PI / 2, 0, 0);
+        createPart(shieldPivot, new THREE.CylinderGeometry(0.038, 0.038, 0.068, 6), accent, 0, 0.01, -0.014, Math.PI / 2, 0, 0);
+        backVis.add(shieldPivot);
+        parts.shieldPivot = shieldPivot;
         break;
       }
+    }
+
+    this.backblingParts = parts;
+  }
+
+  /**
+   * Drives secondary articulated backbling motion (cape flutter, wing spread/flap, antenna sway).
+   */
+  public animateBackbling(
+    moveSpeed: number,
+    time: number,
+    isAirborne: boolean,
+    isSliding: boolean,
+  ): void {
+    const parts = this.backblingParts;
+    if (parts.style === 'none') return;
+
+    const speedFrac = clamp(Number.isFinite(moveSpeed) ? moveSpeed / 8.5 : 0, 0, 1.3);
+    const wind = isAirborne ? 1.15 : isSliding ? 1.05 : speedFrac;
+    const t = Number.isFinite(time) ? time : 0;
+
+    if (parts.style === 'cape' && parts.capeUpper && parts.capeLower) {
+      const flutter = Math.sin(t * (6 + wind * 8)) * (0.04 + wind * 0.14);
+      const sway = Math.cos(t * 4.5) * (0.02 + wind * 0.05);
+      parts.capeUpper.rotation.set(0.08 + wind * 0.42 + flutter * 0.5, 0, sway);
+      parts.capeLower.rotation.set(0.06 + wind * 0.35 + flutter, 0, -sway * 0.7);
+    } else if (parts.style === 'wings' && parts.leftWing && parts.rightWing) {
+      const flap = isAirborne
+        ? Math.sin(t * 9.5) * 0.24 + 0.18
+        : Math.sin(t * 3.2) * (0.04 + wind * 0.08);
+      const sweep = wind * 0.16;
+      parts.leftWing.rotation.set(0, -sweep, flap);
+      parts.rightWing.rotation.set(0, sweep, -flap);
+    } else if (parts.style === 'pack' && parts.packAntenna) {
+      const whip = Math.sin(t * (7 + wind * 7)) * (0.03 + wind * 0.12);
+      parts.packAntenna.rotation.set(-wind * 0.28 + whip, 0, Math.cos(t * 5.2) * 0.05);
+    } else if (parts.style === 'shield' && parts.shieldPivot) {
+      parts.shieldPivot.rotation.set(wind * 0.06, 0, 0.15 + Math.sin(t * 4) * (0.01 + wind * 0.025));
     }
   }
 
@@ -635,54 +788,99 @@ export class CharacterRig {
     const grp = new THREE.Group();
     grp.name = `glider_${this.glider.style}`;
 
-    const primary = makeMat(this.glider.primaryColor, 0.4, 0.25);
-    const accent = makeMat(this.glider.accentColor, 0.28, 0.35, this.glider.accentColor, 0.25);
-    const frameMat = makeMat('#1e293b', 0.45, 0.55);
+    const primary = makeMat(this.glider.primaryColor, 0.38, 0.28);
+    const accent = makeMat(this.glider.accentColor, 0.24, 0.35, this.glider.accentColor, 0.42);
+    const thrusterGlow = makeMat(this.glider.accentColor, 0.16, 0.15, this.glider.accentColor, 0.9);
+    const frameMat = makeMat('#1e293b', 0.42, 0.62);
 
-    switch (this.glider.style) {
-      case 'wing': {
-        // Swept hang-glider wing overhead + twin grip handles hanging down
-        createPart(grp, new THREE.BoxGeometry(0.24, 0.07, 0.95), primary, 0, 0, 0);
-        createPart(grp, new THREE.BoxGeometry(0.95, 0.05, 0.55), primary, 0.54, -0.04, -0.10, 0, -0.35, -0.1);
-        createPart(grp, new THREE.BoxGeometry(0.95, 0.05, 0.55), primary, -0.54, -0.04, -0.10, 0, 0.35, 0.1);
-        createPart(grp, new THREE.BoxGeometry(0.95, 0.056, 0.12), accent, 0.54, -0.04, 0.14, 0, -0.35, -0.1);
-        createPart(grp, new THREE.BoxGeometry(0.95, 0.056, 0.12), accent, -0.54, -0.04, 0.14, 0, 0.35, 0.1);
-        // Handlebar trapezoid
-        createPart(grp, new THREE.CylinderGeometry(0.014, 0.014, 0.32, 6), frameMat, 0.20, -0.15, 0.04, 0, 0, 0.35);
-        createPart(grp, new THREE.CylinderGeometry(0.014, 0.014, 0.32, 6), frameMat, -0.20, -0.15, 0.04, 0, 0, -0.35);
-        createPart(grp, new THREE.CylinderGeometry(0.018, 0.018, 0.54, 8), accent, 0, -0.28, 0.04, 0, 0, Math.PI / 2);
-        break;
+    if (this.glider.id === 'cyber_falcon') {
+      // Swept cyber-falcon feathered wing glider + beak prow + twin glowing thrusters
+      createPart(grp, new THREE.BoxGeometry(0.24, 0.09, 1.02), primary, 0, 0.02, 0.04);
+      createPart(grp, new THREE.ConeGeometry(0.11, 0.32, 6), accent, 0, 0.02, 0.66, Math.PI / 2, 0, 0);
+      for (const side of [1, -1]) {
+        // Primary swept falcon wing + secondary split feather blades
+        createPart(grp, new THREE.BoxGeometry(0.92, 0.048, 0.42), primary, side * 0.54, 0.02, -0.02, 0, side * -0.42, side * 0.08);
+        createPart(grp, new THREE.BoxGeometry(0.84, 0.036, 0.16), accent, side * 0.62, 0.02, -0.22, 0, side * -0.52, side * 0.12);
+        createPart(grp, new THREE.BoxGeometry(0.45, 0.032, 0.12), thrusterGlow, side * 0.88, 0.05, -0.34, 0, side * -0.62, side * 0.16);
+        // Twin glowing rear micro-thrusters + engine vents
+        createPart(grp, new THREE.CylinderGeometry(0.065, 0.082, 0.34, 8), frameMat, side * 0.26, 0.03, -0.28, Math.PI / 2);
+        createPart(grp, new THREE.CylinderGeometry(0.052, 0.052, 0.06, 8), thrusterGlow, side * 0.26, 0.03, -0.46, Math.PI / 2);
+        // Trapeze grips
+        createPart(grp, new THREE.CylinderGeometry(0.014, 0.014, 0.32, 6), frameMat, side * 0.20, -0.15, 0.04, 0, 0, side * 0.35);
       }
-      case 'umbrella': {
-        // Royal Parasol canopy + shaft + curved grip
-        createPart(grp, new THREE.ConeGeometry(0.88, 0.28, 8), primary, 0, 0.06, 0);
-        createPart(grp, new THREE.CylinderGeometry(0.88, 0.89, 0.04, 8), accent, 0, -0.08, 0);
-        createPart(grp, new THREE.SphereGeometry(0.045, 8, 8), accent, 0, 0.21, 0);
-        createPart(grp, new THREE.CylinderGeometry(0.016, 0.016, 0.44, 8), frameMat, 0, -0.18, 0);
-        createPart(grp, new THREE.BoxGeometry(0.14, 0.032, 0.032), accent, 0, -0.40, 0);
-        break;
+      createPart(grp, new THREE.CylinderGeometry(0.018, 0.018, 0.54, 8), accent, 0, -0.28, 0.04, 0, 0, Math.PI / 2);
+    } else if (this.glider.id === 'solar_dragon') {
+      // Fiery Solar Dragon jet-glider with jagged wings, horned prow & twin engine vents
+      createPart(grp, new THREE.BoxGeometry(0.28, 0.12, 1.12), primary, 0, 0.02, 0.04);
+      createPart(grp, new THREE.ConeGeometry(0.12, 0.36, 5), accent, 0, 0.04, 0.72, Math.PI / 2, 0, 0);
+      for (const side of [1, -1]) {
+        // Horned dragon brow + glowing solar eyes
+        createPart(grp, new THREE.ConeGeometry(0.032, 0.24, 5), accent, side * 0.10, 0.12, 0.42, -0.9, side * 0.25, 0);
+        // Swept jagged dragon wing spars + glowing membrane
+        createPart(grp, new THREE.BoxGeometry(1.05, 0.042, 0.54), primary, side * 0.62, 0.02, -0.08, 0, side * -0.32, side * 0.14);
+        createPart(grp, new THREE.BoxGeometry(1.08, 0.05, 0.11), accent, side * 0.62, 0.03, 0.16, 0, side * -0.32, side * 0.14);
+        createPart(grp, new THREE.BoxGeometry(0.55, 0.035, 0.16), thrusterGlow, side * 0.78, 0.04, -0.34, 0, side * -0.46, side * 0.18);
+        // Heavy solar turbojet pods + glowing intake & exhaust vents
+        createPart(grp, new THREE.CylinderGeometry(0.095, 0.115, 0.58, 10), frameMat, side * 0.40, 0.02, -0.06, Math.PI / 2);
+        createPart(grp, new THREE.CylinderGeometry(0.078, 0.078, 0.05, 10), thrusterGlow, side * 0.40, 0.02, 0.24, Math.PI / 2);
+        createPart(grp, new THREE.CylinderGeometry(0.082, 0.095, 0.08, 10), thrusterGlow, side * 0.40, 0.02, -0.38, Math.PI / 2);
+        createPart(grp, new THREE.CylinderGeometry(0.015, 0.015, 0.28, 6), frameMat, side * 0.20, -0.14, 0.04, 0, 0, side * 0.25);
       }
-      case 'hover': {
-        // Cyber Hoverboard positioned under character feet!
-        const boardY = -2.06;
-        createPart(grp, new THREE.BoxGeometry(0.36, 0.055, 1.38), primary, 0, boardY, 0.02);
-        createPart(grp, new THREE.BoxGeometry(0.40, 0.03, 1.24), accent, 0, boardY - 0.01, 0.02);
-        createPart(grp, new THREE.CylinderGeometry(0.11, 0.13, 0.04, 10), accent, 0, boardY - 0.04, 0.42);
-        createPart(grp, new THREE.CylinderGeometry(0.11, 0.13, 0.04, 10), accent, 0, boardY - 0.04, -0.42);
-        break;
-      }
-      case 'jet': {
-        // Twin turbojet crimson glider
-        createPart(grp, new THREE.BoxGeometry(0.26, 0.10, 1.05), primary, 0, 0.02, 0);
-        createPart(grp, new THREE.BoxGeometry(1.75, 0.045, 0.50), primary, 0, 0.0, -0.08);
-        createPart(grp, new THREE.BoxGeometry(1.80, 0.052, 0.11), accent, 0, 0.0, 0.16);
-        for (const side of [1, -1]) {
-          createPart(grp, new THREE.CylinderGeometry(0.09, 0.11, 0.56, 10), frameMat, side * 0.42, 0.02, -0.08, Math.PI / 2);
-          createPart(grp, new THREE.CylinderGeometry(0.075, 0.075, 0.06, 10), accent, side * 0.42, 0.02, -0.37, Math.PI / 2);
-          createPart(grp, new THREE.CylinderGeometry(0.015, 0.015, 0.28, 6), frameMat, side * 0.20, -0.14, 0.04, 0, 0, side * 0.25);
+      createPart(grp, new THREE.CylinderGeometry(0.018, 0.018, 0.52, 8), accent, 0, -0.26, 0.04, 0, 0, Math.PI / 2);
+    } else {
+      switch (this.glider.style) {
+        case 'wing': {
+          // Swept hang-glider wing overhead + wingtip glowing vents + twin grip handles
+          createPart(grp, new THREE.BoxGeometry(0.24, 0.07, 0.95), primary, 0, 0, 0);
+          createPart(grp, new THREE.BoxGeometry(0.95, 0.05, 0.55), primary, 0.54, -0.04, -0.10, 0, -0.35, -0.1);
+          createPart(grp, new THREE.BoxGeometry(0.95, 0.05, 0.55), primary, -0.54, -0.04, -0.10, 0, 0.35, 0.1);
+          createPart(grp, new THREE.BoxGeometry(0.95, 0.056, 0.12), accent, 0.54, -0.04, 0.14, 0, -0.35, -0.1);
+          createPart(grp, new THREE.BoxGeometry(0.95, 0.056, 0.12), accent, -0.54, -0.04, 0.14, 0, 0.35, 0.1);
+          for (const side of [1, -1]) {
+            createPart(grp, new THREE.CylinderGeometry(0.04, 0.05, 0.22, 8), frameMat, side * 0.25, -0.02, -0.22, Math.PI / 2);
+            createPart(grp, new THREE.CylinderGeometry(0.032, 0.032, 0.04, 8), thrusterGlow, side * 0.25, -0.02, -0.34, Math.PI / 2);
+            createPart(grp, new THREE.CylinderGeometry(0.014, 0.014, 0.32, 6), frameMat, side * 0.20, -0.15, 0.04, 0, 0, side * 0.35);
+          }
+          createPart(grp, new THREE.CylinderGeometry(0.018, 0.018, 0.54, 8), accent, 0, -0.28, 0.04, 0, 0, Math.PI / 2);
+          break;
         }
-        createPart(grp, new THREE.CylinderGeometry(0.018, 0.018, 0.52, 8), accent, 0, -0.26, 0.04, 0, 0, Math.PI / 2);
-        break;
+        case 'umbrella': {
+          // Royal Parasol canopy + ribs + shaft + curved grip
+          createPart(grp, new THREE.ConeGeometry(0.88, 0.28, 8), primary, 0, 0.06, 0);
+          createPart(grp, new THREE.CylinderGeometry(0.88, 0.89, 0.04, 8), accent, 0, -0.08, 0);
+          createPart(grp, new THREE.SphereGeometry(0.045, 8, 8), accent, 0, 0.21, 0);
+          createPart(grp, new THREE.CylinderGeometry(0.016, 0.016, 0.44, 8), frameMat, 0, -0.18, 0);
+          createPart(grp, new THREE.BoxGeometry(0.14, 0.032, 0.032), accent, 0, -0.40, 0);
+          break;
+        }
+        case 'hover': {
+          // Cyber Hoverboard positioned under character feet with glowing repulsor thrusters & vents!
+          const boardY = -2.06;
+          createPart(grp, new THREE.BoxGeometry(0.36, 0.055, 1.38), primary, 0, boardY, 0.02);
+          createPart(grp, new THREE.BoxGeometry(0.42, 0.03, 1.24), accent, 0, boardY - 0.01, 0.02);
+          createPart(grp, new THREE.BoxGeometry(0.56, 0.025, 0.24), frameMat, 0, boardY, -0.44);
+          createPart(grp, new THREE.CylinderGeometry(0.11, 0.14, 0.045, 10), thrusterGlow, 0, boardY - 0.042, 0.42);
+          createPart(grp, new THREE.CylinderGeometry(0.11, 0.14, 0.045, 10), thrusterGlow, 0, boardY - 0.042, -0.42);
+          for (const side of [1, -1]) {
+            createPart(grp, new THREE.CylinderGeometry(0.04, 0.05, 0.24, 8), frameMat, side * 0.22, boardY + 0.01, -0.54, Math.PI / 2);
+            createPart(grp, new THREE.CylinderGeometry(0.034, 0.034, 0.05, 8), thrusterGlow, side * 0.22, boardY + 0.01, -0.67, Math.PI / 2);
+          }
+          break;
+        }
+        case 'jet': {
+          // Twin turbojet crimson glider with glowing intake & engine vents
+          createPart(grp, new THREE.BoxGeometry(0.26, 0.10, 1.05), primary, 0, 0.02, 0);
+          createPart(grp, new THREE.BoxGeometry(1.75, 0.045, 0.50), primary, 0, 0.0, -0.08);
+          createPart(grp, new THREE.BoxGeometry(1.80, 0.052, 0.11), accent, 0, 0.0, 0.16);
+          for (const side of [1, -1]) {
+            createPart(grp, new THREE.CylinderGeometry(0.09, 0.11, 0.56, 10), frameMat, side * 0.42, 0.02, -0.08, Math.PI / 2);
+            createPart(grp, new THREE.CylinderGeometry(0.075, 0.075, 0.06, 10), thrusterGlow, side * 0.42, 0.02, -0.37, Math.PI / 2);
+            createPart(grp, new THREE.CylinderGeometry(0.062, 0.062, 0.04, 10), accent, side * 0.42, 0.02, 0.21, Math.PI / 2);
+            createPart(grp, new THREE.CylinderGeometry(0.015, 0.015, 0.28, 6), frameMat, side * 0.20, -0.14, 0.04, 0, 0, side * 0.25);
+          }
+          createPart(grp, new THREE.CylinderGeometry(0.018, 0.018, 0.52, 8), accent, 0, -0.26, 0.04, 0, 0, Math.PI / 2);
+          break;
+        }
       }
     }
 
@@ -812,6 +1010,10 @@ export class CharacterRig {
 
   public getGlider(): GliderDef {
     return this.glider;
+  }
+
+  public getBackblingStyle(): BackblingStyle {
+    return this.backblingParts.style;
   }
 
   public dispose(): void {

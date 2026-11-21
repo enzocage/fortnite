@@ -57,6 +57,97 @@ function addAnimatedSpinMesh(
   });
 }
 
+function addMythicVaultPedestal(
+  ctx: BuildContext,
+  x: number,
+  baseY: number,
+  z: number,
+  tag: string,
+  accentMat: THREE.Material,
+): void {
+  const goldMat = getMat(ctx, 'mythic_vault_gold', () => {
+    return new THREE.MeshStandardMaterial({
+      color: '#facc15',
+      emissive: '#b45309',
+      emissiveIntensity: 0.35,
+      roughness: 0.28,
+      metalness: 0.78,
+    });
+  });
+  const obsidianTrim = solidColorMat(ctx, '#1e293b', 0.4, 0.55);
+  const relicGlowMat = emissiveMat(ctx, '#ffdf40', 1.35);
+
+  // Two walkable golden steps (<= STEP_HEIGHT) + dark obsidian inlay
+  addWorldBox(ctx, x, baseY + 0.12, z, 3.8, 0.24, 3.8, goldMat, 'metal', tag);
+  addWorldBox(ctx, x, baseY + 0.36, z, 2.5, 0.24, 2.5, goldMat, 'metal', tag);
+  addWorldBox(ctx, x, baseY + 0.5, z, 1.9, 0.08, 1.9, obsidianTrim, 'metal', tag, {
+    collider: false,
+  });
+
+  // 4 corner golden shrine obelisks with glowing accent gems
+  for (const [ox, oz] of [
+    [-1.45, -1.45],
+    [1.45, -1.45],
+    [-1.45, 1.45],
+    [1.45, 1.45],
+  ]) {
+    addWorldBox(ctx, x + ox, baseY + 0.72, z + oz, 0.36, 1.0, 0.36, goldMat, 'metal', tag);
+    addWorldBox(ctx, x + ox, baseY + 1.32, z + oz, 0.3, 0.22, 0.3, accentMat, 'metal', tag, {
+      collider: false,
+    });
+  }
+
+  // Central pedestal plinth + spinning mythic crown crystal relic
+  addWorldBox(ctx, x, baseY + 0.84, z, 0.95, 0.62, 0.95, goldMat, 'metal', tag);
+
+  const relicGroup = new THREE.Group();
+  relicGroup.position.set(x, baseY + 2.35, z);
+  const gemGeo = new THREE.OctahedronGeometry(0.48, 0);
+  const haloGeo = new THREE.TorusGeometry(0.74, 0.07, 8, 24);
+  haloGeo.rotateX(Math.PI * 0.35);
+  ctx.geometries.push(gemGeo, haloGeo);
+
+  const gem = new THREE.Mesh(gemGeo, relicGlowMat);
+  gem.scale.set(0.95, 1.35, 0.95);
+  const halo = new THREE.Mesh(haloGeo, accentMat);
+  relicGroup.add(gem, halo);
+  addAnimatedSpinMesh(ctx, relicGroup, 'y', 1.45, 0.22, 2.4);
+}
+
+function addBlueMushroomCluster(
+  ctx: BuildContext,
+  cx: number,
+  cz: number,
+  scale = 1.0,
+): void {
+  const stemMat = solidColorMat(ctx, '#cbd5e1', 0.78, 0.05);
+  const capMat = emissiveMat(ctx, '#38bdf8', 1.3);
+  const tipMat = emissiveMat(ctx, '#bae6fd', 1.5);
+
+  const offsets: Array<[number, number, number]> = [
+    [0, 0, 1.0],
+    [0.52 * scale, 0.35 * scale, 0.72],
+    [-0.44 * scale, 0.28 * scale, 0.58],
+  ];
+  for (const [ox, oz, s] of offsets) {
+    const mx = cx + ox;
+    const mz = cz + oz;
+    const my = ctx.terrain.getHeightAt(mx, mz);
+    const ms = scale * s;
+    const stemH = 0.42 * ms;
+    const capH = 0.32 * ms;
+    addWorldPrimitive(ctx, 'cyl', mx, my + stemH * 0.5, mz, 0, 0, 0, 0.1 * ms, stemH, 0.1 * ms, stemMat, {
+      castShadow: false,
+    });
+    addWorldPrimitive(ctx, 'cone', mx, my + stemH + capH * 0.42, mz, 0, 0, 0, 0.36 * ms, capH, 0.36 * ms, capMat, {
+      castShadow: false,
+    });
+    addWorldPrimitive(ctx, 'oct', mx, my + stemH + capH * 0.78, mz, 0, 0, 0, 0.1 * ms, 0.08 * ms, 0.1 * ms, tipMat, {
+      castShadow: false,
+    });
+  }
+}
+
 function buildMetroTowers(ctx: BuildContext): void {
   const poi = POIS.find((p) => p.id === 'metro_towers')!;
   const baseY = ctx.terrain.getHeightAt(poi.x, poi.z);
@@ -226,6 +317,10 @@ function buildMetroTowers(ctx: BuildContext): void {
     [poi.x + 10, poi.z - 6],
     [poi.x - 10, poi.z + 8],
     [poi.x + 10, poi.z + 8],
+    [poi.x, poi.z - 22],
+    [poi.x, poi.z + 22],
+    [poi.x - 28, poi.z],
+    [poi.x + 28, poi.z],
   ]) {
     addStreetLamp(ctx, lx, lz);
   }
@@ -329,6 +424,10 @@ function buildSunnySuburbs(ctx: BuildContext): void {
   ctx.floorLootSpots.push({ x: pitchX, y: pitchY + 0.08, z: pitchZ });
   addStreetLamp(ctx, poi.x - 10, poi.z - 9);
   addStreetLamp(ctx, poi.x + 10, poi.z + 9);
+  addStreetLamp(ctx, poi.x - 11, poi.z - 18);
+  addStreetLamp(ctx, poi.x + 11, poi.z - 18);
+  addStreetLamp(ctx, poi.x - 11, poi.z + 18);
+  addStreetLamp(ctx, poi.x + 11, poi.z + 18);
 }
 
 function buildCrystalBasin(ctx: BuildContext): void {
@@ -608,6 +707,10 @@ function buildMarketRow(ctx: BuildContext): void {
 
   addStreetLamp(ctx, poi.x - 6, poi.z - 6);
   addStreetLamp(ctx, poi.x + 6, poi.z + 6);
+  addStreetLamp(ctx, poi.x - 19, poi.z - 7);
+  addStreetLamp(ctx, poi.x + 19, poi.z - 7);
+  addStreetLamp(ctx, poi.x - 19, poi.z + 7);
+  addStreetLamp(ctx, poi.x + 19, poi.z + 7);
 }
 
 function buildWarehouse(
@@ -898,6 +1001,25 @@ function buildWhisperingPines(ctx: BuildContext): void {
   ctx.chestSpots.push({ x: tx + 1.5, y: topY, z: tz + 1.2, rotationY: Math.PI });
   ctx.chestSpots.push({ x: tx + 1.5, y: ty + 0.2 + levelH, z: tz, rotationY: -Math.PI * 0.5 });
   ctx.floorLootSpots.push({ x: tx + 1.4, y: topY + 0.05, z: tz - 1.4 });
+
+  // Bioluminescent glowing blue mushrooms across Whispering Pines forest floor
+  const mushroomSpots: Array<[number, number, number]> = [
+    [-24, -18, 1.15],
+    [-25, 4, 0.95],
+    [-5, -22, 1.25],
+    [2, -10, 1.0],
+    [4, 6, 1.1],
+    [8, -28, 1.2],
+    [22, -26, 0.95],
+    [32, -4, 1.15],
+    [30, 8, 1.0],
+    [8, 22, 1.2],
+    [-6, 26, 1.05],
+    [-26, 28, 0.95],
+  ];
+  for (const [mx, mz, ms] of mushroomSpots) {
+    addBlueMushroomCluster(ctx, poi.x + mx, poi.z + mz, ms);
+  }
 }
 
 function buildFrostpeakCitadel(ctx: BuildContext): void {
@@ -908,7 +1030,6 @@ function buildFrostpeakCitadel(ctx: BuildContext): void {
   const snowMat = texturedMat(ctx, 'snow', () => ctx.textures.getSnowTexture());
   const roofIce = texturedMat(ctx, 'roof:#1e3a8a', () => ctx.textures.getRoofTexture('#1e3a8a'));
   const woodMat = texturedMat(ctx, 'wood', () => ctx.textures.getWoodTexture());
-  const goldMat = emissiveMat(ctx, '#facc15', 0.45);
   const iceGlow = emissiveMat(ctx, '#7dd3fc', 0.55);
 
   // Courtyard cobblestone/snow pad
@@ -981,11 +1102,13 @@ function buildFrostpeakCitadel(ctx: BuildContext): void {
     }
   }
 
-  // Glowing Ice Shrine Crystal in Courtyard
-  addWorldBox(ctx, poi.x, baseY + 1.1, poi.z + 8, 2.2, 2.2, 2.2, iceGlow, 'brick', 'building_castle');
-  addWorldBox(ctx, poi.x, baseY + 0.25, poi.z + 8, 4.0, 0.5, 4.0, goldMat, 'metal', 'building_castle');
-  ctx.chestSpots.push({ x: poi.x + 2.5, y: baseY + 0.1, z: poi.z + 8, rotationY: -Math.PI * 0.5 });
-  ctx.floorLootSpots.push({ x: poi.x - 2.5, y: baseY + 0.1, z: poi.z + 8 });
+  // Frostpeak Sanctum Golden Mythic Vault Pedestal + Ice Shrine Crystal in Courtyard
+  addMythicVaultPedestal(ctx, poi.x, baseY + 0.13, poi.z + 8, 'building_castle', iceGlow);
+  addWorldBox(ctx, poi.x, baseY + 1.38, poi.z + 8, 0.9, 0.9, 0.9, iceGlow, 'brick', 'building_castle', {
+    collider: false,
+  });
+  ctx.chestSpots.push({ x: poi.x + 2.6, y: baseY + 0.13, z: poi.z + 8, rotationY: -Math.PI * 0.5 });
+  ctx.floorLootSpots.push({ x: poi.x - 2.6, y: baseY + 0.13, z: poi.z + 8 });
 
   // Animated Cascading Glacial Waterfall pouring down Frostpeak's southern cliff!
   const wfX = poi.x + 28;
@@ -1338,7 +1461,8 @@ function buildSkylineSpire(ctx: BuildContext): void {
     colliderTagPrefix: 'building_sky_island',
   });
 
-  // Extra Sky-Island Vault Chests & Floor Loot
+  // Skyline Sky-Island Golden Mythic Vault Pedestal + Vault Chests & Floor Loot
+  addMythicVaultPedestal(ctx, poi.x, skyY + 0.16, poi.z + 5.2, 'building_sky_island', cyanGlow);
   ctx.chestSpots.push({ x: poi.x - 8, y: skyY + 0.16, z: poi.z + 8, rotationY: 0 });
   ctx.chestSpots.push({ x: poi.x + 8, y: skyY + 0.16, z: poi.z + 8, rotationY: 0 });
   ctx.floorLootSpots.push({ x: poi.x, y: skyY + 0.2, z: poi.z + 9 });

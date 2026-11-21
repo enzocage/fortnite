@@ -8,6 +8,7 @@ import type {
   ChestEntity,
   LaunchPadEntity,
   LootDrop,
+  LootLlamaEntity,
   SupplyDrop,
   ItemInstance,
   MaterialType,
@@ -52,6 +53,9 @@ export interface PropsInteractionBridge {
     },
     scatterVel?: Vec3Like,
   ): LootDrop;
+  getLlamas?(): LootLlamaEntity[];
+  damageLlama?(id: string, dmg: number, hitPos: Vec3Like): boolean;
+  openLlama?(id: string): boolean;
 }
 
 export interface CombatActor {
@@ -61,10 +65,16 @@ export interface CombatActor {
   eyePos: Vec3Like;
   hp: number;
   shield: number;
+  maxHp?: number;
+  maxShield?: number;
+  velocity?: Vec3Like;
+  fallImmune?: boolean;
   radius: number;
   height: number;
   alive: boolean;
   onDamage?: (ev: DamageEvent) => void;
+  onHeal?: (hpAdded: number, shieldAdded: number) => void;
+  onImpulse?: (impulse: Vec3Like, grantFallImmunity: boolean) => void;
 }
 
 export interface RaycastOptions {
@@ -171,4 +181,13 @@ export interface PlayerHudSnapshot {
     angleRad: number;
   } | null;
   activeWeaponId: WeaponId;
+  isSliding: boolean;
+  isZiplining: boolean;
+  isSwimming: boolean;
+  canRepairBuild: boolean;
+  killStreak: number;
+  siphonFlashAt: number;
+  lowHealthPulse: number;
+  showSpeedLines: boolean;
+  leanAngle: number;
 }

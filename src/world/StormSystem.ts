@@ -68,27 +68,54 @@ export class StormSystem {
         varying vec2 vUv;
         varying vec3 vLocalPos;
         void main() {
-          float angle = vUv.x * 6.2831853 * 16.0;
-          float heightWave = vUv.y * 24.0;
+          float theta = vUv.x * 6.2831853;
 
-          float wave1 = sin(angle * 0.5 + heightWave * 0.45 - uTime * 2.1);
-          float wave2 = cos(angle * 0.75 - heightWave * 0.3 + uTime * 1.4);
-          float bands = 0.5 + 0.5 * (wave1 * 0.55 + wave2 * 0.45);
+          // Swirling top-to-bottom storm wall plasma energy bands
+          float swirlWarp = sin(vUv.y * 10.0 + uTime * 1.4) * 0.65;
+          float bandA = sin(theta * 6.0 + vUv.y * 16.0 + uTime * 2.6 + swirlWarp);
+          float bandB = cos(theta * 10.0 - vUv.y * 22.0 + uTime * 3.4);
+          float bandC = sin(theta * 15.0 + vUv.y * 30.0 + uTime * 4.5);
+          float plasmaBands = clamp(0.5 + 0.28 * bandA + 0.22 * bandB + 0.14 * bandC, 0.0, 1.0);
 
-          // Fine diagonal storm rain / energy streaks instead of large dots
-          float streakPhase = sin(vUv.x * 6.2831853 * 48.0 + vUv.y * 28.0 + uTime * 6.5);
-          float streaks = pow(max(0.0, streakPhase), 10.0) * 0.22;
+          // Vertical descending plasma rain / ion streaks
+          float streakPhase = sin(theta * 46.0 + vUv.y * 28.0 + uTime * 7.2);
+          float streaks = pow(max(0.0, streakPhase), 10.0) * 0.26;
 
-          vec3 basePurple = vec3(0.42, 0.08, 0.78);
-          vec3 brightMagenta = vec3(0.84, 0.28, 0.98);
-          vec3 col = mix(basePurple, brightMagenta, bands * 0.55 + streaks);
+          // Vertical flickering purple/white lightning filaments (seamless integer harmonics)
+          float jitter1 = sin(vUv.y * 34.0 + uTime * 9.5) * 0.34 + sin(vUv.y * 74.0 - uTime * 15.0) * 0.18;
+          float boltWave1 = cos(theta * 11.0 + jitter1 + sin(uTime * 1.9) * 0.45);
+          float filament1 = pow(max(0.0, boltWave1), 44.0);
+          float halo1 = pow(max(0.0, boltWave1), 11.0);
+
+          float jitter2 = cos(vUv.y * 46.0 - uTime * 12.5) * 0.38 + sin(vUv.y * 92.0 + uTime * 18.0) * 0.20;
+          float boltWave2 = cos(theta * 17.0 + jitter2 - cos(uTime * 2.3) * 0.4);
+          float filament2 = pow(max(0.0, boltWave2), 54.0);
+          float halo2 = pow(max(0.0, boltWave2), 14.0);
+
+          // Regional lightning flicker strobes around cylinder circumference
+          float sector1 = 0.5 + 0.5 * sin(theta * 3.0 + uTime * 4.8);
+          float strobe1 = pow(0.5 + 0.5 * sin(uTime * 18.5 + theta * 5.0), 4.0) * smoothstep(0.32, 0.94, sector1);
+          float sector2 = 0.5 + 0.5 * cos(theta * 4.0 - uTime * 5.6);
+          float strobe2 = pow(0.5 + 0.5 * cos(uTime * 25.0 - theta * 7.0), 5.0) * smoothstep(0.38, 0.95, sector2);
+
+          float lightningHalo = clamp(halo1 * strobe1 * 0.65 + halo2 * strobe2 * 0.72, 0.0, 1.0);
+          float lightningCore = clamp(filament1 * strobe1 * 1.45 + filament2 * strobe2 * 1.75, 0.0, 1.0);
+
+          vec3 deepStorm = vec3(0.30, 0.05, 0.64);
+          vec3 plasmaViolet = vec3(0.76, 0.22, 0.98);
+          vec3 electricLavender = vec3(0.86, 0.68, 1.0);
+          vec3 boltWhite = vec3(0.98, 0.95, 1.0);
+
+          vec3 col = mix(deepStorm, plasmaViolet, plasmaBands * 0.68 + streaks);
+          col = mix(col, electricLavender, lightningHalo * 0.85);
+          col = mix(col, boltWhite, lightningCore);
 
           // Stronger glowing ground rim, smooth fade toward top
           float groundRim = 1.0 - smoothstep(0.0, 0.14, vUv.y);
           float topFade = 1.0 - smoothstep(0.68, 1.0, vUv.y);
-          float alpha = (0.16 + bands * 0.08 + groundRim * 0.24 + streaks * 0.14) * topFade;
+          float alpha = (0.16 + plasmaBands * 0.12 + groundRim * 0.24 + streaks * 0.14 + lightningHalo * 0.24 + lightningCore * 0.38) * topFade;
 
-          gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.52));
+          gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.68));
         }
       `,
     });

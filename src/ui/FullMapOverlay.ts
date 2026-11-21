@@ -1,6 +1,7 @@
 import { POIS, WORLD_SIZE } from '../core';
 import type { HUDState, LaunchPadEntity, ZiplineEntity } from '../types';
-import { mapNormToWorld, worldToMapNorm } from './UIHelpers';
+import { BOSS_POI_LABELS, mapNormToWorld, worldToMapNorm } from './UIHelpers';
+import { getCrownSvg } from './WeaponIcons';
 
 export interface FullMapCallbacks {
   onWaypointChange: (waypoint: { x: number; z: number } | null) => void;
@@ -91,7 +92,37 @@ export class FullMapOverlay {
       }
     });
 
-    frame.append(head, this.canvas);
+    const stage = document.createElement('div');
+    stage.className = 'fdr-fullmap-stage';
+
+    const legend = document.createElement('div');
+    legend.className = 'fdr-map-legend';
+    legend.innerHTML = `
+      <div class="fdr-map-legend-title">TACTICAL LEGEND</div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch pad"></span>
+        <span>LAUNCH PAD</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch geyser"></span>
+        <span>THERMAL GEYSER</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch zipline"></span>
+        <span>ENERGY ZIPLINE</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch safe"></span>
+        <span>SAFE ZONE</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch boss">${getCrownSvg()}</span>
+        <span>NAMED POI BOSS ZONE</span>
+      </div>
+    `;
+
+    stage.append(this.canvas, legend);
+    frame.append(head, stage);
     this.backdropEl.appendChild(frame);
     this.root.appendChild(this.backdropEl);
   }
@@ -294,18 +325,48 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
-    // 10 POI Labels
+    // 10 POI Labels + Named POI Boss Zones
     ctx.save();
+    for (const poi of POIS) {
+      const p = toPx(poi.x, poi.z);
+      const bossName = BOSS_POI_LABELS[poi.id];
+      if (bossName) {
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(12, poi.radius * pxPerMeter), 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 208, 0, 0.72)';
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255, 208, 0, 0.08)';
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
     ctx.font = '800 13px "Barlow Condensed", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const poi of POIS) {
       const p = toPx(poi.x, poi.z);
+      const bossName = BOSS_POI_LABELS[poi.id];
       ctx.lineWidth = 4;
       ctx.strokeStyle = 'rgba(6, 12, 26, 0.92)';
       ctx.strokeText(poi.name, p.x, p.y);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = bossName ? '#fde047' : '#ffffff';
       ctx.fillText(poi.name, p.x, p.y);
+
+      if (bossName) {
+        ctx.save();
+        ctx.font = '800 10px "Barlow Condensed", sans-serif';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(6, 12, 26, 0.95)';
+        const tag = `★ BOSS: ${bossName}`;
+        ctx.strokeText(tag, p.x, p.y + 13);
+        ctx.fillStyle = '#ffd000';
+        ctx.fillText(tag, p.x, p.y + 13);
+        ctx.restore();
+      }
     }
     ctx.restore();
 

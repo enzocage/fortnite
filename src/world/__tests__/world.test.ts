@@ -22,6 +22,7 @@ import {
   TextureFactory,
   WorldBuilder,
   WorldInteractables,
+  type BumpTextureKind,
 } from '../index';
 
 function createMockCanvasEnvironment() {
@@ -112,6 +113,66 @@ describe('TextureFactory', () => {
       restore();
     }
   });
+
+  it('generates and caches procedural bump maps and enriched biome/architectural textures safely in Node mock', () => {
+    const restore = createMockCanvasEnvironment();
+    try {
+      const factory = new TextureFactory();
+      const bumpKinds: BumpTextureKind[] = [
+        'terrain',
+        'wood',
+        'brick',
+        'metal',
+        'rock',
+        'sandstone',
+        'castle',
+        'cyber',
+        'siding',
+        'roof',
+        'bark',
+        'basalt',
+      ];
+
+      const defaultBump = factory.getBumpTexture();
+      expect(defaultBump).toBeInstanceOf(THREE.CanvasTexture);
+      expect(defaultBump.colorSpace).toBe(THREE.NoColorSpace);
+      expect(defaultBump.wrapS).toBe(THREE.RepeatWrapping);
+      expect(defaultBump.wrapT).toBe(THREE.RepeatWrapping);
+      expect(factory.getBumpTexture('terrain')).toBe(defaultBump);
+
+      const bumpMapSet = new Set<THREE.CanvasTexture>();
+      for (const kind of bumpKinds) {
+        const b = factory.getBumpTexture(kind);
+        expect(b).toBeInstanceOf(THREE.CanvasTexture);
+        expect(b.colorSpace).toBe(THREE.NoColorSpace);
+        expect(b.wrapS).toBe(THREE.RepeatWrapping);
+        expect(b.wrapT).toBe(THREE.RepeatWrapping);
+        expect(factory.getBumpTexture(kind)).toBe(b);
+        bumpMapSet.add(b);
+      }
+      expect(bumpMapSet.size).toBe(bumpKinds.length);
+
+      // Enriched color textures
+      for (const tex of [
+        factory.getSandstoneTexture(),
+        factory.getCastleStoneTexture(),
+        factory.getCyberMetalTexture(),
+        factory.getBasaltTexture(),
+        factory.getSnowTexture(),
+        factory.getMarbleTexture(),
+      ]) {
+        expect(tex).toBeInstanceOf(THREE.CanvasTexture);
+        expect(tex.colorSpace).toBe(THREE.SRGBColorSpace);
+        expect(tex.wrapS).toBe(THREE.RepeatWrapping);
+      }
+
+      factory.dispose();
+      expect(factory.getBumpTexture('brick')).not.toBe(bumpMapSet.values().next().value);
+      factory.dispose();
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe('TerrainSystem', () => {
@@ -123,6 +184,7 @@ describe('TerrainSystem', () => {
     const mesh = t1.getMesh();
     expect(mesh).toBeInstanceOf(THREE.Mesh);
     expect(mesh.receiveShadow).toBe(true);
+    expect((mesh.material as THREE.MeshStandardMaterial).bumpMap).toBeInstanceOf(THREE.CanvasTexture);
     expect(t1.getMesh()).toBe(mesh); // lazily cached
 
     const posAttr = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
@@ -314,6 +376,33 @@ describe('WorldBuilder', () => {
     );
     expect(skyColliders.length).toBeGreaterThan(0);
 
+    // Golden mythic vault pedestals on Skyline Sky-Island (160, 170.2) & Frostpeak Sanctum (-10, -237)
+    const skyPedestal = res.colliders.some(
+      (c) =>
+        c.tag === 'building_sky_island' &&
+        c.minY > 44 &&
+        c.minX < 160 &&
+        c.maxX > 160 &&
+        c.minZ < 170.2 &&
+        c.maxZ > 170.2,
+    );
+    expect(skyPedestal).toBe(true);
+
+    const frostPedestal = res.colliders.some(
+      (c) =>
+        c.tag === 'building_castle' &&
+        c.minY >= 36 &&
+        c.minX < -10 &&
+        c.maxX > -10 &&
+        c.minZ < -237 &&
+        c.maxZ > -237,
+    );
+    expect(frostPedestal).toBe(true);
+
+    // Streetlamp lanterns across Urban & Suburbs POIs
+    const lamps = res.colliders.filter((c) => c.tag === 'building_lamp');
+    expect(lamps.length).toBeGreaterThanOrEqual(20);
+
     builder.update(0.016, 1.0);
 
     // Validate all colliders are finite and non-inverted
@@ -502,6 +591,150 @@ describe('PropsAndLoot', () => {
     builder.dispose();
     terrain.dispose();
   });
+
+  it('spawns 3 deterministic Loot Llamas and bursts mats, ammo, chug_splash & shockwave_grenade when damaged or opened', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+
+    const pal1 = new PropsAndLoot(terrain, bus, 4201);
+    const pal2 = new PropsAndLoot(terrain, bus, 4201);
+    pal1.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    pal2.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const llamas1 = pal1.getLlamas();
+    const llamas2 = pal2.getLlamas();
+    expect(llamas1).toHaveLength(3);
+    expect(llamas2).toHaveLength(3);
+
+    for (let i = 0; i < 3; i++) {
+      expect(llamas1[i].id).toBe(llamas2[i].id);
+      expect(llamas1[i].x).toBe(llamas2[i].x);
+      expect(llamas1[i].y).toBe(llamas2[i].y);
+      expect(llamas1[i].z).toBe(llamas2[i].z);
+      expect(llamas1[i].opened).toBe(false);
+      expect(llamas1[i].hp).toBe(llamas1[i].maxHp);
+      expect(llamas1[i].maxHp).toBeGreaterThan(0);
+      expect(terrain.isWater(llamas1[i].x, llamas1[i].z)).toBe(false);
+      expect(llamas1[i].y).toBeCloseTo(terrain.getHeightAt(llamas1[i].x, llamas1[i].z), 4);
+    }
+
+    // Active prop colliders invariant stays untouched
+    expect(pal1.getActivePropColliders().length).toBe(pal1.getProps().length);
+    expect(pal1.getActiveLlamaColliders()).toHaveLength(3);
+
+    // Non-lethal damage then lethal damage on llama_0
+    const l0 = llamas1[0];
+    const brokePartial = pal1.damageLlama(l0.id, 75, { x: l0.x, y: l0.y + 1, z: l0.z });
+    expect(brokePartial).toBe(false);
+    expect(l0.hp).toBe(l0.maxHp - 75);
+    expect(l0.opened).toBe(false);
+
+    const dropsBeforeBreak = pal1.getLootDrops().length;
+    const brokeLethal = pal1.damageLlama(l0.id, l0.hp + 50, { x: l0.x, y: l0.y + 1, z: l0.z });
+    expect(brokeLethal).toBe(true);
+    expect(l0.hp).toBe(0);
+    expect(l0.opened).toBe(true);
+    expect(pal1.getActiveLlamaColliders()).toHaveLength(2);
+
+    const burstDrops = pal1.getLootDrops().slice(dropsBeforeBreak);
+    expect(burstDrops.some((d) => d.materials?.type === 'wood' && d.materials.amount >= 100)).toBe(true);
+    expect(burstDrops.some((d) => d.materials?.type === 'brick' && d.materials.amount >= 100)).toBe(true);
+    expect(burstDrops.some((d) => d.materials?.type === 'metal' && d.materials.amount >= 100)).toBe(true);
+    expect(burstDrops.some((d) => Boolean(d.ammo && d.ammo.amount > 0))).toBe(true);
+    expect(burstDrops.some((d) => d.item?.weaponId === 'chug_splash')).toBe(true);
+    expect(burstDrops.some((d) => d.item?.weaponId === 'shockwave_grenade')).toBe(true);
+
+    // Already broken llama ignores further damage/open
+    expect(pal1.damageLlama(l0.id, 50, { x: l0.x, y: l0.y + 1, z: l0.z })).toBe(false);
+    expect(pal1.openLlama(l0.id)).toBe(false);
+
+    // Direct openLlama on llama_1
+    const l1 = llamas1[1];
+    const dropsBeforeOpen = pal1.getLootDrops().length;
+    expect(pal1.openLlama(l1.id)).toBe(true);
+    expect(l1.opened).toBe(true);
+    expect(pal1.openLlama(l1.id)).toBe(false);
+    expect(pal1.getActiveLlamaColliders()).toHaveLength(1);
+
+    const openBurst = pal1.getLootDrops().slice(dropsBeforeOpen);
+    expect(openBurst.some((d) => d.materials?.type === 'wood')).toBe(true);
+    expect(openBurst.some((d) => d.materials?.type === 'brick')).toBe(true);
+    expect(openBurst.some((d) => d.materials?.type === 'metal')).toBe(true);
+    expect(openBurst.some((d) => Boolean(d.ammo))).toBe(true);
+    expect(openBurst.some((d) => d.item?.weaponId === 'chug_splash')).toBe(true);
+    expect(openBurst.some((d) => d.item?.weaponId === 'shockwave_grenade')).toBe(true);
+
+    // Update & reset repopulates 3 fresh unopened llamas
+    pal1.update(0.05, 1.0);
+    pal1.reset(world.chestSpots, world.floorLootSpots, world.colliders);
+    expect(pal1.getLlamas()).toHaveLength(3);
+    expect(pal1.getLlamas().every((l) => !l.opened && l.hp === l.maxHp)).toBe(true);
+
+    pal1.dispose();
+    pal2.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('drops heavy_shotgun, shockwave_grenade, frag_grenade, and chug_splash across chest & floor loot pools', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const rolledFloorWeapons = new Set<string>();
+    const rolledChestWeapons = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      rolledFloorWeapons.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      rolledChestWeapons.add(cw.weaponId);
+    }
+    expect(rolledFloorWeapons.has('heavy_shotgun')).toBe(true);
+    expect(rolledChestWeapons.has('heavy_shotgun')).toBe(true);
+
+    // Open all chests and inspect combined floor + chest loot pool items
+    for (const c of pal.getChests()) {
+      pal.openChest(c.id);
+    }
+    const allItemIds = new Set(
+      pal
+        .getLootDrops()
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(allItemIds.has('heavy_shotgun')).toBe(true);
+    expect(allItemIds.has('shockwave_grenade')).toBe(true);
+    expect(allItemIds.has('frag_grenade')).toBe(true);
+    expect(allItemIds.has('chug_splash')).toBe(true);
+
+    // Also validate rollConsumable emits valid rarity & stackCount for throwables
+    const utilityIds = new Set<string>();
+    for (let i = 0; i < 150; i++) {
+      const u = pal.rollConsumable();
+      const def = WEAPONS[u.weaponId];
+      expect(def.allowedRarities).toContain(u.rarity);
+      expect(u.magAmmo).toBe(0);
+      expect(u.stackCount).toBeGreaterThanOrEqual(1);
+      utilityIds.add(u.weaponId);
+    }
+    expect(utilityIds.has('shockwave_grenade')).toBe(true);
+    expect(utilityIds.has('frag_grenade')).toBe(true);
+    expect(utilityIds.has('chug_splash')).toBe(true);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
 });
 
 describe('EnvironmentFX', () => {
@@ -525,8 +758,21 @@ describe('EnvironmentFX', () => {
     }
     const cloudGroup = group.children.find(
       (c) => c.name === 'CloudGroup',
-    );
+    ) as THREE.Group | undefined;
     expect(cloudGroup).toBeDefined();
+    const cloudMats = new Set(
+      cloudGroup!.children.map((m) => (m as THREE.Mesh).material),
+    );
+    expect(cloudMats.size).toBeGreaterThanOrEqual(2);
+
+    const ocean = group.getObjectByName('OceanWater') as THREE.Mesh;
+    expect(ocean).toBeDefined();
+    const oceanMat = ocean.material as THREE.ShaderMaterial;
+    expect(oceanMat.uniforms.uTime).toBeDefined();
+    expect(oceanMat.uniforms.uIslandRadius).toBeDefined();
+    expect(oceanMat.uniforms.uSunDir).toBeDefined();
+    expect(oceanMat.uniforms.uDayPhase).toBeDefined();
+
     const xBefore = cloudGroup!.position.x;
     fx.update(1.0, 3.0);
     expect(cloudGroup!.position.x).not.toBe(xBefore);

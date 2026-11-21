@@ -438,7 +438,7 @@ export class CollisionSystem {
     for (let i = 0; i < buildBoxes.length; i++) {
       const b = buildBoxes[i];
       if (x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) {
-        if (b.maxY <= maxAllowedY && b.maxY > bestY) {
+        if (b.maxY <= maxAllowedY && b.maxY >= bestY) {
           bestY = b.maxY;
           bestMat = b.material ?? 'wood';
         }
@@ -507,7 +507,7 @@ export class CollisionSystem {
       for (let i = 0; i < buildBoxes.length; i++) {
         const b = buildBoxes[i];
         if (sx >= b.minX && sx <= b.maxX && sz >= b.minZ && sz <= b.maxZ) {
-          if (b.maxY <= maxAllowedY && b.maxY > bestY) {
+          if (b.maxY <= maxAllowedY && b.maxY >= bestY) {
             bestY = b.maxY;
             bestMat = b.material ?? 'wood';
           }

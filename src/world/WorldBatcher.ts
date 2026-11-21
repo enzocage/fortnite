@@ -6,7 +6,7 @@ import type {
   MaterialType,
   TerrainQuery,
 } from '../types';
-import { TextureFactory } from './TextureFactory';
+import { TextureFactory, type BumpTextureKind } from './TextureFactory';
 import type { BuildingFootprint } from './TerrainSystem';
 
 export interface ChestSpot {
@@ -215,16 +215,41 @@ export function emissiveMat(
   });
 }
 
+function inferBumpConfig(key: string): { kind: BumpTextureKind; scale: number } | null {
+  if (key === 'brick') return { kind: 'brick', scale: 0.12 };
+  if (key === 'castle_stone') return { kind: 'castle', scale: 0.14 };
+  if (key === 'wood') return { kind: 'wood', scale: 0.09 };
+  if (key === 'bark') return { kind: 'bark', scale: 0.12 };
+  if (key === 'metal') return { kind: 'metal', scale: 0.08 };
+  if (key === 'cyber_metal') return { kind: 'cyber', scale: 0.1 };
+  if (key === 'sandstone') return { kind: 'sandstone', scale: 0.14 };
+  if (key === 'rock') return { kind: 'rock', scale: 0.15 };
+  if (key === 'basalt') return { kind: 'basalt', scale: 0.15 };
+  if (key.startsWith('siding:')) return { kind: 'siding', scale: 0.08 };
+  if (key.startsWith('roof:')) return { kind: 'roof', scale: 0.09 };
+  if (key.startsWith('corrugated:')) return { kind: 'metal', scale: 0.1 };
+  if (key === 'marble' || key === 'snow' || key === 'road' || key === 'grass') {
+    return { kind: 'terrain', scale: 0.06 };
+  }
+  return null;
+}
+
 export function texturedMat(
   ctx: BuildContext,
   key: string,
   getTex: () => THREE.Texture,
   roughness = 0.82,
   metalness = 0.08,
+  bumpKindOverride?: BumpTextureKind | null,
+  bumpScaleOverride?: number,
 ): THREE.Material {
   return getMat(ctx, `tex:${key}`, () => {
+    const inferred = bumpKindOverride === undefined ? inferBumpConfig(key) : null;
+    const kind = bumpKindOverride === undefined ? inferred?.kind : bumpKindOverride;
+    const bumpScale = bumpScaleOverride ?? inferred?.scale ?? 0.09;
     return new THREE.MeshStandardMaterial({
       map: getTex(),
+      ...(kind ? { bumpMap: ctx.textures.getBumpTexture(kind), bumpScale } : {}),
       roughness,
       metalness,
     });
@@ -626,17 +651,36 @@ export function addStaircase(
 export function addStreetLamp(ctx: BuildContext, x: number, z: number): void {
   const y = ctx.terrain.getHeightAt(x, z);
   const poleMat = solidColorMat(ctx, '#1e293b', 0.45, 0.7);
-  const bulbMat = emissiveMat(ctx, '#fef08a', 1.3);
+  const bulbMat = emissiveMat(ctx, '#fef08a', 1.35);
 
+  // Cast-iron pedestal base + main column
+  addWorldBox(ctx, x, y + 0.24, z, 0.44, 0.48, 0.44, poleMat, 'metal', 'building_lamp', {
+    collider: false,
+    castShadow: false,
+  });
   addWorldBox(ctx, x, y + 2.4, z, 0.22, 4.8, 0.22, poleMat, 'metal', 'building_lamp', {
     collider: true,
     castShadow: ctx.quality === 'high',
   });
-  addWorldBox(ctx, x + 0.55, y + 4.7, z, 1.2, 0.16, 0.22, poleMat, 'metal', 'building_lamp', {
+  // Decorative top finial & curved overhang arm
+  addWorldBox(ctx, x, y + 4.92, z, 0.34, 0.24, 0.34, poleMat, 'metal', 'building_lamp', {
     collider: false,
     castShadow: false,
   });
-  addWorldBox(ctx, x + 0.95, y + 4.55, z, 0.42, 0.14, 0.28, bulbMat, 'metal', 'building_lamp', {
+  addWorldBox(ctx, x + 0.55, y + 4.75, z, 1.25, 0.14, 0.18, poleMat, 'metal', 'building_lamp', {
+    collider: false,
+    castShadow: false,
+  });
+  // Hanging stylized lantern housing (cap + glowing amber core + base trim)
+  addWorldBox(ctx, x + 1.02, y + 4.58, z, 0.48, 0.12, 0.48, poleMat, 'metal', 'building_lamp', {
+    collider: false,
+    castShadow: false,
+  });
+  addWorldBox(ctx, x + 1.02, y + 4.32, z, 0.36, 0.42, 0.36, bulbMat, 'metal', 'building_lamp', {
+    collider: false,
+    castShadow: false,
+  });
+  addWorldBox(ctx, x + 1.02, y + 4.06, z, 0.28, 0.1, 0.28, poleMat, 'metal', 'building_lamp', {
     collider: false,
     castShadow: false,
   });

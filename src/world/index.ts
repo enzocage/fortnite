@@ -1,4 +1,4 @@
-export { TextureFactory } from './TextureFactory';
+export { TextureFactory, type BumpTextureKind } from './TextureFactory';
 export {
   TerrainSystem,
   RIVER_POLYLINE,

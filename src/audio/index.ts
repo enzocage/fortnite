@@ -1,10 +1,14 @@
 export {
   AudioEngine,
+  BIOME_AMBIENCE_PROFILES,
   CHEST_HUM_RADIUS,
   computeBusGains,
+  getBiomeAmbienceProfile,
   MAX_CHEST_LOOPS,
   MAX_POLYPHONY,
   type AudioEngineOptions,
+  type BiomeAmbienceProfile,
+  type BiomeAmbienceState,
   type BusGains,
 } from './AudioEngine';
 export {

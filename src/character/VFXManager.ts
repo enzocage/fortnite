@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { BuildPieceType, MaterialType, Vec3Like, WeaponId } from '../types';
-import { EventBus, MATERIAL_STATS, clamp } from '../core';
+import type { AmmoType, BiomeType, BuildPieceType, MaterialType, Vec3Like, WeaponId } from '../types';
+import { EventBus, MATERIAL_STATS, WEAPONS, clamp } from '../core';
 
 type ImpactMaterial =
   | 'wood'
@@ -10,6 +10,31 @@ type ImpactMaterial =
   | 'shield'
   | 'flesh'
   | 'shield_break';
+
+export function getBiomeDustColors(biome: BiomeType): [string, string] {
+  switch (biome) {
+    case 'ocean':
+      return ['#bae6fd', '#38bdf8'];
+    case 'beach':
+      return ['#fde68a', '#f59e0b'];
+    case 'grassland':
+      return ['#a16207', '#84cc16'];
+    case 'forest':
+      return ['#78350f', '#4d7c0f'];
+    case 'highland':
+      return ['#94a3b8', '#78716c'];
+    case 'urban':
+      return ['#cbd5e1', '#64748b'];
+    case 'snow':
+      return ['#f8fafc', '#bae6fd'];
+    case 'desert':
+      return ['#ea580c', '#fbbf24'];
+    case 'volcanic':
+      return ['#57534e', '#f97316'];
+    case 'cyber':
+      return ['#22d3ee', '#a855f7'];
+  }
+}
 
 interface TracerSlot {
   active: boolean;
@@ -28,6 +53,20 @@ interface MuzzleSlot {
   baseScale: number;
   group: THREE.Group;
   material: THREE.MeshBasicMaterial;
+}
+
+interface CasingSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  mesh: THREE.Mesh;
+  material: THREE.MeshStandardMaterial;
 }
 
 interface BurstParticle {
@@ -56,6 +95,32 @@ interface BurstSlot {
   particles: BurstParticle[];
 }
 
+interface ShieldShard {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  baseScale: number;
+}
+
+interface ShieldBreakSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  innerRingMesh: THREE.Mesh;
+  innerRingMat: THREE.MeshBasicMaterial;
+  flashMesh: THREE.Mesh;
+  flashMat: THREE.MeshBasicMaterial;
+  shards: ShieldShard[];
+}
+
 interface ExplosionEmber {
   mesh: THREE.Mesh;
   material: THREE.MeshBasicMaterial;
@@ -80,6 +145,64 @@ interface ExplosionSlot {
   ringMesh: THREE.Mesh;
   ringMat: THREE.MeshBasicMaterial;
   embers: ExplosionEmber[];
+}
+
+interface ShockwaveSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  violetRingMesh: THREE.Mesh;
+  violetRingMat: THREE.MeshBasicMaterial;
+  cyanRingMesh: THREE.Mesh;
+  cyanRingMat: THREE.MeshBasicMaterial;
+  tiltRingMesh: THREE.Mesh;
+  tiltRingMat: THREE.MeshBasicMaterial;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+}
+
+interface SplashSparkle {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface SplashHealSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  sparkles: SplashSparkle[];
+}
+
+interface SlideDustPuff {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface SlideDustSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  puffs: SlideDustPuff[];
 }
 
 interface EliminationVoxel {
@@ -118,17 +241,25 @@ interface WeakpointSlot {
 
 const TRACER_POOL_SIZE = 48;
 const MUZZLE_POOL_SIZE = 24;
+const CASING_POOL_SIZE = 40;
 const BURST_POOL_SIZE = 40;
 const BURST_PARTICLE_COUNT = 12;
+const SHIELD_BREAK_POOL_SIZE = 8;
+const SHIELD_BREAK_SHARD_COUNT = 18;
 const EXPLOSION_POOL_SIZE = 12;
 const EXPLOSION_EMBER_COUNT = 10;
+const SHOCKWAVE_POOL_SIZE = 8;
+const SPLASH_HEAL_POOL_SIZE = 10;
+const SPLASH_SPARKLE_COUNT = 16;
+const SLIDE_DUST_POOL_SIZE = 24;
+const SLIDE_DUST_PARTICLE_COUNT = 8;
 const ELIMINATION_POOL_SIZE = 10;
 const ELIMINATION_VOXEL_COUNT = 18;
 const WEAKPOINT_POOL_SIZE = 8;
 
 /**
  * Pooled 3D VFX manager subscribed to EventBus vfx:* channels.
- * Avoids runtime geometry allocations and cleanly recycles/disposes all resources.
+ * Avoids runtime geometry/material allocations and cleanly recycles/disposes all resources.
  */
 export class VFXManager {
   private readonly scene: THREE.Scene;
@@ -147,21 +278,32 @@ export class VFXManager {
   private readonly unitCircleGeo: THREE.CircleGeometry;
   private readonly unitCrystalGeo: THREE.OctahedronGeometry;
   private readonly unitPlaneGeo: THREE.PlaneGeometry;
+  private readonly casingGeo: THREE.CylinderGeometry;
   private readonly droneBodyGeo: THREE.BoxGeometry;
   private readonly droneRotorGeo: THREE.TorusGeometry;
   private readonly beamCylGeo: THREE.CylinderGeometry;
 
   private readonly tracers: TracerSlot[] = [];
   private readonly muzzles: MuzzleSlot[] = [];
+  private readonly casings: CasingSlot[] = [];
   private readonly bursts: BurstSlot[] = [];
+  private readonly shieldBreaks: ShieldBreakSlot[] = [];
   private readonly explosions: ExplosionSlot[] = [];
+  private readonly shockwaves: ShockwaveSlot[] = [];
+  private readonly splashHeals: SplashHealSlot[] = [];
+  private readonly slideDusts: SlideDustSlot[] = [];
   private readonly eliminations: EliminationSlot[] = [];
   private readonly weakpoints: WeakpointSlot[] = [];
 
   private tracerCursor = 0;
   private muzzleCursor = 0;
+  private casingCursor = 0;
   private burstCursor = 0;
+  private shieldBreakCursor = 0;
   private explosionCursor = 0;
+  private shockwaveCursor = 0;
+  private splashHealCursor = 0;
+  private slideDustCursor = 0;
   private eliminationCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
@@ -170,6 +312,7 @@ export class VFXManager {
   private readonly tmpA = new THREE.Vector3();
   private readonly tmpB = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
+  private readonly tmpRight = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
   private readonly upAxis = new THREE.Vector3(0, 1, 0);
   private readonly zAxis = new THREE.Vector3(0, 0, 1);
@@ -190,6 +333,7 @@ export class VFXManager {
     this.unitCircleGeo = this.trackGeo(new THREE.CircleGeometry(0.5, 20));
     this.unitCrystalGeo = this.trackGeo(new THREE.OctahedronGeometry(0.5, 0));
     this.unitPlaneGeo = this.trackGeo(new THREE.PlaneGeometry(1, 1));
+    this.casingGeo = this.trackGeo(new THREE.CylinderGeometry(0.014, 0.014, 0.048, 8));
     this.droneBodyGeo = this.trackGeo(new THREE.BoxGeometry(0.52, 0.16, 0.42));
     this.droneRotorGeo = this.trackGeo(new THREE.TorusGeometry(0.14, 0.022, 6, 12));
     this.beamCylGeo = this.trackGeo(new THREE.CylinderGeometry(0.42, 0.68, 1, 12, 1, true));
@@ -282,7 +426,36 @@ export class VFXManager {
       });
     }
 
-    // 3. Impact / Build Pop / Chest Open Bursts
+    // 3. Spinning Brass Bullet Casings / Shotgun Shells
+    for (let i = 0; i < CASING_POOL_SIZE; i++) {
+      const material = this.trackMat(
+        new THREE.MeshStandardMaterial({
+          color: 0xfbbf24,
+          roughness: 0.25,
+          metalness: 0.85,
+          transparent: true,
+          opacity: 1,
+        }),
+      );
+      const mesh = new THREE.Mesh(this.casingGeo, material);
+      mesh.visible = false;
+      this.root.add(mesh);
+      this.casings.push({
+        active: false,
+        age: 0,
+        duration: 0.55,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        rx: 0,
+        ry: 0,
+        rz: 0,
+        mesh,
+        material,
+      });
+    }
+
+    // 4. Impact / Build Pop / Chest Open Bursts
     for (let i = 0; i < BURST_POOL_SIZE; i++) {
       const group = new THREE.Group();
       group.visible = false;
@@ -340,7 +513,91 @@ export class VFXManager {
       });
     }
 
-    // 4. Rocket Explosions
+    // 5. Enhanced Shield-Break Crystalline Shards
+    for (let i = 0; i < SHIELD_BREAK_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+      group.add(outerRingMesh);
+
+      const innerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const innerRingMesh = new THREE.Mesh(this.unitRingGeo, innerRingMat);
+      innerRingMesh.rotation.x = Math.PI / 3;
+      group.add(innerRingMesh);
+
+      const flashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x67e8f9,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const flashMesh = new THREE.Mesh(this.unitSphereGeo, flashMat);
+      group.add(flashMesh);
+
+      const shards: ShieldShard[] = [];
+      for (let s = 0; s < SHIELD_BREAK_SHARD_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xe0f2fe : s % 2 === 0 ? 0x22d3ee : 0x38bdf8,
+            transparent: true,
+            opacity: 1,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        shards.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          rz: 0,
+          baseScale: 0.14,
+        });
+      }
+
+      this.root.add(group);
+      this.shieldBreaks.push({
+        active: false,
+        age: 0,
+        duration: 0.62,
+        group,
+        outerRingMesh,
+        outerRingMat,
+        innerRingMesh,
+        innerRingMat,
+        flashMesh,
+        flashMat,
+        shards,
+      });
+    }
+
+    // 6. Rocket Explosions
     for (let i = 0; i < EXPLOSION_POOL_SIZE; i++) {
       const group = new THREE.Group();
       group.visible = false;
@@ -434,7 +691,197 @@ export class VFXManager {
       });
     }
 
-    // 5. Elimination Drone Beam-Out
+    // 7. Shockwave Rings + Vertical Distortion Dome
+    for (let i = 0; i < SHOCKWAVE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const violetRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const violetRingMesh = new THREE.Mesh(this.unitRingGeo, violetRingMat);
+      violetRingMesh.rotation.x = -Math.PI / 2;
+      group.add(violetRingMesh);
+
+      const cyanRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const cyanRingMesh = new THREE.Mesh(this.unitRingGeo, cyanRingMat);
+      cyanRingMesh.rotation.x = -Math.PI / 2;
+      cyanRingMesh.position.y = 0.08;
+      group.add(cyanRingMesh);
+
+      const tiltRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xc084fc,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const tiltRingMesh = new THREE.Mesh(this.unitRingGeo, tiltRingMat);
+      tiltRingMesh.rotation.set(Math.PI / 4, 0, Math.PI / 6);
+      group.add(tiltRingMesh);
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x8b5cf6,
+          transparent: true,
+          opacity: 0.45,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.unitSphereGeo, domeMat);
+      group.add(domeMesh);
+
+      this.root.add(group);
+      this.shockwaves.push({
+        active: false,
+        age: 0,
+        duration: 0.58,
+        radius: 6,
+        group,
+        violetRingMesh,
+        violetRingMat,
+        cyanRingMesh,
+        cyanRingMat,
+        tiltRingMesh,
+        tiltRingMat,
+        domeMesh,
+        domeMat,
+      });
+    }
+
+    // 8. Chug Splash Heal Mist Dome + Rising Healing Sparkles
+    for (let i = 0; i < SPLASH_HEAL_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x2dd4bf,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.unitSphereGeo, domeMat);
+      group.add(domeMesh);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x5eead4,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const sparkles: SplashSparkle[] = [];
+      for (let s = 0; s < SPLASH_SPARKLE_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xecfeff : s % 2 === 0 ? 0x67e8f9 : 0x2dd4bf,
+            transparent: true,
+            opacity: 1,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          }),
+        );
+        const geo = s % 2 === 0 ? this.unitCrystalGeo : this.unitSphereGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        sparkles.push({
+          mesh,
+          material,
+          angle: (s / SPLASH_SPARKLE_COUNT) * Math.PI * 2,
+          radius: 0.3,
+          speedY: 1.5,
+          spin: 4,
+          baseScale: 0.11,
+        });
+      }
+
+      this.root.add(group);
+      this.splashHeals.push({
+        active: false,
+        age: 0,
+        duration: 0.85,
+        radius: 4.5,
+        group,
+        domeMesh,
+        domeMat,
+        ringMesh,
+        ringMat,
+        sparkles,
+      });
+    }
+
+    // 9. Biome-Colored Slide Dust Particles
+    for (let i = 0; i < SLIDE_DUST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const puffs: SlideDustPuff[] = [];
+      for (let p = 0; p < SLIDE_DUST_PARTICLE_COUNT; p++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: 0xd6d3d1,
+            transparent: true,
+            opacity: 0.78,
+            depthWrite: false,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitSphereGeo, material);
+        group.add(mesh);
+        puffs.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.16,
+        });
+      }
+
+      this.root.add(group);
+      this.slideDusts.push({
+        active: false,
+        age: 0,
+        duration: 0.42,
+        group,
+        puffs,
+      });
+    }
+
+    // 10. Elimination Drone Beam-Out
     for (let i = 0; i < ELIMINATION_POOL_SIZE; i++) {
       const group = new THREE.Group();
       group.visible = false;
@@ -537,7 +984,7 @@ export class VFXManager {
       });
     }
 
-    // 6. Weakpoint Target Discs
+    // 11. Weakpoint Target Discs
     for (let i = 0; i < WEAKPOINT_POOL_SIZE; i++) {
       const group = new THREE.Group();
       group.visible = false;
@@ -619,6 +1066,9 @@ export class VFXManager {
       this.eventBus.on('vfx:weakpoint', (e) =>
         this.updateWeakpoint(e.propId, e.position, e.normal, e.active),
       ),
+      this.eventBus.on('vfx:shockwave', (e) => this.spawnShockwave(e.position, e.radius)),
+      this.eventBus.on('vfx:splash_heal', (e) => this.spawnSplashHeal(e.position, e.radius)),
+      this.eventBus.on('vfx:slide_dust', (e) => this.spawnSlideDust(e.position, e.biome)),
     );
   }
 
@@ -673,12 +1123,18 @@ export class VFXManager {
     if (weaponId === 'rocket_launcher') {
       scale = 1.85;
       color = 0xf97316;
+    } else if (weaponId === 'heavy_shotgun') {
+      scale = 1.55;
+      color = 0xf59e0b;
     } else if (weaponId === 'pump_shotgun' || weaponId === 'tac_shotgun') {
       scale = 1.45;
       color = 0xfbbf24;
     } else if (weaponId === 'sniper') {
       scale = 1.5;
       color = 0x93c5fd;
+    } else if (weaponId === 'mythic_blade_rifle') {
+      scale = 1.35;
+      color = 0x22d3ee;
     } else if (weaponId === 'smg' || weaponId === 'pistol') {
       scale = 0.78;
     }
@@ -695,10 +1151,87 @@ export class VFXManager {
     slot.material.color.setHex(color);
     slot.material.opacity = 0.95;
     slot.group.visible = true;
+
+    // Eject spinning brass casing or shotgun shell for bullet/shell firearms
+    const ammoType = WEAPONS[weaponId]?.ammoType;
+    if (
+      ammoType === 'light' ||
+      ammoType === 'medium' ||
+      ammoType === 'heavy' ||
+      ammoType === 'shells'
+    ) {
+      this.spawnCasing(position, direction, ammoType);
+    }
+  }
+
+  private spawnCasing(position: Vec3Like, direction: Vec3Like, ammoType: AmmoType): void {
+    const slot = this.casings[this.casingCursor];
+    this.casingCursor = (this.casingCursor + 1) % CASING_POOL_SIZE;
+
+    this.tmpDir.set(direction.x, direction.y, direction.z);
+    if (this.tmpDir.lengthSq() < 1e-8) {
+      this.tmpDir.set(0, 0, 1);
+    } else {
+      this.tmpDir.normalize();
+    }
+
+    // Character's right side vector = normalize(cross(forward, up))
+    this.tmpRight.crossVectors(this.tmpDir, this.upAxis);
+    if (this.tmpRight.lengthSq() < 1e-6) {
+      this.tmpRight.set(-1, 0, 0);
+    } else {
+      this.tmpRight.normalize();
+    }
+
+    const isShell = ammoType === 'shells';
+    const isHeavy = ammoType === 'heavy';
+    const isLight = ammoType === 'light';
+
+    const scaleXZ = isShell ? 1.45 : isHeavy ? 1.4 : isLight ? 0.85 : 1.0;
+    const scaleY = isShell ? 1.3 : isHeavy ? 1.65 : isLight ? 0.85 : 1.0;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.56;
+
+    // Eject slightly back from muzzle at receiver port
+    slot.mesh.position.set(
+      position.x - this.tmpDir.x * 0.22 + this.tmpRight.x * 0.05,
+      position.y - this.tmpDir.y * 0.22 + 0.02,
+      position.z - this.tmpDir.z * 0.22 + this.tmpRight.z * 0.05,
+    );
+    slot.mesh.rotation.set(
+      this.nextRand() * Math.PI,
+      this.nextRand() * Math.PI,
+      this.nextRand() * Math.PI,
+    );
+    slot.mesh.scale.set(scaleXZ, scaleY, scaleXZ);
+
+    const outSpeed = 2.2 + this.nextRand() * 1.4;
+    const upSpeed = 2.3 + this.nextRand() * 1.3;
+    const backDrift = -0.35 + (this.nextRand() - 0.5) * 0.8;
+
+    slot.vx = this.tmpRight.x * outSpeed + this.tmpDir.x * backDrift;
+    slot.vy = upSpeed;
+    slot.vz = this.tmpRight.z * outSpeed + this.tmpDir.z * backDrift;
+    slot.rx = (this.nextRand() > 0.5 ? 1 : -1) * (18 + this.nextRand() * 14);
+    slot.ry = (this.nextRand() > 0.5 ? 1 : -1) * (16 + this.nextRand() * 14);
+    slot.rz = (this.nextRand() > 0.5 ? 1 : -1) * (20 + this.nextRand() * 14);
+
+    slot.material.color.setHex(isShell ? 0xdc2626 : 0xfbbf24);
+    slot.material.metalness = isShell ? 0.35 : 0.85;
+    slot.material.roughness = isShell ? 0.45 : 0.22;
+    slot.material.opacity = 1;
+    slot.mesh.visible = true;
   }
 
   private spawnImpact(position: Vec3Like, normal: Vec3Like, material: ImpactMaterial): void {
     if (this.disposed) return;
+
+    if (material === 'shield_break') {
+      this.spawnShieldBreak(position, normal);
+      return;
+    }
 
     const slot = this.bursts[this.burstCursor];
     this.burstCursor = (this.burstCursor + 1) % BURST_POOL_SIZE;
@@ -763,18 +1296,6 @@ export class VFXManager {
         gravity = 3.0;
         duration = 0.38;
         break;
-      case 'shield_break':
-        primaryColor = '#22d3ee';
-        secondaryColor = '#e0f2fe';
-        ringColor = '#38bdf8';
-        particleCount = BURST_PARTICLE_COUNT;
-        speedMin = 4.2;
-        speedMax = 8.4;
-        baseScale = 0.12;
-        ringEndScale = 1.45;
-        gravity = 7.5;
-        duration = 0.56;
-        break;
     }
 
     slot.active = true;
@@ -829,6 +1350,70 @@ export class VFXManager {
       p.material.color.set(i % 2 === 0 ? primaryColor : secondaryColor);
       p.material.opacity = 1;
       p.mesh.visible = true;
+    }
+  }
+
+  private spawnShieldBreak(position: Vec3Like, normal: Vec3Like): void {
+    const slot = this.shieldBreaks[this.shieldBreakCursor];
+    this.shieldBreakCursor = (this.shieldBreakCursor + 1) % SHIELD_BREAK_POOL_SIZE;
+
+    this.tmpDir.set(normal.x, normal.y, normal.z);
+    if (this.tmpDir.lengthSq() < 1e-8) {
+      this.tmpDir.set(0, 1, 0);
+    } else {
+      this.tmpDir.normalize();
+    }
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.62;
+
+    slot.group.position.set(
+      position.x + this.tmpDir.x * 0.03,
+      position.y + this.tmpDir.y * 0.03,
+      position.z + this.tmpDir.z * 0.03,
+    );
+    slot.group.visible = true;
+
+    this.tmpQuat.setFromUnitVectors(this.zAxis, this.tmpDir);
+    slot.outerRingMesh.quaternion.copy(this.tmpQuat);
+    slot.outerRingMesh.scale.setScalar(0.2);
+    slot.outerRingMat.opacity = 0.95;
+
+    slot.innerRingMesh.rotation.set(Math.PI / 3, this.nextRand() * Math.PI, 0);
+    slot.innerRingMesh.scale.setScalar(0.15);
+    slot.innerRingMat.opacity = 0.9;
+
+    slot.flashMesh.scale.setScalar(0.35);
+    slot.flashMat.opacity = 0.85;
+
+    for (let i = 0; i < SHIELD_BREAK_SHARD_COUNT; i++) {
+      const sh = slot.shards[i];
+      const ang = (i / SHIELD_BREAK_SHARD_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      const elev = (this.nextRand() - 0.15) * 1.4;
+      const speed = 4.0 + this.nextRand() * 5.2;
+
+      this.tmpA.set(
+        Math.cos(ang) * 0.9 + this.tmpDir.x * 0.55,
+        0.35 + elev + this.tmpDir.y * 0.45,
+        Math.sin(ang) * 0.9 + this.tmpDir.z * 0.55,
+      );
+      if (this.tmpA.lengthSq() < 1e-6) this.tmpA.set(0, 1, 0);
+      this.tmpA.normalize().multiplyScalar(speed);
+
+      sh.vx = this.tmpA.x;
+      sh.vy = this.tmpA.y;
+      sh.vz = this.tmpA.z;
+      sh.rx = (this.nextRand() - 0.5) * 18;
+      sh.ry = (this.nextRand() - 0.5) * 18;
+      sh.rz = (this.nextRand() - 0.5) * 18;
+      sh.baseScale = 0.11 + this.nextRand() * 0.08;
+
+      sh.mesh.position.set(0, 0, 0);
+      sh.mesh.rotation.set(this.nextRand() * 3, this.nextRand() * 3, 0);
+      sh.mesh.scale.set(sh.baseScale * 0.72, sh.baseScale * 2.15, sh.baseScale * 0.55);
+      sh.material.opacity = 1;
+      sh.mesh.visible = true;
     }
   }
 
@@ -890,7 +1475,7 @@ export class VFXManager {
     slot.active = true;
     slot.age = 0;
     slot.duration = 0.78;
-    slot.gravity = -1.2; // Sparkles float gently upward!
+    slot.gravity = -1.2;
     slot.drag = 1.8;
     slot.useRing = true;
     slot.ringStartScale = 0.25;
@@ -929,7 +1514,7 @@ export class VFXManager {
     const slot = this.explosions[this.explosionCursor];
     this.explosionCursor = (this.explosionCursor + 1) % EXPLOSION_POOL_SIZE;
 
-    const safeRadius = Math.max(1.5, radius);
+    const safeRadius = Math.max(1.5, Number.isFinite(radius) ? radius : 5);
     slot.active = true;
     slot.age = 0;
     slot.duration = 0.68;
@@ -959,6 +1544,107 @@ export class VFXManager {
       e.mesh.rotation.set(0, 0, 0);
       e.mesh.scale.setScalar(e.baseScale);
       e.material.opacity = 1;
+    }
+  }
+
+  private spawnShockwave(position: Vec3Like, radius: number): void {
+    if (this.disposed) return;
+
+    const slot = this.shockwaves[this.shockwaveCursor];
+    this.shockwaveCursor = (this.shockwaveCursor + 1) % SHOCKWAVE_POOL_SIZE;
+
+    const safeRadius = Math.max(1.8, Number.isFinite(radius) ? radius : 6);
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.58;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.08, position.z);
+    slot.group.visible = true;
+
+    slot.violetRingMesh.scale.setScalar(0.3 * safeRadius);
+    slot.violetRingMat.opacity = 0.95;
+
+    slot.cyanRingMesh.scale.setScalar(0.22 * safeRadius);
+    slot.cyanRingMat.opacity = 0.92;
+
+    slot.tiltRingMesh.rotation.set(Math.PI / 4, this.nextRand() * Math.PI, Math.PI / 6);
+    slot.tiltRingMesh.scale.setScalar(0.25 * safeRadius);
+    slot.tiltRingMat.opacity = 0.8;
+
+    slot.domeMesh.scale.set(0.35 * safeRadius, 0.5 * safeRadius, 0.35 * safeRadius);
+    slot.domeMat.opacity = 0.48;
+  }
+
+  private spawnSplashHeal(position: Vec3Like, radius: number): void {
+    if (this.disposed) return;
+
+    const slot = this.splashHeals[this.splashHealCursor];
+    this.splashHealCursor = (this.splashHealCursor + 1) % SPLASH_HEAL_POOL_SIZE;
+
+    const safeRadius = Math.max(1.5, Number.isFinite(radius) ? radius : 4.5);
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.85;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.06, position.z);
+    slot.group.visible = true;
+
+    slot.domeMesh.scale.set(0.35 * safeRadius, 0.30 * safeRadius, 0.35 * safeRadius);
+    slot.domeMat.opacity = 0.45;
+    slot.ringMesh.scale.setScalar(0.32 * safeRadius);
+    slot.ringMat.opacity = 0.9;
+
+    for (let i = 0; i < SPLASH_SPARKLE_COUNT; i++) {
+      const sp = slot.sparkles[i];
+      sp.angle = (i / SPLASH_SPARKLE_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      sp.radius = safeRadius * (0.14 + this.nextRand() * 0.38);
+      sp.speedY = 1.6 + this.nextRand() * 1.9;
+      sp.spin = (this.nextRand() > 0.5 ? 1 : -1) * (3 + this.nextRand() * 4);
+      sp.baseScale = 0.09 + this.nextRand() * 0.06;
+
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.1 + this.nextRand() * 0.35,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 1;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnSlideDust(position: Vec3Like, biome: BiomeType): void {
+    if (this.disposed) return;
+
+    const slot = this.slideDusts[this.slideDustCursor];
+    this.slideDustCursor = (this.slideDustCursor + 1) % SLIDE_DUST_POOL_SIZE;
+
+    const [primary, secondary] = getBiomeDustColors(biome);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.42;
+
+    slot.group.position.set(position.x, position.y + 0.08, position.z);
+    slot.group.visible = true;
+
+    for (let i = 0; i < SLIDE_DUST_PARTICLE_COUNT; i++) {
+      const p = slot.puffs[i];
+      const ang = (i / SLIDE_DUST_PARTICLE_COUNT) * Math.PI * 2 + this.nextRand() * 0.5;
+      const spd = 0.9 + this.nextRand() * 1.6;
+      p.vx = Math.cos(ang) * spd;
+      p.vy = 0.85 + this.nextRand() * 1.15;
+      p.vz = Math.sin(ang) * spd;
+      p.rx = (this.nextRand() - 0.5) * 6;
+      p.ry = (this.nextRand() - 0.5) * 6;
+      p.baseScale = 0.14 + this.nextRand() * 0.10;
+      p.mesh.position.set((this.nextRand() - 0.5) * 0.25, 0.02, (this.nextRand() - 0.5) * 0.25);
+      p.mesh.scale.setScalar(p.baseScale);
+      p.material.color.set(i % 2 === 0 ? primary : secondary);
+      p.material.opacity = 0.82;
+      p.mesh.visible = true;
     }
   }
 
@@ -1083,7 +1769,28 @@ export class VFXManager {
       m.material.opacity = 0.95 * (1 - t);
     }
 
-    // 3. Bursts (impacts, build pops, chest open)
+    // 3. Spinning Bullet Casings
+    for (let i = 0; i < CASING_POOL_SIZE; i++) {
+      const c = this.casings[i];
+      if (!c.active) continue;
+      c.age += safeDt;
+      const t = c.age / c.duration;
+      if (t >= 1) {
+        c.active = false;
+        c.mesh.visible = false;
+        continue;
+      }
+      c.vy -= 14.5 * safeDt;
+      c.mesh.position.x += c.vx * safeDt;
+      c.mesh.position.y += c.vy * safeDt;
+      c.mesh.position.z += c.vz * safeDt;
+      c.mesh.rotation.x += c.rx * safeDt;
+      c.mesh.rotation.y += c.ry * safeDt;
+      c.mesh.rotation.z += c.rz * safeDt;
+      c.material.opacity = t > 0.7 ? clamp((1 - t) / 0.3, 0, 1) : 1;
+    }
+
+    // 4. Bursts (impacts, build pops, chest open)
     for (let i = 0; i < BURST_POOL_SIZE; i++) {
       const b = this.bursts[i];
       if (!b.active) continue;
@@ -1119,7 +1826,46 @@ export class VFXManager {
       }
     }
 
-    // 4. Explosions
+    // 5. Shield-Break Crystalline Shards
+    for (let i = 0; i < SHIELD_BREAK_POOL_SIZE; i++) {
+      const sb = this.shieldBreaks[i];
+      if (!sb.active) continue;
+      sb.age += safeDt;
+      const t = sb.age / sb.duration;
+      if (t >= 1) {
+        sb.active = false;
+        sb.group.visible = false;
+        continue;
+      }
+
+      const expand = 1 - (1 - Math.min(1, t * 1.8)) * (1 - Math.min(1, t * 1.8));
+      const fade = 1 - t;
+      sb.outerRingMesh.scale.setScalar(0.2 + 1.55 * expand);
+      sb.outerRingMat.opacity = 0.95 * fade;
+      sb.innerRingMesh.scale.setScalar(0.15 + 1.15 * expand);
+      sb.innerRingMat.opacity = 0.85 * fade;
+      sb.flashMesh.scale.setScalar(0.35 + 0.9 * expand);
+      sb.flashMat.opacity = Math.max(0, 0.85 * (1 - t * 2.2));
+
+      const dampFactor = Math.exp(-2.2 * safeDt);
+      for (let s = 0; s < SHIELD_BREAK_SHARD_COUNT; s++) {
+        const sh = sb.shards[s];
+        sh.vy -= 6.5 * safeDt;
+        sh.vx *= dampFactor;
+        sh.vz *= dampFactor;
+        sh.mesh.position.x += sh.vx * safeDt;
+        sh.mesh.position.y += sh.vy * safeDt;
+        sh.mesh.position.z += sh.vz * safeDt;
+        sh.mesh.rotation.x += sh.rx * safeDt;
+        sh.mesh.rotation.y += sh.ry * safeDt;
+        sh.mesh.rotation.z += sh.rz * safeDt;
+        const sc = sh.baseScale * (1 - 0.55 * t);
+        sh.mesh.scale.set(sc * 0.72, sc * 2.15, sc * 0.55);
+        sh.material.opacity = fade;
+      }
+    }
+
+    // 6. Explosions
     for (let i = 0; i < EXPLOSION_POOL_SIZE; i++) {
       const ex = this.explosions[i];
       if (!ex.active) continue;
@@ -1156,7 +1902,102 @@ export class VFXManager {
       }
     }
 
-    // 5. Elimination Drone Beam-Out
+    // 7. Shockwaves (expanding neon violet/cyan rings + vertical distortion dome)
+    for (let i = 0; i < SHOCKWAVE_POOL_SIZE; i++) {
+      const sw = this.shockwaves[i];
+      if (!sw.active) continue;
+      sw.age += safeDt;
+      const t = sw.age / sw.duration;
+      if (t >= 1) {
+        sw.active = false;
+        sw.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      sw.violetRingMesh.scale.setScalar(sw.radius * (0.25 + 1.35 * easeOut));
+      sw.violetRingMat.opacity = 0.95 * fade;
+
+      sw.cyanRingMesh.scale.setScalar(sw.radius * (0.18 + 1.15 * easeOut));
+      sw.cyanRingMat.opacity = 0.92 * fade;
+
+      sw.tiltRingMesh.rotation.y += 4.5 * safeDt;
+      sw.tiltRingMesh.scale.setScalar(sw.radius * (0.2 + 1.1 * easeOut));
+      sw.tiltRingMat.opacity = 0.78 * fade;
+
+      const xzScale = sw.radius * (0.35 + 1.05 * easeOut);
+      const yScale = sw.radius * (0.55 + 1.45 * easeOut);
+      sw.domeMesh.scale.set(xzScale, yScale, xzScale);
+      sw.domeMat.opacity = 0.48 * fade * fade;
+    }
+
+    // 8. Splash Heals (turquoise mist dome + rising sparkles)
+    for (let i = 0; i < SPLASH_HEAL_POOL_SIZE; i++) {
+      const sh = this.splashHeals[i];
+      if (!sh.active) continue;
+      sh.age += safeDt;
+      const t = sh.age / sh.duration;
+      if (t >= 1) {
+        sh.active = false;
+        sh.group.visible = false;
+        continue;
+      }
+
+      const expand = 1 - Math.pow(1 - Math.min(1, t * 1.6), 2);
+      const fade = 1 - t;
+      const domeXZ = sh.radius * (0.35 + 0.65 * expand);
+      const domeY = sh.radius * (0.3 + 0.55 * expand);
+      sh.domeMesh.scale.set(domeXZ, domeY, domeXZ);
+      sh.domeMat.opacity = 0.45 * fade;
+
+      sh.ringMesh.scale.setScalar(sh.radius * (0.3 + 0.9 * expand));
+      sh.ringMat.opacity = 0.88 * fade;
+
+      for (let s = 0; s < SPLASH_SPARKLE_COUNT; s++) {
+        const sp = sh.sparkles[s];
+        const ang = sp.angle + sh.age * sp.spin * 0.4;
+        const rad = sp.radius * (1 + 0.25 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += sp.spin * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.55 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 9. Biome-Colored Slide Dust
+    for (let i = 0; i < SLIDE_DUST_POOL_SIZE; i++) {
+      const sd = this.slideDusts[i];
+      if (!sd.active) continue;
+      sd.age += safeDt;
+      const t = sd.age / sd.duration;
+      if (t >= 1) {
+        sd.active = false;
+        sd.group.visible = false;
+        continue;
+      }
+
+      const dampFactor = Math.exp(-3.4 * safeDt);
+      const puffCurve = 1 + 0.6 * Math.sin(t * Math.PI);
+      const fade = 1 - t;
+      for (let p = 0; p < SLIDE_DUST_PARTICLE_COUNT; p++) {
+        const pt = sd.puffs[p];
+        pt.vy -= 2.2 * safeDt;
+        pt.vx *= dampFactor;
+        pt.vz *= dampFactor;
+        pt.mesh.position.x += pt.vx * safeDt;
+        pt.mesh.position.y += pt.vy * safeDt;
+        pt.mesh.position.z += pt.vz * safeDt;
+        pt.mesh.rotation.x += pt.rx * safeDt;
+        pt.mesh.rotation.y += pt.ry * safeDt;
+        pt.mesh.scale.setScalar(pt.baseScale * puffCurve * (1 - 0.4 * t));
+        pt.material.opacity = 0.82 * fade;
+      }
+    }
+
+    // 10. Elimination Drone Beam-Out
     for (let i = 0; i < ELIMINATION_POOL_SIZE; i++) {
       const el = this.eliminations[i];
       if (!el.active) continue;
@@ -1168,7 +2009,6 @@ export class VFXManager {
         continue;
       }
 
-      // Drone swoops in -> hovers -> zips up
       let droneY = 2.45;
       let beamWidth = 1.0;
       let beamAlpha = 0.42;
@@ -1198,7 +2038,6 @@ export class VFXManager {
       el.beamMesh.scale.set(beamWidth, beamHeight, beamWidth);
       el.beamMat.opacity = beamAlpha;
 
-      // Rising blue voxel cubes spiraling upward inside the beam
       for (let v = 0; v < ELIMINATION_VOXEL_COUNT; v++) {
         const vx = el.voxels[v];
         const vAge = Math.max(0, el.age - vx.delay);
@@ -1215,7 +2054,7 @@ export class VFXManager {
       }
     }
 
-    // 6. Active Weakpoint Targets
+    // 11. Active Weakpoint Targets
     for (let i = 0; i < WEAKPOINT_POOL_SIZE; i++) {
       const wp = this.weakpoints[i];
       if (!wp.active) continue;
@@ -1230,8 +2069,13 @@ export class VFXManager {
     let count = 0;
     for (const s of this.tracers) if (s.active) count++;
     for (const s of this.muzzles) if (s.active) count++;
+    for (const s of this.casings) if (s.active) count++;
     for (const s of this.bursts) if (s.active) count++;
+    for (const s of this.shieldBreaks) if (s.active) count++;
     for (const s of this.explosions) if (s.active) count++;
+    for (const s of this.shockwaves) if (s.active) count++;
+    for (const s of this.splashHeals) if (s.active) count++;
+    for (const s of this.slideDusts) if (s.active) count++;
     for (const s of this.eliminations) if (s.active) count++;
     return count;
   }
@@ -1239,6 +2083,36 @@ export class VFXManager {
   public getActiveWeakpointCount(): number {
     let count = 0;
     for (const w of this.weakpoints) if (w.active) count++;
+    return count;
+  }
+
+  public getActiveCasingCount(): number {
+    let count = 0;
+    for (const c of this.casings) if (c.active) count++;
+    return count;
+  }
+
+  public getActiveShockwaveCount(): number {
+    let count = 0;
+    for (const sw of this.shockwaves) if (sw.active) count++;
+    return count;
+  }
+
+  public getActiveSplashHealCount(): number {
+    let count = 0;
+    for (const sh of this.splashHeals) if (sh.active) count++;
+    return count;
+  }
+
+  public getActiveSlideDustCount(): number {
+    let count = 0;
+    for (const sd of this.slideDusts) if (sd.active) count++;
+    return count;
+  }
+
+  public getActiveShieldBreakCount(): number {
+    let count = 0;
+    for (const sb of this.shieldBreaks) if (sb.active) count++;
     return count;
   }
 
@@ -1251,13 +2125,33 @@ export class VFXManager {
       m.active = false;
       m.group.visible = false;
     }
+    for (const c of this.casings) {
+      c.active = false;
+      c.mesh.visible = false;
+    }
     for (const b of this.bursts) {
       b.active = false;
       b.group.visible = false;
     }
+    for (const sb of this.shieldBreaks) {
+      sb.active = false;
+      sb.group.visible = false;
+    }
     for (const e of this.explosions) {
       e.active = false;
       e.group.visible = false;
+    }
+    for (const sw of this.shockwaves) {
+      sw.active = false;
+      sw.group.visible = false;
+    }
+    for (const sh of this.splashHeals) {
+      sh.active = false;
+      sh.group.visible = false;
+    }
+    for (const sd of this.slideDusts) {
+      sd.active = false;
+      sd.group.visible = false;
     }
     for (const el of this.eliminations) {
       el.active = false;

@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  BuildPiece,
   ChestEntity,
   DamageEvent,
   HarvestableProp,
   ItemInstance,
+  LaunchPadEntity,
   LootDrop,
   StormState,
   TerrainQuery,
   Vec3Like,
+  WallDir,
 } from '../../types';
 import {
   BUILD_COST,
@@ -21,11 +24,17 @@ import {
 import {
   BOT_NAMES,
   BotManager,
+  BotBrain,
   DIFFICULTY_PROFILES,
+  VOLCANO_LAVA_CENTER_X,
+  VOLCANO_LAVA_CENTER_Z,
   computeBotSpread,
+  isInVolcanoLavaHazard,
   pickBotLoadoutCosmetics,
   selectBestWeaponForDistance,
   selectHealingItem,
+  selectLaunchPadForRotation,
+  selectThrowableForCombat,
   shouldBotBuildDefense,
   updateBot,
   type BotCombatTarget,
@@ -80,18 +89,60 @@ function makeDefaultStorm(overrides: Partial<StormState> = {}): StormState {
 function makeMockContext(
   overrides: Partial<BotWorldContext> = {},
 ): BotWorldContext & {
-  placedBuilds: Array<{ ownerId: string; type: string; material: string }>;
-  firedCalls: Array<{ botId: string; weaponId: string; spreadRad: number }>;
+  placedBuilds: Array<{
+    ownerId: string;
+    type: string;
+    material: string;
+    gx: number;
+    gy: number;
+    gz: number;
+    dir: WallDir;
+    rotation: 0 | 1 | 2 | 3;
+  }>;
+  firedCalls: Array<{
+    botId: string;
+    weaponId: string;
+    spreadRad: number;
+    aimDir: Vec3Like;
+  }>;
   droppedBots: string[];
 } {
   const terrain = overrides.terrain ?? makeMockTerrain(10);
-  const placedBuilds: Array<{ ownerId: string; type: string; material: string }> = [];
-  const firedCalls: Array<{ botId: string; weaponId: string; spreadRad: number }> = [];
+  const placedBuilds: Array<{
+    ownerId: string;
+    type: string;
+    material: string;
+    gx: number;
+    gy: number;
+    gz: number;
+    dir: WallDir;
+    rotation: 0 | 1 | 2 | 3;
+  }> = [];
+  const firedCalls: Array<{
+    botId: string;
+    weaponId: string;
+    spreadRad: number;
+    aimDir: Vec3Like;
+  }> = [];
   const droppedBots: string[] = [];
 
   const ctx: BotWorldContext & {
-    placedBuilds: Array<{ ownerId: string; type: string; material: string }>;
-    firedCalls: Array<{ botId: string; weaponId: string; spreadRad: number }>;
+    placedBuilds: Array<{
+      ownerId: string;
+      type: string;
+      material: string;
+      gx: number;
+      gy: number;
+      gz: number;
+      dir: WallDir;
+      rotation: 0 | 1 | 2 | 3;
+    }>;
+    firedCalls: Array<{
+      botId: string;
+      weaponId: string;
+      spreadRad: number;
+      aimDir: Vec3Like;
+    }>;
     droppedBots: string[];
   } = {
     terrain,
@@ -126,12 +177,17 @@ function makeMockContext(
       };
     },
     hasLineOfSight: () => true,
-    placeBuildPiece: (ownerId, type, material) => {
-      placedBuilds.push({ ownerId, type, material });
+    placeBuildPiece: (ownerId, type, material, gx, gy, gz, dir, rotation) => {
+      placedBuilds.push({ ownerId, type, material, gx, gy, gz, dir, rotation });
       return true;
     },
-    fireWeapon: (bot, item, _origin, _aimDir, spreadRad) => {
-      firedCalls.push({ botId: bot.id, weaponId: item.weaponId, spreadRad });
+    fireWeapon: (bot, item, _origin, aimDir, spreadRad) => {
+      firedCalls.push({
+        botId: bot.id,
+        weaponId: item.weaponId,
+        spreadRad,
+        aimDir: { ...aimDir },
+      });
       return { fired: true, shotsHit: 1, headshots: 0, damageDealt: 30 };
     },
     getCombatTargets: () => [],
@@ -808,5 +864,537 @@ describe('BotManager lifecycle, damage, storm, and audio awareness', () => {
     // Only nearBot triggers resolveMovement; farBot (>180m) uses fast Far LOD terrain integration
     expect(resolveMovement).toHaveBeenCalledTimes(1);
     manager.dispose();
+  });
+});
+
+describe('Wave 1 Named POI Mythic Bosses', () => {
+  it('replaces 3 regular bots with 3 Named POI Bosses when count >= 12 and omits bosses when count < 12', () => {
+    const ctx = makeMockContext();
+    const manager = new BotManager(ctx, 'standard', 5150);
+
+    manager.spawnBots(11, 22);
+    expect(manager.getBots().length).toBe(11);
+    expect(manager.getBots().filter((b) => b.isBoss)).toHaveLength(0);
+
+    manager.spawnBots(12, 22);
+    expect(manager.getBots().length).toBe(12);
+    const bosses12 = manager.getBots().filter((b) => b.isBoss);
+    expect(bosses12).toHaveLength(3);
+    expect(manager.getBots().filter((b) => !b.isBoss)).toHaveLength(9);
+
+    manager.spawnBots(25, 22);
+    expect(manager.getBots().length).toBe(25);
+    const bosses25 = manager.getBots().filter((b) => b.isBoss);
+    expect(bosses25).toHaveLength(3);
+
+    const byPoi = new Map(bosses25.map((b) => [b.bossPoiId, b]));
+    expect(byPoi.get('skyline_spire')?.name).toBe('Skyline Warden');
+    expect(byPoi.get('scorched_caldera')?.name).toBe('Obsidian Titan');
+    expect(byPoi.get('frostpeak_citadel')?.name).toBe('Glacier Monarch');
+
+    for (const boss of bosses25) {
+      expect(boss.maxHp).toBe(150);
+      expect(boss.hp).toBe(150);
+      expect(boss.maxShield).toBe(150);
+      expect(boss.shield).toBe(150);
+
+      const weapons = boss.inventory.items.filter((i) => i !== null);
+      expect(
+        weapons.some(
+          (i) => i?.weaponId === 'mythic_blade_rifle' && i.rarity === 'mythic',
+        ),
+      ).toBe(true);
+      expect(weapons.some((i) => i?.weaponId === 'heavy_shotgun')).toBe(true);
+      expect(weapons.some((i) => i?.weaponId === 'chug_splash')).toBe(true);
+    }
+
+    const summaries = manager.getBotSummaries();
+    expect(summaries).toHaveLength(25);
+    const bossSummaries = summaries.filter((s) => s.isBoss);
+    expect(bossSummaries).toHaveLength(3);
+    expect(bossSummaries.map((s) => s.bossPoiId).sort()).toEqual([
+      'frostpeak_citadel',
+      'scorched_caldera',
+      'skyline_spire',
+    ]);
+    expect(summaries.filter((s) => !s.isBoss)).toHaveLength(22);
+
+    manager.dispose();
+  });
+
+  it('patrols landmark while in safe zone and guarantees mythic_blade_rifle + chug_splash drop on elimination', () => {
+    let droppedInventory: Array<ItemInstance | null> = [];
+    const ctx = makeMockContext({
+      dropBotLoot: (bot) => {
+        droppedInventory = bot.inventory.items.map((it) => (it ? { ...it } : null));
+      },
+    });
+    const manager = new BotManager(ctx, 'standard', 808);
+    manager.spawnBots(12, 22);
+
+    const skylineBoss = manager
+      .getBots()
+      .find((b) => b.isBoss && b.bossPoiId === 'skyline_spire')!;
+    const startPos = { ...skylineBoss.position };
+
+    // Step 5 seconds while storm is safely wide -> boss patrols around its landmark
+    for (let i = 0; i < 50; i++) {
+      manager.update(
+        0.1,
+        5 + i * 0.1,
+        { x: 0, y: 175, z: 0 },
+        { ...skylineBoss.position, x: skylineBoss.position.x + 30 },
+      );
+    }
+
+    const movedDist = Math.hypot(
+      skylineBoss.position.x - startPos.x,
+      skylineBoss.position.z - startPos.z,
+    );
+    const distFromHome = Math.hypot(
+      skylineBoss.position.x - skylineBoss.bossHomePos!.x,
+      skylineBoss.position.z - skylineBoss.bossHomePos!.z,
+    );
+    expect(movedDist).toBeGreaterThan(0.5);
+    expect(distFromHome).toBeLessThanOrEqual(16);
+
+    // Even if boss used all chug_splash during combat, elimination ensures mythic rifle + chug_splash drop
+    skylineBoss.inventory.items[3] = null;
+
+    const lethalHit: DamageEvent = {
+      targetId: skylineBoss.id,
+      attackerId: 'player',
+      attackerName: 'Player',
+      weaponId: 'pump_shotgun',
+      rarity: 'legendary',
+      damage: 320,
+      hpDamage: 170,
+      shieldDamage: 150,
+      isHeadshot: true,
+      isElimination: true,
+      hitPoint: { ...skylineBoss.position },
+      distance: 10,
+    };
+    expect(manager.onBotDamaged(skylineBoss.id, lethalHit, 12)).toBe(true);
+    expect(skylineBoss.alive).toBe(false);
+    expect(
+      droppedInventory.some(
+        (it) => it?.weaponId === 'mythic_blade_rifle' && it.rarity === 'mythic',
+      ),
+    ).toBe(true);
+    expect(droppedInventory.some((it) => it?.weaponId === 'chug_splash')).toBe(true);
+
+    manager.dispose();
+  });
+});
+
+describe('Wave 1 Defensive 1x1 Cover, Combat Peeking, Throwables & Healing Retreat', () => {
+  it('constructs defensive multi-wall 1x1 box + ramp cover (front + perpendicular walls + ramp) when hit or ambushed', () => {
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 22 },
+      eyePos: { x: 0, y: 11.6, z: 22 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const ctx = makeMockContext({
+      getCombatTargets: () => [enemy],
+    });
+
+    // Test standard bot under sudden ambush (reactionTimer > 0)
+    const ambushedBot = makeBotEntity({
+      state: 'combat',
+      personality: 'rusher',
+      position: { x: 2, y: 10, z: 2 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0.25,
+      buildCooldown: 0,
+      lastDamageTime: -99,
+    });
+    ambushedBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    ambushedBot.inventory.ammo.medium = 60;
+    ambushedBot.inventory.materials.wood = 100;
+
+    updateBot(ambushedBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 15.0, 0.05, false);
+
+    const walls = ctx.placedBuilds.filter((b) => b.type === 'wall');
+    const ramps = ctx.placedBuilds.filter((b) => b.type === 'ramp');
+    expect(walls.length).toBeGreaterThanOrEqual(3);
+    expect(walls.some((w) => w.dir === 'N')).toBe(true);
+    expect(walls.some((w) => w.dir === 'W')).toBe(true);
+    expect(ramps.length).toBe(1);
+    expect(ambushedBot.inventory.materials.wood).toBeLessThan(100);
+  });
+
+  it('jump-peeks with shotguns at <12m and crouch-peeks behind ramp cover with AR/sniper', () => {
+    const closeEnemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 8 },
+      eyePos: { x: 0, y: 11.6, z: 8 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+    };
+    const closeCtx = makeMockContext({ getCombatTargets: () => [closeEnemy] });
+    const shotgunBot = makeBotEntity({
+      state: 'combat',
+      personality: 'rusher',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+      jumpCooldown: 0,
+    });
+    shotgunBot.inventory.items[1] = makeItem('heavy_shotgun', 'legendary', 7);
+    shotgunBot.inventory.ammo.shells = 21;
+
+    let jumped = false;
+    for (let i = 0; i < 6; i++) {
+      updateBot(shotgunBot, closeCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.05, 0.05, false);
+      if (shotgunBot.velocity.y > 0 || !shotgunBot.grounded) {
+        jumped = true;
+      }
+    }
+    expect(jumped).toBe(true);
+    expect(shotgunBot.isCrouching).toBe(false);
+    expect(closeCtx.firedCalls.some((c) => c.weaponId === 'heavy_shotgun')).toBe(true);
+
+    // Crouch-peek with sniper/AR behind recently built ramp cover
+    const midEnemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 48 },
+      eyePos: { x: 0, y: 11.6, z: 48 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+    };
+    const sniperCtx = makeMockContext({ getCombatTargets: () => [midEnemy] });
+    const sniperBot = makeBotEntity({
+      state: 'combat',
+      personality: 'sniper',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0.6,
+      lastBuildTime: 9.5,
+      crouchToggleTimer: 0.1,
+    });
+    sniperBot.inventory.items[1] = makeItem('sniper', 'epic', 1);
+    sniperBot.inventory.ammo.heavy = 10;
+
+    let observedCrouch = false;
+    let observedStand = false;
+    for (let i = 0; i < 30; i++) {
+      updateBot(sniperBot, sniperCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10 + i * 0.1, 0.1, false);
+      if (sniperBot.isCrouching) observedCrouch = true;
+      else observedStand = true;
+    }
+    expect(observedCrouch).toBe(true);
+    expect(observedStand).toBe(true);
+  });
+
+  it('retreats briefly when low HP to heal with chug_splash and mini_shield', () => {
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 14 },
+      eyePos: { x: 0, y: 11.6, z: 14 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+    };
+
+    // 1) Low HP bot with chug_splash retreats away from enemy and splashes +20 HP
+    const splashCtx = makeMockContext({ getCombatTargets: () => [enemy] });
+    const splashBot = makeBotEntity({
+      state: 'combat',
+      hp: 35,
+      shield: 0,
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      lastDamageTime: 9.9,
+      lastDamagerId: 'player',
+    });
+    splashBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    splashBot.inventory.items[2] = makeItem('chug_splash', 'rare', 0, 2);
+
+    for (let i = 0; i < 12; i++) {
+      updateBot(splashBot, splashCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.1, 0.1, false);
+    }
+    expect(splashBot.position.z).toBeLessThan(-1.0); // retreated away from +Z enemy
+    expect(splashBot.hp).toBeGreaterThanOrEqual(55);
+    expect(splashCtx.firedCalls.some((c) => c.weaponId === 'chug_splash')).toBe(true);
+
+    // 2) Low HP/shield bot with mini_shield retreats briefly behind cover and pops mini shield
+    const miniCtx = makeMockContext({ getCombatTargets: () => [enemy] });
+    const miniBot = makeBotEntity({
+      state: 'combat',
+      hp: 50,
+      shield: 0,
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      lastDamageTime: 9.9,
+      lastDamagerId: 'player',
+    });
+    miniBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    miniBot.inventory.items[2] = makeItem('mini_shield', 'uncommon', 0, 2);
+
+    for (let i = 0; i < 35; i++) {
+      updateBot(miniBot, miniCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.1, 0.1, false);
+    }
+    expect(miniBot.position.z).toBeLessThan(-1.5);
+    expect(miniBot.shield).toBeGreaterThanOrEqual(25);
+  });
+
+  it('throws frag_grenade against clustered targets and shockwave_grenade against boxed targets', () => {
+    const enemyA: BotCombatTarget = {
+      id: 'e1',
+      name: 'EnemyA',
+      position: { x: 0, y: 10, z: 24 },
+      eyePos: { x: 0, y: 11.6, z: 24 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+    };
+    const enemyB: BotCombatTarget = {
+      id: 'e2',
+      name: 'EnemyB',
+      position: { x: 3.5, y: 10, z: 25 },
+      eyePos: { x: 3.5, y: 11.6, z: 25 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+    };
+
+    // Clustered enemies -> throws frag_grenade with upward ballistic arc
+    const clusterCtx = makeMockContext({
+      getCombatTargets: () => [enemyA, enemyB],
+    });
+    const grenadier = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'e1',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    grenadier.inventory.items[1] = makeItem('ar', 'rare', 30);
+    grenadier.inventory.ammo.medium = 60;
+    grenadier.inventory.items[2] = makeItem('frag_grenade', 'rare', 0, 3);
+
+    updateBot(grenadier, clusterCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    const fragCall = clusterCtx.firedCalls.find((c) => c.weaponId === 'frag_grenade');
+    expect(fragCall).toBeDefined();
+    expect(fragCall!.aimDir.y).toBeGreaterThan(0.1);
+    expect(grenadier.inventory.items[2]?.stackCount).toBe(2);
+
+    // Boxed enemy (no LOS + surrounding build piece) -> throws shockwave_grenade
+    const boxPiece: BuildPiece = {
+      id: 'b1',
+      key: 'wall:0,3,6:N',
+      type: 'wall',
+      material: 'wood',
+      gx: 0,
+      gy: 3,
+      gz: 6,
+      dir: 'N',
+      rotation: 0,
+      hp: 150,
+      maxHp: 150,
+      targetMaxHp: 150,
+      buildProgress: 1,
+      ownerId: 'e1',
+      editMask: 0,
+      editVariant: 'full',
+      createdAt: 0,
+    };
+    const boxedCtx = makeMockContext({
+      getCombatTargets: () => [enemyA],
+      hasLineOfSight: () => false,
+      getBuildPieces: () => [boxPiece],
+    });
+    const breacher = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'e1',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    breacher.inventory.items[1] = makeItem('ar', 'rare', 30);
+    breacher.inventory.ammo.medium = 60;
+    breacher.inventory.items[2] = makeItem('shockwave_grenade', 'epic', 0, 2);
+
+    expect(
+      selectThrowableForCombat(breacher, enemyA, [enemyA], false, [boxPiece])?.item
+        .weaponId,
+    ).toBe('shockwave_grenade');
+
+    updateBot(breacher, boxedCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(boxedCtx.firedCalls.some((c) => c.weaponId === 'shockwave_grenade')).toBe(
+      true,
+    );
+    expect(breacher.inventory.items[2]?.stackCount).toBe(1);
+  });
+});
+
+describe('Wave 1 Smart World Traversal & Volcano Lava Avoidance', () => {
+  it('routes to an active Launch Pad during long zone rotations and launches into a high-altitude glide toward safe zone', () => {
+    const pads: LaunchPadEntity[] = [
+      {
+        id: 'pad_rot_1',
+        kind: 'launch_pad',
+        x: 132,
+        y: 10,
+        z: 0,
+        radius: 2.2,
+        boostVy: 30,
+        boostForward: 20,
+      },
+    ];
+    const ctx = makeMockContext({
+      storm: makeDefaultStorm({
+        currentCenterX: 0,
+        currentCenterZ: 0,
+        currentRadius: 80,
+        nextCenterX: 0,
+        nextCenterZ: 0,
+        nextRadius: 40,
+        isShrinking: true,
+      }),
+      getLaunchPads: () => pads,
+    });
+
+    const rotBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 146, y: 10, z: 0 },
+      yaw: -Math.PI * 0.5,
+      grounded: true,
+    });
+    rotBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    expect(
+      selectLaunchPadForRotation(rotBot, pads, { x: 0, y: 10, z: 0 })?.id,
+    ).toBe('pad_rot_1');
+
+    let enteredGlide = false;
+    let peakAltitude = 10;
+    for (let i = 0; i < 60; i++) {
+      updateBot(rotBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 20 + i * 0.1, 0.1, false);
+      if (rotBot.state === 'gliding' && rotBot.gliderOpen) {
+        enteredGlide = true;
+      }
+      if (rotBot.position.y > peakAltitude) {
+        peakAltitude = rotBot.position.y;
+      }
+    }
+
+    expect(enteredGlide).toBe(true);
+    expect(peakAltitude).toBeGreaterThan(22);
+    expect(rotBot.position.x).toBeLessThan(120);
+  });
+
+  it('avoids entering VOLCANO_CENTER_X/Z molten lava (>= 14m away) and escapes immediately if placed inside', () => {
+    const ctx = makeMockContext({
+      storm: makeDefaultStorm({
+        currentCenterX: VOLCANO_LAVA_CENTER_X - 40,
+        currentCenterZ: VOLCANO_LAVA_CENTER_Z,
+        currentRadius: 300,
+        nextCenterX: VOLCANO_LAVA_CENTER_X - 40,
+        nextCenterZ: VOLCANO_LAVA_CENTER_Z,
+        nextRadius: 80,
+      }),
+    });
+
+    expect(isInVolcanoLavaHazard(VOLCANO_LAVA_CENTER_X, VOLCANO_LAVA_CENTER_Z)).toBe(true);
+    expect(isInVolcanoLavaHazard(VOLCANO_LAVA_CENTER_X + 15, VOLCANO_LAVA_CENTER_Z)).toBe(
+      false,
+    );
+
+    // 1) Bot placed inside crater immediately sprints outward to >= 14m
+    const trappedBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: VOLCANO_LAVA_CENTER_X + 4, y: 10, z: VOLCANO_LAVA_CENTER_Z },
+      grounded: true,
+    });
+    for (let i = 0; i < 30; i++) {
+      updateBot(trappedBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.1, 0.1, false);
+    }
+    const trappedDist = Math.hypot(
+      trappedBot.position.x - VOLCANO_LAVA_CENTER_X,
+      trappedBot.position.z - VOLCANO_LAVA_CENTER_Z,
+    );
+    expect(trappedDist).toBeGreaterThanOrEqual(14);
+
+    // 2) Bot routing across the volcano center skirts around the rim staying >= 14m away
+    const crossingBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: VOLCANO_LAVA_CENTER_X + 20, y: 10, z: VOLCANO_LAVA_CENTER_Z },
+      moveTarget: { x: VOLCANO_LAVA_CENTER_X - 40, y: 10, z: VOLCANO_LAVA_CENTER_Z },
+      grounded: true,
+    });
+    crossingBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    let minDistToCrater = Infinity;
+    for (let i = 0; i < 80; i++) {
+      updateBot(crossingBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.08, 0.08, false);
+      const d = Math.hypot(
+        crossingBot.position.x - VOLCANO_LAVA_CENTER_X,
+        crossingBot.position.z - VOLCANO_LAVA_CENTER_Z,
+      );
+      if (d < minDistToCrater) minDistToCrater = d;
+    }
+    expect(minDistToCrater).toBeGreaterThanOrEqual(14);
+  });
+
+  it('scores heavy_shotgun, mythic_blade_rifle, chug_splash up to 150/150 boss caps, and exposes BotBrain helpers', () => {
+    const brain = new BotBrain();
+    const fullAmmo = {
+      light: 60,
+      medium: 120,
+      shells: 28,
+      heavy: 12,
+      rockets: 0,
+    };
+
+    const bossItems: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('mythic_blade_rifle', 'mythic', 32),
+      makeItem('heavy_shotgun', 'legendary', 7),
+      makeItem('chug_splash', 'rare', 0, 3),
+    ];
+
+    expect(brain.selectBestWeaponForDistance(bossItems, 10, fullAmmo)?.item.weaponId).toBe(
+      'heavy_shotgun',
+    );
+    expect(brain.selectBestWeaponForDistance(bossItems, 45, fullAmmo)?.item.weaponId).toBe(
+      'mythic_blade_rifle',
+    );
+
+    // Boss at 120/120 with max 150/150 still selects chug_splash; at 150/150 returns null
+    expect(brain.selectHealingItem(bossItems, 120, 120, 150, 150)?.item.weaponId).toBe(
+      'chug_splash',
+    );
+    expect(brain.selectHealingItem(bossItems, 150, 150, 150, 150)).toBeNull();
+    expect(brain.isInVolcanoLavaHazard(VOLCANO_LAVA_CENTER_X, VOLCANO_LAVA_CENTER_Z)).toBe(
+      true,
+    );
   });
 });

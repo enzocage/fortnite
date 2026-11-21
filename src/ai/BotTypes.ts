@@ -10,6 +10,7 @@ import type {
   EmoteId,
   HarvestableProp,
   ItemInstance,
+  LaunchPadEntity,
   LootDrop,
   MaterialType,
   Rarity,
@@ -54,6 +55,21 @@ export interface BotRenderState extends CharacterRenderState {
   gliderFactor: number;
   isCrouching: boolean;
   isHiddenInBus: boolean;
+  isBoss?: boolean;
+  bossPoiId?: string;
+}
+
+export interface NamedBossSpec {
+  id: string;
+  name: string;
+  poiId: string;
+  skinId: string;
+  pickaxeId: string;
+  gliderId: string;
+  personality: BotPersonality;
+  offsetX: number;
+  offsetZ: number;
+  patrolRadius: number;
 }
 
 export interface BotEntity {
@@ -149,6 +165,16 @@ export interface BotEntity {
 
   /** Deterministic PRNG state for per-bot variation */
   rngState: number;
+
+  // Boss & Wave 1 tactical/traversal state
+  isBoss?: boolean;
+  bossPoiId?: string;
+  bossHomePos?: Vec3Like;
+  throwCooldown?: number;
+  retreatTimer?: number;
+  launchPadCooldown?: number;
+  launchPadTargetId?: string | null;
+  lastBuildTime?: number;
 }
 
 export interface BotWorldContext {
@@ -206,6 +232,8 @@ export interface BotWorldContext {
     damageDealt?: number;
   } | void;
   getCombatTargets(): BotCombatTarget[];
+  getLaunchPads?: () => LaunchPadEntity[];
+  getBuildPieces?: () => BuildPiece[];
   dropBotLoot(bot: BotEntity): void;
   eventBus: EventBus;
 }

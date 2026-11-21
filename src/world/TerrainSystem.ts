@@ -193,6 +193,7 @@ export class TerrainSystem implements TerrainQuery {
   private roadMasks: Float32Array;
   private mesh: THREE.Mesh | null = null;
   private detailTexture: THREE.CanvasTexture | null = null;
+  private bumpTexture: THREE.CanvasTexture | null = null;
   private textureFactory: TextureFactory | null = null;
   private mapCanvas: HTMLCanvasElement | null = null;
   private buildingFootprints: BuildingFootprint[] = [];
@@ -681,10 +682,13 @@ export class TerrainSystem implements TerrainQuery {
 
     this.textureFactory = new TextureFactory();
     this.detailTexture = this.textureFactory.getTerrainDetailTexture();
+    this.bumpTexture = this.textureFactory.getBumpTexture('terrain');
 
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
       map: this.detailTexture,
+      bumpMap: this.bumpTexture,
+      bumpScale: 0.24,
       roughness: 0.9,
       metalness: 0.02,
     });
@@ -878,6 +882,7 @@ export class TerrainSystem implements TerrainQuery {
     this.textureFactory?.dispose();
     this.textureFactory = null;
     this.detailTexture = null;
+    this.bumpTexture = null;
     this.mapCanvas = null;
   }
 }

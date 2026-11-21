@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type {
   AnimState,
+  BuildPiece,
   BuildPieceType,
   BuildPreviewState,
   CharacterRenderState,
@@ -9,6 +10,7 @@ import type {
   GamePhase,
   GameSettings,
   MaterialType,
+  SoundEventId,
   TerrainQuery,
   Vec3Like,
   WeaponId,
@@ -29,8 +31,11 @@ import {
   damp,
   dist2D,
   dist3D,
+  lerp,
   lerpAngle,
+  normalizeAngle,
 } from '../core';
+import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from '../world';
 import type { BuildingSystem } from './BuildingSystem';
 import type { CollisionSystem } from './CollisionSystem';
 import type {
@@ -82,6 +87,25 @@ export class PlayerController {
 
   private isSprinting = false;
   private isCrouching = false;
+  private isSliding = false;
+  private slideTimer = 0;
+  private slideDir: { x: number; z: number } = { x: 0, z: -1 };
+  private slideSpeed = 0;
+  private slideDustTimer = 0;
+  private slideSoundTimer = 0;
+  private isMantling = false;
+  private mantleTimer = 0;
+  private mantleDuration = 0.28;
+  private mantleStartPos: Vec3Like = { x: 0, y: 0, z: 0 };
+  private mantleEndPos: Vec3Like = { x: 0, y: 0, z: 0 };
+  private isSwimming = false;
+  private fallPeakY = 0;
+  private wasAirborne = false;
+  private fallImmune = false;
+  private lavaCooldown = 0;
+  private ziplineSoundTimer = 0;
+  private leanAngle = 0;
+  private prevYaw = Math.PI;
   private isAiming = false;
   private isScoped = false;
   private isFiring = false;
@@ -116,6 +140,15 @@ export class PlayerController {
   private moveSpeed = 0;
   private muzzleWorldPos: Vec3Like | null = null;
   private kills = 0;
+  private killStreak = 0;
+  private siphonFlashAt = 0;
+  private pendingSiphonFromEvents = 0;
+  private eliminatedTargetIds = new Set<string>();
+  private canRepairBuild = false;
+  private cameraShakeTimer = 0;
+  private cameraShakeDuration = 0;
+  private cameraShakeIntensity = 0;
+  private elapsedTime = 0;
   private stats: PlayerMatchStats = {
     damageDealt: 0,
     shotsFired: 0,
@@ -142,6 +175,8 @@ export class PlayerController {
   private boundDom: HTMLElement | null = null;
   private listenersAttached = false;
   private unsubHitmarker: (() => void) | null = null;
+  private unsubDamage: (() => void) | null = null;
+  private unsubCameraShake: (() => void) | null = null;
 
   private onKeyDownBound = (e: KeyboardEvent) => this.handleKeyDown(e);
   private onKeyUpBound = (e: KeyboardEvent) => this.handleKeyUp(e);
@@ -183,6 +218,33 @@ export class PlayerController {
         };
       }
     });
+
+    this.unsubDamage = this.eventBus.on('combat:damage', (ev) => {
+      if (
+        ev.attackerId === 'player' &&
+        ev.targetId !== 'player' &&
+        ev.isElimination &&
+        this.isAlive()
+      ) {
+        if (!this.eliminatedTargetIds.has(ev.targetId)) {
+          this.eliminatedTargetIds.add(ev.targetId);
+          this.pendingSiphonFromEvents += 1;
+          this.grantEliminationSiphon();
+        }
+      }
+    });
+
+    this.unsubCameraShake = this.eventBus.on('vfx:camera_shake', (ev) => {
+      if (ev.intensity > 0 && ev.duration > 0) {
+        if (this.cameraShakeTimer <= 0 || ev.intensity >= this.cameraShakeIntensity) {
+          this.cameraShakeIntensity = ev.intensity;
+          this.cameraShakeDuration = ev.duration;
+          this.cameraShakeTimer = ev.duration;
+        } else {
+          this.cameraShakeTimer = Math.max(this.cameraShakeTimer, ev.duration);
+        }
+      }
+    });
   }
 
   setSettings(settings: GameSettings): void {
@@ -217,6 +279,9 @@ export class PlayerController {
     this.phase = phase;
     if (phase !== 'playing') {
       this.activeZipline = null;
+      this.isSliding = false;
+      this.isMantling = false;
+      this.isSwimming = false;
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
       this.building.setPreviewVisible(false);
@@ -231,7 +296,10 @@ export class PlayerController {
   }
 
   getEyePosition(): Vec3Like {
-    const h = this.isCrouching ? PLAYER_CROUCH_HEIGHT - 0.16 : PLAYER_HEIGHT - 0.22;
+    const h =
+      this.isCrouching || this.isSliding
+        ? PLAYER_CROUCH_HEIGHT - 0.16
+        : PLAYER_HEIGHT - 0.22;
     return {
       x: this.position.x,
       y: this.position.y + h,
@@ -247,6 +315,12 @@ export class PlayerController {
     return this.pitch;
   }
 
+  setLook(yaw: number, pitch: number): void {
+    this.yaw = yaw;
+    this.prevYaw = yaw;
+    this.pitch = clamp(pitch, -1.28, 1.32);
+  }
+
   getHealth(): number {
     return this.health;
   }
@@ -259,6 +333,10 @@ export class PlayerController {
     return this.stamina;
   }
 
+  isFallImmune(): boolean {
+    return this.fallImmune;
+  }
+
   isAlive(): boolean {
     return this.health > 0 && this.phase !== 'eliminated' && this.phase !== 'lobby';
   }
@@ -267,8 +345,74 @@ export class PlayerController {
     return this.kills;
   }
 
+  getKillStreak(): number {
+    return this.killStreak;
+  }
+
+  private grantEliminationSiphon(): void {
+    this.killStreak += 1;
+    const siphonTotal = 50;
+    const healthNeeded = Math.max(0, this.maxHealth - this.health);
+    const healthAdded = Math.min(siphonTotal, healthNeeded);
+    this.health += healthAdded;
+    const leftover = siphonTotal - healthAdded;
+    const shieldNeeded = Math.max(0, this.maxShield - this.shield);
+    const shieldAdded = Math.min(leftover, shieldNeeded);
+    this.shield += shieldAdded;
+    this.siphonFlashAt = Date.now();
+
+    this.eventBus.emit('combat:siphon', {
+      amount: healthAdded + shieldAdded,
+      healthAdded,
+      shieldAdded,
+    });
+
+    if (this.killStreak >= 2) {
+      this.eventBus.emit('sound:play', { id: 'kill_streak' });
+    }
+  }
+
   addKill(): void {
     this.kills += 1;
+    if (this.pendingSiphonFromEvents > 0) {
+      this.pendingSiphonFromEvents -= 1;
+    } else if (this.isAlive()) {
+      this.grantEliminationSiphon();
+    }
+  }
+
+  applySplashHeal(amount: number): void {
+    if (!this.isAlive() || amount <= 0) return;
+    const hpAdd = Math.min(amount, Math.max(0, this.maxHealth - this.health));
+    this.health += hpAdd;
+    const rem = amount - hpAdd;
+    if (rem > 0) {
+      this.shield = Math.min(this.maxShield, this.shield + rem);
+    }
+  }
+
+  applyExternalImpulse(impulse: Vec3Like, grantFallImmunity = false): void {
+    if (!this.isAlive() || this.phase === 'lobby' || this.phase === 'bus') return;
+    if (this.activeZipline) {
+      this.activeZipline = null;
+      this.ziplineCooldown = 0.5;
+    }
+    this.isMantling = false;
+    this.isSliding = false;
+    this.isCrouching = false;
+    this.isEmoting = false;
+    this.activeEmote = null;
+    this.healTimer = 0;
+    this.healLabel = null;
+    this.grounded = false;
+    this.wasAirborne = true;
+    this.fallPeakY = this.position.y;
+    if (grantFallImmunity) {
+      this.fallImmune = true;
+    }
+    this.velocity.x += impulse.x;
+    this.velocity.y = Math.max(this.velocity.y, 0) + impulse.y;
+    this.velocity.z += impulse.z;
   }
 
   getStats(): PlayerMatchStats {
@@ -280,7 +424,8 @@ export class PlayerController {
   }
 
   getCombatActor(): CombatActor {
-    const h = this.isCrouching ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
+    const h =
+      this.isCrouching || this.isSliding ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
     return {
       id: 'player',
       name: this.playerName,
@@ -288,10 +433,15 @@ export class PlayerController {
       eyePos: this.getEyePosition(),
       hp: this.health,
       shield: this.shield,
+      maxHp: this.maxHealth,
+      maxShield: this.maxShield,
       radius: PLAYER_RADIUS,
       height: h,
       alive: this.isAlive(),
       onDamage: (ev) => this.applyDamage(ev),
+      onHeal: (hpAdded, shieldAdded) => this.applySplashHeal(hpAdded + shieldAdded),
+      onImpulse: (impulse, grantFallImmunity) =>
+        this.applyExternalImpulse(impulse, grantFallImmunity),
     };
   }
 
@@ -307,6 +457,7 @@ export class PlayerController {
     this.position = { ...busStartPos };
     this.velocity = { x: 0, y: 0, z: 0 };
     this.yaw = Math.PI;
+    this.prevYaw = Math.PI;
     this.pitch = -0.22;
     this.characterYaw = Math.PI;
     this.grounded = false;
@@ -320,6 +471,21 @@ export class PlayerController {
 
     this.isSprinting = false;
     this.isCrouching = false;
+    this.isSliding = false;
+    this.slideTimer = 0;
+    this.slideDir = { x: 0, z: -1 };
+    this.slideSpeed = 0;
+    this.slideDustTimer = 0;
+    this.slideSoundTimer = 0;
+    this.isMantling = false;
+    this.mantleTimer = 0;
+    this.isSwimming = false;
+    this.fallPeakY = busStartPos.y;
+    this.wasAirborne = false;
+    this.fallImmune = false;
+    this.lavaCooldown = 0;
+    this.ziplineSoundTimer = 0;
+    this.leanAngle = 0;
     this.isAiming = false;
     this.isScoped = false;
     this.isFiring = false;
@@ -348,6 +514,15 @@ export class PlayerController {
     this.launchPadCooldown = 0;
 
     this.kills = 0;
+    this.killStreak = 0;
+    this.siphonFlashAt = 0;
+    this.pendingSiphonFromEvents = 0;
+    this.eliminatedTargetIds.clear();
+    this.canRepairBuild = false;
+    this.cameraShakeTimer = 0;
+    this.cameraShakeDuration = 0;
+    this.cameraShakeIntensity = 0;
+    this.elapsedTime = 0;
     this.stats = {
       damageDealt: 0,
       shotsFired: 0,
@@ -373,6 +548,11 @@ export class PlayerController {
       this.position.y = groundY;
     }
     this.grounded = this.position.y <= groundY + 0.05;
+    this.isSliding = false;
+    this.isMantling = false;
+    this.fallImmune = false;
+    this.fallPeakY = this.position.y;
+    this.wasAirborne = !this.grounded;
   }
 
   jumpFromBus(): boolean {
@@ -389,6 +569,9 @@ export class PlayerController {
       z: Math.cos(this.yaw) * 14,
     };
     this.grounded = false;
+    this.fallPeakY = this.position.y;
+    this.wasAirborne = true;
+    this.fallImmune = false;
     this.eventBus.emit('sound:play', { id: 'jump' });
     return true;
   }
@@ -499,6 +682,11 @@ export class PlayerController {
     this.health = 0;
     this.phase = 'eliminated';
     this.isBuildMode = false;
+    this.isSliding = false;
+    this.isMantling = false;
+    this.isSwimming = false;
+    this.activeZipline = null;
+    this.killStreak = 0;
     this.building.setPreviewVisible(false);
     this.building.cancelEdit();
     this.clearHeldInputs();
@@ -577,6 +765,37 @@ export class PlayerController {
     this.detachInputListeners();
     this.unsubHitmarker?.();
     this.unsubHitmarker = null;
+    this.unsubDamage?.();
+    this.unsubDamage = null;
+    this.unsubCameraShake?.();
+    this.unsubCameraShake = null;
+  }
+
+  pressKey(code: string): void {
+    this.keysDown.add(code);
+    this.handleKeyCodeDown(code);
+  }
+
+  releaseKey(code: string): void {
+    this.keysDown.delete(code);
+  }
+
+  setMouseButton(button: 0 | 2, down: boolean): void {
+    if (button === 0) {
+      if (down) {
+        this.handlePrimaryButtonDown();
+      } else {
+        this.leftMouseDown = false;
+        this.isFiring = false;
+        this.lastDraggedEditTile = -1;
+      }
+    } else if (button === 2) {
+      if (down) {
+        this.handleSecondaryButtonDown();
+      } else {
+        this.rightMouseDown = false;
+      }
+    }
   }
 
   private clearHeldInputs(): void {
@@ -626,37 +845,45 @@ export class PlayerController {
     this.lastMouseY = e.clientY;
 
     if (e.button === 0) {
-      this.leftMouseDown = true;
-      if (this.isEmoting) {
-        this.isEmoting = false;
-        this.activeEmote = null;
-      }
-
-      if (this.phase === 'playing') {
-        const editState = this.building.getEditState();
-        if (editState.active) {
-          const hovered = this.building.getHoveredEditTileIndex(
-            this.getEyePosition(),
-            this.getLookDirection(),
-          );
-          if (hovered !== -1) {
-            this.building.toggleEditTile(hovered);
-            this.lastDraggedEditTile = hovered;
-          }
-        } else if (this.isBuildMode) {
-          this.tryPlaceBuild();
-        } else {
-          this.tryUseActiveSlot(true);
-        }
-      }
+      this.handlePrimaryButtonDown();
     } else if (e.button === 2) {
-      this.rightMouseDown = true;
-      if (this.phase === 'playing') {
-        if (this.building.getEditState().active) {
-          this.building.resetEditTiles();
-        } else if (this.isBuildMode) {
-          this.cycleBuildMaterial();
+      this.handleSecondaryButtonDown();
+    }
+  }
+
+  private handlePrimaryButtonDown(): void {
+    this.leftMouseDown = true;
+    if (this.isEmoting) {
+      this.isEmoting = false;
+      this.activeEmote = null;
+    }
+
+    if (this.phase === 'playing') {
+      const editState = this.building.getEditState();
+      if (editState.active) {
+        const hovered = this.building.getHoveredEditTileIndex(
+          this.getEyePosition(),
+          this.getLookDirection(),
+        );
+        if (hovered !== -1) {
+          this.building.toggleEditTile(hovered);
+          this.lastDraggedEditTile = hovered;
         }
+      } else if (this.isBuildMode) {
+        this.tryPlaceBuild();
+      } else {
+        this.tryUseActiveSlot(true);
+      }
+    }
+  }
+
+  private handleSecondaryButtonDown(): void {
+    this.rightMouseDown = true;
+    if (this.phase === 'playing') {
+      if (this.building.getEditState().active) {
+        this.building.resetEditTiles();
+      } else if (this.isBuildMode) {
+        this.cycleBuildMaterial();
       }
     }
   }
@@ -725,16 +952,19 @@ export class PlayerController {
   private handleKeyDown(e: KeyboardEvent): void {
     this.keysDown.add(e.code);
     if (e.repeat) return;
+    this.handleKeyCodeDown(e.code);
+  }
 
+  private handleKeyCodeDown(code: string): void {
     if (this.phase === 'bus') {
-      if (e.code === 'Space') {
+      if (code === 'Space') {
         this.jumpFromBus();
       }
       return;
     }
 
     if (this.phase === 'skydiving') {
-      if (e.code === 'Space') {
+      if (code === 'Space') {
         this.phase = 'gliding';
         this.eventBus.emit('sound:play', { id: 'glider_deploy' });
       }
@@ -742,7 +972,7 @@ export class PlayerController {
     }
 
     if (this.phase === 'gliding') {
-      if (e.code === 'Space') {
+      if (code === 'Space') {
         const groundY = this.terrain.getHeightAt(this.position.x, this.position.z);
         if (this.position.y - groundY > GLIDER_FORCE_HEIGHT) {
           this.phase = 'skydiving';
@@ -753,7 +983,7 @@ export class PlayerController {
 
     if (this.phase !== 'playing') return;
 
-    switch (e.code) {
+    switch (code) {
       case 'Digit1':
         this.selectSlot(0);
         break;
@@ -788,6 +1018,9 @@ export class PlayerController {
         this.selectBuildPiece('ramp');
         break;
       case 'KeyF':
+        if (this.repairTargetedBuild()) break;
+        this.selectBuildPiece('roof');
+        break;
       case 'KeyT':
       case 'F4':
         this.selectBuildPiece('roof');
@@ -807,10 +1040,26 @@ export class PlayerController {
         this.tryInteract();
         break;
       case 'KeyC':
-      case 'ControlLeft':
+      case 'ControlLeft': {
+        if (this.isSliding) {
+          this.isSliding = false;
+          this.slideTimer = 0;
+          this.isCrouching = true;
+          break;
+        }
+        const sprintingNow =
+          this.isSprinting ||
+          ((this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight')) &&
+            (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) &&
+            !this.isAiming &&
+            this.stamina > 1.5);
+        if (sprintingNow && this.startSlide()) {
+          break;
+        }
         this.isCrouching = !this.isCrouching;
         if (this.isCrouching) this.isSprinting = false;
         break;
+      }
       case 'KeyK':
         this.enterTestEmote();
         break;
@@ -823,10 +1072,29 @@ export class PlayerController {
           this.detachZipline(true);
           break;
         }
+        if (this.isSliding && (this.grounded || this.velocity.y > -3.5)) {
+          this.isSliding = false;
+          this.slideTimer = 0;
+          this.isCrouching = false;
+          const burstSpeed = Math.max(this.slideSpeed * 1.08, 12.5);
+          this.velocity.x = this.slideDir.x * burstSpeed;
+          this.velocity.z = this.slideDir.z * burstSpeed;
+          this.velocity.y = 9.0;
+          this.grounded = false;
+          this.wasAirborne = true;
+          this.fallPeakY = this.position.y;
+          this.eventBus.emit('sound:play', { id: 'jump', position: this.position, spatial: true });
+          break;
+        }
+        if (this.tryMantle()) {
+          break;
+        }
         if (this.grounded) {
           this.isCrouching = false;
           this.velocity.y = 8.4;
           this.grounded = false;
+          this.wasAirborne = true;
+          this.fallPeakY = this.position.y;
           this.eventBus.emit('sound:play', { id: 'jump', position: this.position, spatial: true });
         }
         break;
@@ -906,7 +1174,7 @@ export class PlayerController {
     const placed = this.building.placePieceFromPreview(preview, 'player');
     if (placed) {
       this.stats.structuresBuilt += 1;
-      this.buildCooldown = 0.08;
+      this.buildCooldown = 0.09;
     }
   }
 
@@ -952,12 +1220,15 @@ export class PlayerController {
 
     if (this.fireCooldown > 0) return;
 
-    // Semi-auto check? Allow holding for automatic/shotgun/pickaxe convenience or rapid fire
+    // Semi-auto / magazine check for guns (skip throwables which use stackCount)
     if (def.magSize > 0 && item.magAmmo <= 0) {
       if (isInitialPress) {
         this.eventBus.emit('sound:play', { id: 'dryfire' });
       }
       this.startReload();
+      return;
+    }
+    if (def.isThrowable && item.stackCount <= 0) {
       return;
     }
 
@@ -986,6 +1257,8 @@ export class PlayerController {
       onAmmoConsumed: () => {
         if (def.magSize > 0 && item.magAmmo > 0) {
           item.magAmmo -= 1;
+        } else if (def.isThrowable && item.stackCount > 0) {
+          this.inventory.consumeActiveItem();
         }
       },
       onHarvest: (matType, amount) => {
@@ -1046,10 +1319,154 @@ export class PlayerController {
   private computeCurrentSpread(weaponId: WeaponId): number {
     const def = WEAPONS[weaponId];
     let spread = this.isAiming ? def.adsSpread : def.baseSpread;
-    if (this.isCrouching) spread *= def.crouchSpreadMult;
+    if (this.isCrouching || this.isSliding) spread *= def.crouchSpreadMult;
     if (this.moveSpeed > 0.8) spread += def.moveSpreadAdd;
     spread += this.bloom;
     return Math.max(0, spread);
+  }
+
+  private findRepairableBuildPiece(): BuildPiece | null {
+    if (this.phase !== 'playing' || this.building.getEditState().active) return null;
+    const eye = this.getEyePosition();
+    const lookDir = this.getLookDirection();
+    const hit = this.collision.raycastWorld(eye, lookDir, 5.8, {
+      checkBuilds: true,
+      checkProps: false,
+    });
+    if (!hit.hit || hit.targetType !== 'build' || !hit.targetId) return null;
+    const piece = this.building.getPieceById(hit.targetId);
+    if (!piece || piece.ownerId !== 'player') return null;
+    if (piece.hp <= 0 || piece.hp >= piece.maxHp - 0.5) return null;
+    return piece;
+  }
+
+  repairTargetedBuild(): boolean {
+    const piece = this.findRepairableBuildPiece();
+    if (!piece) return false;
+    const avail = this.inventory.getMaterials()[piece.material] ?? 0;
+    if (avail <= 0) return false;
+    const res = this.building.repairPiece(piece.id, avail);
+    if (!res.repaired) return false;
+    this.inventory.spendMaterial(piece.material, res.cost);
+    this.canRepairBuild = false;
+    return true;
+  }
+
+  startSlide(): boolean {
+    if (
+      this.phase !== 'playing' ||
+      !this.grounded ||
+      this.isSliding ||
+      this.isMantling ||
+      this.activeZipline ||
+      this.isSwimming
+    ) {
+      return false;
+    }
+    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    let dx: number;
+    let dz: number;
+    if (horizSpeed > 1.0) {
+      dx = this.velocity.x / horizSpeed;
+      dz = this.velocity.z / horizSpeed;
+    } else {
+      dx = Math.sin(this.yaw);
+      dz = Math.cos(this.yaw);
+    }
+    this.isSliding = true;
+    this.slideTimer = 0.9;
+    this.isCrouching = false;
+    this.isSprinting = false;
+    this.isEmoting = false;
+    this.activeEmote = null;
+    this.slideDir = { x: dx, z: dz };
+    this.slideSpeed = clamp(Math.max(13.8, horizSpeed * 1.45), 13.8, 18.5);
+    this.velocity.x = dx * this.slideSpeed;
+    this.velocity.z = dz * this.slideSpeed;
+    this.slideDustTimer = 0;
+    this.slideSoundTimer = 0;
+
+    this.eventBus.emit('vfx:slide_dust', {
+      position: { ...this.position },
+      biome: this.terrain.getBiomeAt(this.position.x, this.position.z),
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'slide_loop',
+      position: { ...this.position },
+      volume: 0.55,
+      spatial: true,
+    });
+    this.slideDustTimer = 0.08;
+    this.slideSoundTimer = 0.28;
+    return true;
+  }
+
+  tryMantle(): boolean {
+    if (
+      this.phase !== 'playing' ||
+      this.isMantling ||
+      this.activeZipline ||
+      this.isSwimming
+    ) {
+      return false;
+    }
+    const fwdX = Math.sin(this.yaw);
+    const fwdZ = Math.cos(this.yaw);
+    const probeDists = [0.55, 0.78, 1.0, 1.2];
+
+    for (let i = 0; i < probeDists.length; i++) {
+      const dist = probeDists[i];
+      const px = this.position.x + fwdX * dist;
+      const pz = this.position.z + fwdZ * dist;
+      const topY = this.collision.getFloorHeightAt(px, pz, this.position.y, 2.35);
+      const deltaY = topY - this.position.y;
+      if (deltaY < 1.1 || deltaY > 2.35) continue;
+
+      const upPlayerClear = this.collision.raycastWorld(
+        { x: this.position.x, y: this.position.y + 0.4, z: this.position.z },
+        { x: 0, y: 1, z: 0 },
+        deltaY + 0.45,
+        { checkBuilds: true, checkProps: false },
+      );
+      if (upPlayerClear.hit) continue;
+
+      const fwdClear = this.collision.raycastWorld(
+        { x: this.position.x, y: topY + 0.45, z: this.position.z },
+        { x: fwdX, y: 0, z: fwdZ },
+        dist,
+        { checkBuilds: true, checkProps: false },
+      );
+      if (fwdClear.hit) continue;
+
+      const topHeadroom = this.collision.raycastWorld(
+        { x: px, y: topY + 0.15, z: pz },
+        { x: 0, y: 1, z: 0 },
+        PLAYER_HEIGHT - 0.15,
+        { checkBuilds: true, checkProps: false },
+      );
+      if (topHeadroom.hit) continue;
+
+      this.isMantling = true;
+      this.mantleTimer = 0;
+      this.mantleDuration = 0.28;
+      this.mantleStartPos = { ...this.position };
+      this.mantleEndPos = { x: px, y: topY, z: pz };
+      this.isCrouching = false;
+      this.isSliding = false;
+      this.isSprinting = false;
+      this.velocity = { x: 0, y: 0, z: 0 };
+      this.grounded = false;
+      this.wasAirborne = false;
+      this.fallPeakY = topY;
+      this.eventBus.emit('sound:play', {
+        id: 'mantle_climb',
+        position: { ...this.position },
+        spatial: true,
+      });
+      return true;
+    }
+
+    return false;
   }
 
   private tryInteract(): void {
@@ -1087,6 +1504,28 @@ export class PlayerController {
           radius: 26,
         });
       }
+      return;
+    }
+
+    // 1b. Check nearby Loot Llamas
+    const llamas = this.propsBridge.getLlamas?.() ?? [];
+    let bestLlamaId: string | null = null;
+    let bestLlamaDist = 3.2;
+    for (let i = 0; i < llamas.length; i++) {
+      const l = llamas[i];
+      if (l.opened) continue;
+      const d = dist3D(this.position, { x: l.x, y: l.y, z: l.z });
+      if (d < bestLlamaDist) {
+        bestLlamaDist = d;
+        bestLlamaId = l.id;
+      }
+    }
+    if (bestLlamaId && this.propsBridge.openLlama?.(bestLlamaId)) {
+      this.stats.chestsOpened += 1;
+      const llama = llamas.find((l) => l.id === bestLlamaId);
+      const pos = llama ? { x: llama.x, y: llama.y, z: llama.z } : this.position;
+      this.eventBus.emit('sound:play', { id: 'chest_open', position: pos, spatial: true });
+      this.eventBus.emit('vfx:chest_open', { position: pos });
       return;
     }
 
@@ -1211,6 +1650,17 @@ export class PlayerController {
       }
     }
 
+    const llamas = this.propsBridge.getLlamas?.() ?? [];
+    for (let i = 0; i < llamas.length; i++) {
+      const l = llamas[i];
+      if (l.opened) continue;
+      const d = dist3D(this.position, { x: l.x, y: l.y, z: l.z });
+      if (d < bestDist) {
+        bestDist = d;
+        prompt = { label: 'Open Loot Llama', key: 'E', rarity: 'legendary' };
+      }
+    }
+
     const sds = this.propsBridge.getSupplyDrops();
     for (let i = 0; i < sds.length; i++) {
       const sd = sds[i];
@@ -1254,6 +1704,9 @@ export class PlayerController {
     }
 
     this.interactPrompt = prompt;
+    const repairTarget = this.findRepairableBuildPiece();
+    this.canRepairBuild =
+      repairTarget !== null && (this.inventory.getMaterials()[repairTarget.material] ?? 0) > 0;
   }
 
   private getLookDirection(): Vec3Like {
@@ -1278,11 +1731,12 @@ export class PlayerController {
 
   update(
     dt: number,
-    _elapsed: number,
+    elapsed: number,
     busPos?: Vec3Like,
     _busYaw?: number,
   ): void {
     const safeDt = clamp(dt, 0, 0.05);
+    this.elapsedTime = elapsed > 0 ? elapsed : this.elapsedTime + safeDt;
     if (busPos) {
       this.lastBusPos = { ...busPos };
     }
@@ -1292,6 +1746,10 @@ export class PlayerController {
     if (this.ziplineCooldown > 0) this.ziplineCooldown = Math.max(0, this.ziplineCooldown - safeDt);
     if (this.launchPadCooldown > 0) {
       this.launchPadCooldown = Math.max(0, this.launchPadCooldown - safeDt);
+    }
+    if (this.lavaCooldown > 0) this.lavaCooldown = Math.max(0, this.lavaCooldown - safeDt);
+    if (this.cameraShakeTimer > 0) {
+      this.cameraShakeTimer = Math.max(0, this.cameraShakeTimer - safeDt);
     }
     if (this.recoilKick > 0) this.recoilKick = Math.max(0, this.recoilKick - safeDt * 6.5);
     if (this.harvestSwingTimer > 0) {
@@ -1309,6 +1767,8 @@ export class PlayerController {
         this.position = { ...busPos };
       }
       this.moveSpeed = 0;
+      this.leanAngle = damp(this.leanAngle, 0, 10, safeDt);
+      this.prevYaw = this.yaw;
       this.updateCamera(safeDt);
       return;
     }
@@ -1320,11 +1780,14 @@ export class PlayerController {
     }
 
     if (this.phase === 'playing') {
-      if (this.activeZipline) {
+      if (this.isMantling) {
+        this.updateMantle(safeDt);
+      } else if (this.activeZipline) {
         this.updateZiplineRide(safeDt);
       } else {
         this.updateGroundMovement(safeDt);
       }
+      this.checkVolcanicLavaHazard();
       this.updateCombatAndTimers(safeDt);
       this.updateAutoPickupAndPrompt();
       this.updateCamera(safeDt);
@@ -1333,7 +1796,79 @@ export class PlayerController {
 
     // Lobby / Victory / Eliminated
     this.moveSpeed = 0;
+    this.leanAngle = damp(this.leanAngle, 0, 10, safeDt);
+    this.prevYaw = this.yaw;
     this.updateCamera(safeDt);
+  }
+
+  private updateMantle(dt: number): void {
+    this.mantleTimer += dt;
+    const t = clamp(this.mantleTimer / this.mantleDuration, 0, 1);
+    const yT = 1 - Math.pow(1 - t, 2.5);
+    const xzT = t < 0.25 ? 0.15 * (t / 0.25) : 0.15 + 0.85 * ((t - 0.25) / 0.75);
+
+    this.position.x = lerp(this.mantleStartPos.x, this.mantleEndPos.x, xzT);
+    this.position.y = lerp(this.mantleStartPos.y, this.mantleEndPos.y, yT);
+    this.position.z = lerp(this.mantleStartPos.z, this.mantleEndPos.z, xzT);
+    this.moveSpeed = dist3D(this.mantleStartPos, this.mantleEndPos) / this.mantleDuration;
+    this.leanAngle = damp(this.leanAngle, 0, 10, dt);
+    this.prevYaw = this.yaw;
+
+    if (t >= 1) {
+      this.isMantling = false;
+      this.mantleTimer = 0;
+      this.position = { ...this.mantleEndPos };
+      this.velocity = { x: 0, y: 0, z: 0 };
+      this.grounded = true;
+      this.wasAirborne = false;
+      this.fallPeakY = this.position.y;
+    }
+  }
+
+  private checkVolcanicLavaHazard(): void {
+    if (this.phase !== 'playing' || !this.isAlive() || this.lavaCooldown > 0) return;
+    const dist = dist2D(
+      this.position.x,
+      this.position.z,
+      VOLCANO_CENTER_X,
+      VOLCANO_CENTER_Z,
+    );
+    if (dist >= 11.8) return;
+    const centerY = this.terrain.getHeightAt(VOLCANO_CENTER_X, VOLCANO_CENTER_Z);
+    if (this.position.y <= centerY + 2.3) {
+      this.lavaCooldown = 0.6;
+      this.isSliding = false;
+      this.isCrouching = false;
+      this.isMantling = false;
+      this.grounded = false;
+      this.wasAirborne = true;
+      this.velocity.y = 14;
+      this.fallPeakY = this.position.y;
+
+      this.applyDamage({
+        targetId: 'player',
+        attackerId: 'lava',
+        attackerName: 'Molten Lava',
+        weaponId: 'pickaxe',
+        rarity: 'common',
+        damage: 10,
+        hpDamage: 10,
+        shieldDamage: 0,
+        isHeadshot: false,
+        isElimination: this.health - 10 <= 0,
+        hitPoint: { ...this.position },
+        distance: 0,
+      });
+      this.eventBus.emit('sound:play', {
+        id: 'lava_burn',
+        position: { ...this.position },
+        spatial: true,
+      });
+      this.eventBus.emit('vfx:camera_shake', {
+        intensity: 0.45,
+        duration: 0.25,
+      });
+    }
   }
 
   private updateAerialMovement(dt: number): void {
@@ -1394,16 +1929,61 @@ export class PlayerController {
       this.eventBus.emit('sound:play', { id: 'glider_deploy' });
     }
 
+    const yawRate = clamp(
+      normalizeAngle(this.yaw - this.prevYaw) / Math.max(dt, 0.001),
+      -8,
+      8,
+    );
+    const targetLean = clamp(-rightInput * 0.24 + yawRate * 0.04, -0.35, 0.35);
+    this.leanAngle = damp(this.leanAngle, targetLean, 8, dt);
+    this.prevYaw = this.yaw;
+
     if (this.velocity.y <= 0 && this.position.y <= groundY + 0.12) {
       this.position.y = groundY;
       this.velocity.y = 0;
       this.grounded = true;
+      this.wasAirborne = false;
+      this.fallPeakY = groundY;
+      this.fallImmune = false;
       this.phase = 'playing';
       this.eventBus.emit('sound:play', {
         id: 'land',
         position: { ...this.position },
         spatial: true,
       });
+    }
+  }
+
+  private resolveFootstepSound(
+    groundMaterial: MaterialType | 'grass' | 'stone',
+  ): SoundEventId {
+    if (
+      this.isSwimming ||
+      (groundMaterial === 'grass' && this.terrain.isWater(this.position.x, this.position.z))
+    ) {
+      return 'footstep_water';
+    }
+    if (groundMaterial === 'wood') return 'footstep_wood';
+    if (groundMaterial === 'metal') return 'footstep_metal';
+    if (groundMaterial === 'brick' || groundMaterial === 'stone') return 'footstep_stone';
+
+    const biome = this.terrain.getBiomeAt(this.position.x, this.position.z);
+    switch (biome) {
+      case 'snow':
+        return 'footstep_snow';
+      case 'beach':
+      case 'desert':
+        return 'footstep_sand';
+      case 'ocean':
+        return 'footstep_water';
+      case 'urban':
+      case 'highland':
+      case 'volcanic':
+        return 'footstep_stone';
+      case 'cyber':
+        return 'footstep_metal';
+      default:
+        return 'footstep';
     }
   }
 
@@ -1422,7 +2002,25 @@ export class PlayerController {
       wishZ /= wishLen;
     }
 
+    const terrainH = this.terrain.getHeightAt(this.position.x, this.position.z);
+    const inWater =
+      this.terrain.isWater(this.position.x, this.position.z) &&
+      terrainH < WATER_LEVEL - 0.5 &&
+      this.position.y <= WATER_LEVEL + 0.15;
+
+    if (this.isSliding) {
+      this.slideTimer -= dt;
+      if (this.slideTimer <= 0 || inWater) {
+        this.isSliding = false;
+        this.slideTimer = 0;
+        if (!inWater) {
+          this.isCrouching = true;
+        }
+      }
+    }
+
     const wantsSprint =
+      !this.isSliding &&
       (this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight')) &&
       forwardInput > 0 &&
       !this.isAiming &&
@@ -1452,23 +2050,41 @@ export class PlayerController {
       activeItem?.weaponId !== 'pickaxe';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
-    const terrainH = this.terrain.getHeightAt(this.position.x, this.position.z);
-    const inWater =
-      this.terrain.isWater(this.position.x, this.position.z) &&
-      terrainH < WATER_LEVEL - 0.5 &&
-      this.position.y <= WATER_LEVEL + 0.15;
+    if (this.isSliding) {
+      if (rightInput !== 0) {
+        const steerAngle = -rightInput * 0.9 * dt;
+        const cosS = Math.cos(steerAngle);
+        const sinS = Math.sin(steerAngle);
+        const sx = this.slideDir.x * cosS - this.slideDir.z * sinS;
+        const sz = this.slideDir.x * sinS + this.slideDir.z * cosS;
+        const sLen = Math.hypot(sx, sz) || 1;
+        this.slideDir.x = sx / sLen;
+        this.slideDir.z = sz / sLen;
+      }
+      const normal = this.terrain.getNormalAt(this.position.x, this.position.z);
+      const downhillDot = this.slideDir.x * normal.x + this.slideDir.z * normal.z;
+      if (downhillDot > 0.03) {
+        this.slideSpeed = Math.min(20.0, this.slideSpeed + downhillDot * 20.0 * dt);
+      } else if (downhillDot < -0.03) {
+        this.slideSpeed = Math.max(3.5, this.slideSpeed + downhillDot * 16.0 * dt);
+      } else {
+        this.slideSpeed = damp(this.slideSpeed, 4.8, 2.2, dt);
+      }
+      this.velocity.x = this.slideDir.x * this.slideSpeed;
+      this.velocity.z = this.slideDir.z * this.slideSpeed;
+    } else {
+      let targetSpeed = 6.6;
+      if (this.isCrouching) targetSpeed = 3.6;
+      else if (this.isSprinting) targetSpeed = 9.6;
+      else if (this.isAiming || this.healTimer > 0) targetSpeed = 3.8;
+      if (inWater) targetSpeed *= 0.68;
 
-    let targetSpeed = 6.6;
-    if (this.isCrouching) targetSpeed = 3.6;
-    else if (this.isSprinting) targetSpeed = 9.6;
-    else if (this.isAiming || this.healTimer > 0) targetSpeed = 3.8;
-    if (inWater) targetSpeed *= 0.68;
-
-    const targetVx = wishX * targetSpeed;
-    const targetVz = wishZ * targetSpeed;
-    const accel = this.grounded ? 16.0 : 5.5;
-    this.velocity.x = damp(this.velocity.x, targetVx, accel, dt);
-    this.velocity.z = damp(this.velocity.z, targetVz, accel, dt);
+      const targetVx = wishX * targetSpeed;
+      const targetVz = wishZ * targetSpeed;
+      const accel = this.grounded ? 16.0 : 5.5;
+      this.velocity.x = damp(this.velocity.x, targetVx, accel, dt);
+      this.velocity.z = damp(this.velocity.z, targetVz, accel, dt);
+    }
 
     if (inWater) {
       // Shallow swim buoyancy at water surface
@@ -1484,7 +2100,8 @@ export class PlayerController {
 
     const prevGrounded = this.grounded;
     const prevVy = this.velocity.y;
-    const charHeight = this.isCrouching ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
+    const charHeight =
+      this.isCrouching || this.isSliding ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
 
     const res = this.collision.resolveCharacterMovement(
       this.position,
@@ -1496,11 +2113,65 @@ export class PlayerController {
 
     this.position = res.position;
     this.velocity = res.velocity;
-    this.grounded = res.grounded || inWater;
+
+    const onStructure =
+      res.grounded &&
+      (res.groundMaterial === 'wood' ||
+        res.groundMaterial === 'brick' ||
+        res.groundMaterial === 'metal');
+    this.isSwimming = inWater && !onStructure;
+    this.grounded = res.grounded || this.isSwimming;
 
     // Keep inside island playable bounds
     this.position.x = clamp(this.position.x, -390, 390);
     this.position.z = clamp(this.position.z, -390, 390);
+
+    // Track fall peak & resolve fall damage on landing
+    if (!this.grounded) {
+      if (!this.wasAirborne) {
+        this.wasAirborne = true;
+        this.fallPeakY = Math.max(this.fallPeakY, this.position.y);
+      } else if (this.position.y > this.fallPeakY) {
+        this.fallPeakY = this.position.y;
+      }
+    } else if (this.isSwimming) {
+      this.wasAirborne = false;
+      this.fallPeakY = this.position.y;
+      this.fallImmune = false;
+    } else {
+      if (!prevGrounded && this.wasAirborne) {
+        const fallDistance = this.fallPeakY - this.position.y;
+        if (!this.fallImmune && fallDistance > 13 && this.isAlive()) {
+          const fallDmg = clamp(Math.round((fallDistance - 13) * 5), 1, 100);
+          this.applyDamage({
+            targetId: 'player',
+            attackerId: 'environment',
+            attackerName: 'Fall Damage',
+            weaponId: 'pickaxe',
+            rarity: 'common',
+            damage: fallDmg,
+            hpDamage: fallDmg,
+            shieldDamage: 0,
+            isHeadshot: false,
+            isElimination: this.health - fallDmg <= 0,
+            hitPoint: { ...this.position },
+            distance: fallDistance,
+          });
+          this.eventBus.emit('sound:play', {
+            id: 'fall_damage',
+            position: { ...this.position },
+            spatial: true,
+          });
+          this.eventBus.emit('vfx:camera_shake', {
+            intensity: clamp(fallDmg / 45, 0.25, 0.85),
+            duration: 0.28,
+          });
+        }
+      }
+      this.wasAirborne = false;
+      this.fallPeakY = this.position.y;
+      this.fallImmune = false;
+    }
 
     // Check Launch Pads & Volcanic Geysers
     if (this.launchPadCooldown <= 0 && this.traversalBridge) {
@@ -1512,16 +2183,20 @@ export class PlayerController {
         if (d2 <= pad.radius && dy <= 2.3) {
           this.launchPadCooldown = 0.9;
           this.isCrouching = false;
+          this.isSliding = false;
           this.isBuildMode = false;
           this.building.setPreviewVisible(false);
           this.activeZipline = null;
           this.grounded = false;
+          this.wasAirborne = true;
+          this.fallImmune = true;
+          this.fallPeakY = this.position.y;
           this.phase = 'gliding';
           this.velocity.x = fwdX * pad.boostForward;
           this.velocity.y = pad.boostVy;
           this.velocity.z = fwdZ * pad.boostForward;
           this.eventBus.emit('sound:play', {
-            id: 'glider_deploy',
+            id: 'launch_pad',
             position: { x: pad.x, y: pad.y, z: pad.z },
             spatial: true,
           });
@@ -1535,7 +2210,7 @@ export class PlayerController {
       }
     }
 
-    if (!prevGrounded && this.grounded && prevVy < -6.0) {
+    if (!prevGrounded && this.grounded && prevVy < -6.0 && !this.isSwimming) {
       this.eventBus.emit('sound:play', {
         id: 'land',
         position: { ...this.position },
@@ -1549,13 +2224,36 @@ export class PlayerController {
       this.activeEmote = null;
     }
 
-    // Footstep sound cadence
-    if (this.grounded && this.moveSpeed > 1.3 && !this.isCrouching) {
+    // Slide dust VFX & audio loop
+    if (this.isSliding && this.grounded) {
+      this.slideDustTimer -= dt;
+      if (this.slideDustTimer <= 0) {
+        this.slideDustTimer = 0.08;
+        this.eventBus.emit('vfx:slide_dust', {
+          position: { ...this.position },
+          biome: this.terrain.getBiomeAt(this.position.x, this.position.z),
+        });
+      }
+      this.slideSoundTimer -= dt;
+      if (this.slideSoundTimer <= 0) {
+        this.slideSoundTimer = 0.28;
+        this.eventBus.emit('sound:play', {
+          id: 'slide_loop',
+          position: { ...this.position },
+          volume: 0.55,
+          spatial: true,
+        });
+      }
+    }
+
+    // Footstep sound cadence with surface & biome mapping
+    if (this.grounded && this.moveSpeed > 1.3 && !this.isCrouching && !this.isSliding) {
       this.footstepTimer -= dt * (this.isSprinting ? 1.45 : 1.0);
       if (this.footstepTimer <= 0) {
         this.footstepTimer = 0.36;
+        const footId = this.resolveFootstepSound(res.groundMaterial);
         this.eventBus.emit('sound:play', {
-          id: 'footstep',
+          id: footId,
           position: { ...this.position },
           volume: 0.45,
           spatial: true,
@@ -1568,6 +2266,21 @@ export class PlayerController {
         });
       }
     }
+
+    // Banking lean angle during strafes and turns
+    const yawRate = clamp(
+      normalizeAngle(this.yaw - this.prevYaw) / Math.max(dt, 0.001),
+      -8,
+      8,
+    );
+    const moveFactor = clamp(this.moveSpeed / 8.0, 0, 1);
+    const targetLean = clamp(
+      (-rightInput * 0.16 + yawRate * 0.035) * (0.35 + 0.65 * moveFactor),
+      -0.32,
+      0.32,
+    );
+    this.leanAngle = damp(this.leanAngle, targetLean, 10, dt);
+    this.prevYaw = this.yaw;
 
     // Character facing yaw: align to camera when aiming/firing/building, else smooth blend
     if (this.isAiming || this.isFiring || this.isBuildMode || this.moveSpeed < 0.4) {
@@ -1627,11 +2340,16 @@ export class PlayerController {
 
     this.activeZipline = { zip, t, dir };
     this.isCrouching = false;
+    this.isSliding = false;
+    this.isMantling = false;
     this.healTimer = 0;
     this.reloadTimer = 0;
     this.grounded = false;
+    this.wasAirborne = false;
+    this.fallPeakY = this.position.y;
+    this.ziplineSoundTimer = 0.35;
     this.eventBus.emit('sound:play', {
-      id: 'ui_click',
+      id: 'zipline_attach',
       position: { ...this.position },
       spatial: true,
     });
@@ -1646,6 +2364,8 @@ export class PlayerController {
     this.activeZipline = null;
     this.ziplineCooldown = 0.65;
     this.grounded = false;
+    this.wasAirborne = true;
+    this.fallPeakY = this.position.y;
 
     const fwdX = (dx / lenXZ) * dir;
     const fwdZ = (dz / lenXZ) * dir;
@@ -1700,7 +2420,21 @@ export class PlayerController {
     this.moveSpeed = zip.speed;
     this.grounded = false;
     this.isSprinting = false;
+    this.fallPeakY = this.position.y;
+    this.leanAngle = damp(this.leanAngle, 0, 10, dt);
+    this.prevYaw = this.yaw;
     this.characterYaw = Math.atan2(dx * dir, dz * dir);
+
+    this.ziplineSoundTimer -= dt;
+    if (this.ziplineSoundTimer <= 0) {
+      this.ziplineSoundTimer = 0.45;
+      this.eventBus.emit('sound:play', {
+        id: 'zipline_loop',
+        position: { ...this.position },
+        volume: 0.4,
+        spatial: true,
+      });
+    }
   }
 
   private updateCombatAndTimers(dt: number): void {
@@ -1864,7 +2598,7 @@ export class PlayerController {
       rightOffset = 0;
       upOffset = 0.4;
     } else {
-      const eyeH = this.isCrouching ? 1.05 : 1.52;
+      const eyeH = this.isCrouching || this.isSliding ? 1.05 : 1.52;
       pivot = {
         x: this.position.x,
         y: this.position.y + eyeH,
@@ -1924,6 +2658,20 @@ export class PlayerController {
       if (finalPos.y < minCamY) finalPos.y = minCamY;
     }
 
+    if (this.cameraShakeTimer > 0 && this.cameraShakeDuration > 0) {
+      const decay = clamp(this.cameraShakeTimer / this.cameraShakeDuration, 0, 1);
+      const amp = this.cameraShakeIntensity * decay * 0.22;
+      finalPos = {
+        x: finalPos.x + (Math.random() - 0.5) * 2 * amp,
+        y: finalPos.y + (Math.random() - 0.5) * 2 * amp,
+        z: finalPos.z + (Math.random() - 0.5) * 2 * amp,
+      };
+      if (this.phase === 'playing' || this.phase === 'victory' || this.phase === 'eliminated') {
+        const minCamY = this.terrain.getHeightAt(finalPos.x, finalPos.z) + 0.35;
+        if (finalPos.y < minCamY) finalPos.y = minCamY;
+      }
+    }
+
     this.camera.position.set(finalPos.x, finalPos.y, finalPos.z);
     this.camera.lookAt(
       finalPos.x + lookDir.x * 40,
@@ -1943,6 +2691,10 @@ export class PlayerController {
       animState = 'glide';
     } else if (this.isEmoting) {
       animState = 'emote';
+    } else if (this.isMantling) {
+      animState = 'mantle';
+    } else if (this.activeZipline !== null) {
+      animState = 'zipline';
     } else if (this.harvestSwingTimer > 0) {
       animState = 'harvest';
     } else if (this.healTimer > 0) {
@@ -1951,6 +2703,10 @@ export class PlayerController {
       animState = 'reload';
     } else if (this.isBuildMode) {
       animState = 'build';
+    } else if (this.isSliding) {
+      animState = 'slide';
+    } else if (this.isSwimming) {
+      animState = 'swim';
     } else if (!this.grounded) {
       animState = this.velocity.y > 0.8 ? 'jump' : 'fall';
     } else if (this.isCrouching) {
@@ -1979,6 +2735,11 @@ export class PlayerController {
       shield: this.shield,
       recoilKick: this.recoilKick,
       harvestSwingTimer: this.harvestSwingTimer,
+      isSliding: this.isSliding,
+      isZiplining: this.activeZipline !== null,
+      isSwimming: this.isSwimming,
+      velocityY: this.velocity.y,
+      leanAngle: this.leanAngle,
     };
   }
 
@@ -1991,6 +2752,17 @@ export class PlayerController {
 
     const groundY = this.terrain.getHeightAt(this.position.x, this.position.z);
     const altitude = this.position.y - groundY;
+
+    const lowHealthPulse =
+      this.phase === 'playing' && this.isAlive() && this.health <= 35
+        ? clamp((35 - this.health) / 25, 0.25, 1.0) *
+          (0.65 + 0.35 * Math.sin(this.elapsedTime * 7.0))
+        : 0;
+    const showSpeedLines =
+      this.phase === 'skydiving' ||
+      this.isSliding ||
+      this.activeZipline !== null ||
+      this.moveSpeed > 11.5;
 
     return {
       phase: this.phase,
@@ -2031,6 +2803,15 @@ export class PlayerController {
       hitmarker: this.hitmarker,
       damageDirection: this.damageDirection,
       activeWeaponId: weaponId,
+      isSliding: this.isSliding,
+      isZiplining: this.activeZipline !== null,
+      isSwimming: this.isSwimming,
+      canRepairBuild: this.canRepairBuild,
+      killStreak: this.killStreak,
+      siphonFlashAt: this.siphonFlashAt,
+      lowHealthPulse,
+      showSpeedLines,
+      leanAngle: this.leanAngle,
     };
   }
 }

@@ -15,8 +15,22 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'mythic_blade_rifle',
 ]);
 
+const THROWABLE_WEAPONS = new Set<WeaponId>([
+  'shockwave_grenade',
+  'frag_grenade',
+  'chug_splash',
+]);
+
 export function isRangedWeapon(weaponId: WeaponId): boolean {
   return RANGED_WEAPONS.has(weaponId);
+}
+
+export function isThrowableWeapon(weaponId: WeaponId): boolean {
+  return THROWABLE_WEAPONS.has(weaponId);
+}
+
+export function hasMuzzleOffset(weaponId: WeaponId): boolean {
+  return RANGED_WEAPONS.has(weaponId) || THROWABLE_WEAPONS.has(weaponId);
 }
 
 /**
@@ -115,7 +129,82 @@ function addCylinder(
   );
 }
 
+function buildPlasmaKatana(def: PickaxeDef): THREE.Group {
+  const group = new THREE.Group();
+  group.name = `weapon_pickaxe_${def.style}`;
+
+  const handleMat = makeStandardMat(def.handleColor, 0.55, 0.35);
+  const plasmaMat = makeStandardMat(def.headColor, 0.16, 0.15, def.headColor, 0.85);
+  const goldMat = makeStandardMat(def.accentColor, 0.25, 0.72, def.accentColor, 0.28);
+  const darkSpine = makeStandardMat('#1e293b', 0.35, 0.65);
+
+  // Katana tsuka hilt & diamond wrap bands
+  addCylinder(group, 0.022, 0.025, 0.34, handleMat, 0, 0.04, 0, 0, 0, 0, 10);
+  for (let i = 0; i < 4; i++) {
+    addBox(group, 0.048, 0.022, 0.054, goldMat, 0, -0.06 + i * 0.07, 0, 0, 0.35, 0);
+  }
+  addCylinder(group, 0.032, 0.024, 0.04, goldMat, 0, -0.145, 0, 0, 0, 0, 8);
+
+  // Octagonal tsuba handguard + habaki collar
+  addCylinder(group, 0.068, 0.068, 0.022, goldMat, 0, 0.22, 0, 0, 0, 0, 8);
+  addBox(group, 0.042, 0.048, 0.064, darkSpine, 0, 0.255, 0.005);
+
+  // Curved multi-segment plasma katana blade spine + glowing energy cutting edge
+  addBox(group, 0.018, 0.34, 0.042, darkSpine, 0, 0.44, 0.014, 0.04, 0, 0);
+  addBox(group, 0.012, 0.34, 0.032, plasmaMat, 0, 0.44, 0.044, 0.04, 0, 0);
+
+  addBox(group, 0.016, 0.30, 0.038, darkSpine, 0, 0.74, 0.042, 0.14, 0, 0);
+  addBox(group, 0.010, 0.31, 0.030, plasmaMat, 0, 0.74, 0.072, 0.14, 0, 0);
+
+  // Swept kissaki razor tip + gold energy conduit nodes
+  addBox(group, 0.012, 0.14, 0.034, plasmaMat, 0, 0.93, 0.088, 0.36, 0, 0);
+  addBox(group, 0.024, 0.045, 0.026, goldMat, 0, 0.56, 0.025, 0.08, 0, 0);
+  addBox(group, 0.022, 0.045, 0.024, goldMat, 0, 0.76, 0.052, 0.14, 0, 0);
+
+  return group;
+}
+
+function buildMagmaAxe(def: PickaxeDef): THREE.Group {
+  const group = new THREE.Group();
+  group.name = `weapon_pickaxe_${def.style}`;
+
+  const obsidianMat = makeStandardMat(def.handleColor, 0.52, 0.45);
+  const magmaMat = makeStandardMat(def.headColor, 0.24, 0.2, def.headColor, 0.65);
+  const emberMat = makeStandardMat(def.accentColor, 0.18, 0.15, def.accentColor, 0.85);
+  const ironMat = makeStandardMat('#1c1917', 0.4, 0.68);
+
+  // Rugged volcanic shaft + grip + spiked pommel
+  addCylinder(group, 0.025, 0.027, 0.94, obsidianMat, 0, 0.26, 0, 0, 0, 0, 8);
+  addCylinder(group, 0.033, 0.033, 0.22, ironMat, 0, 0.0, 0, 0, 0, 0, 8);
+  addCylinder(group, 0.012, 0.032, 0.09, magmaMat, 0, -0.25, 0, Math.PI, 0, 0, 6);
+  addCylinder(group, 0.046, 0.038, 0.10, magmaMat, 0, 0.66, 0, 0, 0, 0, 8);
+
+  // Central basalt socket + glowing molten core
+  addBox(group, 0.11, 0.16, 0.18, ironMat, 0, 0.76, 0);
+  addBox(group, 0.118, 0.08, 0.12, emberMat, 0, 0.76, 0);
+
+  // Double-headed bearded caldera axe blades with glowing magma edges
+  for (const dir of [1, -1]) {
+    addBox(group, 0.052, 0.19, 0.18, ironMat, 0, 0.77, dir * 0.15, dir * 0.12, 0, 0);
+    addBox(group, 0.036, 0.27, 0.11, magmaMat, 0, 0.76, dir * 0.26, dir * 0.18, 0, 0);
+    addBox(group, 0.022, 0.30, 0.06, emberMat, 0, 0.75, dir * 0.32, dir * 0.22, 0, 0);
+    // Lower beard horn
+    addBox(group, 0.03, 0.10, 0.08, magmaMat, 0, 0.61, dir * 0.23, dir * -0.35, 0, 0);
+  }
+  // Top volcanic crest spike
+  addCylinder(group, 0.008, 0.038, 0.13, emberMat, 0, 0.90, 0, 0, 0, 0, 6);
+
+  return group;
+}
+
 function buildPickaxe(def: PickaxeDef): THREE.Group {
+  if (def.id === 'plasma_katana') {
+    return buildPlasmaKatana(def);
+  }
+  if (def.id === 'magma_axe') {
+    return buildMagmaAxe(def);
+  }
+
   const group = new THREE.Group();
   group.name = `weapon_pickaxe_${def.style}`;
 
@@ -137,6 +226,8 @@ function buildPickaxe(def: PickaxeDef): THREE.Group {
     addBox(group, 0.06, 0.09, 0.24, headMat, 0, 0.72, 0.06, 0.14, 0, 0);
     addBox(group, 0.04, 0.13, 0.16, accentMat, 0, 0.70, 0.21, 0.32, 0, 0);
     addBox(group, 0.03, 0.11, 0.09, headMat, 0, 0.67, 0.30, 0.45, 0, 0);
+    // Cheek reinforcement plates
+    addBox(group, 0.072, 0.06, 0.12, gripMat, 0, 0.73, 0.02);
     // Rear pick spike
     addCylinder(group, 0.006, 0.026, 0.20, headMat, 0, 0.74, -0.14, -Math.PI * 0.42, 0, 0, 6);
   } else if (def.style === 'cyber') {
@@ -188,6 +279,9 @@ function buildAssaultRifle(): THREE.Group {
   // Lower & upper SCAR-style receiver
   addBox(group, 0.064, 0.085, 0.36, bodyGold, 0, 0.065, 0.09);
   addBox(group, 0.058, 0.045, 0.38, bodyTan, 0, 0.115, 0.10);
+  // Side handguard vents & charging handle
+  addBox(group, 0.070, 0.022, 0.14, darkMetal, 0, 0.075, 0.21);
+  addCylinder(group, 0.008, 0.008, 0.04, gunmetal, -0.042, 0.105, 0.08, 0, 0, Math.PI / 2, 6);
   // Top picatinny rail + iron sights
   addBox(group, 0.03, 0.018, 0.34, darkMetal, 0, 0.145, 0.10);
   addBox(group, 0.026, 0.026, 0.02, darkMetal, 0, 0.162, -0.04);
@@ -246,8 +340,9 @@ function buildPumpShotgun(): THREE.Group {
   // Stock & angled grip
   addBox(group, 0.044, 0.10, 0.065, wood, 0, -0.01, -0.02, 0.38, 0, 0);
   addBox(group, 0.046, 0.09, 0.22, wood, 0, 0.045, -0.15, 0.14, 0, 0);
-  // Receiver
+  // Receiver + side shell carrier
   addBox(group, 0.058, 0.08, 0.20, darkMetal, 0, 0.07, 0.08);
+  addBox(group, 0.012, 0.045, 0.11, darkMetal, 0.032, 0.07, 0.08);
   // Long barrel & underbarrel shell tube
   addCylinder(group, 0.019, 0.02, 0.46, steel, 0, 0.095, 0.39, Math.PI / 2, 0, 0, 10);
   addCylinder(group, 0.016, 0.016, 0.38, darkMetal, 0, 0.055, 0.35, Math.PI / 2, 0, 0, 10);
@@ -284,6 +379,52 @@ function buildTacShotgun(): THREE.Group {
   addCylinder(group, 0.017, 0.017, 0.08, dark, 0, 0.05, 0.45, Math.PI / 2, 0, 0, 10);
 
   group.userData.muzzleOffset = new THREE.Vector3(0, 0.088, 0.53);
+  return group;
+}
+
+function buildHeavyShotgun(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_heavy_shotgun';
+
+  const matteDark = makeStandardMat('#0f172a', 0.42, 0.55);
+  const slateSteel = makeStandardMat('#334155', 0.32, 0.72);
+  const silver = makeStandardMat('#94a3b8', 0.25, 0.8);
+  const crimsonAccent = makeStandardMat('#ef4444', 0.35, 0.3, '#ef4444', 0.2);
+
+  // Ergonomic pistol grip
+  addBox(group, 0.044, 0.12, 0.052, matteDark, 0, -0.02, -0.01, 0.22, 0, 0);
+
+  // Heavy reinforced receiver + top picatinny rail + crimson trim
+  addBox(group, 0.072, 0.098, 0.32, slateSteel, 0, 0.072, 0.09);
+  addBox(group, 0.076, 0.022, 0.26, crimsonAccent, 0, 0.08, 0.08);
+  addBox(group, 0.036, 0.018, 0.32, matteDark, 0, 0.132, 0.10);
+
+  // Reflex ghost-ring sight
+  addBox(group, 0.032, 0.034, 0.04, matteDark, 0, 0.155, 0.02);
+  addBox(group, 0.012, 0.012, 0.01, crimsonAccent, 0, 0.16, 0.035);
+
+  // High-capacity Drum Magazine beneath receiver
+  addCylinder(group, 0.074, 0.074, 0.095, matteDark, 0, -0.028, 0.14, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.056, 0.056, 0.102, slateSteel, 0, -0.028, 0.14, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.022, 0.022, 0.11, silver, 0, -0.028, 0.14, Math.PI / 2, 0, 0, 10);
+  // Mag feed neck
+  addBox(group, 0.046, 0.06, 0.065, matteDark, 0, 0.025, 0.14);
+
+  // Folding tactical skeleton stock
+  addBox(group, 0.042, 0.025, 0.22, slateSteel, 0, 0.09, -0.17);
+  addBox(group, 0.038, 0.025, 0.20, matteDark, 0, 0.035, -0.16, -0.15, 0, 0);
+  addBox(group, 0.048, 0.11, 0.036, matteDark, 0, 0.055, -0.27);
+
+  // Heavy barrel + Ventilated Cooling Shroud with ribbed slots
+  addCylinder(group, 0.022, 0.024, 0.34, silver, 0, 0.092, 0.42, Math.PI / 2, 0, 0, 12);
+  addBox(group, 0.060, 0.078, 0.23, matteDark, 0, 0.088, 0.36);
+  for (let v = 0; v < 4; v++) {
+    addBox(group, 0.066, 0.084, 0.024, slateSteel, 0, 0.088, 0.28 + v * 0.054);
+  }
+  // Ported heavy choke muzzle brake
+  addCylinder(group, 0.028, 0.026, 0.06, matteDark, 0, 0.092, 0.58, Math.PI / 2, 0, 0, 10);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.092, 0.62);
   return group;
 }
 
@@ -403,6 +544,138 @@ function buildRocketLauncher(): THREE.Group {
   return group;
 }
 
+function buildMythicBladeRifle(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_mythic_blade_rifle';
+
+  const pearlWhite = makeStandardMat('#f8fafc', 0.25, 0.28);
+  const goldTrim = makeStandardMat('#fbbf24', 0.22, 0.78, '#f59e0b', 0.18);
+  const obsidian = makeStandardMat('#1e293b', 0.38, 0.55);
+  const cyanEnergy = makeStandardMat('#22d3ee', 0.14, 0.15, '#22d3ee', 0.9);
+
+  // Sculpted white/gold pistol grip
+  addBox(group, 0.042, 0.12, 0.048, obsidian, 0, -0.02, -0.02, 0.24, 0, 0);
+  addBox(group, 0.046, 0.026, 0.052, goldTrim, 0, -0.075, -0.032, 0.24, 0, 0);
+
+  // Sleek aerodynamic gold-white chassis
+  addBox(group, 0.066, 0.084, 0.40, pearlWhite, 0, 0.070, 0.11);
+  addBox(group, 0.054, 0.036, 0.44, goldTrim, 0, 0.118, 0.13);
+  // Swept forward blade shroud
+  addBox(group, 0.058, 0.068, 0.22, pearlWhite, 0, 0.080, 0.39);
+  addBox(group, 0.044, 0.024, 0.24, goldTrim, 0, 0.118, 0.40);
+
+  // Twin glowing cyan energy rails along sides + glowing top pulse core!
+  addBox(group, 0.014, 0.022, 0.46, cyanEnergy, 0.036, 0.078, 0.28);
+  addBox(group, 0.014, 0.022, 0.46, cyanEnergy, -0.036, 0.078, 0.28);
+  addBox(group, 0.026, 0.014, 0.26, cyanEnergy, 0, 0.138, 0.20);
+
+  // Gold-accented futuristic energy cell magazine
+  addBox(group, 0.036, 0.135, 0.06, obsidian, 0, -0.025, 0.13, -0.18, 0, 0);
+  addBox(group, 0.040, 0.08, 0.02, cyanEnergy, 0, -0.02, 0.135, -0.18, 0, 0);
+
+  // Sleek sculpted mythic stock
+  addBox(group, 0.048, 0.082, 0.21, pearlWhite, 0, 0.064, -0.17, 0.06, 0, 0);
+  addBox(group, 0.052, 0.11, 0.034, goldTrim, 0, 0.05, -0.27);
+
+  // Holographic blade reflex optic
+  addBox(group, 0.036, 0.036, 0.065, goldTrim, 0, 0.155, 0.06);
+  addBox(group, 0.024, 0.024, 0.008, cyanEnergy, 0, 0.172, 0.06);
+
+  // Split-emitter energy barrel & muzzle tip
+  addCylinder(group, 0.014, 0.016, 0.16, obsidian, 0, 0.088, 0.54, Math.PI / 2, 0, 0, 10);
+  addBox(group, 0.048, 0.018, 0.08, goldTrim, 0, 0.092, 0.57);
+  addCylinder(group, 0.018, 0.018, 0.024, cyanEnergy, 0, 0.088, 0.61, Math.PI / 2, 0, 0, 10);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.09, 0.63);
+  return group;
+}
+
+function buildShockwaveGrenade(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_shockwave_grenade';
+
+  const cyanCore = makeStandardMat('#22d3ee', 0.12, 0.2, '#22d3ee', 0.95);
+  const violetGlow = makeStandardMat('#a855f7', 0.18, 0.25, '#a855f7', 0.85);
+  const darkCage = makeStandardMat('#1e293b', 0.35, 0.72);
+  const silver = makeStandardMat('#cbd5e1', 0.28, 0.8);
+
+  // Glowing cyan/violet sphere energy core
+  addMesh(group, new THREE.SphereGeometry(0.068, 14, 12), cyanCore, 0, 0.06, 0.02);
+  addMesh(group, new THREE.TorusGeometry(0.072, 0.012, 8, 16), violetGlow, 0, 0.06, 0.02, Math.PI / 2, 0, 0);
+
+  // Metallic tactical containment rings
+  addMesh(group, new THREE.TorusGeometry(0.078, 0.009, 8, 16), darkCage, 0, 0.06, 0.02, 0, 0, 0);
+  addMesh(group, new THREE.TorusGeometry(0.078, 0.009, 8, 16), darkCage, 0, 0.06, 0.02, 0, Math.PI / 2, 0);
+
+  // Top & bottom activation caps + glowing violet nodes
+  addCylinder(group, 0.036, 0.048, 0.03, darkCage, 0, 0.132, 0.02, 0, 0, 0, 10);
+  addCylinder(group, 0.022, 0.022, 0.016, violetGlow, 0, 0.15, 0.02, 0, 0, 0, 10);
+  addCylinder(group, 0.044, 0.032, 0.022, silver, 0, -0.012, 0.02, 0, 0, 0, 10);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.22);
+  return group;
+}
+
+function buildFragGrenade(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_frag_grenade';
+
+  const olive = makeStandardMat('#4d7c0f', 0.55, 0.22);
+  const darkOlive = makeStandardMat('#365314', 0.62, 0.25);
+  const steel = makeStandardMat('#64748b', 0.3, 0.78);
+  const pinMetal = makeStandardMat('#e2e8f0', 0.25, 0.85);
+
+  // Faceted olive canister body + beveled top/bottom caps
+  addCylinder(group, 0.056, 0.056, 0.095, olive, 0, 0.055, 0.02, 0, 0, 0, 8);
+  addCylinder(group, 0.036, 0.056, 0.026, olive, 0, 0.115, 0.02, 0, 0, 0, 8);
+  addCylinder(group, 0.056, 0.034, 0.024, olive, 0, -0.005, 0.02, 0, 0, 0, 8);
+
+  // Faceted fragmentation waffle bands
+  for (let yOff of [0.03, 0.058, 0.085]) {
+    addCylinder(group, 0.060, 0.060, 0.014, darkOlive, 0, yOff, 0.02, 0, 0, 0, 8);
+  }
+  addBox(group, 0.122, 0.082, 0.016, darkOlive, 0, 0.055, 0.02);
+  addBox(group, 0.016, 0.082, 0.122, darkOlive, 0, 0.055, 0.02);
+
+  // Fuse head + safety spoon lever + metallic pull-pin ring
+  addCylinder(group, 0.024, 0.028, 0.032, steel, 0, 0.142, 0.02, 0, 0, 0, 10);
+  addBox(group, 0.02, 0.095, 0.012, steel, 0, 0.098, -0.044, -0.22, 0, 0);
+  addMesh(group, new THREE.TorusGeometry(0.024, 0.0045, 6, 14), pinMetal, 0.032, 0.148, 0.02, 0, Math.PI / 2, 0);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.22);
+  return group;
+}
+
+function buildChugSplash(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_chug_splash';
+
+  const crateMat = makeStandardMat('#1e3a8a', 0.45, 0.25);
+  const rimMat = makeStandardMat('#38bdf8', 0.3, 0.35, '#0ea5e9', 0.25);
+  const flaskGlow = makeStandardMat('#06b6d4', 0.15, 0.15, '#22d3ee', 0.8);
+  const capMat = makeStandardMat('#e2e8f0', 0.25, 0.8);
+
+  // 6-pack tactical crate base + top rim + center carry handle
+  addBox(group, 0.165, 0.075, 0.115, crateMat, 0, 0.03, 0.02);
+  addBox(group, 0.172, 0.016, 0.122, rimMat, 0, 0.068, 0.02);
+  addBox(group, 0.018, 0.085, 0.105, crateMat, 0, 0.10, 0.02);
+  addBox(group, 0.024, 0.018, 0.11, rimMat, 0, 0.145, 0.02);
+
+  // 6 glowing blue-cyan splash flasks (3x2 grid)
+  const xs = [-0.052, 0, 0.052];
+  const zs = [-0.014, 0.054];
+  for (const fx of xs) {
+    for (const fz of zs) {
+      addCylinder(group, 0.018, 0.020, 0.075, flaskGlow, fx, 0.088, fz, 0, 0, 0, 10);
+      addCylinder(group, 0.010, 0.018, 0.022, flaskGlow, fx, 0.135, fz, 0, 0, 0, 8);
+      addCylinder(group, 0.012, 0.012, 0.012, capMat, fx, 0.150, fz, 0, 0, 0, 8);
+    }
+  }
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.24);
+  return group;
+}
+
 function buildMiniShield(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_mini_shield';
@@ -488,8 +761,8 @@ function buildSlurpJuice(): THREE.Group {
 }
 
 /**
- * Creates a stylized procedural 3D weapon or consumable mesh for any WeaponId.
- * All ranged weapons assign `group.userData.muzzleOffset` (THREE.Vector3) in local space.
+ * Creates a stylized procedural 3D weapon, throwable, or consumable mesh for any WeaponId.
+ * All ranged weapons and throwables assign `group.userData.muzzleOffset` (THREE.Vector3) in local space.
  */
 export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): THREE.Group {
   switch (weaponId) {
@@ -504,7 +777,7 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
     case 'tac_shotgun':
       return buildTacShotgun();
     case 'heavy_shotgun':
-      return buildTacShotgun();
+      return buildHeavyShotgun();
     case 'smg':
       return buildSMG();
     case 'sniper':
@@ -514,11 +787,13 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
     case 'rocket_launcher':
       return buildRocketLauncher();
     case 'mythic_blade_rifle':
-      return buildAssaultRifle();
+      return buildMythicBladeRifle();
     case 'shockwave_grenade':
+      return buildShockwaveGrenade();
     case 'frag_grenade':
+      return buildFragGrenade();
     case 'chug_splash':
-      return buildSlurpJuice();
+      return buildChugSplash();
     case 'mini_shield':
       return buildMiniShield();
     case 'shield_potion':

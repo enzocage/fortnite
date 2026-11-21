@@ -359,54 +359,159 @@ export const MUSIC_PATTERNS: Record<ActiveMusicTrackId, TrackPattern> = {
     ],
   },
 
-  // Phase 1A exhaustiveness placeholders (expanded by w1-audio)
+  // Emote 5: Electro Shuffle (126 BPM bouncy F#m electro-house groove)
   emote_5: {
     bpm: 126,
     steps: 32,
-    bassWave: 'triangle',
-    leadWave: 'sawtooth',
+    bassWave: 'sawtooth',
+    leadWave: 'square',
     padWave: 'triangle',
-    gainScale: 0.8,
-    bass: new Array(32).fill(null).map((_, i) => (i % 4 === 0 ? 45 : null)),
-    lead: new Array(32).fill(null).map((_, i) => (i % 2 === 0 ? 72 + (i % 8) : null)),
-    chords: [{ step: 0, notes: [57, 64, 69], durSteps: 8 }],
-    kick: new Array(32).fill(0).map((_, i) => (i % 4 === 0 ? 1 : 0)),
-    snare: new Array(32).fill(0).map((_, i) => (i % 8 === 4 ? 0.8 : 0)),
-    hat: new Array(32).fill(0.4),
+    gainScale: 0.84,
+    bass: [
+      42, null, 42, 54, null, 42, 45, null,
+      38, null, 38, 50, null, 40, 44, null,
+      42, null, 42, 54, null, 42, 45, null,
+      40, null, 40, 52, 37, null, 49, 40,
+    ],
+    lead: [
+      78, null, 81, 85, null, 81, 78, 81,
+      74, null, 78, 81, null, 83, 81, 78,
+      78, null, 81, 85, null, 88, 85, 81,
+      83, null, 81, 78, 76, null, 73, 76,
+    ],
+    chords: [
+      { step: 0, notes: [54, 57, 61], durSteps: 3 },
+      { step: 6, notes: [54, 57, 61], durSteps: 2 },
+      { step: 8, notes: [50, 54, 57], durSteps: 3 },
+      { step: 14, notes: [52, 56, 59], durSteps: 2 },
+      { step: 16, notes: [54, 57, 61], durSteps: 3 },
+      { step: 22, notes: [50, 54, 57], durSteps: 2 },
+      { step: 24, notes: [52, 56, 59], durSteps: 4 },
+      { step: 28, notes: [49, 53, 56], durSteps: 4 },
+    ],
+    kick: [
+      1, 0, 0, 0, 1, 0, 0, 0.45,
+      1, 0, 0, 0, 1, 0, 0.55, 0,
+      1, 0, 0, 0, 1, 0, 0, 0.45,
+      1, 0, 0, 0, 1, 0, 0.85, 0,
+    ],
+    snare: [
+      0, 0, 0, 0, 0.9, 0, 0, 0,
+      0, 0, 0, 0, 0.9, 0, 0.35, 0.3,
+      0, 0, 0, 0, 0.9, 0, 0, 0,
+      0, 0, 0, 0, 0.9, 0.35, 0.6, 0.45,
+    ],
+    hat: [
+      0.35, 0.2, 0.85, 0.25, 0.35, 0.2, 0.85, 0.3,
+      0.35, 0.2, 0.85, 0.25, 0.35, 0.25, 0.85, 0.35,
+      0.35, 0.2, 0.85, 0.25, 0.35, 0.2, 0.85, 0.3,
+      0.35, 0.25, 0.85, 0.3, 0.4, 0.35, 0.9, 0.5,
+    ],
   },
+
+  // Emote 6: Royal Fanfare Salute (112 BPM majestic Bb major ceremonial brass anthem)
   emote_6: {
     bpm: 112,
     steps: 32,
     bassWave: 'triangle',
-    leadWave: 'sine',
+    leadWave: 'sawtooth',
     padWave: 'triangle',
-    gainScale: 0.8,
-    bass: new Array(32).fill(null).map((_, i) => (i % 4 === 0 ? 48 : null)),
-    lead: new Array(32).fill(null).map((_, i) => (i % 4 === 0 ? 76 + (i % 5) : null)),
-    chords: [{ step: 0, notes: [48, 55, 64], durSteps: 8 }],
-    kick: new Array(32).fill(0).map((_, i) => (i % 4 === 0 ? 1 : 0)),
-    snare: new Array(32).fill(0).map((_, i) => (i % 8 === 4 ? 0.8 : 0)),
-    hat: new Array(32).fill(0.4),
+    gainScale: 0.85,
+    bass: [
+      34, null, 34, null, 46, null, 34, null,
+      41, null, 41, null, 43, null, 43, null,
+      39, null, 39, null, 34, null, 46, null,
+      41, null, 41, 45, 46, null, 34, null,
+    ],
+    lead: [
+      70, null, 70, 74, 77, null, 82, null,
+      81, null, 79, 77, 74, null, 79, null,
+      75, null, 79, 82, 86, null, 82, null,
+      81, null, 77, 79, 82, null, 82, null,
+    ],
+    chords: [
+      { step: 0, notes: [58, 62, 65], durSteps: 6 },
+      { step: 8, notes: [53, 57, 60], durSteps: 4 },
+      { step: 12, notes: [55, 58, 62], durSteps: 4 },
+      { step: 16, notes: [51, 55, 58], durSteps: 4 },
+      { step: 20, notes: [58, 62, 65], durSteps: 4 },
+      { step: 24, notes: [53, 57, 60], durSteps: 4 },
+      { step: 28, notes: [58, 62, 65], durSteps: 4 },
+    ],
+    kick: [
+      1, 0, 0, 0.5, 0.85, 0, 0, 0,
+      1, 0, 0, 0, 0.85, 0, 0.5, 0,
+      1, 0, 0, 0.5, 0.85, 0, 0, 0,
+      1, 0, 0.5, 0, 1, 0, 0.75, 0,
+    ],
+    snare: [
+      0, 0, 0.35, 0, 0.9, 0, 0, 0.35,
+      0, 0, 0.35, 0, 0.9, 0, 0.4, 0.35,
+      0, 0, 0.35, 0, 0.9, 0, 0, 0.35,
+      0, 0, 0.45, 0, 0.95, 0.45, 0.65, 0.8,
+    ],
+    hat: [
+      0.55, 0, 0.4, 0.25, 0.55, 0, 0.4, 0.25,
+      0.55, 0, 0.4, 0.25, 0.55, 0.25, 0.5, 0.3,
+      0.55, 0, 0.4, 0.25, 0.55, 0, 0.4, 0.25,
+      0.55, 0.2, 0.5, 0.3, 0.65, 0.35, 0.65, 0.45,
+    ],
   },
+
+  // Endgame Combat Intense (138 BPM driving E minor / Phrygian tension groove)
   combat_intense: {
     bpm: 138,
     steps: 32,
     bassWave: 'sawtooth',
     leadWave: 'square',
-    padWave: 'triangle',
-    gainScale: 0.7,
-    bass: new Array(32).fill(null).map((_, i) => (i % 2 === 0 ? 38 : null)),
-    lead: new Array(32).fill(null).map((_, i) => (i % 4 === 0 ? 69 : null)),
-    chords: [{ step: 0, notes: [50, 57, 65], durSteps: 8 }],
-    kick: new Array(32).fill(0).map((_, i) => (i % 4 === 0 ? 1 : 0)),
-    snare: new Array(32).fill(0).map((_, i) => (i % 8 === 4 ? 0.9 : 0)),
-    hat: new Array(32).fill(0.55),
+    padWave: 'sawtooth',
+    gainScale: 0.74,
+    bass: [
+      40, 40, 52, 40, 40, 40, 52, 40,
+      36, 36, 48, 36, 38, 38, 50, 38,
+      40, 40, 52, 40, 43, 43, 55, 43,
+      41, 41, 53, 41, 35, 35, 47, 39,
+    ],
+    lead: [
+      76, null, 79, null, 83, null, 79, 76,
+      72, null, 76, null, 79, null, 77, 76,
+      76, null, 79, null, 83, null, 86, 83,
+      84, null, 83, 81, 79, null, 77, 75,
+    ],
+    chords: [
+      { step: 0, notes: [52, 55, 59], durSteps: 4 },
+      { step: 4, notes: [52, 55, 59], durSteps: 4 },
+      { step: 8, notes: [48, 52, 55], durSteps: 4 },
+      { step: 12, notes: [48, 53, 57], durSteps: 4 },
+      { step: 16, notes: [52, 55, 59], durSteps: 4 },
+      { step: 20, notes: [55, 59, 62], durSteps: 4 },
+      { step: 24, notes: [53, 57, 60], durSteps: 4 },
+      { step: 28, notes: [51, 54, 59], durSteps: 4 },
+    ],
+    kick: [
+      1, 0, 0, 0.55, 1, 0, 0, 0,
+      1, 0, 0.65, 0, 1, 0, 0.7, 0.4,
+      1, 0, 0, 0.55, 1, 0, 0, 0,
+      1, 0, 0.65, 0, 1, 0.55, 1, 0.6,
+    ],
+    snare: [
+      0, 0, 0, 0, 0.95, 0, 0, 0.25,
+      0, 0, 0, 0, 0.95, 0, 0.4, 0,
+      0, 0, 0, 0, 0.95, 0, 0, 0.25,
+      0, 0, 0.35, 0, 0.95, 0.45, 0.75, 0.6,
+    ],
+    hat: [
+      0.65, 0.35, 0.8, 0.35, 0.65, 0.35, 0.8, 0.35,
+      0.65, 0.35, 0.8, 0.35, 0.65, 0.4, 0.85, 0.45,
+      0.65, 0.35, 0.8, 0.35, 0.65, 0.35, 0.8, 0.35,
+      0.65, 0.4, 0.85, 0.45, 0.7, 0.5, 0.9, 0.6,
+    ],
   },
 };
 
 /**
  * Lookahead Web Audio pattern sequencer supporting lobby, battle bus,
- * all 4 emote dances, and victory music loops.
+ * all 6 emote dances, combat_intense, and victory music loops.
  */
 export class MusicSequencer {
   private ctx: AudioContext | null = null;

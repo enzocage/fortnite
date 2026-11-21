@@ -13,6 +13,7 @@ import type {
   GraphicsQuality,
   LobbyConfig,
 } from '../types';
+import { computeCareerLevelProgress, loadCareerStats } from './CareerProfile';
 import { getRarityMeta } from './UIHelpers';
 import { getCrownSvg, getWeaponSvg } from './WeaponIcons';
 
@@ -120,6 +121,10 @@ export class LobbyScreen {
   private contentEl: HTMLDivElement;
   private tabButtons = new Map<LobbyTabId, HTMLButtonElement>();
   private badgeTextEl: HTMLSpanElement;
+  private careerLevelEl: HTMLSpanElement;
+  private careerMetaEl: HTMLSpanElement;
+  private careerXpTextEl: HTMLSpanElement;
+  private careerXpFillEl: HTMLDivElement;
 
   constructor(
     root: HTMLElement,
@@ -168,6 +173,36 @@ export class LobbyScreen {
       navTabs.appendChild(btn);
     }
 
+    const rightGroup = document.createElement('div');
+    rightGroup.className = 'fdr-lobby-right';
+
+    const careerBox = document.createElement('div');
+    careerBox.className = 'fdr-career-pill';
+    this.careerLevelEl = document.createElement('span');
+    this.careerLevelEl.className = 'fdr-career-level-tag';
+    this.careerLevelEl.textContent = 'LVL 1';
+
+    const careerProgressCol = document.createElement('div');
+    careerProgressCol.className = 'fdr-career-progress-col';
+
+    const careerTopRow = document.createElement('div');
+    careerTopRow.className = 'fdr-career-top-row';
+    this.careerMetaEl = document.createElement('span');
+    this.careerMetaEl.textContent = '0W • 0 ELIMS';
+    this.careerXpTextEl = document.createElement('span');
+    this.careerXpTextEl.className = 'fdr-career-xp-label';
+    this.careerXpTextEl.textContent = '0 / 500 XP';
+    careerTopRow.append(this.careerMetaEl, this.careerXpTextEl);
+
+    const careerTrack = document.createElement('div');
+    careerTrack.className = 'fdr-career-xp-track';
+    this.careerXpFillEl = document.createElement('div');
+    this.careerXpFillEl.className = 'fdr-career-xp-fill';
+    careerTrack.appendChild(this.careerXpFillEl);
+
+    careerProgressCol.append(careerTopRow, careerTrack);
+    careerBox.append(this.careerLevelEl, careerProgressCol);
+
     const badge = document.createElement('div');
     badge.className = 'fdr-lobby-badge';
     const crownSpan = document.createElement('span');
@@ -178,7 +213,8 @@ export class LobbyScreen {
     this.badgeTextEl = document.createElement('span');
     badge.append(crownSpan, this.badgeTextEl);
 
-    topBar.append(brand, navTabs, badge);
+    rightGroup.append(careerBox, badge);
+    topBar.append(brand, navTabs, rightGroup);
 
     this.contentEl = document.createElement('div');
     this.contentEl.className = 'fdr-lobby-content';
@@ -187,6 +223,7 @@ export class LobbyScreen {
     this.root.appendChild(this.containerEl);
 
     this.updateBadge();
+    this.refreshCareerStats();
     this.renderTab();
   }
 
@@ -196,6 +233,20 @@ export class LobbyScreen {
 
   setVisible(visible: boolean): void {
     this.containerEl.classList.toggle('fdr-hidden', !visible);
+    if (visible) {
+      this.refreshCareerStats();
+    }
+  }
+
+  refreshCareerStats(): void {
+    const stats = loadCareerStats();
+    const prog = computeCareerLevelProgress(stats.xp);
+    this.careerLevelEl.textContent = `LVL ${stats.level}`;
+    this.careerMetaEl.textContent = `${stats.wins}W • ${stats.elims} ELIMS`;
+    this.careerXpTextEl.textContent = prog.isMaxLevel
+      ? `MAX • ${stats.xp} XP`
+      : `${prog.xpIntoLevel} / ${prog.xpRequiredForNext} XP`;
+    this.careerXpFillEl.style.width = `${Math.round(prog.progressRatio * 100)}%`;
   }
 
   getConfig(): LobbyConfig {
@@ -455,8 +506,10 @@ export class LobbyScreen {
     const panel = document.createElement('div');
     panel.className = 'fdr-wide-panel';
 
-    // Skins (8)
-    panel.appendChild(this.makeSectionHeader('OUTFITS (8)', 'LIVE 3D PREVIEW'));
+    // Skins
+    panel.appendChild(
+      this.makeSectionHeader(`OUTFITS (${SKINS.length})`, 'LIVE 3D PREVIEW'),
+    );
     const skinsGrid = document.createElement('div');
     skinsGrid.className = 'fdr-locker-grid';
     for (const skin of SKINS) {
@@ -487,18 +540,27 @@ export class LobbyScreen {
     }
     panel.appendChild(skinsGrid);
 
-    // Pickaxes (4)
-    panel.appendChild(this.makeSectionHeader('HARVESTING TOOLS (4)', 'STYLE & COLOR'));
+    // Pickaxes
+    panel.appendChild(
+      this.makeSectionHeader(
+        `HARVESTING TOOLS (${PICKAXES.length})`,
+        'STYLE & COLOR',
+      ),
+    );
     const pickGrid = document.createElement('div');
     pickGrid.className = 'fdr-locker-grid';
     for (const pick of PICKAXES) {
       const selected = this.config.pickaxeId === pick.id;
       const meta = getRarityMeta(pick.rarity);
+      const crownTag =
+        pick.rarity === 'mythic' && !selected
+          ? `<span class="fdr-card-crown">${getCrownSvg()}</span>`
+          : '';
       const card = document.createElement('button');
       card.type = 'button';
       card.className = `fdr-cosmetic-card rarity-${pick.rarity}${selected ? ' selected' : ''}`;
       card.innerHTML = `
-        ${selected ? '<span class="fdr-equipped-tag">EQUIPPED</span>' : ''}
+        ${selected ? '<span class="fdr-equipped-tag">EQUIPPED</span>' : crownTag}
         <div class="fdr-swatch-bar">
           <span style="width:28px;height:28px;display:inline-flex">${getWeaponSvg('pickaxe')}</span>
           <span class="fdr-swatch-dot" style="background:${pick.headColor}"></span>
@@ -519,18 +581,24 @@ export class LobbyScreen {
     }
     panel.appendChild(pickGrid);
 
-    // Gliders (4)
-    panel.appendChild(this.makeSectionHeader('GLIDERS (4)', 'SKYDROP GEAR'));
+    // Gliders
+    panel.appendChild(
+      this.makeSectionHeader(`GLIDERS (${GLIDERS.length})`, 'SKYDROP GEAR'),
+    );
     const gliderGrid = document.createElement('div');
     gliderGrid.className = 'fdr-locker-grid';
     for (const glider of GLIDERS) {
       const selected = this.config.gliderId === glider.id;
       const meta = getRarityMeta(glider.rarity);
+      const crownTag =
+        glider.rarity === 'mythic' && !selected
+          ? `<span class="fdr-card-crown">${getCrownSvg()}</span>`
+          : '';
       const card = document.createElement('button');
       card.type = 'button';
       card.className = `fdr-cosmetic-card rarity-${glider.rarity}${selected ? ' selected' : ''}`;
       card.innerHTML = `
-        ${selected ? '<span class="fdr-equipped-tag">EQUIPPED</span>' : ''}
+        ${selected ? '<span class="fdr-equipped-tag">EQUIPPED</span>' : crownTag}
         <div class="fdr-swatch-bar">
           <span class="fdr-swatch-dot" style="background:${glider.primaryColor}"></span>
           <span class="fdr-swatch-dot" style="background:${glider.accentColor}"></span>
@@ -550,8 +618,13 @@ export class LobbyScreen {
     }
     panel.appendChild(gliderGrid);
 
-    // Emotes (4)
-    panel.appendChild(this.makeSectionHeader('EMOTES (4)', 'CLICK TO EQUIP & DANCE'));
+    // Emotes
+    panel.appendChild(
+      this.makeSectionHeader(
+        `EMOTES (${EMOTES.length})`,
+        'CLICK TO EQUIP & DANCE',
+      ),
+    );
     const emoteGrid = document.createElement('div');
     emoteGrid.className = 'fdr-locker-grid';
     for (const emote of EMOTES) {
@@ -598,22 +671,23 @@ export class LobbyScreen {
         <div class="fdr-controls-box">
           <h4>MOVEMENT &amp; AIRDROP</h4>
           <div class="fdr-key-row"><span>Move</span><span class="fdr-keycap">W A S D</span></div>
-          <div class="fdr-key-row"><span>Jump / Bus Drop / Glider</span><span class="fdr-keycap">SPACE</span></div>
+          <div class="fdr-key-row"><span>Jump / Mantle / Glider</span><span class="fdr-keycap">SPACE</span></div>
           <div class="fdr-key-row"><span>Sprint</span><span class="fdr-keycap">SHIFT</span></div>
-          <div class="fdr-key-row"><span>Crouch / Dive Faster</span><span class="fdr-keycap">C / CTRL</span></div>
+          <div class="fdr-key-row"><span>Crouch / Sprint-to-Slide</span><span class="fdr-keycap">C / CTRL</span></div>
         </div>
         <div class="fdr-controls-box">
           <h4>COMBAT &amp; LOOTING</h4>
-          <div class="fdr-key-row"><span>Fire / Swing Pickaxe</span><span class="fdr-keycap">LEFT CLICK</span></div>
+          <div class="fdr-key-row"><span>Fire / Throw / Swing Pickaxe</span><span class="fdr-keycap">LEFT CLICK</span></div>
           <div class="fdr-key-row"><span>Aim Down Sights / Scope</span><span class="fdr-keycap">RIGHT CLICK</span></div>
           <div class="fdr-key-row"><span>Reload Weapon</span><span class="fdr-keycap">R</span></div>
-          <div class="fdr-key-row"><span>Interact / Chest / Pickup</span><span class="fdr-keycap">E</span></div>
+          <div class="fdr-key-row"><span>Interact / Chest / Llama / Zipline</span><span class="fdr-keycap">E</span></div>
           <div class="fdr-key-row"><span>Inventory Slots (Pickaxe + 5)</span><span class="fdr-keycap">1 - 6 / WHEEL</span></div>
         </div>
         <div class="fdr-controls-box">
           <h4>BUILDING &amp; EDITING</h4>
           <div class="fdr-key-row"><span>Toggle Build Mode</span><span class="fdr-keycap">Q</span></div>
           <div class="fdr-key-row"><span>Wall / Floor / Ramp / Roof</span><span class="fdr-keycap">Z / X / V / F</span></div>
+          <div class="fdr-key-row"><span>Repair Damaged Structure</span><span class="fdr-keycap">F</span></div>
           <div class="fdr-key-row"><span>Switch Material (Wood/Brick/Metal)</span><span class="fdr-keycap">RIGHT CLICK</span></div>
           <div class="fdr-key-row"><span>Rotate Piece / Edit Structure</span><span class="fdr-keycap">R / G</span></div>
         </div>

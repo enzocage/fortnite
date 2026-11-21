@@ -1,5 +1,6 @@
 import type {
   DamageEvent,
+  LootLlamaEntity,
   MaterialType,
   ProjectileState,
   Rarity,
@@ -9,6 +10,8 @@ import type {
 } from '../types';
 import {
   EventBus,
+  GRID_XZ,
+  GRID_Y,
   RARITY_MULTIPLIER,
   WEAPONS,
   clamp,
@@ -36,9 +39,9 @@ const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   pistol: 'shot_pistol',
   rocket_launcher: 'shot_rocket',
   mythic_blade_rifle: 'shot_mythic_rifle',
-  shockwave_grenade: 'ui_click',
-  frag_grenade: 'ui_click',
-  chug_splash: 'ui_click',
+  shockwave_grenade: 'pickaxe_swing',
+  frag_grenade: 'pickaxe_swing',
+  chug_splash: 'pickaxe_swing',
   mini_shield: 'ui_click',
   shield_potion: 'ui_click',
   bandages: 'ui_click',
@@ -117,6 +120,9 @@ interface ActorHit {
 interface ActiveProjectile extends ProjectileState {
   isPlayer: boolean;
   startPos: Vec3Like;
+  isThrowable?: boolean;
+  settled?: boolean;
+  bounceSoundCooldown?: number;
 }
 
 interface PendingBurst {
@@ -362,6 +368,83 @@ export class WeaponSystem {
     return res;
   }
 
+  private raycastLlamas(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+  ): { llama: LootLlamaEntity; distance: number; point: Vec3Like; normal: Vec3Like } | null {
+    const llamas = this.propsBridge.getLlamas?.();
+    if (!llamas || llamas.length === 0) return null;
+
+    const invDx = Math.abs(dir.x) > 1e-9 ? 1 / dir.x : 1e9;
+    const invDy = Math.abs(dir.y) > 1e-9 ? 1 / dir.y : 1e9;
+    const invDz = Math.abs(dir.z) > 1e-9 ? 1 / dir.z : 1e9;
+    const r = 0.78;
+    const h = 1.65;
+
+    let bestDist = maxDist;
+    let best: { llama: LootLlamaEntity; distance: number; point: Vec3Like; normal: Vec3Like } | null = null;
+
+    for (let i = 0; i < llamas.length; i++) {
+      const llama = llamas[i];
+      if (llama.opened) continue;
+      const minX = llama.x - r;
+      const maxX = llama.x + r;
+      const minY = llama.y;
+      const maxY = llama.y + h;
+      const minZ = llama.z - r;
+      const maxZ = llama.z + r;
+
+      const tx1 = (minX - origin.x) * invDx;
+      const tx2 = (maxX - origin.x) * invDx;
+      let tmin = Math.min(tx1, tx2);
+      let tmax = Math.max(tx1, tx2);
+      let nx = tx1 < tx2 ? -1 : 1;
+      let ny = 0;
+      let nz = 0;
+
+      const ty1 = (minY - origin.y) * invDy;
+      const ty2 = (maxY - origin.y) * invDy;
+      const tyMin = Math.min(ty1, ty2);
+      const tyMax = Math.max(ty1, ty2);
+      if (tyMin > tmin) {
+        tmin = tyMin;
+        nx = 0;
+        ny = ty1 < ty2 ? -1 : 1;
+        nz = 0;
+      }
+      tmax = Math.min(tmax, tyMax);
+
+      const tz1 = (minZ - origin.z) * invDz;
+      const tz2 = (maxZ - origin.z) * invDz;
+      const tzMin = Math.min(tz1, tz2);
+      const tzMax = Math.max(tz1, tz2);
+      if (tzMin > tmin) {
+        tmin = tzMin;
+        nx = 0;
+        ny = 0;
+        nz = tz1 < tz2 ? -1 : 1;
+      }
+      tmax = Math.min(tmax, tzMax);
+
+      if (tmax >= Math.max(0, tmin) && tmin >= 0 && tmin < bestDist) {
+        bestDist = tmin;
+        best = {
+          llama,
+          distance: tmin,
+          point: {
+            x: origin.x + dir.x * tmin,
+            y: origin.y + dir.y * tmin,
+            z: origin.z + dir.z * tmin,
+          },
+          normal: { x: nx, y: ny, z: nz },
+        };
+      }
+    }
+
+    return best;
+  }
+
   private executePickaxeSwing(
     params: FireWeaponParams,
     aimDir: Vec3Like,
@@ -385,8 +468,13 @@ export class WeaponSystem {
       def.range,
       params.actor.id,
     );
+    const llamaHit = this.raycastLlamas(params.origin, aimDir, def.range);
 
-    if (actorHit && (!worldHit.hit || actorHit.distance <= worldHit.distance)) {
+    if (
+      actorHit &&
+      (!worldHit.hit || actorHit.distance <= worldHit.distance) &&
+      (!llamaHit || actorHit.distance <= llamaHit.distance)
+    ) {
       const ev = this.applyActorDamage(
         params.actor,
         actorHit.actor,
@@ -403,6 +491,30 @@ export class WeaponSystem {
         shotsHit: 1,
         headshots: 0,
         damageDealt: ev.damage,
+      };
+    }
+
+    if (llamaHit && (!worldHit.hit || llamaHit.distance <= worldHit.distance)) {
+      this.propsBridge.damageLlama?.(
+        llamaHit.llama.id,
+        def.structureDamage,
+        llamaHit.point,
+      );
+      this.eventBus.emit('vfx:impact', {
+        position: llamaHit.point,
+        normal: llamaHit.normal,
+        material: 'wood',
+      });
+      this.eventBus.emit('sound:play', {
+        id: 'hit_wood',
+        position: llamaHit.point,
+        spatial: true,
+      });
+      return {
+        fired: true,
+        shotsHit: 1,
+        headshots: 0,
+        damageDealt: def.structureDamage,
       };
     }
 
@@ -485,29 +597,56 @@ export class WeaponSystem {
     aimDir: Vec3Like,
   ): FireWeaponResult {
     const def = WEAPONS[params.item.weaponId];
+    if (def.isThrowable && params.item.stackCount <= 0) {
+      return { fired: false, shotsHit: 0, headshots: 0, damageDealt: 0 };
+    }
     params.onAmmoConsumed?.();
 
-    const shotDir = applySpreadToDir(aimDir, params.spreadRad);
+    const spreadDir = applySpreadToDir(aimDir, params.spreadRad);
+    const shotDir =
+      def.isThrowable && Math.abs(spreadDir.y) < 0.72
+        ? normalizeVec({ x: spreadDir.x, y: spreadDir.y + 0.15, z: spreadDir.z })
+        : spreadDir;
     const muzzle = params.muzzlePos ?? params.origin;
 
-    this.eventBus.emit('sound:play', {
-      id: SHOT_SOUND_MAP[params.item.weaponId],
-      position: muzzle,
-      spatial: true,
-    });
-    this.eventBus.emit('vfx:muzzle', {
-      position: muzzle,
-      direction: shotDir,
-      weaponId: params.item.weaponId,
-    });
-    this.eventBus.emit('audio:noise', {
-      position: params.origin,
-      kind: 'gunfire',
-      sourceId: params.actor.id,
-      radius: 135,
-    });
+    if (def.isThrowable) {
+      this.eventBus.emit('sound:play', {
+        id: SHOT_SOUND_MAP[params.item.weaponId],
+        position: muzzle,
+        volume: 0.45,
+        pitch: 1.25,
+        spatial: true,
+      });
+    } else {
+      this.eventBus.emit('sound:play', {
+        id: SHOT_SOUND_MAP[params.item.weaponId],
+        position: muzzle,
+        spatial: true,
+      });
+      this.eventBus.emit('vfx:muzzle', {
+        position: muzzle,
+        direction: shotDir,
+        weaponId: params.item.weaponId,
+      });
+      this.eventBus.emit('audio:noise', {
+        position: params.origin,
+        kind: 'gunfire',
+        sourceId: params.actor.id,
+        radius: 135,
+      });
+      if (params.isPlayer) {
+        this.eventBus.emit('vfx:camera_shake', {
+          intensity: params.item.weaponId === 'sniper' ? 0.36 : 0.32,
+          duration: 0.16,
+        });
+      }
+    }
 
     const rarityMult = RARITY_MULTIPLIER[params.item.rarity] ?? 1.0;
+    const isFrag = params.item.weaponId === 'frag_grenade';
+    const isShockwave = params.item.weaponId === 'shockwave_grenade';
+    const isSplashHeal = params.item.weaponId === 'chug_splash';
+
     const proj: ActiveProjectile = {
       id: `proj_${this.nextProjId++}`,
       ownerId: params.actor.id,
@@ -531,9 +670,21 @@ export class WeaponSystem {
       headshotMultiplier: def.headshotMultiplier,
       splashRadius: def.splashRadius,
       age: 0,
-      maxAge: params.item.weaponId === 'sniper' ? 3.2 : 8.5,
+      maxAge:
+        def.fuseTime !== undefined
+          ? def.fuseTime + 0.5
+          : params.item.weaponId === 'sniper'
+            ? 3.2
+            : 8.5,
       alive: true,
       isPlayer: params.isPlayer,
+      isThrowable: Boolean(def.isThrowable),
+      bouncesRemaining: isFrag ? 5 : 0,
+      fuseRemaining: def.fuseTime,
+      isShockwave,
+      isSplashHeal,
+      settled: false,
+      bounceSoundCooldown: 0,
     };
 
     this.projectiles.push(proj);
@@ -564,6 +715,15 @@ export class WeaponSystem {
       sourceId: params.actor.id,
       radius: def.category === 'shotgun' ? 85 : 115,
     });
+
+    if (params.isPlayer && def.category === 'shotgun') {
+      const intensity =
+        params.item.weaponId === 'tac_shotgun' ? 0.2 : 0.3;
+      this.eventBus.emit('vfx:camera_shake', {
+        intensity,
+        duration: params.item.weaponId === 'tac_shotgun' ? 0.11 : 0.14,
+      });
+    }
 
     const pellets = Math.max(1, def.pellets);
     const props = this.propsBridge.getProps();
@@ -601,21 +761,26 @@ export class WeaponSystem {
         actorMaxDist,
         params.actor.id,
       );
+      const llamaHit = this.raycastLlamas(params.origin, rayDir, actorMaxDist);
 
       const endPoint = actorHit
         ? actorHit.point
-        : worldHit.hit
-          ? worldHit.point
-          : {
-              x: params.origin.x + rayDir.x * def.range,
-              y: params.origin.y + rayDir.y * def.range,
-              z: params.origin.z + rayDir.z * def.range,
-            };
+        : llamaHit && (!worldHit.hit || llamaHit.distance <= worldHit.distance)
+          ? llamaHit.point
+          : worldHit.hit
+            ? worldHit.point
+            : {
+                x: params.origin.x + rayDir.x * def.range,
+                y: params.origin.y + rayDir.y * def.range,
+                z: params.origin.z + rayDir.z * def.range,
+              };
 
+      const isMythicPulse = params.item.weaponId === 'mythic_blade_rifle';
       this.eventBus.emit('vfx:tracer', {
         from: muzzle,
         to: endPoint,
-        color: params.isPlayer ? 0xffe49e : 0xffaa55,
+        color: isMythicPulse ? 0x38bdf8 : params.isPlayer ? 0xffe49e : 0xffaa55,
+        width: isMythicPulse ? 0.09 : undefined,
       });
 
       if (actorHit) {
@@ -640,6 +805,17 @@ export class WeaponSystem {
             distance: actorHit.distance,
           });
         }
+      } else if (llamaHit && (!worldHit.hit || llamaHit.distance <= worldHit.distance)) {
+        const structDmg = Math.max(
+          1,
+          Math.round((def.structureDamage * (RARITY_MULTIPLIER[params.item.rarity] ?? 1)) / pellets),
+        );
+        this.propsBridge.damageLlama?.(llamaHit.llama.id, structDmg, llamaHit.point);
+        this.eventBus.emit('vfx:impact', {
+          position: llamaHit.point,
+          normal: llamaHit.normal,
+          material: 'wood',
+        });
       } else if (worldHit.hit) {
         const structDmg = Math.max(
           1,
@@ -701,7 +877,28 @@ export class WeaponSystem {
     };
   }
 
-  private detonateRocket(proj: ActiveProjectile, impactPos: Vec3Like): void {
+  private emitBlastCameraShake(impactPos: Vec3Like, baseIntensity: number, isPlayer: boolean): void {
+    let shouldEmit = isPlayer;
+    let intensity = baseIntensity;
+    if (this.actorsProvider) {
+      const player = this.actorsProvider().find((a) => a.id === 'player' && a.alive);
+      if (player) {
+        const dist = dist3D(impactPos, player.position);
+        if (dist <= 30) {
+          shouldEmit = true;
+          intensity = Math.max(intensity * clamp(1 - dist / 34, 0.25, 1.0), 0.18);
+        }
+      }
+    }
+    if (shouldEmit) {
+      this.eventBus.emit('vfx:camera_shake', {
+        intensity,
+        duration: 0.3,
+      });
+    }
+  }
+
+  private detonateExplosive(proj: ActiveProjectile, impactPos: Vec3Like): void {
     this.eventBus.emit('vfx:explosion', {
       position: impactPos,
       radius: proj.splashRadius,
@@ -717,6 +914,7 @@ export class WeaponSystem {
       sourceId: proj.ownerId,
       radius: 140,
     });
+    this.emitBlastCameraShake(impactPos, 0.62, proj.isPlayer);
 
     const attackerStub: CombatActor = {
       id: proj.ownerId,
@@ -735,9 +933,9 @@ export class WeaponSystem {
     for (let i = 0; i < pieces.length; i++) {
       const p = pieces[i];
       const center = {
-        x: (p.gx + 0.5) * 4.0,
-        y: (p.gy + 0.5) * 3.2,
-        z: (p.gz + 0.5) * 4.0,
+        x: (p.gx + 0.5) * GRID_XZ,
+        y: (p.gy + 0.5) * GRID_Y,
+        z: (p.gz + 0.5) * GRID_XZ,
       };
       const d = dist3D(impactPos, center);
       if (d <= proj.splashRadius + 2.2) {
@@ -754,6 +952,17 @@ export class WeaponSystem {
       const d = dist3D(impactPos, { x: prop.x, y: prop.y + prop.height * 0.5, z: prop.z });
       if (d <= proj.splashRadius + prop.radius) {
         this.propsBridge.damageProp(prop.id, proj.structureDamage, impactPos, false);
+      }
+    }
+
+    // Damage Loot Llamas within splash radius
+    const llamas = this.propsBridge.getLlamas?.() ?? [];
+    for (let i = 0; i < llamas.length; i++) {
+      const llama = llamas[i];
+      if (llama.opened) continue;
+      const d = dist3D(impactPos, { x: llama.x, y: llama.y + 0.8, z: llama.z });
+      if (d <= proj.splashRadius + 1.0) {
+        this.propsBridge.damageLlama?.(llama.id, proj.structureDamage, impactPos);
       }
     }
 
@@ -788,6 +997,122 @@ export class WeaponSystem {
     }
   }
 
+  private detonateShockwave(proj: ActiveProjectile, impactPos: Vec3Like): void {
+    this.eventBus.emit('vfx:shockwave', {
+      position: impactPos,
+      radius: proj.splashRadius,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'shockwave_blast',
+      position: impactPos,
+      spatial: true,
+    });
+    this.eventBus.emit('audio:noise', {
+      position: impactPos,
+      kind: 'gunfire',
+      sourceId: proj.ownerId,
+      radius: 110,
+    });
+    this.emitBlastCameraShake(impactPos, 0.48, proj.isPlayer);
+
+    // Break nearby builds
+    const pieces = [...this.building.getPieces()];
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i];
+      const center = {
+        x: (p.gx + 0.5) * GRID_XZ,
+        y: (p.gy + 0.5) * GRID_Y,
+        z: (p.gz + 0.5) * GRID_XZ,
+      };
+      const d = dist3D(impactPos, center);
+      if (d <= proj.splashRadius + 1.5) {
+        this.building.damagePiece(p.id, proj.structureDamage);
+      }
+    }
+
+    // Apply radial impulse knockback & fall immunity to actors in radius
+    const baseImpulse = WEAPONS.shockwave_grenade.impulseStrength ?? 24;
+    if (this.actorsProvider) {
+      const actors = this.actorsProvider();
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (!actor.alive) continue;
+        const center = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.5,
+          z: actor.position.z,
+        };
+        const minDist = Math.min(dist3D(impactPos, actor.position), dist3D(impactPos, center));
+        if (minDist <= proj.splashRadius) {
+          const dx = actor.position.x - impactPos.x;
+          const dz = actor.position.z - impactPos.z;
+          const horizDist = Math.hypot(dx, dz);
+          const falloff = clamp(1 - (minDist / proj.splashRadius) * 0.45, 0.5, 1.0);
+          const strength = baseImpulse * falloff;
+
+          const impulse: Vec3Like =
+            horizDist > 0.08
+              ? {
+                  x: (dx / horizDist) * strength * 0.78,
+                  y: Math.max(12, strength * 0.62),
+                  z: (dz / horizDist) * strength * 0.78,
+                }
+              : {
+                  x: 0,
+                  y: Math.max(16, strength * 0.9),
+                  z: 0,
+                };
+
+          actor.fallImmune = true;
+          if (actor.onImpulse) {
+            actor.onImpulse(impulse, true);
+          } else if (actor.velocity) {
+            actor.velocity.x += impulse.x;
+            actor.velocity.y = Math.max(actor.velocity.y, 0) + impulse.y;
+            actor.velocity.z += impulse.z;
+          }
+        }
+      }
+    }
+  }
+
+  private detonateChugSplash(proj: ActiveProjectile, impactPos: Vec3Like): void {
+    this.eventBus.emit('vfx:splash_heal', {
+      position: impactPos,
+      radius: proj.splashRadius,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'splash_heal',
+      position: impactPos,
+      spatial: true,
+    });
+
+    const healAmount = WEAPONS.chug_splash.splashHealAmount ?? 20;
+    if (this.actorsProvider) {
+      const actors = this.actorsProvider();
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (!actor.alive) continue;
+        const center = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.5,
+          z: actor.position.z,
+        };
+        const minDist = Math.min(dist3D(impactPos, actor.position), dist3D(impactPos, center));
+        if (minDist <= proj.splashRadius) {
+          const maxHp = actor.maxHp ?? 100;
+          const maxShield = actor.maxShield ?? 100;
+          const hpAdded = Math.min(healAmount, Math.max(0, maxHp - actor.hp));
+          const leftover = healAmount - hpAdded;
+          const shieldAdded = Math.min(leftover, Math.max(0, maxShield - actor.shield));
+          actor.hp += hpAdded;
+          actor.shield += shieldAdded;
+          actor.onHeal?.(hpAdded, shieldAdded);
+        }
+      }
+    }
+  }
+
   update(dt: number): void {
     const safeDt = clamp(dt, 0, 0.05);
 
@@ -811,7 +1136,7 @@ export class WeaponSystem {
       }
     }
 
-    // 2. Step ballistic projectiles (Sniper, Rocket Launcher)
+    // 2. Step ballistic projectiles (Sniper, Rocket Launcher, Throwables)
     const props = this.propsBridge.getProps();
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const proj = this.projectiles[i];
@@ -820,9 +1145,29 @@ export class WeaponSystem {
         continue;
       }
 
+      if (proj.bounceSoundCooldown && proj.bounceSoundCooldown > 0) {
+        proj.bounceSoundCooldown = Math.max(0, proj.bounceSoundCooldown - safeDt);
+      }
+
       proj.age += safeDt;
+
+      // Frag grenade fuse countdown
+      if (proj.fuseRemaining !== undefined) {
+        proj.fuseRemaining -= safeDt;
+        if (proj.fuseRemaining <= 0) {
+          this.detonateExplosive(proj, proj.position);
+          proj.alive = false;
+          this.projectiles.splice(i, 1);
+          continue;
+        }
+      }
+
       if (proj.age >= proj.maxAge) {
         this.projectiles.splice(i, 1);
+        continue;
+      }
+
+      if (proj.settled) {
         continue;
       }
 
@@ -863,78 +1208,138 @@ export class WeaponSystem {
                 z: prevPos.z + stepDz,
               };
 
+        const tracerColor =
+          proj.weaponId === 'rocket_launcher'
+            ? 0xff5a2a
+            : proj.isShockwave
+              ? 0xa855f7
+              : proj.isSplashHeal
+                ? 0x22d3ee
+                : proj.isThrowable
+                  ? 0xf59e0b
+                  : 0xfff3b0;
+        const tracerWidth =
+          proj.weaponId === 'rocket_launcher'
+            ? 0.14
+            : proj.isThrowable
+              ? 0.08
+              : 0.06;
+
         this.eventBus.emit('vfx:tracer', {
           from: prevPos,
           to: nextPos,
-          color: proj.weaponId === 'rocket_launcher' ? 0xff5a2a : 0xfff3b0,
-          width: proj.weaponId === 'rocket_launcher' ? 0.14 : 0.06,
+          color: tracerColor,
+          width: tracerWidth,
         });
 
         proj.position = nextPos;
 
         if (actorHit || worldHit.hit) {
-          if (proj.splashRadius > 0) {
-            this.detonateRocket(proj, nextPos);
-          } else if (actorHit) {
-            const travelDist = dist3D(proj.startPos, nextPos);
-            const dmg = computeWeaponDamage(
-              proj.weaponId,
-              proj.rarity,
-              travelDist,
-              actorHit.isHeadshot,
-            );
-            const attackerStub: CombatActor = {
-              id: proj.ownerId,
-              name: proj.ownerName,
-              position: proj.startPos,
-              eyePos: proj.startPos,
-              hp: 100,
-              shield: 0,
-              radius: 0.42,
-              height: 1.85,
-              alive: true,
-            };
-            this.applyActorDamage(
-              attackerStub,
-              actorHit.actor,
-              proj.weaponId,
-              proj.rarity,
-              dmg,
-              actorHit.isHeadshot,
-              nextPos,
-              travelDist,
-              proj.isPlayer,
-            );
-          } else if (worldHit.hit) {
-            if (worldHit.targetType === 'build' && worldHit.targetId) {
-              this.building.damagePiece(worldHit.targetId, proj.structureDamage);
-              this.eventBus.emit('vfx:impact', {
-                position: worldHit.point,
-                normal: worldHit.normal,
-                material: worldHit.material ?? 'wood',
-              });
-            } else if (worldHit.targetType === 'prop' && worldHit.targetId) {
-              const propRes = this.propsBridge.damageProp(
-                worldHit.targetId,
-                proj.structureDamage,
-                worldHit.point,
-                false,
-              );
-              this.eventBus.emit('vfx:impact', {
-                position: worldHit.point,
-                normal: worldHit.normal,
-                material: propRes.matType,
-              });
-            } else {
-              this.eventBus.emit('vfx:impact', {
-                position: worldHit.point,
-                normal: worldHit.normal,
-                material: worldHit.material ?? 'dirt',
-              });
+          if (proj.fuseRemaining !== undefined) {
+            // Bouncing frag grenade
+            const n = actorHit ? actorHit.normal : worldHit.normal;
+            const vn = proj.velocity.x * n.x + proj.velocity.y * n.y + proj.velocity.z * n.z;
+            if (vn < 0) {
+              const restitution = 0.35;
+              const friction = 0.52;
+              proj.velocity.x = (proj.velocity.x - (1 + restitution) * vn * n.x) * friction;
+              proj.velocity.y = (proj.velocity.y - (1 + restitution) * vn * n.y) * friction;
+              proj.velocity.z = (proj.velocity.z - (1 + restitution) * vn * n.z) * friction;
             }
+            proj.position = {
+              x: nextPos.x + n.x * 0.08,
+              y: nextPos.y + n.y * 0.08,
+              z: nextPos.z + n.z * 0.08,
+            };
+            if (Math.abs(vn) > 1.5 && (!proj.bounceSoundCooldown || proj.bounceSoundCooldown <= 0)) {
+              this.eventBus.emit('sound:play', {
+                id: 'grenade_bounce',
+                position: nextPos,
+                spatial: true,
+              });
+              proj.bounceSoundCooldown = 0.08;
+            }
+            if (proj.bouncesRemaining !== undefined && proj.bouncesRemaining > 0) {
+              proj.bouncesRemaining -= 1;
+            }
+            if (n.y > 0.7 && Math.hypot(proj.velocity.x, proj.velocity.y, proj.velocity.z) < 1.8) {
+              proj.velocity = { x: 0, y: 0, z: 0 };
+              proj.settled = true;
+            }
+          } else if (proj.isShockwave) {
+            this.detonateShockwave(proj, nextPos);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
+          } else if (proj.isSplashHeal) {
+            this.detonateChugSplash(proj, nextPos);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
+          } else if (proj.splashRadius > 0) {
+            this.detonateExplosive(proj, nextPos);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
+          } else {
+            if (actorHit) {
+              const travelDist = dist3D(proj.startPos, nextPos);
+              const dmg = computeWeaponDamage(
+                proj.weaponId,
+                proj.rarity,
+                travelDist,
+                actorHit.isHeadshot,
+              );
+              const attackerStub: CombatActor = {
+                id: proj.ownerId,
+                name: proj.ownerName,
+                position: proj.startPos,
+                eyePos: proj.startPos,
+                hp: 100,
+                shield: 0,
+                radius: 0.42,
+                height: 1.85,
+                alive: true,
+              };
+              this.applyActorDamage(
+                attackerStub,
+                actorHit.actor,
+                proj.weaponId,
+                proj.rarity,
+                dmg,
+                actorHit.isHeadshot,
+                nextPos,
+                travelDist,
+                proj.isPlayer,
+              );
+            } else if (worldHit.hit) {
+              if (worldHit.targetType === 'build' && worldHit.targetId) {
+                this.building.damagePiece(worldHit.targetId, proj.structureDamage);
+                this.eventBus.emit('vfx:impact', {
+                  position: worldHit.point,
+                  normal: worldHit.normal,
+                  material: worldHit.material ?? 'wood',
+                });
+              } else if (worldHit.targetType === 'prop' && worldHit.targetId) {
+                const propRes = this.propsBridge.damageProp(
+                  worldHit.targetId,
+                  proj.structureDamage,
+                  worldHit.point,
+                  false,
+                );
+                this.eventBus.emit('vfx:impact', {
+                  position: worldHit.point,
+                  normal: worldHit.normal,
+                  material: propRes.matType,
+                });
+              } else {
+                this.eventBus.emit('vfx:impact', {
+                  position: worldHit.point,
+                  normal: worldHit.normal,
+                  material: worldHit.material ?? 'dirt',
+                });
+              }
+            }
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
           }
-          proj.alive = false;
-          this.projectiles.splice(i, 1);
         }
       }
     }

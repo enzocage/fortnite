@@ -6,11 +6,15 @@ import type {
   DamageEvent,
   HarvestableProp,
   ItemInstance,
+  LaunchPadEntity,
   LootDrop,
+  LootLlamaEntity,
   POIDef,
+  SoundEventId,
   SupplyDrop,
   TerrainQuery,
   Vec3Like,
+  ZiplineEntity,
 } from '../../types';
 import {
   DEFAULT_SETTINGS,
@@ -19,11 +23,13 @@ import {
   GRID_XZ,
   GRID_Y,
   MAX_MATS,
+  PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   RARITY_MULTIPLIER,
   WEAPONS,
 } from '../../core';
+import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from '../../world';
 import {
   BuildingSystem,
   CollisionSystem,
@@ -39,12 +45,19 @@ import {
   type PropsInteractionBridge,
 } from '../index';
 
-function createFlatTerrain(heightFn: (x: number, z: number) => number = () => 0): TerrainQuery {
+function createFlatTerrain(
+  heightFn: (x: number, z: number) => number = () => 0,
+  opts?: {
+    normalFn?: (x: number, z: number) => Vec3Like;
+    isWaterFn?: (x: number, z: number) => boolean;
+    biomeFn?: (x: number, z: number) => BiomeType;
+  },
+): TerrainQuery {
   return {
     getHeightAt: heightFn,
-    getNormalAt: () => ({ x: 0, y: 1, z: 0 }),
-    isWater: () => false,
-    getBiomeAt: (): BiomeType => 'grassland',
+    getNormalAt: opts?.normalFn ?? (() => ({ x: 0, y: 1, z: 0 })),
+    isWater: opts?.isWaterFn ?? (() => false),
+    getBiomeAt: opts?.biomeFn ?? ((): BiomeType => 'grassland'),
     getPOIs: (): POIDef[] => [],
     getMapTextureCanvas: () => ({} as HTMLCanvasElement),
   };
@@ -55,11 +68,13 @@ function createMockPropsBridge(): PropsInteractionBridge & {
   chests: ChestEntity[];
   drops: LootDrop[];
   supplyDrops: SupplyDrop[];
+  llamas: LootLlamaEntity[];
 } {
   const props: HarvestableProp[] = [];
   const chests: ChestEntity[] = [];
   const drops: LootDrop[] = [];
   const supplyDrops: SupplyDrop[] = [];
+  const llamas: LootLlamaEntity[] = [];
   let seq = 1;
 
   return {
@@ -67,10 +82,25 @@ function createMockPropsBridge(): PropsInteractionBridge & {
     chests,
     drops,
     supplyDrops,
+    llamas,
     getProps: () => props,
     getChests: () => chests,
     getLootDrops: () => drops,
     getSupplyDrops: () => supplyDrops,
+    getLlamas: () => llamas,
+    damageLlama: (id, dmg) => {
+      const l = llamas.find((item) => item.id === id);
+      if (!l || l.opened) return false;
+      l.hp = Math.max(0, l.hp - dmg);
+      if (l.hp <= 0) l.opened = true;
+      return true;
+    },
+    openLlama: (id) => {
+      const l = llamas.find((item) => item.id === id);
+      if (!l || l.opened) return false;
+      l.opened = true;
+      return true;
+    },
     damageProp: (propId, amount, _hitPoint, isPickaxe) => {
       const p = props.find((item) => item.id === propId);
       if (!p || p.destroyed) {
@@ -811,5 +841,577 @@ describe('Additional Weapon & Inventory Edge Cases', () => {
     expect(swapped.slotIndex).toBe(2);
     expect(swapped.swappedOut?.uid).toBe('w_2');
     expect(inv.getSlot(2)?.weaponId).toBe('sniper');
+
+    // Throwables stack up to maxStack (6) and consumeActiveItem decrements stack
+    const throwInv = new InventorySystem();
+    throwInv.addItem({ uid: 'f1', weaponId: 'frag_grenade', rarity: 'rare', magAmmo: 0, stackCount: 4 });
+    throwInv.addItem({ uid: 'f2', weaponId: 'frag_grenade', rarity: 'rare', magAmmo: 0, stackCount: 3 });
+    expect(throwInv.getSlot(1)?.stackCount).toBe(6);
+    expect(throwInv.getSlot(2)?.stackCount).toBe(1);
+    throwInv.setActiveSlot(2);
+    expect(throwInv.consumeActiveItem()).toBe(true);
+    expect(throwInv.getSlot(2)).toBeNull();
+  });
+});
+
+describe('Wave 1 Gameplay Mechanics', () => {
+  function setupPlayerHarness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'Tester');
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  it('triggers 0.9s tactical slide on sprint+C with downhill boost, VFX/SFX, leanAngle, and Space jump-cancel', () => {
+    const slopeTerrain = createFlatTerrain(
+      (x, z) => (x > 100 ? -z * 0.45 : 0),
+      {
+        normalFn: (x) => {
+          if (x > 100) {
+            const len = Math.hypot(0.45, 1);
+            return { x: 0, y: 1 / len, z: 0.45 / len };
+          }
+          return { x: 0, y: 1, z: 0 };
+        },
+        biomeFn: () => 'snow',
+      },
+    );
+    const { bus, player } = setupPlayerHarness(slopeTerrain);
+
+    const slideDustEvents: Array<{ biome: BiomeType }> = [];
+    const sounds: SoundEventId[] = [];
+    bus.on('vfx:slide_dust', (ev) => slideDustEvents.push({ biome: ev.biome }));
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, 0); // Facing -Z
+    player.pressKey('ShiftLeft');
+    player.pressKey('KeyW');
+    for (let i = 0; i < 6; i++) player.update(0.03, (i + 1) * 0.03);
+
+    player.pressKey('KeyC');
+    const slideRender = player.getCharacterRenderState();
+    const slideSnap = player.getHudSnapshot();
+    expect(slideRender.animState).toBe('slide');
+    expect(slideRender.isSliding).toBe(true);
+    expect(slideSnap.isSliding).toBe(true);
+    expect(slideSnap.showSpeedLines).toBe(true);
+    expect(player.getEyePosition().y).toBeCloseTo(PLAYER_CROUCH_HEIGHT - 0.16, 2);
+    expect(slideDustEvents.some((e) => e.biome === 'snow')).toBe(true);
+    expect(sounds).toContain('slide_loop');
+
+    // Strafe while moving produces non-zero smooth leanAngle
+    player.pressKey('KeyD');
+    for (let i = 0; i < 5; i++) player.update(0.03, 0.2 + i * 0.03);
+    expect(Math.abs(player.getCharacterRenderState().leanAngle ?? 0)).toBeGreaterThan(0.01);
+    expect(Math.abs(player.getHudSnapshot().leanAngle)).toBeGreaterThan(0.01);
+    player.releaseKey('KeyD');
+
+    // Flat slide completes after 0.9s
+    for (let i = 0; i < 30; i++) player.update(0.035, 0.4 + i * 0.035);
+    expect(player.getHudSnapshot().isSliding).toBe(false);
+
+    // Downhill slide travels faster/farther than flat slide & Space jump-cancels
+    player.releaseKey('ShiftLeft');
+    player.releaseKey('KeyW');
+    player.teleport({ x: 150, y: 0, z: 0 });
+    player.setLook(0, 0); // Facing +Z (downhill where normal.z > 0)
+    player.pressKey('ShiftLeft');
+    player.pressKey('KeyW');
+    for (let i = 0; i < 6; i++) player.update(0.03, 2.0 + i * 0.03);
+    player.pressKey('ControlLeft');
+    expect(player.getHudSnapshot().isSliding).toBe(true);
+    const zBefore = player.getPosition().z;
+    for (let i = 0; i < 12; i++) player.update(0.03, 2.2 + i * 0.03);
+    const zAfter = player.getPosition().z;
+    expect(zAfter - zBefore).toBeGreaterThan(4.8);
+
+    // Jump-cancel burst with Space ends slide and boosts upward
+    player.pressKey('Space');
+    expect(player.getHudSnapshot().isSliding).toBe(false);
+    expect(player.getCharacterRenderState().velocityY ?? 0).toBeGreaterThan(7.5);
+  });
+
+  it('mantles waist/chest-high ledges (1.1m..2.35m) on Space and respects headroom', () => {
+    const { collision, bus, player } = setupPlayerHarness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    // Ledge 1.8m high ahead at z in [-2, 0]
+    collision.setStaticColliders([
+      { id: 'ledge_1', minX: -2, minY: 0, minZ: -2, maxX: 2, maxY: 1.8, maxZ: 0, material: 'brick' },
+    ]);
+
+    player.teleport({ x: 0, y: 0, z: 0.75 });
+    player.setLook(Math.PI, 0); // Facing -Z toward ledge
+    player.pressKey('Space');
+
+    expect(sounds).toContain('mantle_climb');
+    expect(player.getCharacterRenderState().animState).toBe('mantle');
+
+    // Step through 0.28s mantle climb
+    for (let i = 0; i < 10; i++) {
+      player.update(0.03, (i + 1) * 0.03);
+    }
+    expect(player.getPosition().y).toBeCloseTo(1.8, 1);
+    expect(player.getPosition().z).toBeLessThanOrEqual(0.01);
+    expect(player.getCharacterRenderState().animState).not.toBe('mantle');
+
+    // Low ceiling blocks mantle
+    collision.setStaticColliders([
+      { id: 'ledge_low_ceil', minX: 8, minY: 0, minZ: -2, maxX: 12, maxY: 1.8, maxZ: 0, material: 'brick' },
+      { id: 'ceiling_block', minX: 8, minY: 2.5, minZ: -2, maxX: 12, maxY: 2.9, maxZ: 2, material: 'brick' },
+    ]);
+    player.teleport({ x: 10, y: 0, z: 0.75 });
+    player.setLook(Math.PI, 0);
+    expect(player.tryMantle()).toBe(false);
+  });
+
+  it('applies proportional HP fall damage >13m and honors water, launch pad, and shockwave fall immunity', () => {
+    const { bus, player } = setupPlayerHarness();
+    const sounds: SoundEventId[] = [];
+    const shakes: number[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:camera_shake', (ev) => shakes.push(ev.intensity));
+
+    // Give 50 shield to confirm fall damage hits HP directly (bypassing shield)
+    player.teleport({ x: 0, y: 20, z: 0 });
+    player.applySplashHeal(50);
+    expect(player.getHealth()).toBe(100);
+    expect(player.getShield()).toBe(50);
+
+    for (let i = 0; i < 60; i++) {
+      player.update(0.04, (i + 1) * 0.04);
+    }
+    expect(player.getPosition().y).toBeCloseTo(0, 1);
+    expect(player.getHealth()).toBeCloseTo(65, 0); // (20 - 13) * 5 = 35
+    expect(player.getShield()).toBe(50);
+    expect(sounds).toContain('fall_damage');
+    expect(shakes.length).toBeGreaterThan(0);
+
+    // Shockwave launch immunity prevents fall damage from high fall
+    player.teleport({ x: 0, y: 22, z: 0 });
+    const hpBeforeShockFall = player.getHealth();
+    player.applyExternalImpulse({ x: 2, y: 6, z: 0 }, true);
+    expect(player.isFallImmune()).toBe(true);
+    for (let i = 0; i < 80; i++) {
+      player.update(0.04, 3.0 + i * 0.04);
+    }
+    expect(player.getPosition().y).toBeCloseTo(0, 1);
+    expect(player.getHealth()).toBe(hpBeforeShockFall);
+    expect(player.isFallImmune()).toBe(false);
+
+    // Launch pad sets fallImmune & glides safely
+    const pads: LaunchPadEntity[] = [
+      { id: 'pad_1', kind: 'launch_pad', x: 10, y: 0, z: 10, radius: 2.5, boostVy: 25, boostForward: 12 },
+    ];
+    player.setTraversalBridge({
+      getLaunchPads: () => pads,
+      getZiplines: () => [] as ZiplineEntity[],
+    });
+    player.teleport({ x: 10, y: 0, z: 10 });
+    player.update(0.03, 6.5);
+    expect(player.getPhase()).toBe('gliding');
+    expect(player.isFallImmune()).toBe(true);
+
+    // Water landing prevents fall damage and activates swimming
+    const waterTerrain = createFlatTerrain(() => -2.0, { isWaterFn: () => true });
+    const waterHarness = setupPlayerHarness(waterTerrain);
+    waterHarness.player.teleport({ x: 0, y: 25, z: 0 });
+    for (let i = 0; i < 80; i++) {
+      waterHarness.player.update(0.04, i * 0.04);
+    }
+    expect(waterHarness.player.getHealth()).toBe(100);
+    expect(waterHarness.player.getHudSnapshot().isSwimming).toBe(true);
+    expect(waterHarness.player.getCharacterRenderState().animState).toBe('swim');
+  });
+
+  it('triggers molten lava hazard bounce (vy=14) and 10 burn damage at VOLCANO_CENTER_X/Z', () => {
+    const { bus, player } = setupPlayerHarness();
+    const sounds: SoundEventId[] = [];
+    const shakes: number[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:camera_shake', (ev) => shakes.push(ev.intensity));
+
+    player.teleport({ x: VOLCANO_CENTER_X, y: 0.5, z: VOLCANO_CENTER_Z });
+    player.update(0.016, 0.016);
+
+    expect(player.getHealth()).toBe(90);
+    expect(player.getCharacterRenderState().velocityY ?? 0).toBeGreaterThan(12);
+    expect(sounds).toContain('lava_burn');
+    expect(shakes.length).toBeGreaterThan(0);
+  });
+
+  it('supports turbo building every 0.09s across cells and F-key proportional repair', () => {
+    const { bus, building, player } = setupPlayerHarness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    player.getInventory().addMaterial('wood', 200);
+    player.teleport({ x: 2, y: 0, z: 2 });
+    player.setLook(Math.PI, 0);
+    player.selectBuildPiece('wall');
+
+    // Hold LMB while turning yaw across grid directions
+    player.setMouseButton(0, true);
+    player.update(0.02, 0.02);
+    expect(building.getPieces().length).toBe(1);
+
+    // Rotate 90 degrees & hold for 0.1s -> turbo builds next piece
+    player.setLook(Math.PI * 0.5, 0);
+    player.update(0.05, 0.07);
+    player.update(0.05, 0.12);
+    expect(building.getPieces().length).toBe(2);
+
+    // Rotate another 90 degrees & hold for 0.1s -> places 3rd piece
+    player.setLook(0, 0);
+    player.update(0.05, 0.17);
+    player.update(0.05, 0.22);
+    expect(building.getPieces().length).toBe(3);
+    player.setMouseButton(0, false);
+
+    // Build repair test: place wood wall ahead, complete build, damage it, verify canRepairBuild & KeyF repair
+    building.clearAll();
+    player.toggleBuildMode(false);
+    player.teleport({ x: 2, y: 0, z: 2 });
+    player.setLook(Math.PI, 0); // Looking -Z toward z=0
+    const wall = building.placePieceForEntity('player', 'wall', 'wood', 0, 0, 0, 'N', 0)!;
+    building.update(4.0, 4.0); // maxHp = 150
+    building.damagePiece(wall.id, 75); // 50% missing -> cost = 5 wood
+
+    player.update(0.016, 4.016);
+    expect(player.getHudSnapshot().canRepairBuild).toBe(true);
+
+    const woodBefore = player.getInventory().getMaterials().wood;
+    player.pressKey('KeyF');
+    expect(wall.hp).toBe(150);
+    expect(player.getInventory().getMaterials().wood).toBe(woodBefore - 5);
+    expect(sounds).toContain('build_repair');
+    player.update(0.016, 4.032);
+    expect(player.getHudSnapshot().canRepairBuild).toBe(false);
+  });
+
+  it('handles frag grenade bouncing + fuse, shockwave knockback/build-break/immunity, chug splash AoE heal, and new weapons', () => {
+    const { bus, building, propsBridge, weapons, player } = setupPlayerHarness();
+    const sounds: SoundEventId[] = [];
+    const shockwaves: number[] = [];
+    const splashes: number[] = [];
+    const explosions: number[] = [];
+    const shakes: number[] = [];
+    const tracers: Array<{ color?: number }> = [];
+
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:shockwave', (ev) => shockwaves.push(ev.radius));
+    bus.on('vfx:splash_heal', (ev) => splashes.push(ev.radius));
+    bus.on('vfx:explosion', (ev) => explosions.push(ev.radius));
+    bus.on('vfx:camera_shake', (ev) => shakes.push(ev.intensity));
+    bus.on('vfx:tracer', (ev) => tracers.push({ color: ev.color }));
+
+    // 1. New weapons: heavy_shotgun & mythic_blade_rifle
+    const enemy: CombatActor = {
+      id: 'bot_target',
+      name: 'Target',
+      position: { x: 2, y: 0, z: -12 },
+      eyePos: { x: 2, y: 1.6, z: -12 },
+      hp: 100,
+      shield: 50,
+      maxHp: 100,
+      maxShield: 100,
+      velocity: { x: 0, y: 0, z: 0 },
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    player.teleport({ x: 2, y: 0, z: 0 });
+    weapons.registerActorsProvider(() => [player.getCombatActor(), enemy]);
+
+    const mythicRes = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'mythic', weaponId: 'mythic_blade_rifle', rarity: 'mythic', magAmmo: 32, stackCount: 1 },
+      origin: { x: 2, y: 1.4, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(mythicRes.fired).toBe(true);
+    expect(mythicRes.damageDealt).toBe(Math.round(38 * RARITY_MULTIPLIER.mythic));
+    expect(sounds).toContain('shot_mythic_rifle');
+    expect(tracers.some((t) => t.color === 0x38bdf8)).toBe(true);
+
+    const heavyRes = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'hsg', weaponId: 'heavy_shotgun', rarity: 'legendary', magAmmo: 7, stackCount: 1 },
+      origin: { x: 2, y: 1.4, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(heavyRes.fired).toBe(true);
+    expect(heavyRes.shotsHit).toBe(1);
+    expect(sounds).toContain('shot_heavy_shotgun');
+    expect(shakes.length).toBeGreaterThan(0);
+
+    // 2. Frag grenade bounces off wall and explodes after fuseTime (2.3s)
+    const bounceWall = building.placePieceForEntity('bot', 'wall', 'metal', 0, 0, -2, 'N', 0)!; // z = -8
+    enemy.alive = true;
+    enemy.hp = 100;
+    enemy.shield = 0;
+    enemy.position = { x: 2, y: 0, z: -6.5 };
+
+    const fragItem: ItemInstance = {
+      uid: 'frag_1',
+      weaponId: 'frag_grenade',
+      rarity: 'rare',
+      magAmmo: 0,
+      stackCount: 3,
+    };
+    player.getInventory().addItem(fragItem);
+    player.getInventory().setActiveSlot(1);
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: fragItem,
+      origin: { x: 2, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(weapons.getProjectiles().length).toBe(1);
+    for (let i = 0; i < 52; i++) {
+      weapons.update(0.05);
+    }
+    expect(sounds).toContain('grenade_bounce');
+    expect(explosions.length).toBeGreaterThanOrEqual(1);
+    expect(sounds).toContain('explosion');
+    expect(enemy.hp).toBeLessThan(100);
+    expect(bounceWall.hp).toBeLessThan(bounceWall.maxHp);
+
+    // 3. Shockwave grenade breaks nearby builds, launches actors, and grants fall immunity
+    building.clearAll();
+    const breakWall = building.placePieceForEntity('bot', 'wall', 'metal', 0, 0, -1, 'N', 0)!; // z = -4
+    enemy.alive = true;
+    enemy.hp = 100;
+    enemy.velocity = { x: 0, y: 0, z: 0 };
+    enemy.fallImmune = false;
+    enemy.position = { x: 2, y: 0, z: -3.5 };
+    player.teleport({ x: 2, y: 0, z: 0 });
+
+    const swItem: ItemInstance = {
+      uid: 'sw_1',
+      weaponId: 'shockwave_grenade',
+      rarity: 'epic',
+      magAmmo: 0,
+      stackCount: 2,
+    };
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: swItem,
+      origin: { x: 2, y: 1.4, z: 0 },
+      aimDir: { x: 0, y: -0.75, z: -0.66 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    for (let i = 0; i < 12; i++) {
+      weapons.update(0.03);
+    }
+    expect(shockwaves.length).toBe(1);
+    expect(sounds).toContain('shockwave_blast');
+    expect(building.getPieceById(breakWall.id)).toBeUndefined();
+    expect(enemy.velocity!.y).toBeGreaterThan(10);
+    expect(enemy.fallImmune).toBe(true);
+    expect(player.isFallImmune()).toBe(true);
+
+    // 4. Chug splash heals +20 HP/Shield overflow on impact
+    player.teleport({ x: 2, y: 0, z: 0 });
+    player.applySplashHeal(100 - player.getHealth());
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot',
+      attackerName: 'Bot',
+      weaponId: 'ar',
+      rarity: 'common',
+      damage: 10,
+      hpDamage: 10,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 2, y: 1, z: 0 },
+      distance: 5,
+    }); // HP now 90, Shield 0
+    enemy.position = { x: 2, y: 0, z: -1.5 };
+    enemy.hp = 60;
+    enemy.shield = 0;
+
+    const chugItem: ItemInstance = {
+      uid: 'chug_1',
+      weaponId: 'chug_splash',
+      rarity: 'rare',
+      magAmmo: 0,
+      stackCount: 4,
+    };
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: chugItem,
+      origin: { x: 2, y: 1.4, z: 0 },
+      aimDir: { x: 0, y: -1, z: 0 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    for (let i = 0; i < 10; i++) {
+      weapons.update(0.03);
+    }
+    expect(splashes.length).toBe(1);
+    expect(sounds).toContain('splash_heal');
+    expect(player.getHealth()).toBe(100);
+    expect(player.getShield()).toBe(10); // +10 HP +10 overflow Shield!
+    expect(enemy.hp).toBe(80);
+
+    // 5. Loot llama interaction via [E] and pickaxe
+    propsBridge.llamas.push(
+      { id: 'llama_1', x: 2, y: 0, z: 1.5, rotationY: 0, hp: 200, maxHp: 200, opened: false },
+      { id: 'llama_2', x: 2, y: 0, z: -1.8, rotationY: 0, hp: 50, maxHp: 50, opened: false },
+    );
+    player.pressKey('KeyE');
+    expect(propsBridge.llamas[0].opened).toBe(true);
+
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'pick', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+      origin: { x: 2, y: 1.0, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(propsBridge.llamas[1].opened).toBe(true);
+  });
+
+  it('grants +50 HP/Shield elimination siphon, tracks killStreak, plays surface footsteps, and exposes all snapshot fields', () => {
+    let curBiome: BiomeType = 'grassland';
+    const { bus, building, weapons, player } = setupPlayerHarness(
+      createFlatTerrain(() => 0, { biomeFn: () => curBiome }),
+    );
+    const siphonEvents: Array<{ amount: number; healthAdded: number; shieldAdded: number }> = [];
+    const sounds: SoundEventId[] = [];
+    bus.on('combat:siphon', (ev) => siphonEvents.push(ev));
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Bot1',
+      weaponId: 'ar',
+      rarity: 'common',
+      damage: 70,
+      hpDamage: 70,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1, z: -5 },
+      distance: 5,
+    }); // HP = 30 -> lowHealthPulse > 0!
+    player.update(0.016, 0.1);
+    expect(player.getHudSnapshot().lowHealthPulse).toBeGreaterThan(0);
+
+    const bot1: CombatActor = {
+      id: 'bot_1',
+      name: 'Bot1',
+      position: { x: 0, y: 0, z: -10 },
+      eyePos: { x: 0, y: 1.6, z: -10 },
+      hp: 20,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const bot2: CombatActor = {
+      id: 'bot_2',
+      name: 'Bot2',
+      position: { x: 0, y: 0, z: -14 },
+      eyePos: { x: 0, y: 1.6, z: -14 },
+      hp: 20,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), bot1, bot2]);
+
+    const arItem: ItemInstance = { uid: 'ar', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 };
+    // Kill 1 -> +50 HP (30 -> 80)
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arItem,
+      origin: { x: 0, y: 1.2, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(bot1.alive).toBe(false);
+    expect(player.getHealth()).toBe(80);
+    expect(player.getShield()).toBe(0);
+    expect(player.getKillStreak()).toBe(1);
+    expect(siphonEvents.length).toBe(1);
+    expect(siphonEvents[0]).toEqual({ amount: 50, healthAdded: 50, shieldAdded: 0 });
+    expect(player.getHudSnapshot().siphonFlashAt).toBeGreaterThan(0);
+
+    // Kill 2 -> +20 HP (80 -> 100) and +30 Shield (0 -> 30), killStreak = 2 -> kill_streak SFX
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arItem,
+      origin: { x: 0, y: 1.2, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(bot2.alive).toBe(false);
+    expect(player.getHealth()).toBe(100);
+    expect(player.getShield()).toBe(30);
+    expect(player.getHudSnapshot().killStreak).toBe(2);
+    expect(siphonEvents[1]).toEqual({ amount: 50, healthAdded: 20, shieldAdded: 30 });
+    expect(sounds).toContain('kill_streak');
+
+    // Surface & biome footsteps
+    player.pressKey('KeyW');
+    curBiome = 'snow';
+    for (let i = 0; i < 15; i++) player.update(0.04, 1.0 + i * 0.04);
+    expect(sounds).toContain('footstep_snow');
+
+    curBiome = 'desert';
+    for (let i = 0; i < 15; i++) player.update(0.04, 2.0 + i * 0.04);
+    expect(sounds).toContain('footstep_sand');
+
+    curBiome = 'urban';
+    for (let i = 0; i < 15; i++) player.update(0.04, 3.0 + i * 0.04);
+    expect(sounds).toContain('footstep_stone');
+
+    curBiome = 'cyber';
+    for (let i = 0; i < 15; i++) player.update(0.04, 3.6 + i * 0.04);
+    expect(sounds).toContain('footstep_metal');
+
+    // Standing on built wood floor -> footstep_wood
+    const pos = player.getPosition();
+    const gx = Math.floor(pos.x / GRID_XZ);
+    const gz = Math.floor(pos.z / GRID_XZ);
+    building.placePieceForEntity('player', 'floor', 'wood', gx, 0, gz, 'N', 0);
+    building.placePieceForEntity('player', 'floor', 'wood', gx, 0, gz - 1, 'N', 0);
+    player.teleport({ x: (gx + 0.5) * GRID_XZ, y: 0.01, z: (gz + 0.5) * GRID_XZ });
+    for (let i = 0; i < 15; i++) player.update(0.04, 4.0 + i * 0.04);
+    expect(sounds).toContain('footstep_wood');
   });
 });

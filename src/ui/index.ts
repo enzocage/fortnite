@@ -1,5 +1,6 @@
 export * from './UIHelpers';
 export * from './WeaponIcons';
+export * from './CareerProfile';
 export * from './LobbyScreen';
 export * from './HUDManager';
 export * from './FullMapOverlay';

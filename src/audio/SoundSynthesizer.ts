@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 42 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 63 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -189,34 +189,42 @@ export class SoundSynthesizer {
       case 'victory_fanfare':
         return this.playVictoryFanfare(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
-        return this.playShotTac(t, targetNode, vol, pitch);
+        return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':
-        return this.playShotAR(t, targetNode, vol, pitch);
+        return this.playShotMythicRifle(t, targetNode, vol, pitch);
       case 'build_repair':
-        return this.playBuildMetal(t, targetNode, vol, pitch);
+        return this.playBuildRepair(t, targetNode, vol, pitch);
       case 'kill_streak':
-        return this.playElimination(t, targetNode, vol, pitch);
+        return this.playKillStreak(t, targetNode, vol, pitch);
       case 'launch_pad':
-        return this.playGliderDeploy(t, targetNode, vol, pitch);
+        return this.playLaunchPad(t, targetNode, vol, pitch);
       case 'zipline_attach':
+        return this.playZiplineAttach(t, targetNode, vol, pitch);
       case 'zipline_loop':
+        return this.playZiplineLoop(t, targetNode, vol, pitch);
       case 'slide_loop':
+        return this.playSlideLoop(t, targetNode, vol, pitch);
       case 'mantle_climb':
+        return this.playMantleClimb(t, targetNode, vol, pitch);
       case 'grenade_bounce':
+        return this.playGrenadeBounce(t, targetNode, vol, pitch);
       case 'splash_heal':
+        return this.playSplashHeal(t, targetNode, vol, pitch);
       case 'fall_damage':
+        return this.playFallDamage(t, targetNode, vol, pitch);
       case 'lava_burn':
+        return this.playLavaBurn(t, targetNode, vol, pitch);
       case 'poi_discover':
-        return this.playUiClick(t, targetNode, vol, pitch);
+        return this.playPoiDiscover(t, targetNode, vol, pitch);
       case 'shockwave_blast':
-        return this.playExplosion(t, targetNode, vol, pitch);
+        return this.playShockwaveBlast(t, targetNode, vol, pitch);
       case 'footstep_wood':
       case 'footstep_stone':
       case 'footstep_metal':
       case 'footstep_snow':
       case 'footstep_water':
       case 'footstep_sand':
-        return this.playFootstep(t, targetNode, vol, pitch);
+        return this.playSurfaceFootstep(id, t, targetNode, vol, pitch);
       default: {
         const exhaustive: never = id;
         return exhaustive;
@@ -307,6 +315,15 @@ export class SoundSynthesizer {
 
   private playShotAR(t: number, target: AudioNode, vol: number, pitch: number): number {
     const jitter = this.pitchJitter(0.04) * pitch;
+    // Punchy chest sub-thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 96 * jitter,
+      freqEnd: 32 * jitter,
+      duration: 0.085,
+      gain: 0.34 * vol,
+      wet: 0.1,
+    });
     this.tone(target, t, {
       type: 'triangle',
       freqStart: 175 * jitter,
@@ -333,11 +350,35 @@ export class SoundSynthesizer {
       filterType: 'highpass',
       filterFreqStart: 2600,
     });
+    // Mechanical bolt-carrier return tail
+    this.noise(target, t + 0.072, {
+      buffer: 'white',
+      duration: 0.028,
+      gain: 0.12 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2900 * pitch,
+      filterQ: 3.4,
+    });
+    this.tone(target, t + 0.074, {
+      type: 'triangle',
+      freqStart: 720 * pitch,
+      freqEnd: 490 * pitch,
+      duration: 0.024,
+      gain: 0.07 * vol,
+    });
     return 0.18;
   }
 
   private playShotBurstAR(t: number, target: AudioNode, vol: number, pitch: number): number {
     const jitter = this.pitchJitter(0.03) * pitch;
+    // Punchy sub-thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 108 * jitter,
+      freqEnd: 38 * jitter,
+      duration: 0.068,
+      gain: 0.28 * vol,
+    });
     this.tone(target, t, {
       type: 'sawtooth',
       freqStart: 215 * jitter,
@@ -360,11 +401,29 @@ export class SoundSynthesizer {
       distort: true,
       wet: 0.18,
     });
+    // Crisp burst bolt snap tail
+    this.noise(target, t + 0.055, {
+      buffer: 'white',
+      duration: 0.022,
+      gain: 0.11 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3100 * pitch,
+      filterQ: 3.5,
+    });
     return 0.14;
   }
 
   private playShotPump(t: number, target: AudioNode, vol: number, pitch: number): number {
     const jitter = this.pitchJitter(0.03) * pitch;
+    // Deep chest-rattling sub-thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 84 * jitter,
+      freqEnd: 26 * jitter,
+      duration: 0.18,
+      gain: 0.48 * vol,
+      wet: 0.18,
+    });
     // Heavy blast
     this.tone(target, t, {
       type: 'triangle',
@@ -417,11 +476,27 @@ export class SoundSynthesizer {
       filterFreqStart: 2550 * pitch,
       filterQ: 3.5,
     });
+    this.tone(target, t + 0.315, {
+      type: 'triangle',
+      freqStart: 880 * pitch,
+      freqEnd: 620 * pitch,
+      duration: 0.035,
+      gain: 0.09 * vol,
+    });
     return 0.44;
   }
 
   private playShotTac(t: number, target: AudioNode, vol: number, pitch: number): number {
     const jitter = this.pitchJitter(0.04) * pitch;
+    // Tight sub-thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 94 * jitter,
+      freqEnd: 30 * jitter,
+      duration: 0.13,
+      gain: 0.38 * vol,
+      wet: 0.14,
+    });
     this.tone(target, t, {
       type: 'triangle',
       freqStart: 155 * jitter,
@@ -441,7 +516,7 @@ export class SoundSynthesizer {
       distort: true,
       wet: 0.2,
     });
-    // Fast auto-bolt cycle snap
+    // Fast auto-bolt cycle snap + latch return
     this.noise(target, t + 0.095, {
       buffer: 'white',
       duration: 0.04,
@@ -449,6 +524,13 @@ export class SoundSynthesizer {
       filterType: 'bandpass',
       filterFreqStart: 2700 * pitch,
       filterQ: 3.0,
+    });
+    this.tone(target, t + 0.105, {
+      type: 'triangle',
+      freqStart: 660 * pitch,
+      freqEnd: 520 * pitch,
+      duration: 0.032,
+      gain: 0.08 * vol,
     });
     return 0.21;
   }
@@ -481,6 +563,15 @@ export class SoundSynthesizer {
 
   private playShotSniper(t: number, target: AudioNode, vol: number, pitch: number): number {
     const jitter = this.pitchJitter(0.02) * pitch;
+    // Seismic sub-bass cannon punch
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 88 * jitter,
+      freqEnd: 24 * jitter,
+      duration: 0.36,
+      gain: 0.5 * vol,
+      wet: 0.26,
+    });
     // Supersonic crack + deep cannon thump
     this.tone(target, t, {
       type: 'sawtooth',
@@ -512,7 +603,7 @@ export class SoundSynthesizer {
       duration: 0.12,
       gain: 0.18 * vol,
     });
-    // Bolt-action cycle
+    // Bolt-action cycle + lock-in click
     this.noise(target, t + 0.36, {
       buffer: 'white',
       duration: 0.045,
@@ -535,6 +626,15 @@ export class SoundSynthesizer {
       filterType: 'bandpass',
       filterFreqStart: 2200 * pitch,
       filterQ: 3.6,
+    });
+    this.tone(target, t + 0.61, {
+      type: 'square',
+      freqStart: 540 * pitch,
+      freqEnd: 390 * pitch,
+      duration: 0.03,
+      gain: 0.07 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1800,
     });
     return 0.72;
   }
@@ -585,6 +685,131 @@ export class SoundSynthesizer {
       wet: 0.25,
     });
     return 0.5;
+  }
+
+  private playShotHeavyShotgun(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.03) * pitch;
+    // Deep booming primary sub-chamber thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 128 * jitter,
+      freqEnd: 28 * jitter,
+      duration: 0.24,
+      gain: 0.68 * vol,
+      wet: 0.24,
+    });
+    // Secondary heavy barrel resonance
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 210 * jitter,
+      freqEnd: 58 * jitter,
+      duration: 0.17,
+      gain: 0.36 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1150,
+      filterFreqEnd: 260,
+      wet: 0.18,
+    });
+    // Thick distorted shotgun blast
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.27,
+      gain: 0.6 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2800 * jitter,
+      filterFreqEnd: 340,
+      distort: true,
+      wet: 0.26,
+    });
+    // Sharp transient muzzle crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.038,
+      gain: 0.32 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2100,
+    });
+    // Double-chamber heavy action clack tail
+    this.noise(target, t + 0.14, {
+      buffer: 'white',
+      duration: 0.04,
+      gain: 0.16 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1750 * pitch,
+      filterQ: 3.4,
+    });
+    this.tone(target, t + 0.14, {
+      type: 'triangle',
+      freqStart: 440 * pitch,
+      freqEnd: 310 * pitch,
+      duration: 0.045,
+      gain: 0.11 * vol,
+    });
+    this.noise(target, t + 0.21, {
+      buffer: 'white',
+      duration: 0.045,
+      gain: 0.18 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2350 * pitch,
+      filterQ: 3.8,
+    });
+    return 0.36;
+  }
+
+  private playShotMythicRifle(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.025) * pitch;
+    // Crisp kinetic sub punch
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 220 * jitter,
+      freqEnd: 54 * jitter,
+      duration: 0.085,
+      gain: 0.45 * vol,
+      wet: 0.15,
+    });
+    // Futuristic plasma transient sweep
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 1580 * jitter,
+      freqEnd: 340 * jitter,
+      duration: 0.095,
+      gain: 0.26 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * jitter,
+      filterFreqEnd: 780 * jitter,
+      filterQ: 2.2,
+      wet: 0.22,
+    });
+    // High-energy blade shimmer harmonic
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 920 * jitter,
+      freqEnd: 1320 * jitter,
+      duration: 0.06,
+      gain: 0.14 * vol,
+      wet: 0.25,
+    });
+    // Tight punchy muzzle snap
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.13,
+      gain: 0.38 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2600 * jitter,
+      filterFreqEnd: 920 * jitter,
+      filterQ: 1.5,
+      distort: true,
+      wet: 0.2,
+    });
+    // Precision energy rail cycle
+    this.tone(target, t + 0.065, {
+      type: 'sine',
+      freqStart: 2100 * pitch,
+      freqEnd: 1400 * pitch,
+      duration: 0.028,
+      gain: 0.09 * vol,
+    });
+    return 0.17;
   }
 
   private playExplosion(t: number, target: AudioNode, vol: number, pitch: number): number {
@@ -1441,6 +1666,742 @@ export class SoundSynthesizer {
     });
 
     return 1.65;
+  }
+
+  // --- Wave 1 Bespoke SFX ---
+
+  private playBuildRepair(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Double ratchet wrench clicks
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.025,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * pitch,
+      filterQ: 4.5,
+    });
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 680 * pitch,
+      freqEnd: 540 * pitch,
+      duration: 0.028,
+      gain: 0.14 * vol,
+    });
+    this.noise(target, t + 0.06, {
+      buffer: 'white',
+      duration: 0.025,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2900 * pitch,
+      filterQ: 4.5,
+    });
+    this.tone(target, t + 0.06, {
+      type: 'square',
+      freqStart: 820 * pitch,
+      freqEnd: 680 * pitch,
+      duration: 0.028,
+      gain: 0.15 * vol,
+    });
+    // Solid hammer tighten + confirmation chime
+    this.tone(target, t + 0.12, {
+      type: 'triangle',
+      freqStart: 340 * pitch,
+      freqEnd: 140 * pitch,
+      duration: 0.08,
+      gain: 0.34 * vol,
+      wet: 0.12,
+    });
+    this.tone(target, t + 0.12, {
+      type: 'sine',
+      freqStart: 740 * pitch,
+      freqEnd: 987.77 * pitch,
+      duration: 0.11,
+      gain: 0.18 * vol,
+      wet: 0.16,
+    });
+    return 0.24;
+  }
+
+  private playKillStreak(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Punchy low sub accent
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 180 * pitch,
+      freqEnd: 65 * pitch,
+      duration: 0.14,
+      gain: 0.36 * vol,
+      wet: 0.18,
+    });
+    // Rising multi-tone arcade brass stab
+    const notes = [587.33, 739.99, 880.0, 1174.66];
+    for (let i = 0; i < notes.length; i++) {
+      const dur = i === notes.length - 1 ? 0.32 : 0.095;
+      this.tone(target, t + i * 0.06, {
+        type: 'sawtooth',
+        freqStart: notes[i] * pitch,
+        duration: dur,
+        gain: 0.2 * vol,
+        filterType: 'lowpass',
+        filterFreqStart: 3200,
+        filterFreqEnd: 1400,
+        wet: 0.28,
+      });
+    }
+    this.tone(target, t + 0.18, {
+      type: 'sine',
+      freqStart: 1760 * pitch,
+      duration: 0.26,
+      gain: 0.13 * vol,
+      wet: 0.3,
+    });
+    this.noise(target, t + 0.18, {
+      buffer: 'white',
+      duration: 0.22,
+      gain: 0.14 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 4000,
+      wet: 0.26,
+    });
+    return 0.54;
+  }
+
+  private playLaunchPad(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Kinetic spring bounce
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 115 * pitch,
+      freqEnd: 320 * pitch,
+      duration: 0.16,
+      gain: 0.42 * vol,
+      wet: 0.2,
+    });
+    // Upward kinetic fan turbine sweep
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 180 * pitch,
+      freqEnd: 920 * pitch,
+      duration: 0.38,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 400 * pitch,
+      filterFreqEnd: 2400 * pitch,
+      filterQ: 2.0,
+      wet: 0.24,
+    });
+    // Air rush whoosh
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.44,
+      attack: 0.02,
+      gain: 0.46 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 280 * pitch,
+      filterFreqEnd: 2600 * pitch,
+      filterQ: 1.3,
+      wet: 0.25,
+    });
+    this.tone(target, t + 0.05, {
+      type: 'triangle',
+      freqStart: 523.25 * pitch,
+      freqEnd: 1046.5 * pitch,
+      duration: 0.26,
+      gain: 0.16 * vol,
+      wet: 0.28,
+    });
+    return 0.46;
+  }
+
+  private playZiplineAttach(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Magnetic lock snap + metallic clack
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 460 * pitch,
+      freqEnd: 185 * pitch,
+      duration: 0.045,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1200,
+      filterQ: 2.5,
+    });
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.035,
+      gain: 0.3 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2900 * pitch,
+      filterQ: 4.0,
+    });
+    this.tone(target, t + 0.025, {
+      type: 'sine',
+      freqStart: 580 * pitch,
+      freqEnd: 1160 * pitch,
+      duration: 0.09,
+      gain: 0.2 * vol,
+      wet: 0.18,
+    });
+    this.tone(target, t + 0.04, {
+      type: 'triangle',
+      freqStart: 260 * pitch,
+      freqEnd: 120 * pitch,
+      duration: 0.055,
+      gain: 0.26 * vol,
+    });
+    return 0.13;
+  }
+
+  private playZiplineLoop(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Electric rail hum + high-speed trolley whirr
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 185 * pitch,
+      freqEnd: 196 * pitch,
+      duration: 0.26,
+      attack: 0.02,
+      gain: 0.16 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 520 * pitch,
+      filterFreqEnd: 740 * pitch,
+      filterQ: 2.8,
+      wet: 0.14,
+    });
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 370 * pitch,
+      freqEnd: 392 * pitch,
+      duration: 0.26,
+      attack: 0.02,
+      gain: 0.12 * vol,
+    });
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.24,
+      attack: 0.025,
+      gain: 0.15 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2200 * pitch,
+      filterFreqEnd: 2800 * pitch,
+      filterQ: 3.6,
+    });
+    return 0.27;
+  }
+
+  private playSlideLoop(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.05) * pitch;
+    // Filtered gravel friction
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.32,
+      attack: 0.025,
+      gain: 0.28 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 950 * jitter,
+      filterFreqEnd: 520 * jitter,
+      filterQ: 1.4,
+      wet: 0.08,
+    });
+    // Cloth/wind rush
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.28,
+      attack: 0.03,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2100 * jitter,
+      filterFreqEnd: 1250 * jitter,
+      filterQ: 1.1,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 92 * jitter,
+      freqEnd: 56 * jitter,
+      duration: 0.18,
+      attack: 0.02,
+      gain: 0.12 * vol,
+    });
+    return 0.34;
+  }
+
+  private playMantleClimb(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Hand-ledge grab thud
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 165 * pitch,
+      freqEnd: 72 * pitch,
+      duration: 0.07,
+      gain: 0.28 * vol,
+    });
+    // Leather glove friction
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.085,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 780 * pitch,
+      filterFreqEnd: 420 * pitch,
+      filterQ: 2.2,
+    });
+    // Upward cloth pull
+    this.noise(target, t + 0.07, {
+      buffer: 'pink',
+      duration: 0.19,
+      attack: 0.02,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 480 * pitch,
+      filterFreqEnd: 1380 * pitch,
+      filterQ: 1.3,
+    });
+    this.tone(target, t + 0.06, {
+      type: 'sine',
+      freqStart: 135 * pitch,
+      freqEnd: 225 * pitch,
+      duration: 0.14,
+      gain: 0.14 * vol,
+    });
+    return 0.27;
+  }
+
+  private playShockwaveBlast(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Deep kinetic sub-drop warp
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 160 * pitch,
+      freqEnd: 26 * pitch,
+      duration: 0.48,
+      gain: 0.68 * vol,
+      wet: 0.32,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 520 * pitch,
+      freqEnd: 65 * pitch,
+      duration: 0.28,
+      gain: 0.34 * vol,
+      wet: 0.25,
+    });
+    // Rising harmonic warp sweep
+    this.tone(target, t + 0.02, {
+      type: 'sine',
+      freqStart: 190 * pitch,
+      freqEnd: 960 * pitch,
+      duration: 0.38,
+      attack: 0.015,
+      gain: 0.26 * vol,
+      wet: 0.35,
+    });
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 285 * pitch,
+      freqEnd: 1440 * pitch,
+      duration: 0.34,
+      attack: 0.015,
+      gain: 0.16 * vol,
+      wet: 0.3,
+    });
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.42,
+      gain: 0.44 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 350 * pitch,
+      filterFreqEnd: 2600 * pitch,
+      filterQ: 1.8,
+      distort: true,
+      wet: 0.3,
+    });
+    return 0.52;
+  }
+
+  private playGrenadeBounce(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.05) * pitch;
+    // Metallic clink ring partials
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 1480 * jitter,
+      freqEnd: 1320 * jitter,
+      duration: 0.085,
+      gain: 0.24 * vol,
+      wet: 0.18,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 2290 * jitter,
+      freqEnd: 2120 * jitter,
+      duration: 0.065,
+      gain: 0.16 * vol,
+      wet: 0.18,
+    });
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.025,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3100 * jitter,
+      filterFreqEnd: 1900 * jitter,
+      filterQ: 3.5,
+    });
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 240 * jitter,
+      freqEnd: 105 * jitter,
+      duration: 0.04,
+      gain: 0.16 * vol,
+    });
+    return 0.1;
+  }
+
+  private playSplashHeal(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Fizzy watery burst
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.24,
+      gain: 0.3 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1200 * pitch,
+      filterFreqEnd: 3600 * pitch,
+      filterQ: 1.6,
+      wet: 0.26,
+    });
+    // Bubbly watery chime droplets
+    const bubbles = [
+      { offset: 0.0, start: 420, end: 880, dur: 0.08 },
+      { offset: 0.045, start: 660, end: 1320, dur: 0.09 },
+      { offset: 0.09, start: 880, end: 1760, dur: 0.11 },
+    ];
+    for (const b of bubbles) {
+      this.tone(target, t + b.offset, {
+        type: 'sine',
+        freqStart: b.start * pitch,
+        freqEnd: b.end * pitch,
+        duration: b.dur,
+        gain: 0.2 * vol,
+        wet: 0.25,
+      });
+    }
+    this.tone(target, t + 0.06, {
+      type: 'triangle',
+      freqStart: 1046.5 * pitch,
+      duration: 0.22,
+      gain: 0.14 * vol,
+      wet: 0.3,
+    });
+    this.tone(target, t + 0.08, {
+      type: 'triangle',
+      freqStart: 1318.51 * pitch,
+      duration: 0.22,
+      gain: 0.12 * vol,
+      wet: 0.3,
+    });
+    // Effervescent fizz sizzle
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.26,
+      gain: 0.15 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 4200,
+      wet: 0.2,
+    });
+    return 0.34;
+  }
+
+  private playFallDamage(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Heavy body impact thud
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 110 * pitch,
+      freqEnd: 26 * pitch,
+      duration: 0.22,
+      gain: 0.62 * vol,
+      wet: 0.18,
+    });
+    // Sharp crunch crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.12,
+      gain: 0.48 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1650 * pitch,
+      filterFreqEnd: 520,
+      filterQ: 1.4,
+      distort: true,
+    });
+    this.noise(target, t + 0.025, {
+      buffer: 'white',
+      duration: 0.055,
+      gain: 0.3 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2400,
+    });
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.24,
+      gain: 0.34 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 680,
+      filterFreqEnd: 180,
+    });
+    return 0.28;
+  }
+
+  private playLavaBurn(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Sizzling hiss + thermal rumble
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.36,
+      gain: 0.36 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2600 * pitch,
+      filterFreqEnd: 1800 * pitch,
+      wet: 0.18,
+    });
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 125 * pitch,
+      freqEnd: 62 * pitch,
+      duration: 0.24,
+      gain: 0.24 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 420,
+      filterFreqEnd: 180,
+    });
+    // Staggered molten crackle pops
+    const pops = [0.0, 0.055, 0.13, 0.21];
+    for (let i = 0; i < pops.length; i++) {
+      this.noise(target, t + pops[i], {
+        buffer: 'white',
+        duration: 0.04,
+        gain: 0.24 * vol,
+        filterType: 'bandpass',
+        filterFreqStart: (3200 + i * 380) * pitch,
+        filterQ: 3.0,
+      });
+    }
+    return 0.38;
+  }
+
+  private playPoiDiscover(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Airy cinematic add9 chord swell
+    const padFreqs = [
+      { freq: 293.66, type: 'sine' as OscillatorType, attack: 0.14, gain: 0.15, dur: 0.95 },
+      { freq: 440.0, type: 'triangle' as OscillatorType, attack: 0.16, gain: 0.13, dur: 0.95 },
+      { freq: 659.25, type: 'sine' as OscillatorType, attack: 0.18, gain: 0.11, dur: 0.9 },
+      { freq: 739.99, type: 'sine' as OscillatorType, attack: 0.22, gain: 0.1, dur: 0.85 },
+    ];
+    for (const p of padFreqs) {
+      this.tone(target, t, {
+        type: p.type,
+        freqStart: p.freq * pitch,
+        duration: p.dur,
+        attack: p.attack,
+        gain: p.gain * vol,
+        wet: 0.42,
+      });
+    }
+    // Airy wind shimmer swell
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.75,
+      attack: 0.18,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 600 * pitch,
+      filterFreqEnd: 1800 * pitch,
+      filterQ: 1.5,
+      wet: 0.38,
+    });
+    // Horizon bell shimmer
+    this.tone(target, t + 0.18, {
+      type: 'sine',
+      freqStart: 1479.98 * pitch,
+      duration: 0.45,
+      attack: 0.03,
+      gain: 0.09 * vol,
+      wet: 0.42,
+    });
+    return 1.0;
+  }
+
+  private playSurfaceFootstep(
+    surface:
+      | 'footstep_wood'
+      | 'footstep_stone'
+      | 'footstep_metal'
+      | 'footstep_snow'
+      | 'footstep_water'
+      | 'footstep_sand',
+    t: number,
+    target: AudioNode,
+    vol: number,
+    pitch: number,
+  ): number {
+    const jitter = this.pitchJitter(0.08) * pitch;
+    switch (surface) {
+      case 'footstep_wood':
+        this.tone(target, t, {
+          type: 'triangle',
+          freqStart: 168 * jitter,
+          freqEnd: 78 * jitter,
+          duration: 0.075,
+          gain: 0.23 * vol,
+        });
+        this.tone(target, t, {
+          type: 'sine',
+          freqStart: 285 * jitter,
+          freqEnd: 165 * jitter,
+          duration: 0.045,
+          gain: 0.13 * vol,
+        });
+        this.noise(target, t, {
+          buffer: 'pink',
+          duration: 0.055,
+          gain: 0.14 * vol,
+          filterType: 'bandpass',
+          filterFreqStart: 720 * jitter,
+          filterFreqEnd: 380,
+          filterQ: 2.6,
+        });
+        return 0.09;
+      case 'footstep_stone':
+        this.tone(target, t, {
+          type: 'sine',
+          freqStart: 128 * jitter,
+          freqEnd: 52 * jitter,
+          duration: 0.05,
+          gain: 0.21 * vol,
+        });
+        this.noise(target, t, {
+          buffer: 'white',
+          duration: 0.042,
+          gain: 0.2 * vol,
+          filterType: 'bandpass',
+          filterFreqStart: 1550 * jitter,
+          filterFreqEnd: 820,
+          filterQ: 2.0,
+        });
+        this.noise(target, t + 0.01, {
+          buffer: 'white',
+          duration: 0.025,
+          gain: 0.09 * vol,
+          filterType: 'highpass',
+          filterFreqStart: 2800,
+        });
+        return 0.075;
+      case 'footstep_metal':
+        this.tone(target, t, {
+          type: 'sine',
+          freqStart: 480 * jitter,
+          freqEnd: 445 * jitter,
+          duration: 0.11,
+          gain: 0.15 * vol,
+          wet: 0.12,
+        });
+        this.tone(target, t, {
+          type: 'triangle',
+          freqStart: 910 * jitter,
+          freqEnd: 860 * jitter,
+          duration: 0.08,
+          gain: 0.11 * vol,
+          wet: 0.12,
+        });
+        this.tone(target, t, {
+          type: 'sine',
+          freqStart: 115 * jitter,
+          freqEnd: 48 * jitter,
+          duration: 0.05,
+          gain: 0.18 * vol,
+        });
+        this.noise(target, t, {
+          buffer: 'white',
+          duration: 0.032,
+          gain: 0.16 * vol,
+          filterType: 'highpass',
+          filterFreqStart: 2400,
+        });
+        return 0.12;
+      case 'footstep_snow':
+        this.noise(target, t, {
+          buffer: 'pink',
+          duration: 0.095,
+          attack: 0.008,
+          gain: 0.24 * vol,
+          filterType: 'bandpass',
+          filterFreqStart: 1850 * jitter,
+          filterFreqEnd: 950 * jitter,
+          filterQ: 1.5,
+        });
+        this.noise(target, t + 0.012, {
+          buffer: 'white',
+          duration: 0.07,
+          gain: 0.16 * vol,
+          filterType: 'highpass',
+          filterFreqStart: 3400,
+        });
+        this.tone(target, t, {
+          type: 'sine',
+          freqStart: 82 * jitter,
+          freqEnd: 42 * jitter,
+          duration: 0.055,
+          gain: 0.12 * vol,
+        });
+        return 0.11;
+      case 'footstep_water':
+        this.noise(target, t, {
+          buffer: 'white',
+          duration: 0.125,
+          gain: 0.24 * vol,
+          filterType: 'bandpass',
+          filterFreqStart: 950 * jitter,
+          filterFreqEnd: 2600 * jitter,
+          filterQ: 1.4,
+          wet: 0.18,
+        });
+        this.noise(target, t, {
+          buffer: 'pink',
+          duration: 0.1,
+          gain: 0.18 * vol,
+          filterType: 'lowpass',
+          filterFreqStart: 1350 * jitter,
+          filterFreqEnd: 580,
+        });
+        this.tone(target, t + 0.02, {
+          type: 'sine',
+          freqStart: 540 * jitter,
+          freqEnd: 1080 * jitter,
+          duration: 0.055,
+          gain: 0.12 * vol,
+          wet: 0.18,
+        });
+        return 0.14;
+      case 'footstep_sand':
+        this.noise(target, t, {
+          buffer: 'pink',
+          duration: 0.105,
+          attack: 0.012,
+          gain: 0.23 * vol,
+          filterType: 'bandpass',
+          filterFreqStart: 1200 * jitter,
+          filterFreqEnd: 640 * jitter,
+          filterQ: 0.9,
+        });
+        this.noise(target, t + 0.008, {
+          buffer: 'white',
+          duration: 0.085,
+          attack: 0.01,
+          gain: 0.14 * vol,
+          filterType: 'bandpass',
+          filterFreqStart: 2600 * jitter,
+          filterFreqEnd: 1600,
+          filterQ: 1.1,
+        });
+        this.tone(target, t, {
+          type: 'sine',
+          freqStart: 76 * jitter,
+          freqEnd: 38 * jitter,
+          duration: 0.055,
+          gain: 0.11 * vol,
+        });
+        return 0.12;
+    }
   }
 
   // --- Low-Level Synthesis Primitives ---

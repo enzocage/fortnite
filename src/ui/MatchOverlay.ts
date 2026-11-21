@@ -1,5 +1,9 @@
 import { EventBus } from '../core';
 import type { BannerMessage, GameSettings, MatchSummary } from '../types';
+import {
+  computeCareerLevelProgress,
+  recordMatchCareerStats,
+} from './CareerProfile';
 import { formatSurvivalTime } from './UIHelpers';
 import { getCrownSvg, getSkullSvg } from './WeaponIcons';
 
@@ -17,6 +21,7 @@ export class MatchOverlay {
   private settings: GameSettings;
 
   private bannerLayerEl: HTMLDivElement;
+  private poiLayerEl: HTMLDivElement;
   private pauseBackdropEl: HTMLDivElement;
   private pauseCardEl: HTMLDivElement;
   private summaryBackdropEl: HTMLDivElement;
@@ -25,6 +30,7 @@ export class MatchOverlay {
   private pauseOpen = false;
   private summaryOpen = false;
   private activeBannerTimers = new Set<ReturnType<typeof setTimeout>>();
+  private poiTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     root: HTMLElement,
@@ -40,6 +46,9 @@ export class MatchOverlay {
     this.bannerLayerEl = document.createElement('div');
     this.bannerLayerEl.className = 'fdr-banner-layer';
 
+    this.poiLayerEl = document.createElement('div');
+    this.poiLayerEl.className = 'fdr-poi-layer';
+
     this.pauseBackdropEl = document.createElement('div');
     this.pauseBackdropEl.className = 'fdr-modal-backdrop fdr-hidden';
     this.pauseCardEl = document.createElement('div');
@@ -54,6 +63,7 @@ export class MatchOverlay {
 
     this.root.append(
       this.bannerLayerEl,
+      this.poiLayerEl,
       this.pauseBackdropEl,
       this.summaryBackdropEl,
     );
@@ -111,12 +121,54 @@ export class MatchOverlay {
     this.activeBannerTimers.add(timer);
   }
 
+  showPoiDiscover(poiName: string, subtitle: string): void {
+    this.clearPoiDiscover();
+
+    const toast = document.createElement('div');
+    toast.className = 'fdr-poi-toast';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'fdr-poi-eyebrow';
+    eyebrow.textContent = 'LOCATION DISCOVERED';
+
+    const title = document.createElement('div');
+    title.className = 'fdr-poi-name';
+    title.textContent = poiName;
+
+    const rule = document.createElement('div');
+    rule.className = 'fdr-poi-rule';
+
+    const sub = document.createElement('div');
+    sub.className = 'fdr-poi-sub';
+    sub.textContent = subtitle;
+
+    toast.append(eyebrow, title, rule);
+    if (subtitle) {
+      toast.appendChild(sub);
+    }
+    this.poiLayerEl.appendChild(toast);
+
+    this.poiTimer = setTimeout(() => {
+      this.poiTimer = null;
+      toast.remove();
+    }, 3200);
+  }
+
+  clearPoiDiscover(): void {
+    if (this.poiTimer !== null) {
+      clearTimeout(this.poiTimer);
+      this.poiTimer = null;
+    }
+    this.poiLayerEl.innerHTML = '';
+  }
+
   clearBanners(): void {
     for (const timer of this.activeBannerTimers) {
       clearTimeout(timer);
     }
     this.activeBannerTimers.clear();
     this.bannerLayerEl.innerHTML = '';
+    this.clearPoiDiscover();
   }
 
   setPauseMenuOpen(open: boolean): boolean {
@@ -369,6 +421,66 @@ export class MatchOverlay {
       statsGrid.appendChild(box);
     }
 
+    const career = recordMatchCareerStats(summary);
+    const xpInfo = career.lastMatchXp;
+    const progress = computeCareerLevelProgress(career.xp);
+
+    const xpPanel = document.createElement('div');
+    xpPanel.className = 'fdr-xp-breakdown-card';
+
+    const xpHead = document.createElement('div');
+    xpHead.className = 'fdr-xp-breakdown-head';
+    const levelLabel = xpInfo?.leveledUp
+      ? `<span class="fdr-levelup-badge">LEVEL UP! LVL ${xpInfo.previousLevel} → ${career.level}</span>`
+      : `<span class="fdr-xp-level-chip">CAREER LVL ${career.level}</span>`;
+    xpHead.innerHTML = `
+      <div class="fdr-xp-title-group">
+        <span>MATCH XP EARNED</span>
+        ${levelLabel}
+      </div>
+      <div class="fdr-xp-total">+${xpInfo?.totalXp ?? 0} XP</div>
+    `;
+
+    const xpRows = document.createElement('div');
+    xpRows.className = 'fdr-xp-chips';
+    const breakdownChips: Array<{ label: string; val: number; gold?: boolean }> = [
+      { label: 'SURVIVAL', val: xpInfo?.survivalXp ?? 0 },
+      { label: 'ELIMS', val: xpInfo?.elimXp ?? 0 },
+      { label: 'DAMAGE', val: xpInfo?.damageXp ?? 0 },
+      { label: 'PLACEMENT', val: xpInfo?.placementXp ?? 0 },
+    ];
+    if ((xpInfo?.victoryBonusXp ?? 0) > 0) {
+      breakdownChips.push({
+        label: 'VICTORY BONUS',
+        val: xpInfo?.victoryBonusXp ?? 0,
+        gold: true,
+      });
+    }
+    for (const chip of breakdownChips) {
+      const el = document.createElement('div');
+      el.className = `fdr-xp-chip${chip.gold ? ' gold' : ''}`;
+      el.innerHTML = `<span>${chip.label}</span><b>+${chip.val}</b>`;
+      xpRows.appendChild(el);
+    }
+
+    const barWrap = document.createElement('div');
+    barWrap.className = 'fdr-summary-xp-bar-wrap';
+    const barMeta = document.createElement('div');
+    barMeta.className = 'fdr-summary-xp-meta';
+    barMeta.innerHTML = `
+      <span>CAREER: ${career.wins} WINS • ${career.elims} ELIMS</span>
+      <span>${progress.isMaxLevel ? `MAX LEVEL (${career.xp} XP)` : `${progress.xpIntoLevel} / ${progress.xpRequiredForNext} XP TO LVL ${career.level + 1}`}</span>
+    `;
+    const barTrack = document.createElement('div');
+    barTrack.className = 'fdr-career-xp-track';
+    const barFill = document.createElement('div');
+    barFill.className = 'fdr-career-xp-fill';
+    barFill.style.width = `${Math.round(progress.progressRatio * 100)}%`;
+    barTrack.appendChild(barFill);
+    barWrap.append(barMeta, barTrack);
+
+    xpPanel.append(xpHead, xpRows, barWrap);
+
     const actions = document.createElement('div');
     actions.className = 'fdr-modal-actions';
 
@@ -393,12 +505,13 @@ export class MatchOverlay {
     });
 
     actions.append(playAgainBtn, lobbyBtn);
-    this.summaryCardEl.append(header, sub, statsGrid, actions);
+    this.summaryCardEl.append(header, sub, statsGrid, xpPanel, actions);
   }
 
   dispose(): void {
     this.clearBanners();
     this.bannerLayerEl.remove();
+    this.poiLayerEl.remove();
     this.pauseBackdropEl.remove();
     this.summaryBackdropEl.remove();
   }

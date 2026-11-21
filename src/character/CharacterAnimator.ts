@@ -1,6 +1,5 @@
-import type { EmoteId, WeaponId } from '../types';
+import type { AnimState, CharacterRenderState, EmoteId, WeaponId } from '../types';
 import { clamp, damp } from '../core';
-import type { CharacterRenderState } from '../types';
 import type { CharacterRig } from './CharacterRig';
 
 interface PoseTarget {
@@ -51,6 +50,11 @@ interface RigAnimData {
 
 const BASE_HIPS_Y = 0.9;
 const CROUCH_HIPS_Y = 0.56;
+const SLIDE_HIPS_Y = 0.44;
+
+function finiteOr(val: number | undefined, fallback = 0): number {
+  return val !== undefined && Number.isFinite(val) ? val : fallback;
+}
 
 function createEmptyPose(): PoseTarget {
   return {
@@ -138,9 +142,19 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
     weaponId === 'burst_ar' ||
     weaponId === 'pump_shotgun' ||
     weaponId === 'tac_shotgun' ||
+    weaponId === 'heavy_shotgun' ||
     weaponId === 'smg' ||
     weaponId === 'sniper' ||
-    weaponId === 'rocket_launcher'
+    weaponId === 'rocket_launcher' ||
+    weaponId === 'mythic_blade_rifle'
+  );
+}
+
+function isThrowable(weaponId: WeaponId): boolean {
+  return (
+    weaponId === 'shockwave_grenade' ||
+    weaponId === 'frag_grenade' ||
+    weaponId === 'chug_splash'
   );
 }
 
@@ -154,9 +168,29 @@ function isConsumable(weaponId: WeaponId): boolean {
   );
 }
 
+function resolveAnimState(state: CharacterRenderState): AnimState {
+  const anim = state.animState;
+  const isBaseLocomotion =
+    anim === 'idle' ||
+    anim === 'walk' ||
+    anim === 'run' ||
+    anim === 'sprint' ||
+    anim === 'crouch_idle' ||
+    anim === 'crouch_walk' ||
+    anim === 'jump' ||
+    anim === 'fall';
+
+  if (isBaseLocomotion) {
+    if (state.isZiplining) return 'zipline';
+    if (state.isSliding) return 'slide';
+    if (state.isSwimming) return 'swim';
+  }
+  return anim;
+}
+
 /**
  * Procedural skeletal animator for CharacterRig.
- * Supports all 15 AnimStates, all 4 EmoteId dances, aiming pitch, and recoil kick.
+ * Supports all 19 AnimStates, all 6 EmoteId dances, banking lean, aiming pitch, and recoil kick.
  */
 export class CharacterAnimator {
   private readonly rigStates = new WeakMap<CharacterRig, RigAnimData>();
@@ -178,12 +212,17 @@ export class CharacterAnimator {
 
     // Sync transform, weapon/blueprint, and glider state
     const root = rig.getGroup();
-    root.position.set(state.position.x, state.position.y, state.position.z);
-    root.rotation.y = state.yaw;
+    root.position.set(
+      finiteOr(state.position.x),
+      finiteOr(state.position.y),
+      finiteOr(state.position.z),
+    );
+    root.rotation.y = finiteOr(state.yaw);
 
     rig.equipWeapon(state.weaponId, state.isBuilding);
 
-    const shouldGlideOpen = state.animState === 'glide';
+    const anim = resolveAnimState(state);
+    const shouldGlideOpen = anim === 'glide';
     if (shouldGlideOpen) {
       data.gliderFactor = safeDt > 0 ? damp(Math.max(data.gliderFactor, 0.25), 1, 14, safeDt) : 1;
       rig.setGliderOpen(true, data.gliderFactor);
@@ -201,7 +240,8 @@ export class CharacterAnimator {
     resetPose(p);
 
     const t = data.time;
-    const anim = state.animState;
+    const speed = finiteOr(state.moveSpeed);
+    const velY = clamp(finiteOr(state.velocityY), -25, 25);
 
     // 1. Base locomotion / full-body action pose
     switch (anim) {
@@ -209,25 +249,37 @@ export class CharacterAnimator {
         this.applyIdlePose(p, t);
         break;
       case 'walk':
-        this.applyGaitPose(p, data, safeDt, state.moveSpeed > 0.1 ? state.moveSpeed : 3.2, 6.4, 0.48, 0.58, 0.05, 0.028, false);
+        this.applyGaitPose(p, data, safeDt, speed > 0.1 ? speed : 3.2, 6.4, 0.48, 0.58, 0.05, 0.028, false);
         break;
       case 'run':
-        this.applyGaitPose(p, data, safeDt, state.moveSpeed > 0.1 ? state.moveSpeed : 6.2, 9.6, 0.78, 0.96, 0.14, 0.052, false);
+        this.applyGaitPose(p, data, safeDt, speed > 0.1 ? speed : 6.2, 9.6, 0.78, 0.96, 0.14, 0.052, false);
         break;
       case 'sprint':
-        this.applyGaitPose(p, data, safeDt, state.moveSpeed > 0.1 ? state.moveSpeed : 8.5, 12.6, 1.02, 1.18, 0.28, 0.072, true);
+        this.applyGaitPose(p, data, safeDt, speed > 0.1 ? speed : 8.5, 12.6, 1.02, 1.18, 0.28, 0.072, true);
         break;
       case 'crouch_idle':
         this.applyCrouchIdlePose(p, t);
         break;
       case 'crouch_walk':
-        this.applyCrouchWalkPose(p, data, safeDt, state.moveSpeed > 0.1 ? state.moveSpeed : 2.6);
+        this.applyCrouchWalkPose(p, data, safeDt, speed > 0.1 ? speed : 2.6);
         break;
       case 'jump':
-        this.applyJumpPose(p, t);
+        this.applyJumpPose(p, t, velY);
         break;
       case 'fall':
-        this.applyFallPose(p, t);
+        this.applyFallPose(p, t, velY);
+        break;
+      case 'slide':
+        this.applySlidePose(p, t);
+        break;
+      case 'mantle':
+        this.applyMantlePose(p, t);
+        break;
+      case 'swim':
+        this.applySwimPose(p, t, speed);
+        break;
+      case 'zipline':
+        this.applyZiplinePose(p, t);
         break;
       case 'skydive':
         this.applySkydivePose(p, t);
@@ -236,16 +288,16 @@ export class CharacterAnimator {
         this.applyGlidePose(p, t, rig.getGlider().style === 'hover');
         break;
       case 'harvest':
-        if (state.moveSpeed > 0.5) {
-          this.applyGaitPose(p, data, safeDt, state.moveSpeed, 8.8, 0.65, 0.8, 0.1, 0.04, false);
+        if (speed > 0.5) {
+          this.applyGaitPose(p, data, safeDt, speed, 8.8, 0.65, 0.8, 0.1, 0.04, false);
         } else {
           this.applyIdlePose(p, t);
         }
-        this.applyHarvestPose(p, t, state.harvestSwingTimer);
+        this.applyHarvestPose(p, t, finiteOr(state.harvestSwingTimer));
         break;
       case 'reload':
-        if (state.moveSpeed > 0.5) {
-          this.applyGaitPose(p, data, safeDt, state.moveSpeed, 8.4, 0.6, 0.72, 0.08, 0.035, false);
+        if (speed > 0.5) {
+          this.applyGaitPose(p, data, safeDt, speed, 8.4, 0.6, 0.72, 0.08, 0.035, false);
         } else {
           this.applyIdlePose(p, t);
         }
@@ -263,8 +315,8 @@ export class CharacterAnimator {
         this.applyHealPose(p, t, state.weaponId);
         break;
       case 'build':
-        if (state.moveSpeed > 0.5) {
-          this.applyGaitPose(p, data, safeDt, state.moveSpeed, 9.2, 0.68, 0.85, 0.1, 0.04, false);
+        if (speed > 0.5) {
+          this.applyGaitPose(p, data, safeDt, speed, 9.2, 0.68, 0.85, 0.1, 0.04, false);
         } else {
           this.applyIdlePose(p, t);
         }
@@ -275,7 +327,18 @@ export class CharacterAnimator {
         break;
     }
 
-    // 2. Upper-body weapon readiness, aiming pitch & recoil kick
+    // 2. Banking lean roll (carving turns during sprint, slide, glide, swim, etc.)
+    const lean = clamp(finiteOr(state.leanAngle), -0.45, 0.45);
+    if (lean !== 0 && anim !== 'emote' && anim !== 'heal') {
+      p.hipsRz += lean * 0.55;
+      p.spineRz += lean * 0.35;
+      p.chestRz += lean * 0.20;
+      p.headRz -= lean * 0.35;
+    }
+
+    // 3. Upper-body weapon readiness, aiming pitch & recoil kick
+    const isSlideWithTrailingArm = anim === 'slide' && !state.isAiming && !state.isFiring;
+    const isZiplineUnfocused = anim === 'zipline' && !state.isAiming && !state.isFiring;
     const suppressWeaponAim =
       anim === 'skydive' ||
       anim === 'glide' ||
@@ -283,18 +346,33 @@ export class CharacterAnimator {
       anim === 'harvest' ||
       anim === 'reload' ||
       anim === 'heal' ||
-      anim === 'build';
+      anim === 'build' ||
+      anim === 'mantle' ||
+      anim === 'swim' ||
+      isSlideWithTrailingArm ||
+      isZiplineUnfocused;
 
     if (!suppressWeaponAim) {
       if (state.isBuilding) {
         this.applyBuildPose(p, t);
       } else {
-        this.applyUpperBodyWeaponAim(p, state, t);
+        this.applyUpperBodyWeaponAim(p, state, anim, t);
       }
     }
 
-    // 3. Smoothly damp joints toward target pose (instant snap on dt === 0 for deterministic single-step tests)
-    const blendLambda = anim === 'emote' || anim === 'harvest' ? 22 : 16;
+    // 4. Articulated backbling motion (cape flutter, wing flaps, pack antenna sway)
+    const isAirborne =
+      !state.grounded ||
+      anim === 'jump' ||
+      anim === 'fall' ||
+      anim === 'skydive' ||
+      anim === 'glide' ||
+      anim === 'zipline';
+    rig.animateBackbling(speed, t, isAirborne, anim === 'slide');
+
+    // 5. Smoothly damp joints toward target pose (instant snap on dt === 0 for deterministic single-step tests)
+    const blendLambda =
+      anim === 'emote' || anim === 'harvest' || anim === 'slide' || anim === 'mantle' ? 22 : 16;
     this.applyPoseToJoints(rig, p, blendLambda, safeDt);
   }
 
@@ -386,12 +464,13 @@ export class CharacterAnimator {
     p.rFoRx = -0.42;
   }
 
-  private applyJumpPose(p: PoseTarget, t: number): void {
+  private applyJumpPose(p: PoseTarget, t: number, velY: number): void {
     const flutter = Math.sin(t * 6) * 0.04;
+    const tuck = clamp(velY * 0.02, -0.1, 0.16);
     p.hipsY = BASE_HIPS_Y + 0.05;
     p.spineRx = 0.08;
-    p.lHiRx = -0.62 + flutter;
-    p.lKnRx = 0.98;
+    p.lHiRx = -0.62 - tuck + flutter;
+    p.lKnRx = 0.98 + tuck * 0.8;
     p.lFoRx = -0.25;
     p.rHiRx = 0.24 - flutter;
     p.rKnRx = 0.36;
@@ -401,8 +480,9 @@ export class CharacterAnimator {
     p.lElRx = -0.65;
   }
 
-  private applyFallPose(p: PoseTarget, t: number): void {
+  private applyFallPose(p: PoseTarget, t: number, velY: number): void {
     const flutter = Math.sin(t * 9) * 0.06;
+    const dropFactor = clamp(-velY * 0.015, 0, 0.25);
     p.hipsY = BASE_HIPS_Y + 0.02;
     p.spineRx = 0.14;
     p.lHiRx = -0.35 + flutter;
@@ -411,9 +491,147 @@ export class CharacterAnimator {
     p.rHiRx = 0.12 - flutter;
     p.rKnRx = 0.48;
     p.rFoRx = 0.18;
-    p.lShRx = -0.55;
-    p.lShRz = 0.48 + flutter * 0.5;
+    p.lShRx = -0.55 - dropFactor;
+    p.lShRz = 0.48 + dropFactor * 0.6 + flutter * 0.5;
     p.lElRx = -0.45;
+  }
+
+  private applySlidePose(p: PoseTarget, t: number): void {
+    const grit = Math.sin(t * 16) * 0.015;
+    // Low crouched knee-drag leaning back with trailing left arm
+    p.hipsY = SLIDE_HIPS_Y + grit;
+    p.hipsRx = -0.38;
+    p.hipsRy = -0.24;
+    p.spineRx = -0.18;
+    p.chestRx = -0.10;
+    p.chestRy = 0.18;
+    p.headRx = 0.42;
+    p.headRy = 0.08;
+
+    // Lead left leg extended forward along slide vector
+    p.lHiRx = -1.24;
+    p.lHiRz = 0.10;
+    p.lKnRx = 0.34;
+    p.lFoRx = 0.26;
+
+    // Trailing right knee tucked & dragging behind
+    p.rHiRx = 0.32;
+    p.rHiRz = -0.14;
+    p.rKnRx = 1.52;
+    p.rFoRx = 0.45;
+
+    // Trailing left arm skimming ground for balance
+    p.lShRx = 0.58 + grit * 2;
+    p.lShRy = -0.18;
+    p.lShRz = 0.46;
+    p.lElRx = -0.32;
+
+    // Right arm carries weapon compactly across chest unless aiming
+    p.rShRx = -0.42;
+    p.rShRy = 0.35;
+    p.rShRz = -0.16;
+    p.rElRx = -0.82;
+  }
+
+  private applyMantlePose(p: PoseTarget, t: number): void {
+    const climb = Math.sin(t * 8.5);
+    const lift = 0.5 - 0.5 * Math.cos(t * 7.0);
+    // Dynamic vaulting body pitching forward over ledge
+    p.hipsY = BASE_HIPS_Y - 0.06 + lift * 0.14;
+    p.hipsRx = 0.28;
+    p.spineRx = 0.24;
+    p.chestRx = 0.14;
+    p.chestRy = climb * 0.14;
+    p.headRx = -0.38;
+
+    // Arms reaching high overhead & vaulting/pulling body up
+    p.lShRx = -2.42 + climb * 0.26;
+    p.lShRy = -0.12;
+    p.lShRz = 0.24;
+    p.lElRx = -0.58 - Math.max(0, -climb) * 0.48;
+
+    p.rShRx = -2.42 - climb * 0.26;
+    p.rShRy = 0.12;
+    p.rShRz = -0.24;
+    p.rElRx = -0.58 - Math.max(0, climb) * 0.48;
+
+    // Legs driving upward to clear ledge
+    p.lHiRx = -0.96 + climb * 0.32;
+    p.lKnRx = 1.28;
+    p.lFoRx = 0.18;
+    p.rHiRx = -0.48 - climb * 0.32;
+    p.rKnRx = 0.96;
+    p.rFoRx = 0.22;
+  }
+
+  private applySwimPose(p: PoseTarget, t: number, speed: number): void {
+    const pace = speed > 0.4 ? 7.2 : 4.2;
+    const stroke = t * pace;
+    const lArm = Math.sin(stroke);
+    const rArm = Math.sin(stroke + Math.PI);
+    const kick = Math.sin(t * (pace * 2.0));
+
+    // Prone swimming attitude at water surface
+    p.hipsY = 0.88 + Math.sin(t * 4.2) * 0.03;
+    p.hipsRx = 1.30;
+    p.hipsRz = lArm * 0.14;
+    p.spineRx = 0.04;
+    p.chestRy = lArm * 0.30;
+    p.headRx = -0.92; // Chin raised above waterline looking ahead
+
+    // Alternating freestyle crawl arm strokes
+    p.lShRx = -1.25 - lArm * 1.42;
+    p.lShRz = 0.32 + Math.max(0, lArm) * 0.38;
+    p.lElRx = lArm > 0 ? -0.92 * lArm : -0.22;
+
+    p.rShRx = -1.25 - rArm * 1.42;
+    p.rShRz = -0.32 - Math.max(0, rArm) * 0.38;
+    p.rElRx = rArm > 0 ? -0.92 * rArm : -0.22;
+
+    // Rapid alternating flutter kick
+    p.lHiRx = 0.16 + kick * 0.34;
+    p.lKnRx = 0.30 + Math.max(0, -kick) * 0.36;
+    p.lFoRx = 0.46;
+    p.lHiRz = 0.10;
+
+    p.rHiRx = 0.16 - kick * 0.34;
+    p.rKnRx = 0.30 + Math.max(0, kick) * 0.36;
+    p.rFoRx = 0.46;
+    p.rHiRz = -0.10;
+  }
+
+  private applyZiplinePose(p: PoseTarget, t: number): void {
+    const sway = Math.sin(t * 4.4);
+    const legSwing = Math.sin(t * 5.2);
+
+    p.hipsY = 0.82;
+    p.hipsRx = 0.12 + sway * 0.04;
+    p.hipsRz = sway * 0.04;
+    p.spineRx = 0.04;
+    p.chestRx = -0.05;
+    p.chestRy = -0.12;
+    p.headRx = -0.08;
+
+    // One-hand overhead grip (left arm straight overhead gripping energy rail)
+    p.lShRx = -2.85;
+    p.lShRy = 0.04;
+    p.lShRz = 0.08;
+    p.lElRx = -0.12;
+    p.lHaRx = -0.18;
+
+    // Right arm swept outward for aerodynamic balance
+    p.rShRx = -0.34;
+    p.rShRy = 0.12;
+    p.rShRz = -0.62 + sway * 0.12;
+    p.rElRx = -0.65;
+
+    // Dangling legs trailing in slipstream
+    p.lHiRx = 0.24 + legSwing * 0.11;
+    p.lKnRx = 0.42 + legSwing * 0.06;
+    p.lFoRx = 0.28;
+    p.rHiRx = 0.36 - legSwing * 0.11;
+    p.rKnRx = 0.56 - legSwing * 0.06;
+    p.rFoRx = 0.32;
   }
 
   private applySkydivePose(p: PoseTarget, t: number): void {
@@ -492,13 +710,11 @@ export class CharacterAnimator {
   }
 
   private applyHarvestPose(p: PoseTarget, t: number, swingTimer: number): void {
-    // Use provided swingTimer (0..0.625s) or fall back to continuous swing rhythm
     const cycle = swingTimer > 0 ? (swingTimer % 0.625) / 0.625 : (t * 1.65) % 1;
-    // Fast forward slash, smooth windup recovery
     const swing =
       cycle < 0.35
-        ? -Math.cos((cycle / 0.35) * Math.PI) // -1 -> +1 slash
-        : 1 - ((cycle - 0.35) / 0.65) * 2; // +1 -> -1 recovery
+        ? -Math.cos((cycle / 0.35) * Math.PI)
+        : 1 - ((cycle - 0.35) / 0.65) * 2;
 
     p.chestRy = -swing * 0.42;
     p.spineRy = -swing * 0.18;
@@ -510,7 +726,6 @@ export class CharacterAnimator {
     p.rElRx = -0.45 - Math.max(0, -swing) * 0.45;
     p.rHaRx = swing * 0.25;
 
-    // Left arm counter-balances
     p.lShRx = -0.45 - swing * 0.35;
     p.lShRz = 0.28;
     p.lElRx = -0.72;
@@ -523,14 +738,12 @@ export class CharacterAnimator {
     p.chestRy = 0.22;
     p.headRx = 0.14;
 
-    // Right hand tilts gun inward across chest
     p.rShRx = -0.92;
     p.rShRy = 0.48;
     p.rShRz = -0.1;
     p.rElRx = -0.78;
     p.rElRy = 0.25;
 
-    // Left hand drops to belt pouch then feeds mag up
     p.lShRx = -0.45 - insert * 0.68;
     p.lShRy = -0.42 - insert * 0.25;
     p.lShRz = 0.18;
@@ -551,7 +764,6 @@ export class CharacterAnimator {
       p.lShRy = -0.55;
       p.lElRx = -1.15 - bob * 0.18;
     } else {
-      // Drinking shield / slurp potion!
       p.headRx = -0.25 + bob * 0.06;
       p.rShRx = -1.35 + bob * 0.08;
       p.rShRy = 0.42;
@@ -566,29 +778,31 @@ export class CharacterAnimator {
   private applyBuildPose(p: PoseTarget, t: number): void {
     const tap = Math.sin(t * 14) * 0.08;
     p.chestRy = 0.12;
-    // Right hand holds blueprint forward
     p.rShRx = -0.98;
     p.rShRy = 0.26;
     p.rShRz = -0.05;
     p.rElRx = -0.68 + tap;
     p.rHaRx = 0.1;
 
-    // Left hand taps / sketches on blueprint
     p.lShRx = -0.95 + tap * 0.8;
     p.lShRy = -0.46;
     p.lShRz = 0.1;
     p.lElRx = -0.74 - tap;
   }
 
-  private applyUpperBodyWeaponAim(p: PoseTarget, state: CharacterRenderState, t: number): void {
-    const aimPitch = clamp(state.pitch, -1.35, 1.35);
-    const recoil = clamp(state.recoilKick, 0, 1);
+  private applyUpperBodyWeaponAim(
+    p: PoseTarget,
+    state: CharacterRenderState,
+    anim: AnimState,
+    t: number,
+  ): void {
+    const aimPitch = clamp(finiteOr(state.pitch), -1.35, 1.35);
+    const recoil = clamp(finiteOr(state.recoilKick), 0, 1);
     const recoilTilt = recoil * 0.28;
 
-    const isSprintingUnfocused = state.animState === 'sprint' && !state.isAiming && !state.isFiring;
+    const isSprintingUnfocused = anim === 'sprint' && !state.isAiming && !state.isFiring;
     const weapon = state.weaponId;
 
-    // Sprinting without aiming/firing: hold rifle diagonally across chest or pump arms with pickaxe/pistol
     if (isSprintingUnfocused) {
       if (isTwoHandedGun(weapon)) {
         p.rShRx = -0.78;
@@ -606,27 +820,30 @@ export class CharacterAnimator {
       return;
     }
 
-    // Subtle chest & head pitch tracking when aiming or holding weapon
     const pitchInfluence = state.isAiming || state.isFiring ? 0.35 : 0.2;
     p.chestRx += -aimPitch * pitchInfluence - recoilTilt * 0.25;
     p.headRx += -aimPitch * 0.55;
 
     const torsoPitch = p.hipsRx + p.spineRx + p.chestRx;
+    const keepLeftGripOnZipline = anim === 'zipline';
 
     if (weapon === 'pickaxe') {
       if (state.isAiming || state.isFiring) {
         p.rElRx = -0.55;
         p.rShRx = -Math.PI / 2 - torsoPitch - aimPitch - p.rElRx;
         p.rShRy = 0.15;
-        p.lShRx = -0.55;
-        p.lElRx = -0.72;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -0.55;
+          p.lElRx = -0.72;
+        }
       } else {
-        // Low-ready pickaxe stance
         p.rShRx = -0.52;
         p.rShRy = 0.08;
         p.rShRz = -0.16;
         p.rElRx = -0.62;
-        p.lShRx = Math.max(p.lShRx, -0.45);
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = Math.max(p.lShRx, -0.45);
+        }
       }
       return;
     }
@@ -635,21 +852,44 @@ export class CharacterAnimator {
       p.rShRx = -0.78;
       p.rShRy = 0.32;
       p.rElRx = -0.82;
-      p.lShRx = -0.48;
-      p.lShRy = -0.25;
-      p.lElRx = -0.65;
+      if (!keepLeftGripOnZipline) {
+        p.lShRx = -0.48;
+        p.lShRy = -0.25;
+        p.lElRx = -0.65;
+      }
       return;
     }
 
-    if (weapon === 'pistol') {
-      // Tactical one-handed or two-handed pistol readiness
+    if (isThrowable(weapon)) {
+      if (state.isAiming || state.isFiring) {
+        // Cocked-back overhand throw wind-up
+        p.rShRx = -2.10 - aimPitch * 0.65 - recoilTilt * 0.6;
+        p.rShRy = -0.15;
+        p.rShRz = -0.22;
+        p.rElRx = -0.78;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -1.25 - aimPitch * 0.6;
+          p.lShRy = -0.25;
+          p.lShRz = 0.18;
+          p.lElRx = -0.25;
+        }
+      } else {
+        p.rShRx = -0.68;
+        p.rShRy = 0.22;
+        p.rShRz = -0.10;
+        p.rElRx = -0.78;
+      }
+      return;
+    }
+
+    if (weapon === 'pistol' || keepLeftGripOnZipline) {
       p.rElRx = state.isAiming ? -0.32 : -0.55;
       p.rHaRx = 0;
       p.rShRx = -Math.PI / 2 - torsoPitch - aimPitch - recoilTilt - p.rElRx - p.rHaRx;
       p.rShRy = state.isAiming ? 0.16 : 0.12;
       p.rShRz = -0.05;
 
-      if (state.isAiming || state.isFiring) {
+      if (!keepLeftGripOnZipline && (state.isAiming || state.isFiring)) {
         p.lShRx = p.rShRx + 0.08;
         p.lShRy = -0.56;
         p.lShRz = 0.06;
@@ -659,14 +899,12 @@ export class CharacterAnimator {
     }
 
     // Two-handed rifles, shotguns, SMG, sniper, rocket launcher:
-    // Aim weapon forward (+Z) + pitch + recoil kick!
     p.rElRx = state.isAiming ? -0.38 : -0.48;
     p.rHaRx = 0;
     p.rShRx = -Math.PI / 2 - torsoPitch - aimPitch - recoilTilt - p.rElRx - p.rHaRx;
     p.rShRy = 0.14;
     p.rShRz = -0.04;
 
-    // Left arm reaches across to cradle forend
     p.lElRx = state.isAiming ? -0.52 : -0.62;
     p.lShRx = -Math.PI / 2 - torsoPitch - aimPitch - recoilTilt * 0.8 - p.lElRx + 0.06;
     p.lShRy = -0.54;
@@ -676,7 +914,6 @@ export class CharacterAnimator {
   private applyEmotePose(p: PoseTarget, t: number, emoteId: EmoteId): void {
     switch (emoteId) {
       case 'victory_groove': {
-        // 122 BPM upbeat groove + claps + arm pumps
         const beat = t * ((122 / 60) * Math.PI);
         const s = Math.sin(beat);
         const bounce = Math.abs(Math.sin(beat));
@@ -704,7 +941,6 @@ export class CharacterAnimator {
         break;
       }
       case 'floss_wave': {
-        // 128 BPM classic front/back crossing floss!
         const beat = t * ((128 / 60) * Math.PI);
         const swing = Math.sin(beat);
         const cross = Math.cos(beat * 0.5);
@@ -714,7 +950,6 @@ export class CharacterAnimator {
         p.chestRz = -swing * 0.16;
         p.headRz = swing * 0.10;
 
-        // Straight sweeping arms passing front & back of torso
         p.lShRx = cross > 0 ? 0.65 * Math.abs(swing) : -0.82 * Math.abs(swing);
         p.lShRz = 0.25 - swing * 0.58;
         p.lElRx = -0.08;
@@ -730,7 +965,6 @@ export class CharacterAnimator {
         break;
       }
       case 'take_w_hop': {
-        // 132 BPM energetic alternating leg kick + overhead W salute
         const beat = t * ((132 / 60) * Math.PI);
         const s = Math.sin(beat);
         const hop = Math.abs(s);
@@ -739,7 +973,6 @@ export class CharacterAnimator {
         p.chestRz = -s * 0.14;
         p.headRz = s * 0.12;
 
-        // Right arm triumphant overhead salute, left hand on hip
         p.rShRx = -2.38 + hop * 0.18;
         p.rShRz = -0.28;
         p.rElRx = -0.95;
@@ -748,7 +981,6 @@ export class CharacterAnimator {
         p.lShRz = 0.62;
         p.lElRx = -1.25;
 
-        // Alternating high kick
         p.lHiRx = s > 0 ? -1.12 * s : 0.15;
         p.lKnRx = s > 0 ? 0.25 : 0.35;
         p.rHiRx = s < 0 ? 1.12 * s : 0.15;
@@ -756,7 +988,6 @@ export class CharacterAnimator {
         break;
       }
       case 'robot_boogie': {
-        // 118 BPM snapped mechanical steps
         const step = Math.floor(t * (118 / 30)) % 4;
         p.hipsY = BASE_HIPS_Y - (step % 2 === 1 ? 0.05 : 0);
         p.chestRy = step === 0 ? 0.32 : step === 2 ? -0.32 : 0;
@@ -775,6 +1006,80 @@ export class CharacterAnimator {
         p.lKnRx = step === 1 ? 0.52 : 0.10;
         p.rHiRx = step === 3 ? -0.32 : 0;
         p.rKnRx = step === 3 ? 0.52 : 0.10;
+        break;
+      }
+      case 'electro_shuffle': {
+        // 126 BPM Melbourne-shuffle footwork + syncopated electro arm chops
+        const beat = t * ((126 / 60) * Math.PI);
+        const s = Math.sin(beat);
+        const s2 = Math.sin(beat * 2);
+        const hop = Math.abs(Math.cos(beat));
+
+        p.hipsX = s * 0.14;
+        p.hipsY = BASE_HIPS_Y - 0.05 + hop * 0.075;
+        p.hipsRy = s * 0.24;
+        p.hipsRz = -s * 0.11;
+        p.chestRy = -s * 0.28;
+        p.chestRx = 0.06;
+        p.headRy = s * 0.14;
+        p.headRx = s2 * 0.08;
+
+        // Cutting-shapes alternating running-man + heel-flick steps
+        p.lHiRx = s > 0 ? -0.78 * s : 0.42 * -s;
+        p.lKnRx = 0.24 + Math.max(0, s) * 0.86;
+        p.lFoRx = s * 0.26;
+        p.lHiRz = 0.10 + Math.max(0, s) * 0.18;
+
+        p.rHiRx = s < 0 ? 0.78 * s : 0.42 * s;
+        p.rKnRx = 0.24 + Math.max(0, -s) * 0.86;
+        p.rFoRx = -s * 0.26;
+        p.rHiRz = -0.10 - Math.max(0, -s) * 0.18;
+
+        // Sharp electro arm pumps & forearm crosses
+        p.lShRx = -0.88 + s2 * 0.46;
+        p.lShRy = -0.45 * s;
+        p.lShRz = 0.44 + Math.abs(s) * 0.36;
+        p.lElRx = -1.24 + s * 0.25;
+
+        p.rShRx = -0.88 - s2 * 0.46;
+        p.rShRy = 0.45 * s;
+        p.rShRz = -0.44 - Math.abs(s) * 0.36;
+        p.rElRx = -1.24 - s * 0.25;
+        break;
+      }
+      case 'star_salute': {
+        // 112 BPM heroic royal salute -> triumphant overhead star extension
+        const beat = t * ((112 / 60) * Math.PI);
+        const s = Math.sin(beat);
+        const phrase = Math.sin(beat * 0.5);
+        const saluteWeight = clamp(0.5 + 0.5 * phrase, 0, 1);
+
+        p.hipsY = BASE_HIPS_Y + Math.abs(s) * 0.032;
+        p.hipsRy = phrase * 0.16;
+        p.chestRx = -0.10 + s * 0.05;
+        p.chestRy = -phrase * 0.12;
+        p.headRx = -0.08;
+        p.headRy = phrase * 0.10;
+
+        // Right arm sweeps between crisp forehead salute and high victorious star point
+        p.rShRx = -1.82 * saluteWeight + -2.42 * (1 - saluteWeight);
+        p.rShRy = 0.38 * saluteWeight + -0.12 * (1 - saluteWeight);
+        p.rShRz = -0.46 * saluteWeight + -0.36 * (1 - saluteWeight);
+        p.rElRx = -1.90 * saluteWeight + -0.24 * (1 - saluteWeight);
+        p.rHaRx = 0.2 * saluteWeight;
+
+        // Left arm rests proudly behind hip or balances outward
+        p.lShRx = 0.18 * saluteWeight + -0.45 * (1 - saluteWeight);
+        p.lShRz = 0.46 + (1 - saluteWeight) * 0.35;
+        p.lElRx = -1.15 * saluteWeight + -0.35 * (1 - saluteWeight);
+
+        // Grounded heroic wide stance with crisp alternating march pulse
+        p.lHiRz = 0.12;
+        p.rHiRz = -0.12;
+        p.lHiRx = -Math.max(0, s) * 0.26;
+        p.lKnRx = 0.12 + Math.max(0, s) * 0.40;
+        p.rHiRx = -Math.max(0, -s) * 0.26;
+        p.rKnRx = 0.12 + Math.max(0, -s) * 0.40;
         break;
       }
     }

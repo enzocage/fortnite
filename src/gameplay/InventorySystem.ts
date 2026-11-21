@@ -115,8 +115,8 @@ export class InventorySystem {
     const def = WEAPONS[item.weaponId];
     let remainingStack = Math.max(1, item.stackCount || 1);
 
-    // 1. Merge into existing stackable consumable slots
-    if (def.isConsumable && def.maxStack > 1) {
+    // 1. Merge into existing stackable consumable or throwable slots
+    if ((def.isConsumable || def.isThrowable) && def.maxStack > 1) {
       let mergedSlot = -1;
       for (let i = 1; i < this.slots.length; i++) {
         const existing = this.slots[i];
@@ -199,7 +199,7 @@ export class InventorySystem {
     const item = this.slots[this.activeSlot];
     if (!item) return false;
     const def = WEAPONS[item.weaponId];
-    if (!def.isConsumable) return false;
+    if (!def.isConsumable && !def.isThrowable) return false;
 
     item.stackCount -= 1;
     if (item.stackCount <= 0) {

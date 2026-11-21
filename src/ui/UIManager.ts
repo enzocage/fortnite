@@ -13,6 +13,7 @@ import type {
   MatchSummary,
   ZiplineEntity,
 } from '../types';
+import { type CareerStats, loadCareerStats } from './CareerProfile';
 import { FullMapOverlay } from './FullMapOverlay';
 import { HUDManager } from './HUDManager';
 import { LobbyScreen, saveStoredSettings } from './LobbyScreen';
@@ -149,6 +150,7 @@ export class UIManager {
       this.matchOverlay.clearBanners();
       this.hud.setEmoteWheelOpen(false);
       this.hud.clearTransient();
+      this.lobby.refreshCareerStats();
     } else if (!isEnd) {
       if (wasInactive) {
         this.hud.clearTransient();
@@ -229,6 +231,14 @@ export class UIManager {
     this.matchOverlay.showBanner(banner);
   }
 
+  showPoiDiscover(poiName: string, subtitle: string): void {
+    this.matchOverlay.showPoiDiscover(poiName, subtitle);
+  }
+
+  getCareerStats(): CareerStats {
+    return loadCareerStats();
+  }
+
   getSettings(): GameSettings {
     return this.lobby.getSettings();
   }
@@ -260,6 +270,12 @@ export class UIManager {
       }),
       this.eventBus.on('ui:banner', (banner) => {
         this.showBanner(banner);
+      }),
+      this.eventBus.on('ui:poi_discover', (ev) => {
+        this.showPoiDiscover(ev.poiName, ev.subtitle);
+      }),
+      this.eventBus.on('combat:siphon', (ev) => {
+        this.hud.triggerSiphonFlash(ev.amount, ev.healthAdded, ev.shieldAdded, true);
       }),
       this.eventBus.on('combat:hitmarker', (hm) => {
         this.hud.triggerHitmarker({

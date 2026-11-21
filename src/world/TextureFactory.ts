@@ -3,6 +3,20 @@ import { mulberry32 } from '../core';
 
 type CanvasDrawFn = (ctx: CanvasRenderingContext2D, size: number) => void;
 
+export type BumpTextureKind =
+  | 'terrain'
+  | 'wood'
+  | 'brick'
+  | 'metal'
+  | 'rock'
+  | 'sandstone'
+  | 'castle'
+  | 'cyber'
+  | 'siding'
+  | 'roof'
+  | 'bark'
+  | 'basalt';
+
 function normalizeHex(hex: string): string {
   const c = new THREE.Color(hex);
   return `#${c.getHexString()}`;
@@ -27,6 +41,7 @@ export class TextureFactory {
     draw: CanvasDrawFn,
     repeatX = 1,
     repeatY = 1,
+    isDataMap = false,
   ): THREE.CanvasTexture {
     const cached = this.cache.get(key);
     if (cached) return cached;
@@ -50,7 +65,7 @@ export class TextureFactory {
     }
 
     const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.colorSpace = isDataMap ? THREE.NoColorSpace : THREE.SRGBColorSpace;
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
     texture.repeat.set(repeatX, repeatY);
@@ -238,31 +253,60 @@ export class TextureFactory {
       const ph = s / planks;
       for (let p = 0; p < planks; p++) {
         const y = p * ph;
-        ctx.fillStyle = p % 2 === 0 ? '#c4834b' : '#ac6f3c';
+        ctx.fillStyle = p % 2 === 0 ? '#c8874e' : '#a86b38';
         ctx.fillRect(0, y, s, ph - 2);
 
-        // Grain streaks
-        ctx.strokeStyle = 'rgba(110, 62, 26, 0.28)';
-        ctx.lineWidth = 1.5;
-        for (let g = 0; g < 6; g++) {
-          const gy = y + 6 + rand() * (ph - 12);
+        // Subtle top bevel highlight & bottom plank shadow
+        ctx.fillStyle = 'rgba(255, 224, 180, 0.22)';
+        ctx.fillRect(0, y + 1, s, 2.5);
+        ctx.fillStyle = 'rgba(65, 34, 14, 0.28)';
+        ctx.fillRect(0, y + ph - 5, s, 3);
+
+        // Rich multi-tone woodgrain streaks
+        for (let g = 0; g < 9; g++) {
+          const gy = y + 5 + rand() * (ph - 10);
+          ctx.strokeStyle =
+            g % 3 === 0 ? 'rgba(245, 198, 138, 0.24)' : 'rgba(84, 44, 16, 0.36)';
+          ctx.lineWidth = g % 2 === 0 ? 1.8 : 1.1;
           ctx.beginPath();
           ctx.moveTo(0, gy);
-          ctx.bezierCurveTo(s * 0.33, gy + (rand() - 0.5) * 6, s * 0.66, gy + (rand() - 0.5) * 6, s, gy);
+          ctx.bezierCurveTo(
+            s * 0.33,
+            gy + (rand() - 0.5) * 7,
+            s * 0.66,
+            gy + (rand() - 0.5) * 7,
+            s,
+            gy,
+          );
           ctx.stroke();
         }
 
-        // Plank seam
-        ctx.fillStyle = '#6f4220';
+        // Wood knot detail on alternating planks
+        if (p % 2 === 1) {
+          const kx = ((p * 83 + 52) % (s - 48)) + 24;
+          const ky = y + ph * 0.5;
+          ctx.fillStyle = 'rgba(72, 36, 14, 0.45)';
+          ctx.beginPath();
+          ctx.arc(kx, ky, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(88, 46, 18, 0.35)';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(kx, ky, 8, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Deep plank seam
+        ctx.fillStyle = '#5c3316';
         ctx.fillRect(0, y + ph - 2, s, 2);
 
-        // Staggered vertical joint & nails
+        // Staggered vertical joint & nails with highlight rim
         const vx = ((p * 97 + 43) % (s - 32)) + 16;
         ctx.fillRect(vx, y, 2, ph);
-        ctx.fillStyle = '#473022';
+        ctx.fillStyle = '#382215';
         ctx.beginPath();
-        ctx.arc(vx - 6, y + 8, 2, 0, Math.PI * 2);
-        ctx.arc(vx + 8, y + ph - 9, 2, 0, Math.PI * 2);
+        ctx.arc(vx - 6, y + 8, 2.2, 0, Math.PI * 2);
+        ctx.arc(vx + 8, y + ph - 9, 2.2, 0, Math.PI * 2);
         ctx.fill();
       }
     });
@@ -271,25 +315,45 @@ export class TextureFactory {
   getBrickTexture(): THREE.CanvasTexture {
     return this.createTexture('brick', 256, (ctx, s) => {
       const rand = mulberry32(707);
-      // Mortar base
-      ctx.fillStyle = '#d4cbc0';
+      // Richer contrasting recessed mortar base
+      ctx.fillStyle = '#9b9184';
       ctx.fillRect(0, 0, s, s);
 
       const rows = 8;
       const cols = 4;
       const rh = s / rows;
       const cw = s / cols;
-      const palette = ['#c25943', '#b34d39', '#cc664e', '#a94835'];
+      const palette = ['#c85c44', '#ae4733', '#d46c52', '#9f412f', '#bd533d'];
 
       for (let r = 0; r < rows; r++) {
         const offset = (r % 2) * (cw * 0.5);
         for (let c = -1; c <= cols; c++) {
           const bx = c * cw + offset;
           const by = r * rh;
+          // Recessed mortar shadow lip
+          ctx.fillStyle = 'rgba(42, 34, 28, 0.35)';
+          ctx.fillRect(bx + 1.5, by + 1.5, cw - 3, rh - 3);
+
           ctx.fillStyle = palette[Math.floor(rand() * palette.length)];
-          ctx.fillRect(bx + 2, by + 2, cw - 4, rh - 4);
-          ctx.fillStyle = 'rgba(255,255,255,0.12)';
-          ctx.fillRect(bx + 2, by + 2, cw - 4, 3);
+          ctx.fillRect(bx + 2.5, by + 2.5, cw - 5, rh - 5);
+
+          // Top highlight + bottom shadow bevel
+          ctx.fillStyle = 'rgba(255, 232, 212, 0.22)';
+          ctx.fillRect(bx + 2.5, by + 2.5, cw - 5, 3);
+          ctx.fillStyle = 'rgba(54, 18, 12, 0.26)';
+          ctx.fillRect(bx + 2.5, by + rh - 5.5, cw - 5, 3);
+
+          // Kiln texture flecks
+          for (let f = 0; f < 5; f++) {
+            ctx.fillStyle =
+              rand() > 0.5 ? 'rgba(255,255,255,0.1)' : 'rgba(45,15,10,0.18)';
+            ctx.fillRect(
+              bx + 4 + rand() * (cw - 10),
+              by + 4 + rand() * (rh - 10),
+              2 + rand() * 3,
+              2,
+            );
+          }
         }
       }
     });
@@ -510,21 +574,39 @@ export class TextureFactory {
       ctx.fillStyle = '#d97745';
       ctx.fillRect(0, 0, s, s);
 
-      const bands = 12;
+      const bands = 14;
       const bh = s / bands;
-      const palette = ['#d97745', '#c85a32', '#e5925c', '#b44825', '#df8448'];
+      const palette = ['#dc7b47', '#c2542d', '#ea9962', '#ad4222', '#e1864a', '#cf6436'];
       for (let i = 0; i < bands; i++) {
+        const by = i * bh;
         ctx.fillStyle = palette[i % palette.length];
-        ctx.fillRect(0, i * bh, s, bh);
-        ctx.fillStyle = 'rgba(72, 26, 12, 0.22)';
-        ctx.fillRect(0, i * bh + bh - 2, s, 2);
+        ctx.fillRect(0, by, s, bh);
+
+        // Undulating sedimentary contour ribbon
+        ctx.strokeStyle = i % 2 === 0 ? 'rgba(255, 224, 184, 0.25)' : 'rgba(84, 30, 14, 0.28)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, by + bh * 0.45);
+        ctx.bezierCurveTo(
+          s * 0.3,
+          by + bh * (0.2 + rand() * 0.5),
+          s * 0.7,
+          by + bh * (0.2 + rand() * 0.5),
+          s,
+          by + bh * 0.45,
+        );
+        ctx.stroke();
+
+        // Eroded strata shadow seam
+        ctx.fillStyle = 'rgba(62, 22, 10, 0.34)';
+        ctx.fillRect(0, by + bh - 2.5, s, 2.5);
       }
 
-      for (let i = 0; i < 550; i++) {
+      for (let i = 0; i < 650; i++) {
         const x = rand() * s;
         const y = rand() * s;
-        ctx.fillStyle = rand() > 0.5 ? 'rgba(255,230,195,0.22)' : 'rgba(92,35,16,0.22)';
-        ctx.fillRect(x, y, 2 + rand() * 3, 2);
+        ctx.fillStyle = rand() > 0.48 ? 'rgba(255,235,205,0.26)' : 'rgba(78,28,12,0.26)';
+        ctx.fillRect(x, y, 2 + rand() * 3.5, 2);
       }
     });
   }
@@ -565,14 +647,14 @@ export class TextureFactory {
   getCastleStoneTexture(): THREE.CanvasTexture {
     return this.createTexture('castle_stone', 256, (ctx, s) => {
       const rand = mulberry32(1212);
-      ctx.fillStyle = '#475569';
+      ctx.fillStyle = '#2d3748';
       ctx.fillRect(0, 0, s, s);
 
       const rows = 6;
       const cols = 4;
       const rh = s / rows;
       const cw = s / cols;
-      const stones = ['#94a3b8', '#7c8ba1', '#8392a7', '#6b7a90'];
+      const stones = ['#94a3b8', '#7c8ba1', '#8896ab', '#67778f'];
 
       for (let r = 0; r < rows; r++) {
         const off = (r % 2) * (cw * 0.5);
@@ -581,8 +663,10 @@ export class TextureFactory {
           const y = r * rh;
           ctx.fillStyle = stones[Math.floor(rand() * stones.length)];
           ctx.fillRect(x + 3, y + 3, cw - 6, rh - 6);
-          ctx.fillStyle = 'rgba(255,255,255,0.18)';
+          ctx.fillStyle = 'rgba(255,255,255,0.24)';
           ctx.fillRect(x + 3, y + 3, cw - 6, 4);
+          ctx.fillStyle = 'rgba(15,23,42,0.28)';
+          ctx.fillRect(x + 3, y + rh - 6, cw - 6, 3);
         }
       }
     });
@@ -590,14 +674,24 @@ export class TextureFactory {
 
   getCyberMetalTexture(): THREE.CanvasTexture {
     return this.createTexture('cyber_metal', 256, (ctx, s) => {
+      const rand = mulberry32(1414);
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, s, s);
 
       const grad = ctx.createLinearGradient(0, 0, s, s);
       grad.addColorStop(0, '#1e293b');
+      grad.addColorStop(0.5, '#131d31');
       grad.addColorStop(1, '#090f1f');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, s, s);
+
+      // Brushed metallic micro-striations
+      for (let i = 0; i < 80; i++) {
+        const y = rand() * s;
+        ctx.fillStyle =
+          rand() > 0.5 ? 'rgba(148, 163, 184, 0.08)' : 'rgba(2, 6, 23, 0.16)';
+        ctx.fillRect(0, y, s, 1.5);
+      }
 
       ctx.strokeStyle = '#1e3a5f';
       ctx.lineWidth = 3;
@@ -605,12 +699,15 @@ export class TextureFactory {
       for (let x = 0; x < s; x += step) {
         for (let y = 0; y < s; y += step) {
           ctx.strokeRect(x + 2, y + 2, step - 4, step - 4);
+          ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
+          ctx.fillRect(x + 6, y + 6, 3, 3);
+          ctx.fillRect(x + step - 9, y + step - 9, 3, 3);
         }
       }
 
-      // Glowing cyan circuit accents
-      ctx.strokeStyle = '#22d3ee';
-      ctx.lineWidth = 2.5;
+      // Dual-layer glowing cyan & electric blue circuit traces
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
+      ctx.lineWidth = 4.5;
       ctx.beginPath();
       ctx.moveTo(0, 32);
       ctx.lineTo(96, 32);
@@ -620,12 +717,30 @@ export class TextureFactory {
       ctx.lineTo(32, 160);
       ctx.lineTo(64, 128);
       ctx.lineTo(192, 128);
+      ctx.lineTo(224, 96);
+      ctx.lineTo(224, 0);
       ctx.stroke();
 
-      ctx.fillStyle = '#38bdf8';
+      ctx.strokeStyle = '#22d3ee';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 32);
+      ctx.lineTo(96, 32);
+      ctx.lineTo(128, 64);
+      ctx.lineTo(s, 64);
+      ctx.moveTo(32, s);
+      ctx.lineTo(32, 160);
+      ctx.lineTo(64, 128);
+      ctx.lineTo(192, 128);
+      ctx.lineTo(224, 96);
+      ctx.lineTo(224, 0);
+      ctx.stroke();
+
+      ctx.fillStyle = '#67e8f9';
       ctx.beginPath();
       ctx.arc(96, 32, 4, 0, Math.PI * 2);
       ctx.arc(64, 128, 4, 0, Math.PI * 2);
+      ctx.arc(192, 128, 4, 0, Math.PI * 2);
       ctx.fill();
     });
   }
@@ -740,6 +855,203 @@ export class TextureFactory {
         ctx.fillRect(58, 174, 140, 22);
       }
     });
+  }
+
+  getBumpTexture(kind: BumpTextureKind = 'terrain'): THREE.CanvasTexture {
+    return this.createTexture(
+      `bump:${kind}`,
+      256,
+      (ctx, s) => {
+        const rand = mulberry32(2000 + kind.charCodeAt(0) * 97 + kind.length * 31);
+        ctx.fillStyle = '#808080';
+        ctx.fillRect(0, 0, s, s);
+
+        if (kind === 'brick' || kind === 'castle') {
+          ctx.fillStyle = '#242424';
+          ctx.fillRect(0, 0, s, s);
+          const rows = kind === 'brick' ? 8 : 6;
+          const cols = 4;
+          const rh = s / rows;
+          const cw = s / cols;
+          const gap = kind === 'brick' ? 2.5 : 3.5;
+
+          for (let r = 0; r < rows; r++) {
+            const off = (r % 2) * (cw * 0.5);
+            for (let c = -1; c <= cols; c++) {
+              const bx = c * cw + off;
+              const by = r * rh;
+              const v = Math.floor(175 + rand() * 55);
+              ctx.fillStyle = `rgb(${v},${v},${v})`;
+              ctx.fillRect(bx + gap, by + gap, cw - gap * 2, rh - gap * 2);
+              ctx.fillStyle = '#f2f2f2';
+              ctx.fillRect(bx + gap, by + gap, cw - gap * 2, 2.5);
+              ctx.fillStyle = '#525252';
+              ctx.fillRect(bx + gap, by + rh - gap - 2.5, cw - gap * 2, 2.5);
+            }
+          }
+          return;
+        }
+
+        if (kind === 'wood' || kind === 'bark') {
+          const planks = kind === 'wood' ? 6 : 10;
+          const ph = s / planks;
+          for (let p = 0; p < planks; p++) {
+            const pos = p * ph;
+            const tone = p % 2 === 0 ? '#a8a8a8' : '#949494';
+            ctx.fillStyle = tone;
+            if (kind === 'wood') {
+              ctx.fillRect(0, pos, s, ph - 2);
+              for (let g = 0; g < 7; g++) {
+                const gy = pos + 5 + rand() * (ph - 10);
+                ctx.strokeStyle = g % 2 === 0 ? '#d8d8d8' : '#585858';
+                ctx.lineWidth = 1.4;
+                ctx.beginPath();
+                ctx.moveTo(0, gy);
+                ctx.bezierCurveTo(
+                  s * 0.33,
+                  gy + (rand() - 0.5) * 6,
+                  s * 0.66,
+                  gy + (rand() - 0.5) * 6,
+                  s,
+                  gy,
+                );
+                ctx.stroke();
+              }
+              ctx.fillStyle = '#1e1e1e';
+              ctx.fillRect(0, pos + ph - 2.5, s, 2.5);
+              const vx = ((p * 97 + 43) % (s - 32)) + 16;
+              ctx.fillRect(vx, pos, 2.5, ph);
+            } else {
+              ctx.fillRect(pos, 0, ph - 2, s);
+              ctx.fillStyle = '#262626';
+              ctx.fillRect(pos + ph - 3, 0, 3, s);
+              ctx.strokeStyle = '#d4d4d4';
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(pos + ph * 0.4, 0);
+              ctx.lineTo(pos + ph * 0.4 + (rand() - 0.5) * 8, s);
+              ctx.stroke();
+            }
+          }
+          return;
+        }
+
+        if (kind === 'metal' || kind === 'cyber') {
+          const grad = ctx.createLinearGradient(0, 0, s, s);
+          grad.addColorStop(0, '#c0c0c0');
+          grad.addColorStop(0.5, '#969696');
+          grad.addColorStop(1, '#787878');
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, s, s);
+
+          // Brushed striations
+          for (let i = 0; i < 90; i++) {
+            const y = rand() * s;
+            ctx.fillStyle = rand() > 0.5 ? '#d8d8d8' : '#646464';
+            ctx.fillRect(0, y, s, 1);
+          }
+
+          const step = kind === 'cyber' ? 64 : 128;
+          ctx.strokeStyle = '#242424';
+          ctx.lineWidth = 3;
+          for (let x = 0; x < s; x += step) {
+            for (let y = 0; y < s; y += step) {
+              ctx.strokeRect(x + 2, y + 2, step - 4, step - 4);
+              ctx.fillStyle = '#f0f0f0';
+              for (const rx of [x + 9, x + step - 9]) {
+                for (const ry of [y + 9, y + step - 9]) {
+                  ctx.beginPath();
+                  ctx.arc(rx, ry, 2.5, 0, Math.PI * 2);
+                  ctx.fill();
+                }
+              }
+            }
+          }
+
+          if (kind === 'cyber') {
+            ctx.strokeStyle = '#202020';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(0, 32);
+            ctx.lineTo(96, 32);
+            ctx.lineTo(128, 64);
+            ctx.lineTo(s, 64);
+            ctx.moveTo(32, s);
+            ctx.lineTo(32, 160);
+            ctx.lineTo(64, 128);
+            ctx.lineTo(192, 128);
+            ctx.stroke();
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(96, 32, 4, 0, Math.PI * 2);
+            ctx.arc(64, 128, 4, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          return;
+        }
+
+        if (kind === 'sandstone' || kind === 'siding' || kind === 'roof') {
+          const bands = kind === 'sandstone' ? 14 : 10;
+          const bh = s / bands;
+          for (let i = 0; i < bands; i++) {
+            const by = i * bh;
+            const hi = Math.floor(155 + (i % 3) * 30);
+            ctx.fillStyle = `rgb(${hi},${hi},${hi})`;
+            ctx.fillRect(0, by, s, bh - 2);
+            ctx.fillStyle = '#2c2c2c';
+            ctx.fillRect(0, by + bh - 2.5, s, 2.5);
+            if (kind === 'sandstone') {
+              ctx.strokeStyle = '#d8d8d8';
+              ctx.lineWidth = 1.6;
+              ctx.beginPath();
+              ctx.moveTo(0, by + bh * 0.45);
+              ctx.bezierCurveTo(
+                s * 0.35,
+                by + bh * (0.25 + rand() * 0.4),
+                s * 0.7,
+                by + bh * (0.25 + rand() * 0.4),
+                s,
+                by + bh * 0.45,
+              );
+              ctx.stroke();
+            }
+          }
+          return;
+        }
+
+        // 'terrain' | 'rock' | 'basalt'
+        const blobCount = kind === 'terrain' ? 420 : 120;
+        for (let i = 0; i < blobCount; i++) {
+          const x = rand() * s;
+          const y = rand() * s;
+          const w = kind === 'terrain' ? 2 + rand() * 5 : 12 + rand() * 26;
+          const h = kind === 'terrain' ? 2 + rand() * 5 : 10 + rand() * 24;
+          const v = rand() > 0.5 ? Math.floor(150 + rand() * 85) : Math.floor(60 + rand() * 55);
+          ctx.fillStyle = `rgb(${v},${v},${v})`;
+          for (const ox of [-s, 0, s]) {
+            for (const oy of [-s, 0, s]) {
+              if (x + ox < -w || x + ox > s + w || y + oy < -h || y + oy > s + h) continue;
+              ctx.fillRect(x + ox, y + oy, w, h);
+            }
+          }
+        }
+        ctx.strokeStyle = '#282828';
+        ctx.lineWidth = kind === 'terrain' ? 1.2 : 2.2;
+        const cracks = kind === 'terrain' ? 110 : 38;
+        for (let i = 0; i < cracks; i++) {
+          const x = rand() * s;
+          const y = rand() * s;
+          const span = kind === 'terrain' ? 8 : 38;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x + (rand() - 0.5) * span, y + (rand() - 0.5) * span);
+          ctx.stroke();
+        }
+      },
+      1,
+      1,
+      true,
+    );
   }
 
   dispose(): void {

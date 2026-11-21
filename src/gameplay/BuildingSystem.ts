@@ -675,6 +675,32 @@ export class BuildingSystem {
     group.add(m);
   }
 
+  private addOrientedBoxPart(
+    group: THREE.Group,
+    mat: THREE.Material,
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number,
+    width: number,
+    height: number,
+  ): void {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const dz = bz - az;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-4) return;
+    const m = new THREE.Mesh(this.unitBoxGeo, mat);
+    m.position.set((ax + bx) * 0.5, (ay + by) * 0.5, (az + bz) * 0.5);
+    m.scale.set(width, height, len);
+    m.lookAt(bx, by, bz);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    group.add(m);
+  }
+
   private populatePieceVisualMeshes(visual: PieceVisual): void {
     this.clearVisualGroupMeshes(visual);
     const p = visual.piece;
@@ -683,43 +709,90 @@ export class BuildingSystem {
     if (p.type === 'wall') {
       const tileW = GRID_XZ / 3;
       const tileH = GRID_Y / 3;
+      let hasTopRow = false;
+      let hasBotRow = false;
 
       for (let row = 0; row < 3; row++) {
         for (let col = 0; col < 3; col++) {
           if (isTileRemoved(p.editMask, row * 3 + col)) continue;
+          if (row === 0) hasTopRow = true;
+          if (row === 2) hasBotRow = true;
           const cy = (2 - row + 0.5) * tileH;
           const cOffset = (col + 0.5) * tileW;
 
           if (p.dir === 'N') {
             this.addBoxPart(g, visual.mainMat, cOffset, cy, 0, tileW - 0.02, tileH - 0.02, WALL_THICK);
-            // Stylized plank/brick/rib trim
             if (p.material === 'wood') {
               this.addBoxPart(g, visual.trimMat, cOffset, cy, 0, tileW - 0.04, 0.08, WALL_THICK + 0.03);
+              this.addBoxPart(g, visual.trimMat, cOffset, cy + tileH * 0.27, 0, tileW - 0.06, 0.045, WALL_THICK + 0.02);
+              this.addBoxPart(g, visual.trimMat, cOffset, cy - tileH * 0.27, 0, tileW - 0.06, 0.045, WALL_THICK + 0.02);
             } else if (p.material === 'brick') {
               this.addBoxPart(g, visual.trimMat, cOffset, cy - tileH * 0.28, 0, tileW * 0.85, 0.09, WALL_THICK + 0.03);
+              this.addBoxPart(g, visual.trimMat, cOffset - tileW * 0.18, cy + tileH * 0.14, 0, tileW * 0.36, 0.11, WALL_THICK + 0.025);
+              this.addBoxPart(g, visual.trimMat, cOffset + tileW * 0.2, cy + tileH * 0.3, 0, tileW * 0.32, 0.09, WALL_THICK + 0.025);
             } else {
               this.addBoxPart(g, visual.trimMat, cOffset, cy, 0, 0.1, tileH - 0.04, WALL_THICK + 0.03);
+              this.addBoxPart(g, visual.trimMat, cOffset, cy, 0, tileW - 0.06, 0.08, WALL_THICK + 0.025);
+              this.addBoxPart(g, visual.trimMat, cOffset - tileW * 0.3, cy + tileH * 0.3, 0, 0.06, 0.06, WALL_THICK + 0.05);
+              this.addBoxPart(g, visual.trimMat, cOffset + tileW * 0.3, cy - tileH * 0.3, 0, 0.06, 0.06, WALL_THICK + 0.05);
             }
           } else {
             this.addBoxPart(g, visual.mainMat, 0, cy, cOffset, WALL_THICK, tileH - 0.02, tileW - 0.02);
             if (p.material === 'wood') {
               this.addBoxPart(g, visual.trimMat, 0, cy, cOffset, WALL_THICK + 0.03, 0.08, tileW - 0.04);
+              this.addBoxPart(g, visual.trimMat, 0, cy + tileH * 0.27, cOffset, WALL_THICK + 0.02, 0.045, tileW - 0.06);
+              this.addBoxPart(g, visual.trimMat, 0, cy - tileH * 0.27, cOffset, WALL_THICK + 0.02, 0.045, tileW - 0.06);
             } else if (p.material === 'brick') {
               this.addBoxPart(g, visual.trimMat, 0, cy - tileH * 0.28, cOffset, WALL_THICK + 0.03, 0.09, tileW * 0.85);
+              this.addBoxPart(g, visual.trimMat, 0, cy + tileH * 0.14, cOffset - tileW * 0.18, WALL_THICK + 0.025, 0.11, tileW * 0.36);
+              this.addBoxPart(g, visual.trimMat, 0, cy + tileH * 0.3, cOffset + tileW * 0.2, WALL_THICK + 0.025, 0.09, tileW * 0.32);
             } else {
               this.addBoxPart(g, visual.trimMat, 0, cy, cOffset, WALL_THICK + 0.03, tileH - 0.04, 0.1);
+              this.addBoxPart(g, visual.trimMat, 0, cy, cOffset, WALL_THICK + 0.025, 0.08, tileW - 0.06);
+              this.addBoxPart(g, visual.trimMat, 0, cy + tileH * 0.3, cOffset - tileW * 0.3, WALL_THICK + 0.05, 0.06, 0.06);
+              this.addBoxPart(g, visual.trimMat, 0, cy - tileH * 0.3, cOffset + tileW * 0.3, WALL_THICK + 0.05, 0.06, 0.06);
             }
           }
         }
       }
 
-      // Corner/top vertical framing beams if full or edited
+      // Corner/top/bottom structural framing beams & rivets
       if (p.dir === 'N') {
-        this.addBoxPart(g, visual.trimMat, 0.06, GRID_Y * 0.5, 0, 0.1, GRID_Y, WALL_THICK + 0.04);
-        this.addBoxPart(g, visual.trimMat, GRID_XZ - 0.06, GRID_Y * 0.5, 0, 0.1, GRID_Y, WALL_THICK + 0.04);
+        this.addBoxPart(g, visual.trimMat, 0.06, GRID_Y * 0.5, 0, 0.11, GRID_Y, WALL_THICK + 0.04);
+        this.addBoxPart(g, visual.trimMat, GRID_XZ - 0.06, GRID_Y * 0.5, 0, 0.11, GRID_Y, WALL_THICK + 0.04);
+        if (hasTopRow) {
+          this.addBoxPart(g, visual.trimMat, GRID_XZ * 0.5, GRID_Y - 0.06, 0, GRID_XZ, 0.12, WALL_THICK + 0.05);
+        }
+        if (hasBotRow) {
+          this.addBoxPart(g, visual.trimMat, GRID_XZ * 0.5, 0.06, 0, GRID_XZ, 0.12, WALL_THICK + 0.05);
+        }
+        if (p.material === 'wood' && p.editMask === 0) {
+          this.addOrientedBoxPart(g, visual.trimMat, 0.14, 0.14, 0, GRID_XZ - 0.14, GRID_Y - 0.14, 0, WALL_THICK + 0.03, 0.09);
+        } else if (p.material === 'metal') {
+          for (let r = 0; r < 4; r++) {
+            const ry = 0.25 + r * ((GRID_Y - 0.5) / 3);
+            this.addBoxPart(g, visual.trimMat, 0.07, ry, 0, 0.08, 0.08, WALL_THICK + 0.07);
+            this.addBoxPart(g, visual.trimMat, GRID_XZ - 0.07, ry, 0, 0.08, 0.08, WALL_THICK + 0.07);
+          }
+        }
       } else {
-        this.addBoxPart(g, visual.trimMat, 0, GRID_Y * 0.5, 0.06, WALL_THICK + 0.04, GRID_Y, 0.1);
-        this.addBoxPart(g, visual.trimMat, 0, GRID_Y * 0.5, GRID_XZ - 0.06, WALL_THICK + 0.04, GRID_Y, 0.1);
+        this.addBoxPart(g, visual.trimMat, 0, GRID_Y * 0.5, 0.06, WALL_THICK + 0.04, GRID_Y, 0.11);
+        this.addBoxPart(g, visual.trimMat, 0, GRID_Y * 0.5, GRID_XZ - 0.06, WALL_THICK + 0.04, GRID_Y, 0.11);
+        if (hasTopRow) {
+          this.addBoxPart(g, visual.trimMat, 0, GRID_Y - 0.06, GRID_XZ * 0.5, WALL_THICK + 0.05, 0.12, GRID_XZ);
+        }
+        if (hasBotRow) {
+          this.addBoxPart(g, visual.trimMat, 0, 0.06, GRID_XZ * 0.5, WALL_THICK + 0.05, 0.12, GRID_XZ);
+        }
+        if (p.material === 'wood' && p.editMask === 0) {
+          this.addOrientedBoxPart(g, visual.trimMat, 0, 0.14, 0.14, 0, GRID_Y - 0.14, GRID_XZ - 0.14, WALL_THICK + 0.03, 0.09);
+        } else if (p.material === 'metal') {
+          for (let r = 0; r < 4; r++) {
+            const ry = 0.25 + r * ((GRID_Y - 0.5) / 3);
+            this.addBoxPart(g, visual.trimMat, 0, ry, 0.07, WALL_THICK + 0.07, 0.08, 0.08);
+            this.addBoxPart(g, visual.trimMat, 0, ry, GRID_XZ - 0.07, WALL_THICK + 0.07, 0.08, 0.08);
+          }
+        }
       }
     } else if (p.type === 'floor') {
       const tile = GRID_XZ / 3;
@@ -730,7 +803,21 @@ export class BuildingSystem {
           const cz = (row + 0.5) * tile;
           this.addBoxPart(g, visual.mainMat, cx, -FLOOR_THICK * 0.5, cz, tile - 0.02, FLOOR_THICK, tile - 0.02);
           this.addBoxPart(g, visual.trimMat, cx, -FLOOR_THICK * 0.5, cz, tile - 0.06, FLOOR_THICK + 0.02, 0.1);
+          if (p.material === 'wood') {
+            this.addBoxPart(g, visual.trimMat, cx, -FLOOR_THICK * 0.5, cz - tile * 0.28, tile - 0.06, FLOOR_THICK + 0.015, 0.06);
+          } else if (p.material === 'brick') {
+            this.addBoxPart(g, visual.trimMat, cx - tile * 0.22, -FLOOR_THICK * 0.5, cz + tile * 0.22, tile * 0.4, FLOOR_THICK + 0.02, tile * 0.4);
+          } else {
+            this.addBoxPart(g, visual.trimMat, cx - tile * 0.35, -FLOOR_THICK * 0.5, cz - tile * 0.35, 0.07, FLOOR_THICK + 0.04, 0.07);
+            this.addBoxPart(g, visual.trimMat, cx + tile * 0.35, -FLOOR_THICK * 0.5, cz + tile * 0.35, 0.07, FLOOR_THICK + 0.04, 0.07);
+          }
         }
+      }
+      if (p.editMask === 0) {
+        this.addBoxPart(g, visual.trimMat, GRID_XZ * 0.5, -FLOOR_THICK * 0.5, 0.06, GRID_XZ, FLOOR_THICK + 0.03, 0.12);
+        this.addBoxPart(g, visual.trimMat, GRID_XZ * 0.5, -FLOOR_THICK * 0.5, GRID_XZ - 0.06, GRID_XZ, FLOOR_THICK + 0.03, 0.12);
+        this.addBoxPart(g, visual.trimMat, 0.06, -FLOOR_THICK * 0.5, GRID_XZ * 0.5, 0.12, FLOOR_THICK + 0.03, GRID_XZ);
+        this.addBoxPart(g, visual.trimMat, GRID_XZ - 0.06, -FLOOR_THICK * 0.5, GRID_XZ * 0.5, 0.12, FLOOR_THICK + 0.03, GRID_XZ);
       }
     } else if (p.type === 'ramp') {
       const geo = this.createRampBufferGeometry(p.editMask, p.rotation);
@@ -740,7 +827,22 @@ export class BuildingSystem {
       mesh.receiveShadow = true;
       g.add(mesh);
 
-      // Add subtle tread cleats along ramp center for readable silhouette
+      // Sloped side stringer frame rails along intact edges
+      if (p.editMask === 0) {
+        if (p.rotation === 0 || p.rotation === 2) {
+          const y0 = getRampHeightAtLocal(0.06, 0, p.rotation);
+          const y1 = getRampHeightAtLocal(0.06, GRID_XZ, p.rotation);
+          this.addOrientedBoxPart(g, visual.trimMat, 0.07, y0 - 0.03, 0, 0.07, y1 - 0.03, GRID_XZ, 0.13, 0.16);
+          this.addOrientedBoxPart(g, visual.trimMat, GRID_XZ - 0.07, y0 - 0.03, 0, GRID_XZ - 0.07, y1 - 0.03, GRID_XZ, 0.13, 0.16);
+        } else {
+          const y0 = getRampHeightAtLocal(0, 0.06, p.rotation);
+          const y1 = getRampHeightAtLocal(GRID_XZ, 0.06, p.rotation);
+          this.addOrientedBoxPart(g, visual.trimMat, 0, y0 - 0.03, 0.07, GRID_XZ, y1 - 0.03, 0.07, 0.13, 0.16);
+          this.addOrientedBoxPart(g, visual.trimMat, 0, y0 - 0.03, GRID_XZ - 0.07, GRID_XZ, y1 - 0.03, GRID_XZ - 0.07, 0.13, 0.16);
+        }
+      }
+
+      // Add subtle tread cleats + corner rivets along ramp center for readable silhouette
       const steps = 6;
       for (let s = 0; s < steps; s++) {
         const frac = (s + 0.5) / steps;
@@ -764,10 +866,12 @@ export class BuildingSystem {
         }
         const col = clamp(Math.floor(lx / (GRID_XZ / 3)), 0, 2);
         const row = clamp(Math.floor(lz / (GRID_XZ / 3)), 0, 2);
-        // Check unrotated tile match cleanly via center height
         const ly = getRampHeightAtLocal(lx, lz, p.rotation);
         if (p.editMask === 0 || !this.isRampWorldCellRemoved(p, row, col)) {
           this.addBoxPart(g, visual.trimMat, lx, ly - 0.02, lz, sx, 0.06, sz);
+          if (p.material === 'metal') {
+            this.addBoxPart(g, visual.trimMat, lx - sx * 0.42, ly + 0.02, lz - sz * 0.42, 0.07, 0.05, 0.07);
+          }
         }
       }
     } else if (p.type === 'roof') {
@@ -778,18 +882,22 @@ export class BuildingSystem {
       mesh.receiveShadow = true;
       g.add(mesh);
 
-      // Apex cap detail if center tile intact
+      // Apex cap + hip ridge beams + eave fascia frame
       if (!isTileRemoved(p.editMask, 4)) {
-        this.addBoxPart(
-          g,
-          visual.trimMat,
-          GRID_XZ * 0.5,
-          ROOF_HEIGHT - 0.03,
-          GRID_XZ * 0.5,
-          0.32,
-          0.08,
-          0.32,
-        );
+        const ax = GRID_XZ * 0.5;
+        const ay = ROOF_HEIGHT;
+        const az = GRID_XZ * 0.5;
+        this.addBoxPart(g, visual.trimMat, ax, ay - 0.03, az, 0.36, 0.09, 0.36);
+        if (p.editMask === 0) {
+          this.addOrientedBoxPart(g, visual.trimMat, 0.04, 0, 0.04, ax, ay, az, 0.1, 0.1);
+          this.addOrientedBoxPart(g, visual.trimMat, GRID_XZ - 0.04, 0, 0.04, ax, ay, az, 0.1, 0.1);
+          this.addOrientedBoxPart(g, visual.trimMat, GRID_XZ - 0.04, 0, GRID_XZ - 0.04, ax, ay, az, 0.1, 0.1);
+          this.addOrientedBoxPart(g, visual.trimMat, 0.04, 0, GRID_XZ - 0.04, ax, ay, az, 0.1, 0.1);
+          this.addBoxPart(g, visual.trimMat, GRID_XZ * 0.5, -0.04, 0.05, GRID_XZ, 0.09, 0.1);
+          this.addBoxPart(g, visual.trimMat, GRID_XZ * 0.5, -0.04, GRID_XZ - 0.05, GRID_XZ, 0.09, 0.1);
+          this.addBoxPart(g, visual.trimMat, 0.05, -0.04, GRID_XZ * 0.5, 0.1, 0.09, GRID_XZ);
+          this.addBoxPart(g, visual.trimMat, GRID_XZ - 0.05, -0.04, GRID_XZ * 0.5, 0.1, 0.09, GRID_XZ);
+        }
       }
     }
   }
@@ -1021,9 +1129,9 @@ export class BuildingSystem {
       visual.mainMat.opacity = targetOpacity;
       visual.trimMat.opacity = isBeingEdited ? 0.35 : 0.85 + 0.15 * p.buildProgress;
 
-      // Damage crack darkening
-      const hpRatio = clamp(p.hp / p.targetMaxHp, 0, 1);
-      const damageDarken = hpRatio < 0.85 ? (1 - hpRatio / 0.85) * 0.62 : 0;
+      // Subtle damage crack darkening relative to current build maxHp
+      const hpRatio = clamp(p.hp / Math.max(1, p.maxHp), 0, 1);
+      const damageDarken = hpRatio < 0.96 ? (1 - hpRatio / 0.96) * 0.62 : 0;
 
       tmpBase.setHex(visual.baseColorHex).lerp(darkTarget, damageDarken);
       tmpTrim.setHex(visual.trimColorHex).lerp(darkTarget, damageDarken);
@@ -1095,6 +1203,57 @@ export class BuildingSystem {
     }
 
     return { destroyed: false, piece };
+  }
+
+  repairPiece(
+    pieceId: string,
+    availableMats?: number,
+  ): { repaired: boolean; cost: number; hpRestored: number; piece?: BuildPiece } {
+    const piece = this.piecesById.get(pieceId);
+    if (!piece || piece.hp <= 0 || piece.hp >= piece.maxHp - 0.01) {
+      return { repaired: false, cost: 0, hpRestored: 0, piece };
+    }
+
+    const missingHp = piece.maxHp - piece.hp;
+    const fullCost = Math.max(
+      1,
+      Math.ceil((missingHp / Math.max(1, piece.targetMaxHp)) * BUILD_COST),
+    );
+
+    let cost = fullCost;
+    let hpRestored = missingHp;
+
+    if (availableMats !== undefined) {
+      if (availableMats <= 0) {
+        return { repaired: false, cost: 0, hpRestored: 0, piece };
+      }
+      if (availableMats < fullCost) {
+        cost = availableMats;
+        hpRestored = Math.max(1, Math.round(missingHp * (availableMats / fullCost)));
+      }
+    }
+
+    piece.hp = Math.min(piece.maxHp, piece.hp + hpRestored);
+
+    const visual = this.visualsById.get(pieceId);
+    if (visual) {
+      visual.hitFlashTimer = 0.12;
+      visual.popAge = 0.05;
+    }
+
+    const center = this.getPieceWorldCenter(piece);
+    this.eventBus.emit('sound:play', {
+      id: 'build_repair',
+      position: center,
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:build_pop', {
+      position: center,
+      material: piece.material,
+      pieceType: piece.type,
+    });
+
+    return { repaired: true, cost, hpRestored, piece };
   }
 
   private removePieceInternal(pieceId: string): void {

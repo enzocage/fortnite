@@ -117,11 +117,65 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <circle cx="33" cy="48" r="1.8" fill="#ecfeff"/>
   </svg>`,
 
-  heavy_shotgun: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="10" y="28" width="44" height="10" rx="2" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/></svg>`,
-  mythic_blade_rifle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="8" y="27" width="48" height="11" rx="2" fill="#facc15" stroke="#0f172a" stroke-width="2"/></svg>`,
-  shockwave_grenade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="34" r="14" fill="#a855f7" stroke="#0f172a" stroke-width="2"/></svg>`,
-  frag_grenade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="34" r="14" fill="#15803d" stroke="#0f172a" stroke-width="2"/></svg>`,
-  chug_splash: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="20" y="18" width="24" height="30" rx="5" fill="#38bdf8" stroke="#0f172a" stroke-width="2"/></svg>`,
+  heavy_shotgun: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M5 36L16 30L18 39L7 44L5 36Z" fill="#475569" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M16 26H43V35H34L36 45H30L28 36H22L19 46H14L16 26Z" fill="#f8fafc" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="43" y="25.5" width="16" height="5" rx="1.2" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.5"/>
+    <rect x="43" y="31.5" width="12" height="3.2" rx="1" fill="#94a3b8" stroke="#0f172a" stroke-width="1.4"/>
+    <path d="M46 27H48V29H46V27ZM50 27H52V29H50V27ZM54 27H56V29H54V27Z" fill="#0f172a"/>
+    <rect x="20" y="28.5" width="18" height="3.4" rx="1" fill="#f97316"/>
+    <circle cx="32" cy="41.5" r="7.5" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.8"/>
+    <circle cx="32" cy="41.5" r="3.2" fill="#334155"/>
+    <rect x="57" y="26" width="3" height="4" rx="0.8" fill="#f97316"/>
+  </svg>`,
+
+  mythic_blade_rifle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M6 34L17 29L19 37L9 42L6 34Z" fill="#f59e0b" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M17 26H45L47 34H37L40 48H33L30 35H23L20 45H15L17 26Z" fill="#fef9c3" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M24 20H37L39 26H22L24 20Z" fill="#ffd000" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <rect x="26" y="22" width="9" height="2.4" rx="1" fill="#22d3ee"/>
+    <path d="M45 27.5H57L60 25L56 32.5H45V27.5Z" fill="#ffd000" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <rect x="22" y="29" width="21" height="3" rx="1.2" fill="#22d3ee"/>
+    <rect x="46" y="29" width="11" height="2" rx="1" fill="#67e8f9"/>
+    <rect x="33.5" y="37" width="3.5" height="8" rx="1" fill="#22d3ee"/>
+  </svg>`,
+
+  shockwave_grenade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M13 24C9.5 30 9.5 38 13 44M51 24C54.5 30 54.5 38 51 44" stroke="#22d3ee" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M18 19C14.5 22 13 25 13 25M46 19C49.5 22 51 25 51 25" stroke="#c084fc" stroke-width="2" stroke-linecap="round"/>
+    <rect x="26" y="10" width="12" height="7" rx="2" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.8"/>
+    <circle cx="22" cy="14" r="3" stroke="#22d3ee" stroke-width="2"/>
+    <circle cx="32" cy="35" r="16" fill="#7e22ce" stroke="#0f172a" stroke-width="2.2"/>
+    <circle cx="32" cy="35" r="11" fill="#a855f7"/>
+    <path d="M32 23L39 35L32 47L25 35L32 23Z" fill="#22d3ee" stroke="#f5d0fe" stroke-width="1.4" stroke-linejoin="round"/>
+    <circle cx="32" cy="35" r="3.5" fill="#ffffff"/>
+    <path d="M18 35H25M39 35H46" stroke="#f5d0fe" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
+
+  frag_grenade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <rect x="27" y="10" width="10" height="7" rx="1.5" fill="#94a3b8" stroke="#0f172a" stroke-width="1.8"/>
+    <path d="M37 13H43C46 13 48 16 48 21L46 31" stroke="#cbd5e1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="22" cy="14" r="4.5" stroke="#fbbf24" stroke-width="2.6"/>
+    <rect x="19" y="17" width="26" height="34" rx="12" fill="#15803d" stroke="#0f172a" stroke-width="2.2"/>
+    <path d="M21 26H43M20 35H44M21 43H43" stroke="#052e16" stroke-width="2"/>
+    <path d="M27 18V50M37 18V50" stroke="#052e16" stroke-width="2"/>
+    <rect x="20" y="33" width="24" height="3.2" fill="#facc15" opacity="0.85"/>
+    <path d="M24 22C24 20 26 19 28 19" stroke="#86efac" stroke-width="2.2" stroke-linecap="round"/>
+  </svg>`,
+
+  chug_splash: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M14 21C11 16 15 11 19 15M49 20C53 15 50 10 46 14M32 10V14" stroke="#a5f3fc" stroke-width="2.4" stroke-linecap="round"/>
+    <circle cx="12" cy="27" r="2.2" fill="#67e8f9"/>
+    <circle cx="52" cy="26" r="2" fill="#67e8f9"/>
+    <rect x="18" y="19" width="11" height="10" rx="2" fill="#22d3ee" stroke="#0f172a" stroke-width="1.6"/>
+    <rect x="35" y="19" width="11" height="10" rx="2" fill="#38bdf8" stroke="#0f172a" stroke-width="1.6"/>
+    <rect x="20" y="15" width="7" height="4" rx="1" fill="#e0f2fe" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="37" y="15" width="7" height="4" rx="1" fill="#e0f2fe" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="14" y="27" width="36" height="25" rx="4" fill="#0284c7" stroke="#0f172a" stroke-width="2.2"/>
+    <rect x="18" y="31" width="28" height="14" rx="2" fill="#0ea5e9"/>
+    <path d="M32 27V52M14 37H50" stroke="#075985" stroke-width="2"/>
+    <path d="M26 36H38M32 30V42" stroke="#e0f2fe" stroke-width="2.8" stroke-linecap="round"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {

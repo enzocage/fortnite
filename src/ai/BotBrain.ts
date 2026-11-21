@@ -1,7 +1,9 @@
 import type {
   AmmoType,
+  BuildPiece,
   Difficulty,
   ItemInstance,
+  LaunchPadEntity,
   MaterialType,
   POIDef,
   Vec3Like,
@@ -111,6 +113,55 @@ const SKYDIVE_DESCENT_SPEED = 24.0;
 const GLIDE_HORIZONTAL_SPEED = 15.0;
 const GLIDE_DESCENT_SPEED = 7.5;
 
+const SCORCHED_CALDERA_POI = POIS.find((p) => p.id === 'scorched_caldera');
+export const VOLCANO_LAVA_CENTER_X = SCORCHED_CALDERA_POI
+  ? SCORCHED_CALDERA_POI.x - 19
+  : -194;
+export const VOLCANO_LAVA_CENTER_Z = SCORCHED_CALDERA_POI
+  ? SCORCHED_CALDERA_POI.z + 17
+  : 142;
+export const VOLCANO_LAVA_SAFE_RADIUS = 14.0;
+
+/**
+ * Returns true if the world XZ coordinate lies within the Scorched Caldera molten lava hazard radius.
+ */
+export function isInVolcanoLavaHazard(
+  x: number,
+  z: number,
+  safeRadius = VOLCANO_LAVA_SAFE_RADIUS,
+): boolean {
+  return dist2D(x, z, VOLCANO_LAVA_CENTER_X, VOLCANO_LAVA_CENTER_Z) < safeRadius;
+}
+
+/**
+ * Clamps a world XZ point outside the Scorched Caldera molten lava crater.
+ */
+export function clampOutsideVolcanoLava(
+  x: number,
+  z: number,
+  safeRadius = VOLCANO_LAVA_SAFE_RADIUS + 1.5,
+): { x: number; z: number } {
+  const dx = x - VOLCANO_LAVA_CENTER_X;
+  const dz = z - VOLCANO_LAVA_CENTER_Z;
+  const d = Math.hypot(dx, dz);
+  if (d >= safeRadius) return { x, z };
+  if (d < 1e-4) {
+    return { x: VOLCANO_LAVA_CENTER_X + safeRadius, z: VOLCANO_LAVA_CENTER_Z };
+  }
+  return {
+    x: VOLCANO_LAVA_CENTER_X + (dx / d) * safeRadius,
+    z: VOLCANO_LAVA_CENTER_Z + (dz / d) * safeRadius,
+  };
+}
+
+function isHealingItem(weaponId: WeaponId): boolean {
+  return WEAPONS[weaponId].isConsumable || weaponId === 'chug_splash';
+}
+
+function isOffensiveThrowable(weaponId: WeaponId): boolean {
+  return weaponId === 'frag_grenade' || weaponId === 'shockwave_grenade';
+}
+
 function nextBotRand(bot: BotEntity): number {
   bot.rngState = (Math.imul(bot.rngState, 1664525) + 1013904223) >>> 0;
   return bot.rngState / 4294967296;
@@ -164,10 +215,16 @@ function scoreWeaponForDistance(
   hasLoadedMag: boolean,
 ): number {
   const def = WEAPONS[item.weaponId];
-  if (def.isConsumable) return -1;
+  if (isHealingItem(item.weaponId)) return -1;
 
   if (item.weaponId === 'pickaxe') {
     return distance <= def.range + 1.0 ? 5 : -1;
+  }
+
+  if (def.isThrowable) {
+    if (item.stackCount <= 0) return -1;
+    if (distance < 8 || distance > 52) return -1;
+    return item.weaponId === 'frag_grenade' ? 20 : 14;
   }
 
   let base = 0;
@@ -175,6 +232,10 @@ function scoreWeaponForDistance(
     case 'pump_shotgun':
       if (distance > def.range + 4) return 0.5;
       base = distance <= 12 ? 116 - distance * 2.4 : Math.max(4, 88 - (distance - 12) * 3.5);
+      break;
+    case 'heavy_shotgun':
+      if (distance > def.range + 4) return 0.5;
+      base = distance <= 16 ? 124 - distance * 1.8 : Math.max(8, 95 - (distance - 16) * 3.0);
       break;
     case 'tac_shotgun':
       if (distance > def.range + 4) return 0.5;
@@ -199,6 +260,12 @@ function scoreWeaponForDistance(
       if (distance < 15) base = 62 + distance * 1.3;
       else if (distance <= 100) base = 102;
       else base = Math.max(15, 102 - (distance - 100) * 0.4);
+      break;
+    case 'mythic_blade_rifle':
+      if (distance > def.range) return 0.5;
+      if (distance < 15) base = 76 + distance * 1.4;
+      else if (distance <= 100) base = 116;
+      else base = Math.max(22, 116 - (distance - 100) * 0.4);
       break;
     case 'sniper':
       if (distance < 22) base = 18;
@@ -233,7 +300,9 @@ export function selectBestWeaponForDistance(
     const item = items[i];
     if (!item) continue;
     const def = WEAPONS[item.weaponId];
-    if (!def || def.isConsumable) continue;
+    if (!def || isHealingItem(item.weaponId)) continue;
+
+    if (def.isThrowable && item.stackCount <= 0) continue;
 
     if (def.ammoType !== null && ammo !== undefined) {
       const reserve = ammo[def.ammoType] ?? 0;
@@ -242,7 +311,11 @@ export function selectBestWeaponForDistance(
       }
     }
 
-    const score = scoreWeaponForDistance(item, distance, item.magAmmo > 0);
+    const score = scoreWeaponForDistance(
+      item,
+      distance,
+      !def.isThrowable && item.magAmmo > 0,
+    );
     if (score > bestScore) {
       bestScore = score;
       bestSlot = i;
@@ -256,9 +329,82 @@ export function selectBestWeaponForDistance(
   return { slotIndex: bestSlot, item: bestItem };
 }
 
+export interface ThrowableDecision {
+  slotIndex: number;
+  item: ItemInstance;
+  reason: 'clustered' | 'boxed';
+}
+
 /**
- * Selects the optimal usable consumable healing item respecting Fortnite's heal caps
- * (mini shields cap at 50 shield, bandages cap at 75 HP) and mini-before-big shield priority.
+ * Evaluates whether a bot should throw a `frag_grenade` or `shockwave_grenade`
+ * against clustered enemies or a boxed/occluded target.
+ */
+export function selectThrowableForCombat(
+  bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'>,
+  target: BotCombatTarget,
+  allTargets: BotCombatTarget[],
+  hasLOS: boolean,
+  buildPieces?: BuildPiece[],
+): ThrowableDecision | null {
+  if ((bot.throwCooldown ?? 0) > 0) return null;
+
+  const horizDist = dist2D(
+    bot.position.x,
+    bot.position.z,
+    target.position.x,
+    target.position.z,
+  );
+  if (horizDist < 8 || horizDist > 46) return null;
+
+  let fragSlot = -1;
+  let shockwaveSlot = -1;
+  for (let i = 0; i < bot.inventory.items.length; i++) {
+    const it = bot.inventory.items[i];
+    if (!it || it.stackCount <= 0) continue;
+    if (it.weaponId === 'frag_grenade' && fragSlot < 0) fragSlot = i;
+    if (it.weaponId === 'shockwave_grenade' && shockwaveSlot < 0) shockwaveSlot = i;
+  }
+  if (fragSlot < 0 && shockwaveSlot < 0) return null;
+
+  const isClustered = allTargets.some(
+    (other) =>
+      other.alive &&
+      other.id !== bot.id &&
+      other.id !== target.id &&
+      dist3D(other.position, target.position) <= 9.0,
+  );
+
+  const hasNearbyBuild =
+    buildPieces?.some((p) => {
+      const cx = (p.gx + 0.5) * 4.0;
+      const cy = (p.gy + 0.5) * 3.2;
+      const cz = (p.gz + 0.5) * 4.0;
+      return (
+        dist2D(cx, cz, target.position.x, target.position.z) <= 5.0 &&
+        Math.abs(cy - target.position.y) <= 3.8
+      );
+    }) ?? false;
+
+  const isBoxed = !hasLOS || hasNearbyBuild;
+
+  if (!isClustered && !isBoxed) return null;
+
+  if (isClustered) {
+    const slotIndex = fragSlot >= 0 ? fragSlot : shockwaveSlot;
+    const item = bot.inventory.items[slotIndex];
+    return item ? { slotIndex, item, reason: 'clustered' } : null;
+  }
+
+  // Boxed target: prefer shockwave to shatter builds/displace, or frag grenade to pressure box
+  const slotIndex = shockwaveSlot >= 0 ? shockwaveSlot : fragSlot;
+  const item = bot.inventory.items[slotIndex];
+  return item ? { slotIndex, item, reason: 'boxed' } : null;
+}
+
+/**
+ * Selects the optimal usable healing item (consumable or `chug_splash`) respecting
+ * Fortnite's heal caps (mini shields cap at 50 shield, bandages cap at 75 HP)
+ * and mini-before-big shield priority.
  */
 export function selectHealingItem(
   items: (ItemInstance | null)[],
@@ -271,13 +417,29 @@ export function selectHealingItem(
   let bestItem: ItemInstance | null = null;
   let bestScore = -1;
 
-  const hpCritical = hp < 50;
+  const hpCritical = hp < maxHp * 0.5;
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (!item || item.stackCount <= 0) continue;
     const def = WEAPONS[item.weaponId];
-    if (!def || !def.isConsumable) continue;
+    if (!def || !isHealingItem(item.weaponId)) continue;
+
+    if (item.weaponId === 'chug_splash') {
+      const canUseSplash = hp < maxHp || shield < maxShield;
+      if (!canUseSplash) continue;
+      let score = 94;
+      if (hpCritical) score = 114;
+      else if (hp < maxHp && shield < maxShield) score = 108;
+      else if (hp < maxHp) score = 104;
+      else if (shield < 50) score = 96; // let mini_shield (105) top up 0..50 first if present
+      if (score > bestScore) {
+        bestScore = score;
+        bestSlot = i;
+        bestItem = item;
+      }
+      continue;
+    }
 
     const target = def.healTarget;
     const cap = def.healCap ?? 100;
@@ -296,7 +458,7 @@ export function selectHealingItem(
     let score = 0;
     switch (item.weaponId) {
       case 'slurp_juice':
-        score = hpCritical ? 115 : hp < 100 && shield < 100 ? 96 : 82;
+        score = hpCritical ? 115 : hp < maxHp && shield < maxShield ? 96 : 82;
         break;
       case 'medkit':
         score = hpCritical ? 110 : hp < 70 ? 78 : 55;
@@ -327,7 +489,7 @@ export function selectHealingItem(
 }
 
 /**
- * Determines whether a bot should reactively build defensive cover (Wall / Ramp).
+ * Determines whether a bot should reactively build defensive 1x1 box + ramp cover.
  */
 export function shouldBotBuildDefense(
   bot: Pick<
@@ -339,7 +501,7 @@ export function shouldBotBuildDefense(
     | 'buildCooldown'
     | 'lastDamageTime'
     | 'state'
-  >,
+  > & { maxHp?: number; reactionTimer?: number },
   difficulty: Difficulty,
   nowSec: number,
   threatDistance = 30,
@@ -362,13 +524,18 @@ export function shouldBotBuildDefense(
   const recentlyDamaged =
     bot.lastDamageTime >= 0 && nowSec - bot.lastDamageTime <= hitWindow;
   const effectiveHp = bot.hp + bot.shield;
-  const lowHpThreat = effectiveHp < 75 && threatDistance < 55;
+  const scale = (bot.maxHp ?? 100) / 100;
+  const lowHpThreat = effectiveHp < 75 * scale && threatDistance < 55;
+  const underAmbush =
+    difficulty !== 'casual' &&
+    (bot.reactionTimer ?? 0) > 0.05 &&
+    threatDistance < 32;
   const builderEngaged =
     bot.personality === 'builder' &&
     bot.state === 'combat' &&
     threatDistance < 45;
 
-  if (!recentlyDamaged && !lowHpThreat && !builderEngaged) {
+  if (!recentlyDamaged && !lowHpThreat && !underAmbush && !builderEngaged) {
     return false;
   }
 
@@ -378,7 +545,7 @@ export function shouldBotBuildDefense(
   }
 
   if (difficulty === 'casual') {
-    return effectiveHp < 70 || bot.personality === 'builder';
+    return effectiveHp < 70 * scale || bot.personality === 'builder';
   }
   return true;
 }
@@ -388,9 +555,9 @@ function tryBuildCover(
   ctx: BotWorldContext,
   difficulty: Difficulty,
   threatPos: Vec3Like,
+  elapsed: number,
 ): boolean {
-  const mat = pickAvailableMaterial(bot);
-  if (!mat) return false;
+  if (!pickAvailableMaterial(bot)) return false;
 
   const profile = DIFFICULTY_PROFILES[difficulty];
   const cell = worldToGrid(bot.position.x, bot.position.y + 0.3, bot.position.z);
@@ -404,52 +571,99 @@ function tryBuildCover(
     face = dx >= 0 ? 1 : 3;
   }
 
-  const wall = canonicalizeWall(cell.gx, cell.gy, cell.gz, face);
-  const placedWall = ctx.placeBuildPiece(
-    bot.id,
-    'wall',
-    mat,
-    wall.gx,
-    wall.gy,
-    wall.gz,
-    wall.dir,
-    face,
-  );
+  const leftFace = ((face + 3) % 4) as 0 | 1 | 2 | 3;
+  const rightFace = ((face + 1) % 4) as 0 | 1 | 2 | 3;
+  const backFace = ((face + 2) % 4) as 0 | 1 | 2 | 3;
 
   let builtAny = false;
-  if (placedWall) {
-    bot.inventory.materials[mat] = Math.max(0, bot.inventory.materials[mat] - BUILD_COST);
-    builtAny = true;
-  }
 
-  // Follow up with a ramp behind the wall for highground cover
-  const rampMat = pickAvailableMaterial(bot);
-  if (
-    rampMat &&
-    (nextBotRand(bot) < profile.rampOnBuildChance || bot.personality === 'builder')
-  ) {
-    const placedRamp = ctx.placeBuildPiece(
+  const placeWallFace = (f: 0 | 1 | 2 | 3): boolean => {
+    const mat = pickAvailableMaterial(bot);
+    if (!mat) return false;
+    const wall = canonicalizeWall(cell.gx, cell.gy, cell.gz, f);
+    const placed = ctx.placeBuildPiece(
+      bot.id,
+      'wall',
+      mat,
+      wall.gx,
+      wall.gy,
+      wall.gz,
+      wall.dir,
+      f,
+    );
+    if (placed) {
+      bot.inventory.materials[mat] = Math.max(
+        0,
+        bot.inventory.materials[mat] - BUILD_COST,
+      );
+      builtAny = true;
+      return true;
+    }
+    return false;
+  };
+
+  const placeRamp = (): boolean => {
+    const mat = pickAvailableMaterial(bot);
+    if (!mat) return false;
+    const placed = ctx.placeBuildPiece(
       bot.id,
       'ramp',
-      rampMat,
+      mat,
       cell.gx,
       cell.gy,
       cell.gz,
       'N',
       face,
     );
-    if (placedRamp) {
-      bot.inventory.materials[rampMat] = Math.max(
+    if (placed) {
+      bot.inventory.materials[mat] = Math.max(
         0,
-        bot.inventory.materials[rampMat] - BUILD_COST,
+        bot.inventory.materials[mat] - BUILD_COST,
       );
       builtAny = true;
+      return true;
+    }
+    return false;
+  };
+
+  const wantsMultiWallBox =
+    difficulty !== 'casual' ||
+    bot.personality === 'builder' ||
+    bot.hp + bot.shield < 75 * (bot.maxHp / 100);
+
+  // 1. Primary wall facing the threat
+  placeWallFace(face);
+
+  // 2. First perpendicular flank wall for 1x1 box protection
+  if (wantsMultiWallBox) {
+    placeWallFace(leftFace);
+  }
+
+  // 3. Ramp inside 1x1 for highground crouch/jump peeking
+  if (
+    difficulty !== 'casual' ||
+    bot.personality === 'builder' ||
+    nextBotRand(bot) < profile.rampOnBuildChance
+  ) {
+    placeRamp();
+  }
+
+  // 4. Second perpendicular wall + rear wall to finish defensive 1x1 box
+  if (wantsMultiWallBox) {
+    placeWallFace(rightFace);
+    if (
+      difficulty === 'sweaty' ||
+      bot.personality === 'builder' ||
+      bot.hp + bot.shield < 85 * (bot.maxHp / 100)
+    ) {
+      placeWallFace(backFace);
     }
   }
 
   if (builtAny) {
     bot.buildAnimTimer = 0.38;
     bot.isBuilding = true;
+    bot.lastBuildTime = elapsed;
     bot.buildCooldown =
       profile.buildCooldownSec * (bot.personality === 'builder' ? 0.7 : 1.0);
     ctx.eventBus.emit('audio:noise', {
@@ -468,11 +682,15 @@ function tryBuildCover(
 
 function getWeaponOverallValue(item: ItemInstance): number {
   const def = WEAPONS[item.weaponId];
-  if (!def || def.isConsumable || item.weaponId === 'pickaxe') return 0;
+  if (!def || isHealingItem(item.weaponId) || def.isThrowable || item.weaponId === 'pickaxe') {
+    return 0;
+  }
   const rarityIdx = RARITY_ORDER.indexOf(item.rarity);
   const baseByType: Record<string, number> = {
-    sniper: 52,
+    mythic_blade_rifle: 62,
+    heavy_shotgun: 56,
     rocket_launcher: 54,
+    sniper: 52,
     pump_shotgun: 50,
     ar: 48,
     burst_ar: 45,
@@ -487,7 +705,9 @@ function countWeapons(bot: BotEntity): number {
   let count = 0;
   for (let i = 1; i < bot.inventory.items.length; i++) {
     const it = bot.inventory.items[i];
-    if (it && !WEAPONS[it.weaponId].isConsumable) count++;
+    if (it && !isHealingItem(it.weaponId) && !WEAPONS[it.weaponId].isThrowable) {
+      count++;
+    }
   }
   return count;
 }
@@ -496,7 +716,7 @@ function countHealingSlots(bot: BotEntity): number {
   let count = 0;
   for (let i = 1; i < bot.inventory.items.length; i++) {
     const it = bot.inventory.items[i];
-    if (it && WEAPONS[it.weaponId].isConsumable) count++;
+    if (it && isHealingItem(it.weaponId)) count++;
   }
   return count;
 }
@@ -505,8 +725,8 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
   const def = WEAPONS[candidate.weaponId];
   if (!def || candidate.weaponId === 'pickaxe') return -1;
 
-  // Stack existing consumables
-  if (def.isConsumable) {
+  // Stack existing consumables and throwables
+  if (def.isConsumable || def.isThrowable) {
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
       if (slot && slot.weaponId === candidate.weaponId && slot.stackCount < def.maxStack) {
@@ -516,7 +736,7 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
   }
 
   // Upgrade existing same-weapon slot in-place; skip equal/worse duplicates
-  if (!def.isConsumable) {
+  if (!def.isConsumable && !def.isThrowable) {
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
       if (slot && slot.weaponId === candidate.weaponId) {
@@ -534,16 +754,15 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
     }
   }
 
-  // Replace existing same-weapon with higher rarity
-  if (!def.isConsumable) {
+  // Replace existing same-weapon with higher rarity or strictly better weapon
+  if (!def.isConsumable && !def.isThrowable) {
     const candValue = getWeaponOverallValue(candidate);
     let worstSlot = -1;
     let worstDiff = 0;
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
       if (!slot) continue;
-      if (WEAPONS[slot.weaponId].isConsumable) continue;
-      // Same weapon rarity upgrade or strictly weaker weapon when we have duplicates
+      if (isHealingItem(slot.weaponId) || WEAPONS[slot.weaponId].isThrowable) continue;
       const slotVal = getWeaponOverallValue(slot);
       const sameWeapon = slot.weaponId === candidate.weaponId;
       const diff = candValue - slotVal;
@@ -555,13 +774,15 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
       }
     }
     return worstSlot;
-  } else if (countHealingSlots(bot) === 0) {
+  } else if (isHealingItem(candidate.weaponId) && countHealingSlots(bot) === 0) {
     // Replace weakest weapon if we have zero heals
     let worstSlot = -1;
     let lowestVal = Infinity;
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
-      if (!slot || WEAPONS[slot.weaponId].isConsumable) continue;
+      if (!slot || isHealingItem(slot.weaponId) || WEAPONS[slot.weaponId].isThrowable) {
+        continue;
+      }
       const val = getWeaponOverallValue(slot);
       if (val < lowestVal) {
         lowestVal = val;
@@ -594,7 +815,11 @@ function applyPickedLoot(
     if (slotIdx >= 1) {
       const existing = bot.inventory.items[slotIdx];
       const def = WEAPONS[item.weaponId];
-      if (existing && def.isConsumable && existing.weaponId === item.weaponId) {
+      if (
+        existing &&
+        (def.isConsumable || def.isThrowable) &&
+        existing.weaponId === item.weaponId
+      ) {
         existing.stackCount = Math.min(def.maxStack, existing.stackCount + item.stackCount);
       } else {
         bot.inventory.items[slotIdx] = { ...item };
@@ -622,23 +847,37 @@ function pickSafeDestination(bot: BotEntity, ctx: BotWorldContext): Vec3Like {
   const targetZ = s.nextRadius > 0 ? s.nextCenterZ : s.currentCenterZ;
   const targetR = s.nextRadius > 0 ? s.nextRadius : s.currentRadius;
   const spreadR = Math.max(4, targetR * 0.6);
-  const x = clamp(
+  let x = clamp(
     targetX + Math.cos(bot.patrolAngle) * spreadR,
     -WORLD_HALF + 25,
     WORLD_HALF - 25,
   );
-  const z = clamp(
+  let z = clamp(
     targetZ + Math.sin(bot.patrolAngle) * spreadR,
     -WORLD_HALF + 25,
     WORLD_HALF - 25,
   );
+  if (isInVolcanoLavaHazard(x, z, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
+    const safe = clampOutsideVolcanoLava(x, z, VOLCANO_LAVA_SAFE_RADIUS + 2.5);
+    x = safe.x;
+    z = safe.z;
+  }
   if (!ctx.terrain.isWater(x, z)) {
     return { x, y: ctx.terrain.getHeightAt(x, z), z };
   }
   // Fallback toward safe center or nearest dry POI
   const pois: POIDef[] = ctx.terrain.getPOIs();
   const list = pois.length > 0 ? pois : POIS;
-  let best = { x: targetX, y: ctx.terrain.getHeightAt(targetX, targetZ), z: targetZ };
+  const clampedCenter = clampOutsideVolcanoLava(
+    targetX,
+    targetZ,
+    VOLCANO_LAVA_SAFE_RADIUS + 2,
+  );
+  let best = {
+    x: clampedCenter.x,
+    y: ctx.terrain.getHeightAt(clampedCenter.x, clampedCenter.z),
+    z: clampedCenter.z,
+  };
   if (ctx.terrain.isWater(best.x, best.z)) {
     let bestD = Infinity;
     for (const poi of list) {
@@ -646,11 +885,108 @@ function pickSafeDestination(bot: BotEntity, ctx: BotWorldContext): Vec3Like {
       const d = dist2D(poi.x, poi.z, targetX, targetZ);
       if (d < bestD) {
         bestD = d;
-        best = { x: poi.x, y: poi.plateauY, z: poi.z };
+        const safePoi = clampOutsideVolcanoLava(poi.x, poi.z, VOLCANO_LAVA_SAFE_RADIUS + 2);
+        best = { x: safePoi.x, y: poi.plateauY, z: safePoi.z };
       }
     }
   }
   return best;
+}
+
+/**
+ * Picks an active Launch Pad / Geyser during a long safe-zone rotation if one is
+ * nearby and helps carry the bot toward `destination`.
+ */
+export function selectLaunchPadForRotation(
+  bot: Pick<BotEntity, 'position' | 'launchPadCooldown' | 'isBoss'>,
+  launchPads: LaunchPadEntity[],
+  destination: Vec3Like,
+): LaunchPadEntity | null {
+  if ((bot.launchPadCooldown ?? 0) > 0 || launchPads.length === 0) return null;
+
+  const distToDest = dist2D(
+    bot.position.x,
+    bot.position.z,
+    destination.x,
+    destination.z,
+  );
+  if (distToDest < 45) return null;
+
+  let bestPad: LaunchPadEntity | null = null;
+  let bestScore = Infinity;
+
+  for (const pad of launchPads) {
+    if (Math.abs(pad.y - bot.position.y) > 12) continue;
+
+    const dToPad = dist2D(bot.position.x, bot.position.z, pad.x, pad.z);
+    if (dToPad > 78) continue;
+
+    const dPadToDest = dist2D(pad.x, pad.z, destination.x, destination.z);
+    const helpsRotation =
+      dPadToDest < distToDest + 12 &&
+      (dToPad <= 28 || dToPad + dPadToDest * 0.45 < distToDest + 15);
+    if (!helpsRotation) continue;
+
+    const score = dToPad + dPadToDest * 0.35;
+    if (score < bestScore) {
+      bestScore = score;
+      bestPad = pad;
+    }
+  }
+
+  return bestPad;
+}
+
+function tryTriggerLaunchPad(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  safeDest: Vec3Like,
+): boolean {
+  if ((bot.launchPadCooldown ?? 0) > 0 || !ctx.getLaunchPads) return false;
+  const pads = ctx.getLaunchPads();
+  if (!pads || pads.length === 0) return false;
+
+  for (const pad of pads) {
+    const d2 = dist2D(bot.position.x, bot.position.z, pad.x, pad.z);
+    const dy = Math.abs(bot.position.y - pad.y);
+    if (d2 <= Math.max(pad.radius, 2.2) && dy <= 2.5) {
+      const dx = safeDest.x - bot.position.x;
+      const dz = safeDest.z - bot.position.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const nx = dx / len;
+      const nz = dz / len;
+
+      bot.launchPadCooldown = 3.0;
+      bot.launchPadTargetId = null;
+      bot.isCrouching = false;
+      bot.isSprinting = false;
+      bot.grounded = false;
+      bot.dropTarget = { ...safeDest };
+      bot.moveTarget = { ...safeDest };
+      bot.velocity.x = nx * Math.max(GLIDE_HORIZONTAL_SPEED, pad.boostForward);
+      bot.velocity.y = pad.boostVy;
+      bot.velocity.z = nz * Math.max(GLIDE_HORIZONTAL_SPEED, pad.boostForward);
+      bot.yaw = Math.atan2(nx, nz);
+      bot.state = 'gliding';
+      bot.animState = 'glide';
+      bot.gliderOpen = true;
+      bot.gliderFactor = 0.25;
+      bot.stateTimer = 0;
+
+      ctx.eventBus.emit('sound:play', {
+        id: 'launch_pad',
+        position: { x: pad.x, y: pad.y, z: pad.z },
+        spatial: true,
+      });
+      ctx.eventBus.emit('vfx:build_pop', {
+        position: { x: pad.x, y: pad.y + 0.4, z: pad.z },
+        material: 'metal',
+        pieceType: 'floor',
+      });
+      return true;
+    }
+  }
+  return false;
 }
 
 function applyMovementStep(
@@ -848,6 +1184,28 @@ function handleReloading(bot: BotEntity, dt: number): void {
   }
 }
 
+function computeBallisticAimDir(
+  from: Vec3Like,
+  to: Vec3Like,
+  speed: number,
+  gravity: number,
+): Vec3Like {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const horiz = Math.hypot(dx, dz) || 1;
+  const ratio = clamp((gravity * horiz) / Math.max(1, speed * speed), -0.95, 0.95);
+  const arcPitch = 0.5 * Math.asin(ratio);
+  const elevPitch = Math.atan2(dy, horiz);
+  const pitch = clamp(arcPitch + elevPitch * 0.65, -0.35, Math.PI * 0.34);
+  const cosP = Math.cos(pitch);
+  return {
+    x: (dx / horiz) * cosP,
+    y: Math.sin(pitch),
+    z: (dz / horiz) * cosP,
+  };
+}
+
 function handleFireAndBurst(
   bot: BotEntity,
   ctx: BotWorldContext,
@@ -858,7 +1216,7 @@ function handleFireAndBurst(
   dt: number,
 ): void {
   const activeItem = bot.inventory.items[bot.inventory.activeSlot];
-  if (!activeItem || WEAPONS[activeItem.weaponId].isConsumable) return;
+  if (!activeItem || isHealingItem(activeItem.weaponId)) return;
   const def = WEAPONS[activeItem.weaponId];
   const profile = DIFFICULTY_PROFILES[difficulty];
 
@@ -885,6 +1243,38 @@ function handleFireAndBurst(
       bot.fireCooldown = 1 / def.fireRate;
       bot.harvestSwingTimer = 0.35;
       bot.isFiring = true;
+    }
+    return;
+  }
+
+  // Offensive throwables (`frag_grenade`, `shockwave_grenade`)
+  if (def.isThrowable) {
+    if (
+      activeItem.stackCount > 0 &&
+      bot.reactionTimer <= 0 &&
+      bot.fireCooldown <= 0 &&
+      bot.reloadTimer <= 0
+    ) {
+      const yawDiff = Math.abs(normalizeAngle(targetYaw - bot.yaw));
+      if (yawDiff <= 0.65) {
+        const throwDir = computeBallisticAimDir(
+          eye,
+          target.position,
+          def.projectileSpeed || 26,
+          def.projectileGravity || 20,
+        );
+        const res = ctx.fireWeapon(bot, activeItem, eye, throwDir, 0.02);
+        if (!res || res.fired !== false) {
+          activeItem.stackCount = Math.max(0, activeItem.stackCount - 1);
+          if (activeItem.stackCount <= 0) {
+            bot.inventory.items[bot.inventory.activeSlot] = null;
+          }
+          bot.isFiring = true;
+          bot.recoilKick = 0.8;
+          bot.fireCooldown = 1 / Math.max(0.2, def.fireRate * profile.fireRateScale);
+          bot.throwCooldown = 3.5;
+        }
+      }
     }
     return;
   }
@@ -955,6 +1345,7 @@ interface MoveIntent {
   dirZ: number;
   speed: number;
   wantsJump: boolean;
+  launchedGliding?: boolean;
 }
 
 function emptyMoveIntent(): MoveIntent {
@@ -1018,6 +1409,25 @@ function stepSkydivingPhase(
   ctx: BotWorldContext,
   safeDt: number,
 ): void {
+  if (
+    isInVolcanoLavaHazard(
+      bot.dropTarget.x,
+      bot.dropTarget.z,
+      VOLCANO_LAVA_SAFE_RADIUS + 1.5,
+    )
+  ) {
+    const safe = clampOutsideVolcanoLava(
+      bot.dropTarget.x,
+      bot.dropTarget.z,
+      VOLCANO_LAVA_SAFE_RADIUS + 2,
+    );
+    bot.dropTarget = {
+      x: safe.x,
+      y: ctx.terrain.getHeightAt(safe.x, safe.z),
+      z: safe.z,
+    };
+  }
+
   const dx = bot.dropTarget.x - bot.position.x;
   const dz = bot.dropTarget.z - bot.position.z;
   const d = Math.hypot(dx, dz);
@@ -1061,12 +1471,30 @@ function stepGlidingPhase(
   bot: BotEntity,
   ctx: BotWorldContext,
   safeDt: number,
+  isFarLOD: boolean,
 ): void {
   bot.gliderOpen = true;
   bot.gliderFactor = clamp(bot.gliderFactor + safeDt * 3.5, 0, 1);
 
   if (ctx.terrain.isWater(bot.dropTarget.x, bot.dropTarget.z)) {
     bot.dropTarget = pickSafeDestination(bot, ctx);
+  } else if (
+    isInVolcanoLavaHazard(
+      bot.dropTarget.x,
+      bot.dropTarget.z,
+      VOLCANO_LAVA_SAFE_RADIUS + 1.5,
+    )
+  ) {
+    const safe = clampOutsideVolcanoLava(
+      bot.dropTarget.x,
+      bot.dropTarget.z,
+      VOLCANO_LAVA_SAFE_RADIUS + 2,
+    );
+    bot.dropTarget = {
+      x: safe.x,
+      y: ctx.terrain.getHeightAt(safe.x, safe.z),
+      z: safe.z,
+    };
   }
 
   const dx = bot.dropTarget.x - bot.position.x;
@@ -1075,38 +1503,73 @@ function stepGlidingPhase(
   if (d > 2.5) {
     const nx = dx / d;
     const nz = dz / d;
-    const horizSpeed = Math.min(GLIDE_HORIZONTAL_SPEED, d * 2.5);
-    bot.velocity.x = nx * horizSpeed;
-    bot.velocity.z = nz * horizSpeed;
+    const currentHoriz = Math.hypot(bot.velocity.x, bot.velocity.z);
+    const boostHoriz = bot.velocity.y > 0 ? clamp(currentHoriz, GLIDE_HORIZONTAL_SPEED, 26) : GLIDE_HORIZONTAL_SPEED;
+    const horizSpeed = Math.min(boostHoriz, d * 2.5);
+    bot.velocity.x = damp(bot.velocity.x, nx * horizSpeed, 6, safeDt);
+    bot.velocity.z = damp(bot.velocity.z, nz * horizSpeed, 6, safeDt);
     bot.yaw = lerpAngle(bot.yaw, Math.atan2(nx, nz), clamp(5 * safeDt, 0, 1));
   } else {
     bot.velocity.x *= 0.85;
     bot.velocity.z *= 0.85;
   }
-  bot.velocity.y = -GLIDE_DESCENT_SPEED;
 
-  const res = ctx.resolveMovement(
-    bot.position,
-    bot.velocity,
-    bot.radius,
-    bot.height,
-    safeDt,
-  );
-  bot.position.x = clamp(res.position.x, -WORLD_HALF + 6, WORLD_HALF - 6);
-  bot.position.y = res.position.y;
-  bot.position.z = clamp(res.position.z, -WORLD_HALF + 6, WORLD_HALF - 6);
-  bot.grounded = res.grounded;
+  // Preserve upward Launch Pad / Geyser momentum before settling into steady glider descent
+  if (bot.velocity.y > -GLIDE_DESCENT_SPEED) {
+    bot.velocity.y = Math.max(-GLIDE_DESCENT_SPEED, bot.velocity.y - GRAVITY * safeDt);
+  } else {
+    bot.velocity.y = -GLIDE_DESCENT_SPEED;
+  }
+
+  if (isFarLOD) {
+    const nx = clamp(bot.position.x + bot.velocity.x * safeDt, -WORLD_HALF + 6, WORLD_HALF - 6);
+    const nz = clamp(bot.position.z + bot.velocity.z * safeDt, -WORLD_HALF + 6, WORLD_HALF - 6);
+    const ny = bot.position.y + bot.velocity.y * safeDt;
+    const gy = ctx.terrain.getHeightAt(nx, nz);
+    bot.position.x = nx;
+    bot.position.z = nz;
+    if (bot.velocity.y <= 0 && ny <= gy + 0.05) {
+      bot.position.y = gy;
+      bot.velocity.y = 0;
+      bot.grounded = true;
+    } else {
+      bot.position.y = ny;
+      bot.grounded = false;
+    }
+  } else {
+    const res = ctx.resolveMovement(
+      bot.position,
+      bot.velocity,
+      bot.radius,
+      bot.height,
+      safeDt,
+    );
+    bot.position.x = clamp(res.position.x, -WORLD_HALF + 6, WORLD_HALF - 6);
+    bot.position.y = res.position.y;
+    bot.position.z = clamp(res.position.z, -WORLD_HALF + 6, WORLD_HALF - 6);
+    bot.grounded = res.grounded;
+  }
+
   bot.moveSpeed = Math.hypot(bot.velocity.x, bot.velocity.z);
   bot.animState = 'glide';
 
   const groundY = ctx.terrain.getHeightAt(bot.position.x, bot.position.z);
-  if (bot.grounded || bot.position.y <= groundY + 0.15) {
+  if (bot.velocity.y <= 0 && (bot.grounded || bot.position.y <= groundY + 0.15)) {
     bot.position.y = Math.max(bot.position.y, groundY);
     bot.velocity.y = 0;
     bot.grounded = true;
     bot.gliderOpen = false;
     bot.gliderFactor = 0;
-    bot.state = 'looting';
+    const distLeft = dist2D(
+      bot.position.x,
+      bot.position.z,
+      bot.dropTarget.x,
+      bot.dropTarget.z,
+    );
+    bot.state =
+      bot.isBoss || isInStorm(bot, ctx, 4) || distLeft > 25
+        ? 'rotating'
+        : 'looting';
     bot.stateTimer = 0;
     bot.animState = 'idle';
   }
@@ -1114,37 +1577,87 @@ function stepGlidingPhase(
 
 function stepHealingState(
   bot: BotEntity,
-  hasCombatMatch: boolean,
+  ctx: BotWorldContext,
+  combatMatch: { target: BotCombatTarget; hasLOS: boolean; distance: number } | null,
   closeThreat: boolean,
   needRotateStorm: boolean,
   safeDt: number,
 ): MoveIntent {
-  bot.isCrouching = true;
-  bot.isSprinting = false;
   const item = bot.inventory.items[bot.healSlot];
-  if (!item || !WEAPONS[item.weaponId].isConsumable || item.stackCount <= 0) {
+  if (!item || !isHealingItem(item.weaponId) || item.stackCount <= 0) {
     bot.healTimer = 0;
+    bot.retreatTimer = 0;
     bot.isCrouching = false;
-    bot.state = hasCombatMatch ? 'combat' : needRotateStorm ? 'rotating' : 'looting';
+    bot.state = combatMatch ? 'combat' : needRotateStorm ? 'rotating' : 'looting';
     return emptyMoveIntent();
+  }
+
+  const def = WEAPONS[item.weaponId];
+  const isSplash = item.weaponId === 'chug_splash';
+  const threatPos = combatMatch?.target.position ?? bot.lastKnownEnemyPos;
+  let moveIntent = emptyMoveIntent();
+
+  // Brief tactical retreat away from threat before channeling shields/meds (or while tossing Chug Splash)
+  if ((bot.retreatTimer ?? 0) > 0 && threatPos) {
+    bot.retreatTimer = Math.max(0, (bot.retreatTimer ?? 0) - safeDt);
+    const awayX = bot.position.x - threatPos.x;
+    const awayZ = bot.position.z - threatPos.z;
+    const awayDist = Math.hypot(awayX, awayZ) || 1;
+    const dirX = awayX / awayDist;
+    const dirZ = awayZ / awayDist;
+    bot.yaw = lerpAngle(bot.yaw, Math.atan2(dirX, dirZ), clamp(9 * safeDt, 0, 1));
+    bot.isCrouching = false;
+    bot.isSprinting = true;
+    moveIntent = {
+      dirX,
+      dirZ,
+      speed: SPRINT_SPEED,
+      wantsJump: false,
+    };
+    bot.inventory.activeSlot = bot.healSlot;
+    if (!isSplash) {
+      return moveIntent;
+    }
+  } else {
+    bot.isCrouching = !isSplash;
+    bot.isSprinting = false;
   }
 
   bot.inventory.activeSlot = bot.healSlot;
   bot.healTimer -= safeDt;
   if (bot.healTimer > 0) {
-    return emptyMoveIntent();
+    return moveIntent;
   }
 
-  const def = WEAPONS[item.weaponId];
-  const amt = def.healAmount ?? 25;
-  const cap = def.healCap ?? 100;
-  if (def.healTarget === 'hp') {
-    bot.hp = Math.min(bot.maxHp, cap, bot.hp + amt);
-  } else if (def.healTarget === 'shield') {
-    bot.shield = Math.min(bot.maxShield, cap, bot.shield + amt);
-  } else if (def.healTarget === 'both') {
-    bot.hp = Math.min(bot.maxHp, cap, bot.hp + amt);
-    bot.shield = Math.min(bot.maxShield, cap, bot.shield + amt);
+  if (isSplash) {
+    const splashAmt = def.splashHealAmount ?? 20;
+    const hpGain = Math.min(splashAmt, Math.max(0, bot.maxHp - bot.hp));
+    const shieldGain = Math.min(
+      splashAmt - hpGain,
+      Math.max(0, bot.maxShield - bot.shield),
+    );
+    bot.hp = Math.min(bot.maxHp, bot.hp + hpGain);
+    bot.shield = Math.min(bot.maxShield, bot.shield + shieldGain);
+
+    const eye = getBotEyePos(bot);
+    const throwDir = {
+      x: Math.sin(bot.yaw) * 0.25,
+      y: -0.94,
+      z: Math.cos(bot.yaw) * 0.25,
+    };
+    ctx.fireWeapon(bot, item, eye, throwDir, 0.01);
+    bot.isFiring = true;
+  } else {
+    const amt = def.healAmount ?? 25;
+    const cap = def.healCap ?? 100;
+    if (def.healTarget === 'hp') {
+      bot.hp = Math.min(bot.maxHp, cap, bot.hp + amt);
+    } else if (def.healTarget === 'shield') {
+      bot.shield = Math.min(bot.maxShield, cap, bot.shield + amt);
+    } else if (def.healTarget === 'both') {
+      bot.hp = Math.min(bot.maxHp, cap, bot.hp + amt);
+      bot.shield = Math.min(bot.maxShield, cap, bot.shield + amt);
+    }
   }
 
   item.stackCount -= 1;
@@ -1160,16 +1673,23 @@ function stepHealingState(
     bot.maxHp,
     bot.maxShield,
   );
-  if (nextHeal && !closeThreat && (bot.hp < 85 || bot.shield < 85)) {
+  if (
+    nextHeal &&
+    !closeThreat &&
+    (bot.hp < bot.maxHp * 0.85 || bot.shield < bot.maxShield * 0.85)
+  ) {
     bot.healSlot = nextHeal.slotIndex;
     bot.inventory.activeSlot = nextHeal.slotIndex;
-    bot.healTimer = WEAPONS[nextHeal.item.weaponId].consumeTime ?? 2.5;
+    bot.healTimer =
+      WEAPONS[nextHeal.item.weaponId].consumeTime ??
+      (nextHeal.item.weaponId === 'chug_splash' ? 0.55 : 2.5);
   } else {
     bot.isCrouching = false;
-    bot.state = hasCombatMatch ? 'combat' : needRotateStorm ? 'rotating' : 'looting';
+    bot.retreatTimer = 0;
+    bot.state = combatMatch ? 'combat' : needRotateStorm ? 'rotating' : 'looting';
     bot.stateTimer = 0;
   }
-  return emptyMoveIntent();
+  return moveIntent;
 }
 
 function getPreferredCombatRange(
@@ -1179,15 +1699,19 @@ function getPreferredCombatRange(
   if (
     weaponId === 'pump_shotgun' ||
     weaponId === 'tac_shotgun' ||
+    weaponId === 'heavy_shotgun' ||
     personality === 'rusher'
   ) {
-    return { min: 5, max: 13 };
+    return { min: weaponId === 'heavy_shotgun' ? 6 : 5, max: weaponId === 'heavy_shotgun' ? 15 : 13 };
   }
   if (weaponId === 'smg') {
     return { min: 9, max: 20 };
   }
   if (weaponId === 'sniper' || personality === 'sniper') {
     return { min: 42, max: 88 };
+  }
+  if (weaponId === 'mythic_blade_rifle') {
+    return { min: 16, max: 38 };
   }
   return { min: 16, max: 35 };
 }
@@ -1199,6 +1723,7 @@ function stepCombatState(
   profile: DifficultyProfile,
   combatMatch: { target: BotCombatTarget; hasLOS: boolean; distance: number } | null,
   weaponCount: number,
+  elapsed: number,
   safeDt: number,
   isFarLOD: boolean,
 ): MoveIntent {
@@ -1226,20 +1751,42 @@ function stepCombatState(
   }
 
   const { target, hasLOS, distance } = combatMatch;
-  const chosen = selectBestWeaponForDistance(
-    bot.inventory.items,
-    distance,
-    bot.inventory.ammo,
-  );
-  if (chosen) {
-    if (bot.inventory.activeSlot !== chosen.slotIndex) {
-      bot.inventory.activeSlot = chosen.slotIndex;
+
+  // Check tactical throwables (`frag_grenade` / `shockwave_grenade`) against clustered or boxed enemies
+  const throwDecision =
+    !isFarLOD && bot.reloadTimer <= 0 && bot.burstQueue <= 0
+      ? selectThrowableForCombat(
+          bot,
+          target,
+          ctx.getCombatTargets(),
+          hasLOS,
+          ctx.getBuildPieces?.(),
+        )
+      : null;
+
+  if (throwDecision && bot.fireCooldown <= 0 && bot.reactionTimer <= 0) {
+    if (bot.inventory.activeSlot !== throwDecision.slotIndex) {
+      bot.inventory.activeSlot = throwDecision.slotIndex;
       bot.burstQueue = 0;
     }
     handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
+  } else {
+    const chosen = selectBestWeaponForDistance(
+      bot.inventory.items,
+      distance,
+      bot.inventory.ammo,
+    );
+    if (chosen) {
+      if (bot.inventory.activeSlot !== chosen.slotIndex) {
+        bot.inventory.activeSlot = chosen.slotIndex;
+        bot.burstQueue = 0;
+      }
+      handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
+    }
   }
 
   const activeWeaponId = bot.inventory.items[bot.inventory.activeSlot]?.weaponId;
+  const activeDef = activeWeaponId ? WEAPONS[activeWeaponId] : undefined;
   const range = getPreferredCombatRange(activeWeaponId, bot.personality);
 
   const toEnemyX = target.position.x - bot.position.x;
@@ -1256,11 +1803,23 @@ function stepCombatState(
     bot.strafeTimer = 0.65 + nextBotRand(bot) * 1.1;
   }
 
-  let radial = 0;
-  if (horizDist > range.max || !hasLOS) radial = 1;
-  else if (horizDist < range.min) radial = -0.8;
+  const behindRampCover =
+    bot.lastBuildTime !== undefined && elapsed - bot.lastBuildTime <= 8.0;
+  const isRangedPrecision =
+    activeDef?.category === 'rifle' || activeDef?.category === 'sniper';
 
-  const strafeWeight = profile.strafeAgility * (isFarLOD ? 0.25 : 0.85);
+  let radial = 0;
+  if (behindRampCover && isRangedPrecision && horizDist >= 12) {
+    // Hold 1x1 ramp cover; nudge slightly up the ramp if own wall obscures LOS
+    radial = hasLOS ? 0 : 0.42;
+  } else if (horizDist > range.max || !hasLOS) {
+    radial = 1;
+  } else if (horizDist < range.min) {
+    radial = -0.8;
+  }
+
+  const strafeWeight =
+    profile.strafeAgility * (isFarLOD ? 0.25 : behindRampCover && isRangedPrecision ? 0.45 : 0.85);
   const rawX = fwdX * radial + rightX * bot.strafeDir * strafeWeight;
   const rawZ = fwdZ * radial + rightZ * bot.strafeDir * strafeWeight;
   const rawLen = Math.hypot(rawX, rawZ);
@@ -1272,22 +1831,49 @@ function stepCombatState(
     dirZ = rawZ / rawLen;
   }
 
-  bot.crouchToggleTimer -= safeDt;
-  if (!isFarLOD && bot.crouchToggleTimer <= 0) {
-    bot.crouchToggleTimer = 0.9 + nextBotRand(bot) * 1.2;
-    bot.isCrouching =
-      horizDist > 22 && nextBotRand(bot) < profile.crouchInCombatChance;
-  }
-
   let wantsJump = false;
-  if (
-    !isFarLOD &&
-    horizDist < 22 &&
-    bot.jumpCooldown <= 0 &&
-    nextBotRand(bot) < profile.jumpInCombatChance * safeDt * 4
-  ) {
-    wantsJump = true;
+  if (!isFarLOD && activeDef?.category === 'shotgun' && horizDist < 12) {
+    // Jump-peek aggressively with shotguns at close quarters (<12m)
     bot.isCrouching = false;
+    if (
+      bot.grounded &&
+      bot.jumpCooldown <= 0 &&
+      (bot.fireCooldown <= 0.22 ||
+        nextBotRand(bot) < (0.35 + profile.jumpInCombatChance) * safeDt * 6)
+    ) {
+      wantsJump = true;
+    }
+  } else if (!isFarLOD && isRangedPrecision && horizDist >= 12 && behindRampCover) {
+    // Crouch-peek behind defensive ramp with AR / Sniper
+    if (
+      bot.reloadTimer > 0 ||
+      (activeWeaponId === 'sniper' && bot.fireCooldown > 0.35)
+    ) {
+      bot.isCrouching = true;
+    } else {
+      bot.crouchToggleTimer -= safeDt;
+      if (bot.crouchToggleTimer <= 0) {
+        bot.crouchToggleTimer = 0.45 + nextBotRand(bot) * 0.45;
+        bot.isCrouching = !bot.isCrouching;
+      }
+    }
+  } else {
+    bot.crouchToggleTimer -= safeDt;
+    if (!isFarLOD && bot.crouchToggleTimer <= 0) {
+      bot.crouchToggleTimer = 0.9 + nextBotRand(bot) * 1.2;
+      bot.isCrouching =
+        horizDist > 22 && nextBotRand(bot) < profile.crouchInCombatChance;
+    }
+
+    if (
+      !isFarLOD &&
+      horizDist < 22 &&
+      bot.jumpCooldown <= 0 &&
+      nextBotRand(bot) < profile.jumpInCombatChance * safeDt * 4
+    ) {
+      wantsJump = true;
+      bot.isCrouching = false;
+    }
   }
 
   bot.isSprinting = radial > 0 && horizDist > range.max + 8 && !bot.isCrouching;
@@ -1314,12 +1900,13 @@ function scanLootingTargets(
 
   for (const drop of drops) {
     if (drop.id === bot.ignoredTargetId && elapsed < bot.ignoredTargetUntil) continue;
+    if (isInVolcanoLavaHazard(drop.x, drop.z)) continue;
     const d = dist2D(bot.position.x, bot.position.z, drop.x, drop.z);
     if (d > 48) continue;
 
     let bonus = 0;
     if (drop.item && canUpgradeOrTakeItem(bot, drop.item) >= 1) {
-      bonus = WEAPONS[drop.item.weaponId].isConsumable ? 18 : 32;
+      bonus = isHealingItem(drop.item.weaponId) ? 18 : 32;
     } else if (drop.ammo) {
       bonus = 6;
     } else if (drop.materials && getTotalMaterials(bot) < 400) {
@@ -1352,6 +1939,7 @@ function scanLootingTargets(
   for (const chest of chests) {
     if (chest.opened) continue;
     if (chest.id === bot.ignoredTargetId && elapsed < bot.ignoredTargetUntil) continue;
+    if (isInVolcanoLavaHazard(chest.x, chest.z)) continue;
     const d = dist2D(bot.position.x, bot.position.z, chest.x, chest.z);
     if (d < bestChestDist) {
       bestChestDist = d;
@@ -1462,6 +2050,7 @@ function stepHarvestingState(
     for (const prop of ctx.getProps()) {
       if (prop.destroyed) continue;
       if (prop.id === bot.ignoredTargetId && elapsed < bot.ignoredTargetUntil) continue;
+      if (isInVolcanoLavaHazard(prop.x, prop.z)) continue;
       const d = dist2D(bot.position.x, bot.position.z, prop.x, prop.z);
       if (d < bestDist) {
         bestDist = d;
@@ -1512,6 +2101,23 @@ function stepHarvestingState(
   return moveTowardPoint(bot, prop.x, prop.z, safeDt, 10);
 }
 
+function pickBossPatrolPoint(bot: BotEntity, ctx: BotWorldContext): Vec3Like {
+  const home = bot.bossHomePos ?? bot.position;
+  const radius = 5.0;
+  let x = home.x + Math.cos(bot.patrolAngle) * radius;
+  let z = home.z + Math.sin(bot.patrolAngle) * radius;
+  if (isInVolcanoLavaHazard(x, z, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
+    const safe = clampOutsideVolcanoLava(x, z, VOLCANO_LAVA_SAFE_RADIUS + 2);
+    x = safe.x;
+    z = safe.z;
+  }
+  if (ctx.terrain.isWater(x, z)) {
+    x = home.x;
+    z = home.z;
+  }
+  return { x, y: ctx.terrain.getHeightAt(x, z), z };
+}
+
 function stepRotatingState(
   bot: BotEntity,
   ctx: BotWorldContext,
@@ -1529,6 +2135,37 @@ function stepRotatingState(
     bot.inventory.activeSlot = bestSlot.slotIndex;
   }
 
+  // Named POI Bosses patrol their landmark while inside the safe zone
+  if (bot.isBoss && bot.bossHomePos && !needRotateStorm) {
+    const home = bot.bossHomePos;
+    let destination: Vec3Like;
+    if (
+      bot.lastHeardNoisePos &&
+      elapsed - bot.lastHeardNoiseTime < 4.0 &&
+      dist2D(bot.lastHeardNoisePos.x, bot.lastHeardNoisePos.z, home.x, home.z) <= 36
+    ) {
+      destination = bot.lastHeardNoisePos;
+    } else {
+      const targetFarFromHome =
+        !bot.moveTarget ||
+        dist2D(bot.moveTarget.x, bot.moveTarget.z, home.x, home.z) > 12;
+      if (
+        targetFarFromHome ||
+        dist2D(bot.position.x, bot.position.z, bot.moveTarget!.x, bot.moveTarget!.z) < 2.2
+      ) {
+        bot.patrolAngle += 1.05 + nextBotRand(bot) * 0.8;
+        bot.moveTarget = pickBossPatrolPoint(bot, ctx);
+      }
+      destination = bot.moveTarget!;
+    }
+    const d = dist2D(bot.position.x, bot.position.z, destination.x, destination.z);
+    if (d <= 1.2) return emptyMoveIntent();
+    const intent = moveTowardPoint(bot, destination.x, destination.z, safeDt, 18);
+    intent.speed = Math.min(intent.speed, WALK_SPEED);
+    bot.isSprinting = false;
+    return intent;
+  }
+
   let destination: Vec3Like | null = null;
   if (
     !needRotateStorm &&
@@ -1538,27 +2175,65 @@ function stepRotatingState(
     bot.personality !== 'looter'
   ) {
     destination = bot.lastHeardNoisePos;
+    bot.launchPadTargetId = null;
   } else {
     if (
       !bot.moveTarget ||
       dist2D(bot.position.x, bot.position.z, bot.moveTarget.x, bot.moveTarget.z) < 6 ||
-      ctx.terrain.isWater(bot.moveTarget.x, bot.moveTarget.z)
+      ctx.terrain.isWater(bot.moveTarget.x, bot.moveTarget.z) ||
+      isInVolcanoLavaHazard(bot.moveTarget.x, bot.moveTarget.z, VOLCANO_LAVA_SAFE_RADIUS + 1.5)
     ) {
       bot.patrolAngle += 0.8 + nextBotRand(bot) * 1.4;
       bot.moveTarget = pickSafeDestination(bot, ctx);
     }
-    destination = bot.moveTarget;
+    const safeDest = bot.moveTarget;
+
+    // Check if an active Launch Pad / Geyser is nearby to boost long zone rotations
+    const pads = ctx.getLaunchPads?.();
+    if (pads && pads.length > 0 && (bot.launchPadCooldown ?? 0) <= 0) {
+      if (tryTriggerLaunchPad(bot, ctx, safeDest)) {
+        return { ...emptyMoveIntent(), launchedGliding: true };
+      }
+      let pad: LaunchPadEntity | null = null;
+      if (bot.launchPadTargetId) {
+        pad = pads.find((p) => p.id === bot.launchPadTargetId) ?? null;
+        if (
+          !pad ||
+          dist2D(bot.position.x, bot.position.z, pad.x, pad.z) > 85 ||
+          isInVolcanoLavaHazard(pad.x, pad.z)
+        ) {
+          pad = null;
+          bot.launchPadTargetId = null;
+        }
+      }
+      if (!pad) {
+        pad = selectLaunchPadForRotation(bot, pads, safeDest);
+        bot.launchPadTargetId = pad ? pad.id : null;
+      }
+      destination = pad ? { x: pad.x, y: pad.y, z: pad.z } : safeDest;
+    } else {
+      destination = safeDest;
+    }
   }
 
-  if (!needRotateStorm && !isFarLOD && bot.scanCooldown <= 0) {
+  if (!needRotateStorm && !bot.isBoss && !isFarLOD && bot.scanCooldown <= 0) {
     bot.scanCooldown = 0.35;
     if (weaponCount < 2 || countHealingSlots(bot) === 0) {
       const hasNearbyLoot = ctx
         .getLootDrops()
-        .some((ld) => dist2D(bot.position.x, bot.position.z, ld.x, ld.z) < 28);
+        .some(
+          (ld) =>
+            !isInVolcanoLavaHazard(ld.x, ld.z) &&
+            dist2D(bot.position.x, bot.position.z, ld.x, ld.z) < 28,
+        );
       const hasNearbyChest = ctx
         .getChests()
-        .some((c) => !c.opened && dist2D(bot.position.x, bot.position.z, c.x, c.z) < 32);
+        .some(
+          (c) =>
+            !c.opened &&
+            !isInVolcanoLavaHazard(c.x, c.z) &&
+            dist2D(bot.position.x, bot.position.z, c.x, c.z) < 32,
+        );
       if (hasNearbyLoot || hasNearbyChest) {
         bot.state = 'looting';
         bot.stateTimer = 0;
@@ -1570,8 +2245,14 @@ function stepRotatingState(
   const d = dist2D(bot.position.x, bot.position.z, destination.x, destination.z);
   if (d <= 2.0) return emptyMoveIntent();
 
-  const intent = moveTowardPoint(bot, destination.x, destination.z, safeDt, inStormNow ? 0 : 15);
-  if (inStormNow) {
+  const intent = moveTowardPoint(
+    bot,
+    destination.x,
+    destination.z,
+    safeDt,
+    inStormNow || bot.launchPadTargetId ? 0 : 15,
+  );
+  if (inStormNow || bot.launchPadTargetId) {
     bot.isSprinting = true;
     intent.speed = SPRINT_SPEED;
   }
@@ -1623,6 +2304,53 @@ function recoverIfStuck(
   }
 }
 
+function applyVolcanoLavaAvoidance(
+  bot: BotEntity,
+  intent: MoveIntent,
+): MoveIntent {
+  const dx = bot.position.x - VOLCANO_LAVA_CENTER_X;
+  const dz = bot.position.z - VOLCANO_LAVA_CENTER_Z;
+  const d = Math.hypot(dx, dz);
+
+  // If inside or on edge of molten lava (< 14.8m), sprint directly radially outward
+  if (d < VOLCANO_LAVA_SAFE_RADIUS + 0.8) {
+    const ox = d > 1e-4 ? dx / d : 1;
+    const oz = d > 1e-4 ? dz / d : 0;
+    bot.isSprinting = true;
+    bot.isCrouching = false;
+    return {
+      dirX: ox,
+      dirZ: oz,
+      speed: SPRINT_SPEED,
+      wantsJump: intent.wantsJump,
+    };
+  }
+
+  // If just outside the crater rim and moving toward lava, steer tangentially around it
+  if (d < VOLCANO_LAVA_SAFE_RADIUS + 5.5 && intent.speed > 0.1) {
+    const rx = dx / d;
+    const rz = dz / d;
+    const inwardDot = intent.dirX * -rx + intent.dirZ * -rz;
+    if (inwardDot > 0.05) {
+      const txA = -rz;
+      const tzA = rx;
+      const dotA = intent.dirX * txA + intent.dirZ * tzA;
+      const sign = dotA >= 0 ? 1 : -1;
+      const outBias = d < VOLCANO_LAVA_SAFE_RADIUS + 2.2 ? 0.35 : 0.12;
+      const bx = txA * sign + rx * outBias;
+      const bz = tzA * sign + rz * outBias;
+      const blen = Math.hypot(bx, bz) || 1;
+      return {
+        ...intent,
+        dirX: bx / blen,
+        dirZ: bz / blen,
+      };
+    }
+  }
+
+  return intent;
+}
+
 /**
  * Advances a single bot's state machine, physics, perception, combat, building, and animations.
  */
@@ -1661,6 +2389,12 @@ export function updateBot(
   if (bot.recoilKick > 0) bot.recoilKick = Math.max(0, bot.recoilKick - safeDt * 6);
   if (bot.harvestSwingTimer > 0) bot.harvestSwingTimer = Math.max(0, bot.harvestSwingTimer - safeDt);
   if (bot.harvestCooldown > 0) bot.harvestCooldown = Math.max(0, bot.harvestCooldown - safeDt);
+  if ((bot.throwCooldown ?? 0) > 0) {
+    bot.throwCooldown = Math.max(0, (bot.throwCooldown ?? 0) - safeDt);
+  }
+  if ((bot.launchPadCooldown ?? 0) > 0) {
+    bot.launchPadCooldown = Math.max(0, (bot.launchPadCooldown ?? 0) - safeDt);
+  }
   if (bot.buildAnimTimer > 0) {
     bot.buildAnimTimer = Math.max(0, bot.buildAnimTimer - safeDt);
     if (bot.buildAnimTimer === 0) bot.isBuilding = false;
@@ -1677,7 +2411,7 @@ export function updateBot(
     return;
   }
   if (bot.state === 'gliding') {
-    stepGlidingPhase(bot, ctx, safeDt);
+    stepGlidingPhase(bot, ctx, safeDt, isFarLOD);
     return;
   }
 
@@ -1738,7 +2472,7 @@ export function updateBot(
         y: bot.position.y,
         z: bot.position.z + Math.cos(bot.yaw) * 15,
       };
-    tryBuildCover(bot, ctx, difficulty, threatPos);
+    tryBuildCover(bot, ctx, difficulty, threatPos, elapsed);
   }
 
   const healChoice = selectHealingItem(
@@ -1749,28 +2483,49 @@ export function updateBot(
     bot.maxShield,
   );
   const closeThreat = combatMatch !== null && combatMatch.hasLOS && combatMatch.distance < 18;
+  const activeHealItem = bot.inventory.items[bot.healSlot];
   if (
     bot.state === 'healing' &&
+    bot.stateTimer > 1.1 &&
+    activeHealItem?.weaponId !== 'chug_splash' &&
+    bot.hp >= 35 * (bot.maxHp / 100) &&
     bot.lastDamageTime >= 0 &&
     elapsed - bot.lastDamageTime < 0.25 &&
     closeThreat
   ) {
     bot.healTimer = 0;
+    bot.retreatTimer = 0;
     bot.state = 'combat';
   }
 
+  const hpScale = bot.maxHp / 100;
+  const lowHpForHeal =
+    bot.hp < profile.healThresholdHp * hpScale ||
+    (bot.hp + bot.shield < 85 * hpScale &&
+      (healChoice?.item.weaponId === 'chug_splash' ||
+        healChoice?.item.weaponId === 'mini_shield'));
   const wantsCriticalHeal =
     healChoice !== null &&
-    bot.hp < profile.healThresholdHp &&
-    (!closeThreat || bot.buildCooldown > 0);
+    lowHpForHeal &&
+    (!closeThreat ||
+      bot.buildCooldown > 0 ||
+      getTotalMaterials(bot) < BUILD_COST ||
+      healChoice.item.weaponId === 'chug_splash' ||
+      healChoice.item.weaponId === 'mini_shield');
   const wantsSafeTopOff =
-    healChoice !== null && !combatMatch && !inStormNow && (bot.hp < 85 || bot.shield < 85);
+    healChoice !== null &&
+    !combatMatch &&
+    !inStormNow &&
+    (bot.hp < bot.maxHp * 0.85 || bot.shield < bot.maxShield * 0.85);
 
   if (bot.state !== 'healing' && (wantsCriticalHeal || wantsSafeTopOff)) {
     bot.state = 'healing';
     bot.healSlot = healChoice.slotIndex;
     bot.inventory.activeSlot = healChoice.slotIndex;
-    bot.healTimer = WEAPONS[healChoice.item.weaponId].consumeTime ?? 3.0;
+    bot.healTimer =
+      WEAPONS[healChoice.item.weaponId].consumeTime ??
+      (healChoice.item.weaponId === 'chug_splash' ? 0.55 : 3.0);
+    bot.retreatTimer = combatMatch ? 0.75 : 0;
     bot.stateTimer = 0;
   }
 
@@ -1804,7 +2559,14 @@ export function updateBot(
   let intent: MoveIntent;
   switch (bot.state) {
     case 'healing':
-      intent = stepHealingState(bot, combatMatch !== null, closeThreat, needRotateStorm, safeDt);
+      intent = stepHealingState(
+        bot,
+        ctx,
+        combatMatch,
+        closeThreat,
+        needRotateStorm,
+        safeDt,
+      );
       break;
     case 'combat':
       intent = stepCombatState(
@@ -1814,6 +2576,7 @@ export function updateBot(
         profile,
         combatMatch,
         weaponCount,
+        elapsed,
         safeDt,
         isFarLOD,
       );
@@ -1843,10 +2606,15 @@ export function updateBot(
         safeDt,
         isFarLOD,
       );
+      if (intent.launchedGliding) {
+        updateAnimState(bot);
+        return;
+      }
       break;
   }
 
   recoverIfStuck(bot, ctx, intent, elapsed, safeDt, isFarLOD);
+  intent = applyVolcanoLavaAvoidance(bot, intent);
   applyMovementStep(
     bot,
     ctx,
@@ -1874,6 +2642,32 @@ export class BotBrain {
     return selectBestWeaponForDistance(items, distance, ammo);
   }
 
+  selectThrowableForCombat(
+    bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'>,
+    target: BotCombatTarget,
+    allTargets: BotCombatTarget[],
+    hasLOS: boolean,
+    buildPieces?: BuildPiece[],
+  ): ThrowableDecision | null {
+    return selectThrowableForCombat(bot, target, allTargets, hasLOS, buildPieces);
+  }
+
+  selectLaunchPadForRotation(
+    bot: Pick<BotEntity, 'position' | 'launchPadCooldown' | 'isBoss'>,
+    launchPads: LaunchPadEntity[],
+    destination: Vec3Like,
+  ): LaunchPadEntity | null {
+    return selectLaunchPadForRotation(bot, launchPads, destination);
+  }
+
+  isInVolcanoLavaHazard(
+    x: number,
+    z: number,
+    safeRadius = VOLCANO_LAVA_SAFE_RADIUS,
+  ): boolean {
+    return isInVolcanoLavaHazard(x, z, safeRadius);
+  }
+
   selectHealingItem(
     items: (ItemInstance | null)[],
     hp: number,
@@ -1894,7 +2688,7 @@ export class BotBrain {
       | 'buildCooldown'
       | 'lastDamageTime'
       | 'state'
-    >,
+    > & { maxHp?: number; reactionTimer?: number },
     difficulty: Difficulty,
     nowSec: number,
     threatDistance?: number,

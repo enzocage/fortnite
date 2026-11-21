@@ -13,14 +13,64 @@ import {
   PLAYER_RADIUS,
   POIS,
   SKINS,
+  WEAPONS,
   clamp,
   dist2D,
   dist3D,
   mulberry32,
 } from '../core';
-import { updateBot } from './BotBrain';
+import {
+  VOLCANO_LAVA_SAFE_RADIUS,
+  clampOutsideVolcanoLava,
+  isInVolcanoLavaHazard,
+  updateBot,
+} from './BotBrain';
 import { pickBotLoadoutCosmetics } from './BotNames';
-import type { BotEntity, BotRenderState, BotWorldContext } from './BotTypes';
+import type {
+  BotEntity,
+  BotRenderState,
+  BotWorldContext,
+  NamedBossSpec,
+} from './BotTypes';
+
+export const BOSS_SPECS: readonly NamedBossSpec[] = [
+  {
+    id: 'boss_skyline_spire',
+    name: 'Skyline Warden',
+    poiId: 'skyline_spire',
+    skinId: 'cyber_knight',
+    pickaxeId: 'plasma_katana',
+    gliderId: 'cyber_falcon',
+    personality: 'builder',
+    offsetX: 2,
+    offsetZ: -2,
+    patrolRadius: 5.5,
+  },
+  {
+    id: 'boss_scorched_caldera',
+    name: 'Obsidian Titan',
+    poiId: 'scorched_caldera',
+    skinId: 'obsidian_knight',
+    pickaxeId: 'magma_axe',
+    gliderId: 'solar_dragon',
+    personality: 'rusher',
+    offsetX: -5,
+    offsetZ: -4,
+    patrolRadius: 5.0,
+  },
+  {
+    id: 'boss_frostpeak_citadel',
+    name: 'Glacier Monarch',
+    poiId: 'frostpeak_citadel',
+    skinId: 'frost_phantom',
+    pickaxeId: 'storm_breaker',
+    gliderId: 'victory_brolly',
+    personality: 'builder',
+    offsetX: 8,
+    offsetZ: 7,
+    patrolRadius: 4.0,
+  },
+];
 
 interface EliminationMeta {
   killerId: string;
@@ -96,15 +146,22 @@ export class BotManager {
 
     const minJump = Math.min(1.2, Math.max(0.1, busTotalDuration * 0.1));
     const maxJump = Math.max(minJump + 0.5, busTotalDuration - 2.0);
+    const bossCount = total >= 12 ? BOSS_SPECS.length : 0;
+    const regularCount = total - bossCount;
 
-    for (let i = 0; i < total; i++) {
+    for (let i = 0; i < regularCount; i++) {
       const id = `bot_${i + 1}`;
       const cosmetics = pickBotLoadoutCosmetics(i, matchSeed);
       const poi = poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length];
 
-      // Pick landing offset around the target POI, avoiding water
+      // Pick landing offset around the target POI, avoiding water & volcano lava
       let dropX = poi.x + (rng() - 0.5) * poi.radius * 1.1;
       let dropZ = poi.z + (rng() - 0.5) * poi.radius * 1.1;
+      if (isInVolcanoLavaHazard(dropX, dropZ, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
+        const safe = clampOutsideVolcanoLava(dropX, dropZ, VOLCANO_LAVA_SAFE_RADIUS + 2.5);
+        dropX = safe.x;
+        dropZ = safe.z;
+      }
       if (this.ctx.terrain.isWater(dropX, dropZ)) {
         dropX = poi.x;
         dropZ = poi.z;
@@ -112,7 +169,7 @@ export class BotManager {
       const dropY = this.ctx.terrain.getHeightAt(dropX, dropZ);
 
       // Spread jump times smoothly across bus flight
-      const frac = total > 1 ? i / (total - 1) : 0.5;
+      const frac = regularCount > 1 ? i / (regularCount - 1) : 0.5;
       const jitter = (rng() - 0.5) * 1.8;
       const dropJumpTime = clamp(
         minJump + frac * (maxJump - minJump) + jitter,
@@ -235,10 +292,184 @@ export class BotManager {
         lastStuckCheckPos: { x: dropX, y: dropY, z: dropZ },
 
         rngState: ((matchSeed ^ ((i + 1) * 2654435761)) >>> 0) || 1,
+        isBoss: false,
+        throwCooldown: 0,
+        retreatTimer: 0,
+        launchPadCooldown: 0,
+        launchPadTargetId: null,
       };
 
       this.bots.push(bot);
       this.botMap.set(id, bot);
+    }
+
+    // Spawn the 3 Named POI Mythic Bosses replacing 3 regular bots when count >= 12
+    for (let b = 0; b < bossCount; b++) {
+      const spec = BOSS_SPECS[b];
+      const poi =
+        poiList.find((p) => p.id === spec.poiId) ??
+        POIS.find((p) => p.id === spec.poiId);
+      let spawnX = (poi?.x ?? 0) + spec.offsetX;
+      let spawnZ = (poi?.z ?? 0) + spec.offsetZ;
+      if (isInVolcanoLavaHazard(spawnX, spawnZ, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
+        const safe = clampOutsideVolcanoLava(
+          spawnX,
+          spawnZ,
+          VOLCANO_LAVA_SAFE_RADIUS + 2.5,
+        );
+        spawnX = safe.x;
+        spawnZ = safe.z;
+      }
+      if (this.ctx.terrain.isWater(spawnX, spawnZ) && poi) {
+        spawnX = poi.x;
+        spawnZ = poi.z;
+      }
+      const spawnY = this.ctx.terrain.getHeightAt(spawnX, spawnZ);
+
+      const boss: BotEntity = {
+        id: spec.id,
+        name: spec.name,
+        skinId: spec.skinId,
+        pickaxeId: spec.pickaxeId,
+        gliderId: spec.gliderId,
+        personality: spec.personality,
+        state: 'rotating',
+
+        position: { x: spawnX, y: spawnY, z: spawnZ },
+        velocity: { x: 0, y: 0, z: 0 },
+        yaw: rng() * Math.PI * 2,
+        pitch: 0,
+        grounded: true,
+        isCrouching: false,
+        isSprinting: false,
+        moveSpeed: 0,
+        radius: PLAYER_RADIUS,
+        height: PLAYER_HEIGHT,
+
+        hp: 150,
+        maxHp: 150,
+        shield: 150,
+        maxShield: 150,
+        alive: true,
+        kills: 0,
+        damageDealt: 0,
+
+        animState: 'idle',
+        isAiming: false,
+        isFiring: false,
+        isBuilding: false,
+        emoteId: null,
+        recoilKick: 0,
+        harvestSwingTimer: 0,
+        gliderOpen: false,
+        gliderFactor: 0,
+
+        inventory: {
+          items: [
+            {
+              uid: `${spec.id}_pickaxe`,
+              weaponId: 'pickaxe',
+              rarity: 'common',
+              magAmmo: 0,
+              stackCount: 1,
+            },
+            {
+              uid: `${spec.id}_mythic_rifle`,
+              weaponId: 'mythic_blade_rifle',
+              rarity: 'mythic',
+              magAmmo: WEAPONS.mythic_blade_rifle.magSize,
+              stackCount: 1,
+            },
+            {
+              uid: `${spec.id}_heavy_shotgun`,
+              weaponId: 'heavy_shotgun',
+              rarity: 'legendary',
+              magAmmo: WEAPONS.heavy_shotgun.magSize,
+              stackCount: 1,
+            },
+            {
+              uid: `${spec.id}_chug_splash`,
+              weaponId: 'chug_splash',
+              rarity: 'rare',
+              magAmmo: 0,
+              stackCount: 4,
+            },
+            null,
+            null,
+          ],
+          activeSlot: 1,
+          ammo: {
+            light: 0,
+            medium: 150,
+            shells: 28,
+            heavy: 0,
+            rockets: 0,
+          },
+          materials: {
+            wood: 150,
+            brick: 100,
+            metal: 60,
+          },
+        },
+
+        targetPoiId: spec.poiId,
+        dropJumpTime: 0,
+        dropTarget: { x: spawnX, y: spawnY, z: spawnZ },
+        moveTarget: { x: spawnX, y: spawnY, z: spawnZ },
+        patrolAngle: rng() * Math.PI * 2,
+
+        targetEnemyId: null,
+        lastKnownEnemyPos: null,
+        enemyLostTimer: 0,
+        lastHeardNoisePos: null,
+        lastHeardNoiseTime: -999,
+        lastDamageTime: -999,
+        lastDamagerId: null,
+        lastAttackerName: null,
+        lastDamageWeaponId: null,
+        lastDamageRarity: null,
+        lastDamageHeadshot: false,
+        reactionTimer: 0,
+
+        fireCooldown: 0,
+        burstQueue: 0,
+        burstTimer: 0,
+        reloadTimer: 0,
+        reloadSlot: 0,
+        healTimer: 0,
+        healSlot: 0,
+        buildCooldown: 0,
+        buildAnimTimer: 0,
+        harvestCooldown: 0,
+
+        strafeDir: rng() < 0.5 ? -1 : 1,
+        strafeTimer: 0.5 + rng(),
+        jumpCooldown: 0,
+        crouchToggleTimer: 0.6 + rng(),
+        stateTimer: 0,
+        thinkCooldown: rng() * 0.25,
+        scanCooldown: rng() * 0.16,
+
+        harvestTargetId: null,
+        lootTargetId: null,
+        chestTargetId: null,
+        ignoredTargetId: null,
+        ignoredTargetUntil: 0,
+        stuckTimer: 0,
+        lastStuckCheckPos: { x: spawnX, y: spawnY, z: spawnZ },
+
+        rngState: ((matchSeed ^ ((regularCount + b + 1) * 2654435761)) >>> 0) || 1,
+        isBoss: true,
+        bossPoiId: spec.poiId,
+        bossHomePos: { x: spawnX, y: spawnY, z: spawnZ },
+        throwCooldown: 0,
+        retreatTimer: 0,
+        launchPadCooldown: 0,
+        launchPadTargetId: null,
+      };
+
+      this.bots.push(boss);
+      this.botMap.set(spec.id, boss);
     }
   }
 
@@ -378,6 +609,10 @@ export class BotManager {
       }
     }
 
+    if (bot.isBoss) {
+      this.ensureBossEliminationDrops(bot);
+    }
+
     this.ctx.dropBotLoot(bot);
 
     const skinColor = SKINS.find((s) => s.id === bot.skinId)?.primaryColor;
@@ -402,6 +637,47 @@ export class BotManager {
         meta.killerId === 'player' || bot.id === 'player',
     };
     this.ctx.eventBus.emit('combat:killfeed', entry);
+  }
+
+  private ensureBossEliminationDrops(bot: BotEntity): void {
+    const items = bot.inventory.items;
+
+    const mythicIdx = items.findIndex(
+      (it, idx) => idx > 0 && it?.weaponId === 'mythic_blade_rifle',
+    );
+    if (mythicIdx >= 1 && items[mythicIdx]) {
+      items[mythicIdx]!.rarity = 'mythic';
+      if (items[mythicIdx]!.magAmmo <= 0) {
+        items[mythicIdx]!.magAmmo = WEAPONS.mythic_blade_rifle.magSize;
+      }
+    } else {
+      const targetSlot = items.findIndex((it, idx) => idx > 0 && it === null);
+      const slot = targetSlot >= 1 ? targetSlot : 1;
+      items[slot] = {
+        uid: `${bot.id}_mythic_rifle_drop`,
+        weaponId: 'mythic_blade_rifle',
+        rarity: 'mythic',
+        magAmmo: WEAPONS.mythic_blade_rifle.magSize,
+        stackCount: 1,
+      };
+    }
+
+    const chugIdx = items.findIndex(
+      (it, idx) => idx > 0 && it?.weaponId === 'chug_splash',
+    );
+    if (chugIdx >= 1 && items[chugIdx]) {
+      items[chugIdx]!.stackCount = Math.max(2, items[chugIdx]!.stackCount);
+    } else {
+      const targetSlot = items.findIndex((it, idx) => idx > 0 && it === null);
+      const slot = targetSlot >= 1 ? targetSlot : 3;
+      items[slot] = {
+        uid: `${bot.id}_chug_splash_drop`,
+        weaponId: 'chug_splash',
+        rarity: 'rare',
+        magAmmo: 0,
+        stackCount: 2,
+      };
+    }
   }
 
   getBots(): BotEntity[] {
@@ -455,6 +731,8 @@ export class BotManager {
         shield: bot.shield,
         recoilKick: bot.recoilKick,
         harvestSwingTimer: bot.harvestSwingTimer,
+        isBoss: Boolean(bot.isBoss),
+        bossPoiId: bot.bossPoiId,
       };
     });
   }
@@ -471,6 +749,8 @@ export class BotManager {
       alive: bot.alive,
       kills: bot.kills,
       position: { ...bot.position },
+      isBoss: Boolean(bot.isBoss),
+      bossPoiId: bot.bossPoiId,
     }));
   }
 

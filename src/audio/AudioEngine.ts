@@ -1,5 +1,6 @@
-import { clamp, DEFAULT_SETTINGS, dist3D, EventBus } from '../core';
+import { clamp, DEFAULT_SETTINGS, dist3D, EventBus, mulberry32 } from '../core';
 import type {
+  BiomeType,
   ChestEntity,
   GameSettings,
   MusicTrackId,
@@ -25,6 +26,144 @@ export interface AudioEngineOptions {
   autoBindGestureUnlock?: boolean;
 }
 
+export interface BiomeAmbienceProfile {
+  noiseFilterType: BiquadFilterType;
+  noiseFilterFreq: number;
+  noiseFilterQ: number;
+  noiseGain: number;
+  droneFreq: number;
+  droneHarmonicFreq: number;
+  droneWave: OscillatorType;
+  droneGain: number;
+  stormOverlayGain: number;
+}
+
+export interface BiomeAmbienceState {
+  biome: BiomeType | null;
+  inStorm: boolean;
+  active: boolean;
+}
+
+export const BIOME_AMBIENCE_PROFILES: Record<BiomeType, Omit<BiomeAmbienceProfile, 'stormOverlayGain'>> = {
+  ocean: {
+    noiseFilterType: 'lowpass',
+    noiseFilterFreq: 420,
+    noiseFilterQ: 0.7,
+    noiseGain: 0.044,
+    droneFreq: 55,
+    droneHarmonicFreq: 82.5,
+    droneWave: 'sine',
+    droneGain: 0.016,
+  },
+  beach: {
+    noiseFilterType: 'bandpass',
+    noiseFilterFreq: 580,
+    noiseFilterQ: 0.8,
+    noiseGain: 0.036,
+    droneFreq: 65.41,
+    droneHarmonicFreq: 98,
+    droneWave: 'sine',
+    droneGain: 0.01,
+  },
+  grassland: {
+    noiseFilterType: 'bandpass',
+    noiseFilterFreq: 460,
+    noiseFilterQ: 0.7,
+    noiseGain: 0.022,
+    droneFreq: 110,
+    droneHarmonicFreq: 165,
+    droneWave: 'sine',
+    droneGain: 0.006,
+  },
+  forest: {
+    noiseFilterType: 'bandpass',
+    noiseFilterFreq: 920,
+    noiseFilterQ: 1.1,
+    noiseGain: 0.028,
+    droneFreq: 98,
+    droneHarmonicFreq: 146.83,
+    droneWave: 'triangle',
+    droneGain: 0.008,
+  },
+  highland: {
+    noiseFilterType: 'bandpass',
+    noiseFilterFreq: 680,
+    noiseFilterQ: 1.6,
+    noiseGain: 0.034,
+    droneFreq: 130.81,
+    droneHarmonicFreq: 196,
+    droneWave: 'sine',
+    droneGain: 0.01,
+  },
+  urban: {
+    noiseFilterType: 'lowpass',
+    noiseFilterFreq: 280,
+    noiseFilterQ: 0.9,
+    noiseGain: 0.024,
+    droneFreq: 60,
+    droneHarmonicFreq: 120,
+    droneWave: 'triangle',
+    droneGain: 0.014,
+  },
+  snow: {
+    noiseFilterType: 'bandpass',
+    noiseFilterFreq: 1250,
+    noiseFilterQ: 2.8,
+    noiseGain: 0.038,
+    droneFreq: 196,
+    droneHarmonicFreq: 293.66,
+    droneWave: 'sine',
+    droneGain: 0.014,
+  },
+  desert: {
+    noiseFilterType: 'bandpass',
+    noiseFilterFreq: 840,
+    noiseFilterQ: 1.9,
+    noiseGain: 0.032,
+    droneFreq: 87.31,
+    droneHarmonicFreq: 130.81,
+    droneWave: 'triangle',
+    droneGain: 0.01,
+  },
+  volcanic: {
+    noiseFilterType: 'lowpass',
+    noiseFilterFreq: 220,
+    noiseFilterQ: 1.4,
+    noiseGain: 0.046,
+    droneFreq: 48,
+    droneHarmonicFreq: 72,
+    droneWave: 'sawtooth',
+    droneGain: 0.028,
+  },
+  cyber: {
+    noiseFilterType: 'bandpass',
+    noiseFilterFreq: 540,
+    noiseFilterQ: 1.8,
+    noiseGain: 0.02,
+    droneFreq: 110,
+    droneHarmonicFreq: 165,
+    droneWave: 'sawtooth',
+    droneGain: 0.024,
+  },
+};
+
+export function getBiomeAmbienceProfile(biome: BiomeType, inStorm: boolean): BiomeAmbienceProfile {
+  const base = BIOME_AMBIENCE_PROFILES[biome] ?? BIOME_AMBIENCE_PROFILES.grassland;
+  if (!inStorm) {
+    return {
+      ...base,
+      stormOverlayGain: 0.0001,
+    };
+  }
+  return {
+    ...base,
+    noiseFilterFreq: Math.max(120, base.noiseFilterFreq * 0.85),
+    noiseFilterQ: Math.max(0.7, base.noiseFilterQ + 0.6),
+    noiseGain: clamp(base.noiseGain * 1.15 + 0.015, 0.0001, 0.08),
+    stormOverlayGain: 0.042,
+  };
+}
+
 interface ActiveVoice {
   id: SoundEventId;
   startedAt: number;
@@ -36,6 +175,20 @@ interface ActiveVoice {
 interface ActiveChestLoop {
   handle: LoopHandle;
   panner: PannerNode | null;
+}
+
+interface BiomeAmbienceRig {
+  masterGain: GainNode;
+  noiseSource: AudioBufferSourceNode | null;
+  noiseFilter: BiquadFilterNode | null;
+  noiseGain: GainNode | null;
+  droneOscA: OscillatorNode;
+  droneOscB: OscillatorNode;
+  droneFilter: BiquadFilterNode | null;
+  droneGain: GainNode;
+  stormOsc: OscillatorNode;
+  stormFilter: BiquadFilterNode | null;
+  stormGain: GainNode;
 }
 
 /**
@@ -57,15 +210,28 @@ function getSoundPriority(id: SoundEventId): number {
   switch (id) {
     case 'victory_fanfare':
     case 'elimination':
+    case 'kill_streak':
     case 'headshot_dink':
     case 'shield_break':
     case 'explosion':
+    case 'shockwave_blast':
     case 'shot_sniper':
     case 'shot_pump':
+    case 'shot_heavy_shotgun':
+    case 'shot_mythic_rifle':
     case 'ui_play':
     case 'chest_open':
+    case 'poi_discover':
+    case 'launch_pad':
+    case 'fall_damage':
       return 3;
     case 'footstep':
+    case 'footstep_wood':
+    case 'footstep_stone':
+    case 'footstep_metal':
+    case 'footstep_snow':
+    case 'footstep_water':
+    case 'footstep_sand':
     case 'ui_hover':
       return 0;
     case 'pickaxe_swing':
@@ -77,6 +243,9 @@ function getSoundPriority(id: SoundEventId): number {
     case 'jump':
     case 'land':
     case 'ui_click':
+    case 'slide_loop':
+    case 'mantle_climb':
+    case 'zipline_loop':
       return 1;
     default:
       return 2;
@@ -86,8 +255,16 @@ function getSoundPriority(id: SoundEventId): number {
 function getMaxHearDistance(id: SoundEventId): number {
   switch (id) {
     case 'footstep':
+    case 'footstep_wood':
+    case 'footstep_stone':
+    case 'footstep_metal':
+    case 'footstep_snow':
+    case 'footstep_water':
+    case 'footstep_sand':
     case 'jump':
     case 'land':
+    case 'slide_loop':
+    case 'mantle_climb':
       return 55;
     case 'pickaxe_swing':
     case 'hit_wood':
@@ -96,11 +273,17 @@ function getMaxHearDistance(id: SoundEventId): number {
     case 'reload':
     case 'dryfire':
     case 'loot_pickup':
+    case 'build_repair':
+    case 'grenade_bounce':
+    case 'zipline_attach':
+    case 'zipline_loop':
       return 85;
     case 'shot_sniper':
     case 'shot_rocket':
     case 'explosion':
+    case 'shockwave_blast':
     case 'bus_horn':
+    case 'launch_pad':
       return 240;
     default:
       return 175;
@@ -133,6 +316,13 @@ export class AudioEngine {
   private disposed = false;
   private gestureListenersBound = false;
   private gestureHandler: (() => void) | null = null;
+
+  private ambienceRig: BiomeAmbienceRig | null = null;
+  private ambienceActive = false;
+  private appliedBiome: BiomeType | null = null;
+  private appliedInStorm = false;
+  private desiredBiome: BiomeType | null = null;
+  private desiredInStorm = false;
 
   constructor(
     eventBus: EventBus,
@@ -178,6 +368,9 @@ export class AudioEngine {
 
     if (ctx.state !== 'suspended') {
       this.unbindGestureUnlock();
+      if (this.desiredBiome !== null) {
+        this.updateBiomeAmbience(this.desiredBiome, this.desiredInStorm);
+      }
     }
   }
 
@@ -406,11 +599,67 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Updates the subtle procedural ambient bed (wind/ocean/lava/cyber/storm)
+   * for the player's current biome and storm state. Safe no-op when headless/mocked.
+   */
+  updateBiomeAmbience(biome: BiomeType, inStorm: boolean): void {
+    if (this.disposed) return;
+
+    this.desiredBiome = biome;
+    this.desiredInStorm = inStorm;
+
+    if (this.ambienceActive && this.appliedBiome === biome && this.appliedInStorm === inStorm) {
+      return;
+    }
+
+    if (!this.ctx && (this.unlocked || typeof window === 'undefined')) {
+      this.ensureContext();
+    }
+
+    if (
+      !this.ctx ||
+      !this.sfxGain ||
+      this.ctx.state === 'closed' ||
+      (!this.unlocked && this.ctx.state === 'suspended')
+    ) {
+      return;
+    }
+
+    this.pruneVoices(this.ctx.currentTime);
+
+    if (!this.ambienceActive && !this.ensurePolyphonyRoom(2)) {
+      return;
+    }
+
+    if (!this.ambienceRig) {
+      this.ambienceRig = this.createBiomeAmbienceRig(this.ctx, this.sfxGain);
+      if (!this.ambienceRig) {
+        return;
+      }
+    }
+
+    this.ambienceActive = true;
+    this.appliedBiome = biome;
+    this.appliedInStorm = inStorm;
+
+    const profile = getBiomeAmbienceProfile(biome, inStorm);
+    this.applyBiomeAmbienceProfile(this.ctx, this.ambienceRig, profile);
+  }
+
+  getBiomeAmbienceState(): BiomeAmbienceState {
+    return {
+      biome: this.appliedBiome ?? this.desiredBiome,
+      inStorm: this.ambienceActive ? this.appliedInStorm : this.desiredInStorm,
+      active: this.ambienceActive,
+    };
+  }
+
   getActiveVoiceCount(): number {
     if (this.ctx) {
       this.pruneVoices(this.ctx.currentTime);
     }
-    return this.activeVoices.length + this.chestLoops.size;
+    return this.activeVoices.length + this.getReservedVoiceCount();
   }
 
   getActiveChestLoopCount(): number {
@@ -431,6 +680,8 @@ export class AudioEngine {
       unsub();
     }
     this.unsubscribers.length = 0;
+
+    this.teardownBiomeAmbience();
 
     for (const active of this.chestLoops.values()) {
       active.handle.stop();
@@ -553,6 +804,30 @@ export class AudioEngine {
     }
   }
 
+  private rampParam(
+    param: AudioParam | undefined,
+    value: number,
+    time: number,
+    duration = 0.25,
+  ): void {
+    if (!param) return;
+    if (typeof param.linearRampToValueAtTime === 'function') {
+      if (typeof param.cancelScheduledValues === 'function') {
+        param.cancelScheduledValues(time);
+      }
+      if (typeof param.setValueAtTime === 'function') {
+        param.setValueAtTime(Number.isFinite(param.value) ? param.value : value, time);
+      }
+      param.linearRampToValueAtTime(value, time + duration);
+    } else {
+      this.setParam(param, value, time);
+    }
+  }
+
+  private getReservedVoiceCount(): number {
+    return this.chestLoops.size + (this.ambienceActive ? 1 : 0);
+  }
+
   private pruneVoices(now: number): void {
     for (let i = this.activeVoices.length - 1; i >= 0; i--) {
       if (now >= this.activeVoices[i].expiresAt) {
@@ -563,7 +838,7 @@ export class AudioEngine {
   }
 
   private ensurePolyphonyRoom(incomingPriority: number): boolean {
-    if (this.activeVoices.length + this.chestLoops.size < MAX_POLYPHONY) {
+    if (this.activeVoices.length + this.getReservedVoiceCount() < MAX_POLYPHONY) {
       return true;
     }
     if (this.activeVoices.length === 0) {
@@ -591,6 +866,219 @@ export class AudioEngine {
     this.safeDisconnect(victim.panner);
     this.activeVoices.splice(victimIdx, 1);
     return true;
+  }
+
+  private createBiomeAmbienceRig(
+    ctx: AudioContext,
+    destination: AudioNode,
+  ): BiomeAmbienceRig | null {
+    if (typeof ctx.createGain !== 'function' || typeof ctx.createOscillator !== 'function') {
+      return null;
+    }
+
+    let masterGain: GainNode | null = null;
+    let noiseSource: AudioBufferSourceNode | null = null;
+    let noiseFilter: BiquadFilterNode | null = null;
+    let noiseGain: GainNode | null = null;
+    let droneOscA: OscillatorNode | null = null;
+    let droneOscB: OscillatorNode | null = null;
+    let droneFilter: BiquadFilterNode | null = null;
+    let droneGain: GainNode | null = null;
+    let stormOsc: OscillatorNode | null = null;
+    let stormFilter: BiquadFilterNode | null = null;
+    let stormGain: GainNode | null = null;
+
+    try {
+      const now = ctx.currentTime;
+      masterGain = ctx.createGain();
+      this.setParam(masterGain.gain, 1.0, now);
+      masterGain.connect(destination);
+
+      // Filtered pink noise bed (wind / surf / thermal hiss)
+      const noiseBuf = this.buildAmbienceNoiseBuffer(ctx);
+      if (noiseBuf && typeof ctx.createBufferSource === 'function') {
+        noiseSource = ctx.createBufferSource();
+        noiseSource.buffer = noiseBuf;
+        noiseSource.loop = true;
+        noiseGain = ctx.createGain();
+        this.setParam(noiseGain.gain, 0.0001, now);
+        noiseFilter = this.safeCreateFilter(ctx);
+        if (noiseFilter) {
+          noiseFilter.type = 'bandpass';
+          this.setParam(noiseFilter.frequency, 500, now);
+          this.setParam(noiseFilter.Q, 1.0, now);
+          noiseSource.connect(noiseFilter);
+          noiseFilter.connect(noiseGain);
+        } else {
+          noiseSource.connect(noiseGain);
+        }
+        noiseGain.connect(masterGain);
+        noiseSource.start(now);
+      }
+
+      // Subtle tonal harmonic drone (lava / cyber / ocean / snow aura)
+      droneOscA = ctx.createOscillator();
+      droneOscB = ctx.createOscillator();
+      droneOscA.type = 'sine';
+      droneOscB.type = 'sine';
+      this.setParam(droneOscA.frequency, 110, now);
+      this.setParam(droneOscB.frequency, 165, now);
+      droneOscB.detune?.setValueAtTime(5, now);
+
+      droneGain = ctx.createGain();
+      this.setParam(droneGain.gain, 0.0001, now);
+      droneFilter = this.safeCreateFilter(ctx);
+      if (droneFilter) {
+        droneFilter.type = 'lowpass';
+        this.setParam(droneFilter.frequency, 420, now);
+        this.setParam(droneFilter.Q, 0.8, now);
+        droneOscA.connect(droneFilter);
+        droneOscB.connect(droneFilter);
+        droneFilter.connect(droneGain);
+      } else {
+        droneOscA.connect(droneGain);
+        droneOscB.connect(droneGain);
+      }
+      droneGain.connect(masterGain);
+      droneOscA.start(now);
+      droneOscB.start(now);
+
+      // Storm overlay howl/buzz (muted at 0.0001 outside storm)
+      stormOsc = ctx.createOscillator();
+      stormOsc.type = 'sawtooth';
+      this.setParam(stormOsc.frequency, 82, now);
+      stormGain = ctx.createGain();
+      this.setParam(stormGain.gain, 0.0001, now);
+      stormFilter = this.safeCreateFilter(ctx);
+      if (stormFilter) {
+        stormFilter.type = 'bandpass';
+        this.setParam(stormFilter.frequency, 340, now);
+        this.setParam(stormFilter.Q, 2.2, now);
+        stormOsc.connect(stormFilter);
+        stormFilter.connect(stormGain);
+      } else {
+        stormOsc.connect(stormGain);
+      }
+      stormGain.connect(masterGain);
+      stormOsc.start(now);
+
+      return {
+        masterGain,
+        noiseSource,
+        noiseFilter,
+        noiseGain,
+        droneOscA,
+        droneOscB,
+        droneFilter,
+        droneGain,
+        stormOsc,
+        stormFilter,
+        stormGain,
+      };
+    } catch {
+      this.safeDisconnect(noiseSource);
+      this.safeDisconnect(noiseFilter);
+      this.safeDisconnect(noiseGain);
+      this.safeDisconnect(droneOscA);
+      this.safeDisconnect(droneOscB);
+      this.safeDisconnect(droneFilter);
+      this.safeDisconnect(droneGain);
+      this.safeDisconnect(stormOsc);
+      this.safeDisconnect(stormFilter);
+      this.safeDisconnect(stormGain);
+      this.safeDisconnect(masterGain);
+      return null;
+    }
+  }
+
+  private applyBiomeAmbienceProfile(
+    ctx: AudioContext,
+    rig: BiomeAmbienceRig,
+    profile: BiomeAmbienceProfile,
+  ): void {
+    const now = ctx.currentTime;
+    try {
+      if (rig.noiseFilter) {
+        rig.noiseFilter.type = profile.noiseFilterType;
+        this.rampParam(rig.noiseFilter.frequency, Math.max(25, profile.noiseFilterFreq), now, 0.35);
+        this.rampParam(rig.noiseFilter.Q, Math.max(0.1, profile.noiseFilterQ), now, 0.35);
+      }
+      if (rig.noiseGain) {
+        this.rampParam(rig.noiseGain.gain, Math.max(0.0001, profile.noiseGain), now, 0.35);
+      }
+
+      rig.droneOscA.type = profile.droneWave;
+      rig.droneOscB.type = profile.droneWave === 'sawtooth' ? 'triangle' : profile.droneWave;
+      this.rampParam(rig.droneOscA.frequency, Math.max(20, profile.droneFreq), now, 0.4);
+      this.rampParam(rig.droneOscB.frequency, Math.max(20, profile.droneHarmonicFreq), now, 0.4);
+      this.rampParam(rig.droneGain.gain, Math.max(0.0001, profile.droneGain), now, 0.4);
+      this.rampParam(rig.stormGain.gain, Math.max(0.0001, profile.stormOverlayGain), now, 0.3);
+    } catch {
+      // Gracefully tolerate incomplete AudioNode mocks
+    }
+  }
+
+  private teardownBiomeAmbience(): void {
+    const rig = this.ambienceRig;
+    this.ambienceRig = null;
+    this.ambienceActive = false;
+    this.appliedBiome = null;
+    this.appliedInStorm = false;
+    this.desiredBiome = null;
+    this.desiredInStorm = false;
+
+    if (!rig) return;
+
+    const stopAt = this.ctx ? this.ctx.currentTime + 0.03 : 0;
+    for (const src of [rig.noiseSource, rig.droneOscA, rig.droneOscB, rig.stormOsc]) {
+      if (!src) continue;
+      try {
+        src.stop(stopAt);
+      } catch {
+        // Ignore stop errors during teardown
+      }
+      this.safeDisconnect(src);
+    }
+    this.safeDisconnect(rig.noiseFilter);
+    this.safeDisconnect(rig.noiseGain);
+    this.safeDisconnect(rig.droneFilter);
+    this.safeDisconnect(rig.droneGain);
+    this.safeDisconnect(rig.stormFilter);
+    this.safeDisconnect(rig.stormGain);
+    this.safeDisconnect(rig.masterGain);
+  }
+
+  private safeCreateFilter(ctx: AudioContext): BiquadFilterNode | null {
+    if (typeof ctx.createBiquadFilter !== 'function') return null;
+    try {
+      return ctx.createBiquadFilter();
+    } catch {
+      return null;
+    }
+  }
+
+  private buildAmbienceNoiseBuffer(ctx: AudioContext): AudioBuffer | null {
+    if (typeof ctx.createBuffer !== 'function') return null;
+    try {
+      const rate = ctx.sampleRate || 44100;
+      const len = Math.max(256, Math.floor(rate * 1.5));
+      const buf = ctx.createBuffer(1, len, rate);
+      const data = buf.getChannelData(0);
+      const rand = mulberry32(0xa4b1e2);
+      let b0 = 0;
+      let b1 = 0;
+      let b2 = 0;
+      for (let i = 0; i < len; i++) {
+        const w = rand() * 2 - 1;
+        b0 = 0.997 * b0 + w * 0.029;
+        b1 = 0.985 * b1 + w * 0.032;
+        b2 = 0.95 * b2 + w * 0.048;
+        data[i] = clamp((b0 + b1 + b2 + w * 0.12) * 0.25, -1, 1);
+      }
+      return buf;
+    } catch {
+      return null;
+    }
   }
 
   private createSpatialPanner(

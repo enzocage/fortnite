@@ -1,5 +1,5 @@
 import { RARITY_COLORS, WORLD_HALF, WORLD_SIZE } from '../core';
-import type { Rarity } from '../types';
+import type { BiomeType, HUDState, Rarity, StormState } from '../types';
 
 export interface CompassTick {
   degree: number;
@@ -18,7 +18,27 @@ export interface RarityVisualMeta {
   bgBottom: string;
   border: string;
   glow: string;
+  shimmer?: string;
 }
+
+export interface KillStreakCallout {
+  streak: number;
+  tier: 'DOUBLE' | 'TRIPLE' | 'RAMPAGE';
+  label: string;
+}
+
+export interface ContextualHintItem {
+  id: 'repair' | 'slide' | 'zipline';
+  key: string;
+  label: string;
+  tone: 'emerald' | 'cyan' | 'gold';
+}
+
+export const BOSS_POI_LABELS: Readonly<Record<string, string>> = {
+  frostpeak_citadel: 'GLACIER MONARCH',
+  scorched_caldera: 'OBSIDIAN TITAN',
+  skyline_spire: 'SKYLINE WARDEN',
+};
 
 export const COMPASS_CARDINALS: Readonly<Record<number, string>> = {
   0: 'N',
@@ -81,10 +101,12 @@ const RARITY_VISUALS: Record<Rarity, RarityVisualMeta> = {
     rarity: 'mythic',
     label: 'MYTHIC',
     accent: RARITY_COLORS.mythic,
-    bgTop: '#fde047',
-    bgBottom: '#ca8a04',
+    bgTop: '#fff3a1',
+    bgBottom: '#b45309',
     border: '#fef9c3',
-    glow: 'rgba(255, 223, 64, 0.72)',
+    glow: 'rgba(255, 223, 64, 0.78)',
+    shimmer:
+      'linear-gradient(135deg, #b45309 0%, #f59e0b 25%, #fff3a1 50%, #ffdf40 75%, #92400e 100%)',
   },
 };
 
@@ -230,4 +252,130 @@ export function formatCountdown(seconds: number): string {
   const mins = Math.floor(totalSec / 60);
   const secs = totalSec % 60;
   return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+/**
+ * Returns animated Kill-Streak callout metadata when `killStreak >= 2`.
+ */
+export function getKillStreakCallout(
+  killStreak: number,
+): KillStreakCallout | null {
+  if (!Number.isFinite(killStreak) || killStreak < 2) {
+    return null;
+  }
+  const streak = Math.floor(killStreak);
+  if (streak === 2) {
+    return { streak, tier: 'DOUBLE', label: 'DOUBLE ELIM!' };
+  }
+  if (streak === 3) {
+    return { streak, tier: 'TRIPLE', label: 'TRIPLE ELIM!' };
+  }
+  return {
+    streak,
+    tier: 'RAMPAGE',
+    label: streak >= 5 ? `RAMPAGE x${streak}!` : 'RAMPAGE!',
+  };
+}
+
+/**
+ * Computes meters outside the active/next safe zone when `stormDistance` is omitted.
+ */
+export function computeFallbackStormDistance(
+  playerX: number,
+  playerZ: number,
+  storm: Pick<
+    StormState,
+    | 'currentCenterX'
+    | 'currentCenterZ'
+    | 'currentRadius'
+    | 'nextCenterX'
+    | 'nextCenterZ'
+    | 'nextRadius'
+  >,
+): number {
+  const useNext = storm.nextRadius > 0;
+  const cx = useNext ? storm.nextCenterX : storm.currentCenterX;
+  const cz = useNext ? storm.nextCenterZ : storm.currentCenterZ;
+  const radius = useNext ? storm.nextRadius : storm.currentRadius;
+  return Math.max(0, Math.hypot(playerX - cx, playerZ - cz) - Math.max(0, radius));
+}
+
+/**
+ * Formats safe-zone distance badge text and urgency flag near the storm pill.
+ */
+export function formatSafeZoneDistance(
+  stormDistance?: number,
+  inStorm?: boolean,
+): { text: string; isOutside: boolean } {
+  if (typeof stormDistance !== 'number' || !Number.isFinite(stormDistance)) {
+    return {
+      text: inStorm ? 'OUTSIDE ZONE' : 'SAFE ZONE',
+      isOutside: Boolean(inStorm),
+    };
+  }
+  if (stormDistance > 0.5) {
+    return {
+      text: `SAFE ${Math.round(stormDistance)}M`,
+      isOutside: true,
+    };
+  }
+  return {
+    text: 'IN SAFE',
+    isOutside: Boolean(inStorm),
+  };
+}
+
+const BIOME_LABELS: Readonly<Record<BiomeType, string>> = {
+  ocean: 'OPEN OCEAN',
+  beach: 'COASTLINE',
+  grassland: 'GRASSLANDS',
+  forest: 'TIMBER WOODS',
+  highland: 'HIGHLANDS',
+  urban: 'METRO DISTRICT',
+  snow: 'ALPINE PEAKS',
+  desert: 'RED MESA',
+  volcanic: 'VOLCANIC RIFT',
+  cyber: 'CYBER SECTOR',
+};
+
+/**
+ * Maps BiomeType enum values to concise uppercase HUD labels.
+ */
+export function formatBiomeLabel(biome?: BiomeType): string {
+  if (!biome) return '';
+  return BIOME_LABELS[biome] ?? String(biome).toUpperCase();
+}
+
+/**
+ * Computes active contextual action hints for repair/slide/zipline states.
+ */
+export function getContextualHudHints(
+  state: Pick<HUDState, 'canRepairBuild' | 'isSliding' | 'isZiplining'>,
+): ContextualHintItem[] {
+  const hints: ContextualHintItem[] = [];
+  if (state.canRepairBuild) {
+    hints.push({
+      id: 'repair',
+      key: 'F',
+      label: 'REPAIR BUILD',
+      tone: 'emerald',
+    });
+  }
+  if (state.isSliding) {
+    hints.push({
+      id: 'slide',
+      key: 'SPACE',
+      label: 'SLIDE • JUMP BOOST',
+      tone: 'cyan',
+    });
+  }
+  if (state.isZiplining) {
+    hints.push({
+      id: 'zipline',
+      key: 'SPACE',
+      label: 'ZIPLINE • DETACH',
+      tone: 'gold',
+    });
+  }
+  return hints;
 }

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, EventBus } from '../../core';
-import type { ChestEntity, MusicTrackId, SoundEventId } from '../../types';
+import type { BiomeType, ChestEntity, MusicTrackId, SoundEventId } from '../../types';
 import {
   AudioEngine,
+  BIOME_AMBIENCE_PROFILES,
   CHEST_HUM_RADIUS,
   computeBusGains,
+  getBiomeAmbienceProfile,
   MAX_CHEST_LOOPS,
   MAX_POLYPHONY,
   MUSIC_PATTERNS,
@@ -12,61 +14,104 @@ import {
   SoundSynthesizer,
 } from '../index';
 
-const ALL_SOUND_EVENT_IDS: SoundEventId[] = [
-  'shot_ar',
-  'shot_burst_ar',
-  'shot_pump',
-  'shot_tac',
-  'shot_smg',
-  'shot_sniper',
-  'shot_pistol',
-  'shot_rocket',
-  'explosion',
-  'reload',
-  'dryfire',
-  'pickaxe_swing',
-  'hit_wood',
-  'hit_brick',
-  'hit_metal',
-  'weakpoint_crit',
-  'build_wood',
-  'build_brick',
-  'build_metal',
-  'edit_select',
-  'edit_confirm',
-  'structure_break',
-  'hitmarker',
-  'shield_hit',
-  'shield_break',
-  'headshot_dink',
-  'elimination',
-  'chest_open',
-  'loot_pickup',
-  'bus_horn',
-  'glider_deploy',
-  'heal_start',
-  'heal_finish',
-  'storm_warning',
-  'storm_tick',
-  'footstep',
-  'jump',
-  'land',
-  'ui_click',
-  'ui_hover',
-  'ui_play',
-  'victory_fanfare',
-];
+const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
+  shot_ar: true,
+  shot_burst_ar: true,
+  shot_pump: true,
+  shot_tac: true,
+  shot_smg: true,
+  shot_sniper: true,
+  shot_pistol: true,
+  shot_rocket: true,
+  shot_heavy_shotgun: true,
+  shot_mythic_rifle: true,
+  explosion: true,
+  reload: true,
+  dryfire: true,
+  pickaxe_swing: true,
+  hit_wood: true,
+  hit_brick: true,
+  hit_metal: true,
+  weakpoint_crit: true,
+  build_wood: true,
+  build_brick: true,
+  build_metal: true,
+  build_repair: true,
+  edit_select: true,
+  edit_confirm: true,
+  structure_break: true,
+  hitmarker: true,
+  shield_hit: true,
+  shield_break: true,
+  headshot_dink: true,
+  elimination: true,
+  kill_streak: true,
+  chest_open: true,
+  loot_pickup: true,
+  bus_horn: true,
+  glider_deploy: true,
+  launch_pad: true,
+  zipline_attach: true,
+  zipline_loop: true,
+  slide_loop: true,
+  mantle_climb: true,
+  shockwave_blast: true,
+  grenade_bounce: true,
+  splash_heal: true,
+  fall_damage: true,
+  lava_burn: true,
+  poi_discover: true,
+  heal_start: true,
+  heal_finish: true,
+  storm_warning: true,
+  storm_tick: true,
+  footstep: true,
+  footstep_wood: true,
+  footstep_stone: true,
+  footstep_metal: true,
+  footstep_snow: true,
+  footstep_water: true,
+  footstep_sand: true,
+  jump: true,
+  land: true,
+  ui_click: true,
+  ui_hover: true,
+  ui_play: true,
+  victory_fanfare: true,
+};
 
-const ALL_MUSIC_TRACK_IDS: MusicTrackId[] = [
-  'none',
-  'lobby',
-  'bus',
-  'emote_1',
-  'emote_2',
-  'emote_3',
-  'emote_4',
-  'victory',
-];
+const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
+
+const MUSIC_TRACK_MAP: Record<MusicTrackId, true> = {
+  none: true,
+  lobby: true,
+  bus: true,
+  emote_1: true,
+  emote_2: true,
+  emote_3: true,
+  emote_4: true,
+  emote_5: true,
+  emote_6: true,
+  combat_intense: true,
+  victory: true,
+};
+
+const ALL_MUSIC_TRACK_IDS = Object.keys(MUSIC_TRACK_MAP) as MusicTrackId[];
+
+const BIOME_MAP: Record<BiomeType, true> = {
+  ocean: true,
+  beach: true,
+  grassland: true,
+  forest: true,
+  highland: true,
+  urban: true,
+  snow: true,
+  desert: true,
+  volcanic: true,
+  cyber: true,
+};
+
+const ALL_BIOMES = Object.keys(BIOME_MAP) as BiomeType[];
 
 class MockAudioParam {
   value: number;
@@ -164,14 +209,16 @@ class MockAudioBuffer {
 class MockBufferSourceNode extends MockAudioNode {
   buffer: AudioBuffer | null = null;
   playbackRate = new MockAudioParam(1);
+  loop = false;
   started = false;
+  stopped = false;
 
   start(_when = 0, _offset = 0, _duration?: number): void {
     this.started = true;
   }
 
   stop(_when = 0): void {
-    // noop
+    this.stopped = true;
   }
 }
 
@@ -342,14 +389,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 42 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 63 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(42);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(63);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -363,6 +410,78 @@ describe('SoundSynthesizer', () => {
         mockCtx.oscillators.length - oscBefore + (mockCtx.bufferSources.length - srcBefore);
       expect(createdSources).toBeGreaterThan(0);
     }
+
+    synth.dispose();
+  });
+
+  it('layers gunfire sub-thump & bolt tails cleanly across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const gunfireIds: SoundEventId[] = [
+      'shot_ar',
+      'shot_burst_ar',
+      'shot_pump',
+      'shot_tac',
+      'shot_sniper',
+      'shot_heavy_shotgun',
+      'shot_mythic_rifle',
+    ];
+
+    for (const id of gunfireIds) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const durLow = synth.play(id, dest, { volume: 0.05, pitch: 0.5 });
+      const durHigh = synth.play(id, dest, { volume: 1.5, pitch: 1.4 });
+      expect(durLow).toBeGreaterThan(0);
+      expect(durHigh).toBeGreaterThan(0);
+      // Multi-layered gunfire must create multiple oscillator + noise voices per shot
+      expect(mockCtx.oscillators.length - oscBefore).toBeGreaterThanOrEqual(4);
+      expect(mockCtx.bufferSources.length - srcBefore).toBeGreaterThanOrEqual(2);
+    }
+
+    synth.dispose();
+  });
+
+  it('creates distinct synthesis profiles for surface footsteps and bespoke Wave 1 events', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const surfaceSteps: SoundEventId[] = [
+      'footstep_wood',
+      'footstep_stone',
+      'footstep_metal',
+      'footstep_snow',
+      'footstep_water',
+      'footstep_sand',
+    ];
+
+    const durations: Record<string, number> = {};
+    for (const step of surfaceSteps) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      durations[step] = synth.play(step, dest);
+      expect(mockCtx.oscillators.length - oscBefore).toBeGreaterThanOrEqual(1);
+      expect(mockCtx.bufferSources.length - srcBefore).toBeGreaterThanOrEqual(1);
+    }
+    expect(durations.footstep_water).toBeGreaterThan(durations.footstep_stone);
+    expect(durations.footstep_metal).toBeGreaterThan(durations.footstep_wood);
+
+    // Metal footstep produces resonant metallic overtones >= 400Hz
+    const metalStart = mockCtx.oscillators.findIndex(
+      (o) => o.frequency.events[0]?.value >= 400,
+    );
+    expect(metalStart).toBeGreaterThanOrEqual(0);
+
+    // Bespoke Wave 1 events
+    expect(synth.play('shockwave_blast', dest)).toBeGreaterThan(0.4);
+    expect(synth.play('poi_discover', dest)).toBeGreaterThan(0.8);
+    expect(synth.play('kill_streak', dest)).toBeGreaterThan(0.4);
+    expect(synth.play('splash_heal', dest)).toBeGreaterThan(0.25);
 
     synth.dispose();
   });
@@ -418,28 +537,44 @@ describe('MusicSequencer', () => {
     vi.useRealTimers();
   });
 
-  it('covers all MusicTrackIds and cleanly schedules & disposes', () => {
+  it('covers all 11 MusicTrackIds (10+1) with full 32-step patterns and cleanly disposes', () => {
     vi.useFakeTimers();
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const seq = new MusicSequencer(ctx, dest);
 
+    expect(ALL_MUSIC_TRACK_IDS.length).toBe(11);
     expect(seq.getCurrentTrack()).toBe('none');
 
     for (const track of ALL_MUSIC_TRACK_IDS) {
+      const before = mockCtx.oscillators.length + mockCtx.bufferSources.length;
       seq.setTrack(track);
       expect(seq.getCurrentTrack()).toBe(track);
 
       if (track !== 'none') {
-        expect(MUSIC_PATTERNS[track].bpm).toBeGreaterThan(0);
-        expect(MUSIC_PATTERNS[track].steps).toBe(32);
-        const before = mockCtx.oscillators.length + mockCtx.bufferSources.length;
-        vi.advanceTimersByTime(100);
+        const pattern = MUSIC_PATTERNS[track];
+        expect(pattern.bpm).toBeGreaterThan(0);
+        expect(pattern.steps).toBe(32);
+        expect(pattern.bass.length).toBe(32);
+        expect(pattern.lead.length).toBe(32);
+        expect(pattern.kick.length).toBe(32);
+        expect(pattern.snare.length).toBe(32);
+        expect(pattern.hat.length).toBe(32);
+        expect(pattern.chords.length).toBeGreaterThanOrEqual(4);
+        expect(new Set(pattern.lead.filter((n): n is number => n !== null)).size).toBeGreaterThanOrEqual(
+          3,
+        );
+        mockCtx.currentTime += 0.25;
+        vi.advanceTimersByTime(50);
         const after = mockCtx.oscillators.length + mockCtx.bufferSources.length;
-        expect(after).toBeGreaterThanOrEqual(before);
+        expect(after).toBeGreaterThan(before);
       }
     }
+
+    expect(MUSIC_PATTERNS.emote_5.bpm).toBe(126);
+    expect(MUSIC_PATTERNS.emote_6.bpm).toBe(112);
+    expect(MUSIC_PATTERNS.combat_intense.bpm).toBe(138);
 
     seq.setTrack('none');
     expect(seq.getCurrentTrack()).toBe('none');
@@ -645,5 +780,103 @@ describe('AudioEngine', () => {
     expect(engine.getActiveChestLoopCount()).toBe(0);
 
     engine.dispose();
+  });
+
+  it('manages updateBiomeAmbience across all 10 biomes and storm states safely', async () => {
+    // 1. Headless no-AudioContext safety
+    const bus = new EventBus();
+    const headless = new AudioEngine(bus);
+    for (const biome of ALL_BIOMES) {
+      expect(() => headless.updateBiomeAmbience(biome, false)).not.toThrow();
+      expect(() => headless.updateBiomeAmbience(biome, true)).not.toThrow();
+      const profileCalm = getBiomeAmbienceProfile(biome, false);
+      const profileStorm = getBiomeAmbienceProfile(biome, true);
+      expect(BIOME_AMBIENCE_PROFILES[biome]).toBeDefined();
+      expect(profileCalm.noiseFilterFreq).toBeGreaterThan(20);
+      expect(profileStorm.stormOverlayGain).toBeGreaterThan(profileCalm.stormOverlayGain);
+    }
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    // 2. Minimal mocked AudioContext missing optional createBiquadFilter / createBuffer
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      createBufferSource: () => new MockBufferSourceNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minimalEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => minimalCtx,
+    });
+    await minimalEngine.unlock();
+    expect(() => minimalEngine.updateBiomeAmbience('volcanic', true)).not.toThrow();
+    expect(minimalEngine.getBiomeAmbienceState()).toEqual({
+      biome: 'volcanic',
+      inStorm: true,
+      active: true,
+    });
+    expect(minimalEngine.getActiveVoiceCount()).toBe(1);
+    minimalEngine.dispose();
+    expect(minimalEngine.getActiveVoiceCount()).toBe(0);
+
+    // 3. Full MockAudioContext: verify node reuse (no 60Hz leaks), modulation, and polyphony cap
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+
+    engine.updateBiomeAmbience('ocean', false);
+    const oscCountAfterStart = mockCtx.oscillators.length;
+    const srcCountAfterStart = mockCtx.bufferSources.length;
+    expect(oscCountAfterStart).toBe(3); // droneA + droneB + stormOsc
+    expect(srcCountAfterStart).toBe(1); // looping noise bed
+    expect(engine.getActiveVoiceCount()).toBe(1);
+
+    // Calling repeatedly with same state must be a no-op with zero node allocation
+    for (let i = 0; i < 120; i++) {
+      engine.updateBiomeAmbience('ocean', false);
+    }
+    expect(mockCtx.oscillators.length).toBe(oscCountAfterStart);
+    expect(mockCtx.bufferSources.length).toBe(srcCountAfterStart);
+
+    // Switching across all 10 biomes and storm states updates existing nodes cleanly
+    for (const biome of ALL_BIOMES) {
+      engine.updateBiomeAmbience(biome, false);
+      expect(engine.getBiomeAmbienceState()).toEqual({ biome, inStorm: false, active: true });
+      engine.updateBiomeAmbience(biome, true);
+      expect(engine.getBiomeAmbienceState()).toEqual({ biome, inStorm: true, active: true });
+    }
+    expect(mockCtx.oscillators.length).toBe(oscCountAfterStart);
+    expect(mockCtx.bufferSources.length).toBe(srcCountAfterStart);
+
+    // Storm gain reflects active storm state
+    const stormGainNode = mockCtx.gains[mockCtx.gains.length - 1];
+    expect(stormGainNode.gain.value).toBeCloseTo(
+      getBiomeAmbienceProfile('cyber', true).stormOverlayGain,
+      4,
+    );
+    engine.updateBiomeAmbience('grassland', false);
+    expect(stormGainNode.gain.value).toBeCloseTo(
+      getBiomeAmbienceProfile('grassland', false).stormOverlayGain,
+      4,
+    );
+
+    // Polyphony remains strictly bounded <= MAX_POLYPHONY with active biome ambience
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'shot_mythic_rifle' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+    expect(engine.getActiveVoiceCount()).toBe(MAX_POLYPHONY);
+
+    engine.dispose();
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.every((o) => o.stopped)).toBe(true);
+    expect(mockCtx.bufferSources[0].loop).toBe(true);
+    expect(mockCtx.bufferSources[0].stopped).toBe(true);
   });
 });
