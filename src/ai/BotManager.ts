@@ -381,6 +381,9 @@ export class BotManager {
         recentDamageTaken: 0,
         recentDamageWindowStart: -999,
         eliminatedByPlayer: false,
+        riftCooldown: 0,
+        riftTargetId: null,
+        captureTargetId: null,
       };
 
       this.bots.push(bot);
@@ -556,6 +559,9 @@ export class BotManager {
         recentDamageTaken: 0,
         recentDamageWindowStart: -999,
         eliminatedByPlayer: false,
+        riftCooldown: 0,
+        riftTargetId: null,
+        captureTargetId: null,
       };
 
       this.bots.push(boss);

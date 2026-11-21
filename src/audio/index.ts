@@ -13,6 +13,7 @@ export {
   type BiomeAmbienceState,
   type BusGains,
   type VehicleEngineState,
+  type WindRushState,
 } from './AudioEngine';
 export {
   midiToFreq,

@@ -9,6 +9,7 @@ import type {
   WeaponId,
 } from '../../types';
 import {
+  CONTRAILS,
   EMOTES,
   EventBus,
   GLIDERS,
@@ -1458,5 +1459,363 @@ describe('Wave-3 Weapon Wraps, Ground Contact Shadow & Armor Rim Polish', () => 
     expect(rimMatCount).toBeGreaterThan(0);
 
     rig.dispose();
+  });
+});
+
+describe('Wave-4 Skydiving Contrails & VFX Channels', () => {
+  it('supports all 6 CONTRAILS on CharacterRig, animates in skydive/fast-fall, and hides cleanly when landed or gliding', () => {
+    expect(CONTRAILS).toHaveLength(6);
+
+    const rig = new CharacterRig(SKINS[0], PICKAXES[0], GLIDERS[0]);
+    const animator = new CharacterAnimator();
+
+    // Defaults to CONTRAILS[0].id ('wind_stream') and inactive initially
+    expect(rig.getContrailId()).toBe(CONTRAILS[0].id);
+    expect(rig.isContrailActive()).toBe(false);
+
+    const limbNames = [
+      'contrail_left_hand',
+      'contrail_right_hand',
+      'contrail_left_foot',
+      'contrail_right_foot',
+    ] as const;
+
+    const getLimbStreams = () =>
+      limbNames.map((name) => rig.getGroup().getObjectByName(name) as THREE.Group);
+
+    const initialStreams = getLimbStreams();
+    for (const grp of initialStreams) {
+      expect(grp).toBeInstanceOf(THREE.Group);
+      expect(grp.visible).toBe(false);
+      expect(countMeshes(grp)).toBeGreaterThanOrEqual(8);
+    }
+
+    // Verify all 6 contrails via setContrail, state.contrailId, updateFromState, and CharacterAnimator.update
+    for (const contrail of CONTRAILS) {
+      rig.setContrail(contrail.id);
+      expect(rig.getContrailId()).toBe(contrail.id);
+
+      // Skydive via updateFromState activates streamers with matching primaryColor & secondaryColor
+      rig.updateFromState(
+        makeRenderState({
+          position: { x: 0, y: 120, z: 0 },
+          animState: 'skydive',
+          grounded: false,
+          velocityY: -22,
+          contrailId: contrail.id,
+        }),
+        0,
+      );
+      expect(rig.getContrailId()).toBe(contrail.id);
+      expect(rig.isContrailActive()).toBe(true);
+
+      const expectedPrimary = new THREE.Color(contrail.primaryColor).getHex();
+      const expectedSecondary = new THREE.Color(contrail.secondaryColor).getHex();
+      let foundPrimary = false;
+      let foundSecondary = false;
+      for (const grp of getLimbStreams()) {
+        expect(grp.visible).toBe(true);
+        expect(grp.scale.x).toBeCloseTo(1, 3);
+        grp.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
+            const hex = child.material.color.getHex();
+            if (hex === expectedPrimary) foundPrimary = true;
+            if (hex === expectedSecondary) foundSecondary = true;
+          }
+        });
+      }
+      expect(foundPrimary).toBe(true);
+      expect(foundSecondary).toBe(true);
+
+      // CharacterAnimator.update advances contrail particles smoothly without NaN
+      animator.update(
+        rig,
+        makeRenderState({
+          position: { x: 0, y: 115, z: 0 },
+          animState: 'skydive',
+          grounded: false,
+          velocityY: -24,
+          contrailId: contrail.id,
+        }),
+        0.05,
+      );
+      const firstStream = getLimbStreams()[0];
+      const snapshotPosY = firstStream.children.map((c) => c.position.y);
+
+      for (let i = 0; i < 6; i++) {
+        animator.update(
+          rig,
+          makeRenderState({
+            position: { x: 0, y: 110 - i, z: 0 },
+            animState: 'skydive',
+            grounded: false,
+            velocityY: -24,
+            contrailId: contrail.id,
+          }),
+          0.05,
+        );
+      }
+      const nextPosY = firstStream.children.map((c) => c.position.y);
+      expect(nextPosY.some((y, idx) => Math.abs(y - snapshotPosY[idx]) > 0.01)).toBe(true);
+      assertFiniteBox(rig.getGroup());
+
+      // Grounded state via updateFromState hides contrails completely and maintains ~1.85m bounds
+      rig.updateFromState(
+        makeRenderState({
+          position: { x: 0, y: 0, z: 0 },
+          animState: 'idle',
+          grounded: true,
+          velocityY: 0,
+          contrailId: contrail.id,
+        }),
+        0,
+      );
+      expect(rig.isContrailActive()).toBe(false);
+      for (const grp of getLimbStreams()) {
+        expect(grp.visible).toBe(false);
+      }
+
+      // Switching to glide hides contrails immediately even while glider opens
+      animator.update(
+        rig,
+        makeRenderState({
+          position: { x: 0, y: 40, z: 0 },
+          animState: 'glide',
+          grounded: false,
+          velocityY: -5,
+          contrailId: contrail.id,
+        }),
+        0.05,
+      );
+      expect(rig.isContrailActive()).toBe(false);
+      for (const grp of getLimbStreams()) {
+        expect(grp.visible).toBe(false);
+      }
+
+      // Returning to grounded idle via animator closes glider and keeps contrails hidden
+      for (let i = 0; i < 30; i++) {
+        animator.update(
+          rig,
+          makeRenderState({
+            position: { x: 0, y: 0, z: 0 },
+            animState: 'idle',
+            weaponId: 'pickaxe',
+            grounded: true,
+            velocityY: 0,
+            contrailId: contrail.id,
+          }),
+          0.05,
+        );
+      }
+      expect(rig.isContrailActive()).toBe(false);
+      expect(rig.isGliderOpen()).toBe(false);
+      for (const grp of getLimbStreams()) {
+        expect(grp.visible).toBe(false);
+        expect(grp.scale.x).toBeCloseTo(0.001, 4);
+      }
+      const groundedBox = assertFiniteBox(rig.getGroup());
+      expect(groundedBox.max.y - groundedBox.min.y).toBeLessThan(1.98);
+    }
+
+    // Fast ungrounded fall (velocityY < -8) triggers contrails even when animState === 'fall'
+    animator.update(
+      rig,
+      makeRenderState({
+        position: { x: 0, y: 60, z: 0 },
+        animState: 'fall',
+        grounded: false,
+        velocityY: -12,
+        contrailId: 'void_lightning',
+      }),
+      0.05,
+    );
+    expect(rig.getContrailId()).toBe('void_lightning');
+    expect(rig.isContrailActive()).toBe(true);
+
+    // Slow fall (velocityY >= -8) hides contrails
+    animator.update(
+      rig,
+      makeRenderState({
+        position: { x: 0, y: 55, z: 0 },
+        animState: 'fall',
+        grounded: false,
+        velocityY: -4,
+        contrailId: 'void_lightning',
+      }),
+      0.05,
+    );
+    expect(rig.isContrailActive()).toBe(false);
+
+    // Unknown contrailId defaults cleanly to CONTRAILS[0].id
+    rig.setContrail('non_existent_contrail');
+    expect(rig.getContrailId()).toBe(CONTRAILS[0].id);
+
+    // Direct updateContrail toggle works cleanly
+    rig.updateContrail(true, 0.05, 1.25);
+    expect(rig.isContrailActive()).toBe(true);
+    rig.updateContrail(false, 0.05, 1.3);
+    expect(rig.isContrailActive()).toBe(false);
+
+    rig.dispose();
+  });
+
+  it('spawns, updates, expires, replaces, clears, and disposes all 4 Wave-4 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:rift_tear (ground + sky endpoints)
+    bus.emit('vfx:rift_tear', {
+      position: { x: 10, y: 2, z: -8 },
+      skyPosition: { x: 10, y: 94, z: -8 },
+    });
+    expect(vfx.getActiveRiftTearCount()).toBe(1);
+
+    // 2. vfx:flag_captured (tall golden beacon + fireworks sparks)
+    bus.emit('vfx:flag_captured', {
+      position: { x: -18, y: 1, z: 14 },
+      poiName: 'metro_towers',
+    });
+    expect(vfx.getActiveFlagCaptureCount()).toBe(1);
+
+    // 3. vfx:augment_activate (ascending holographic hex/ring aura tinted by color)
+    bus.emit('vfx:augment_activate', {
+      position: { x: 4, y: 0.5, z: 6 },
+      color: '#a855f7',
+    });
+    expect(vfx.getActiveAugmentVfxCount()).toBe(1);
+
+    // 4. vfx:tactical_ping (color-coded singleton replacing prior active ping cleanly)
+    bus.emit('vfx:tactical_ping', {
+      position: { x: 25, y: 0, z: -12 },
+      kind: 'danger',
+      label: 'Enemy',
+    });
+    expect(vfx.hasActiveTacticalPing()).toBe(true);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    const pingObj = scene.getObjectByName('vfx_tactical_ping') as THREE.Group;
+    expect(pingObj).toBeInstanceOf(THREE.Group);
+    expect(pingObj.visible).toBe(true);
+    expect(pingObj.position.x).toBe(25);
+
+    const getPingColorHex = (): number => {
+      let hex = -1;
+      pingObj.traverse((child) => {
+        if (
+          hex === -1 &&
+          child instanceof THREE.Mesh &&
+          child.material instanceof THREE.MeshBasicMaterial &&
+          child.material.color.getHex() !== 0xffffff
+        ) {
+          hex = child.material.color.getHex();
+        }
+      });
+      return hex;
+    };
+    expect(getPingColorHex()).toBe(new THREE.Color('#ef4444').getHex());
+
+    // Emitting loot then move ping replaces prior ping cleanly (at most 1 active ping!)
+    bus.emit('vfx:tactical_ping', {
+      position: { x: -12, y: 3, z: 18 },
+      kind: 'loot',
+      label: 'Chest',
+    });
+    expect(vfx.hasActiveTacticalPing()).toBe(true);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    expect(pingObj.position.x).toBe(-12);
+    expect(getPingColorHex()).toBe(new THREE.Color('#fbbf24').getHex());
+
+    bus.emit('vfx:tactical_ping', {
+      position: { x: 8, y: 1, z: 9 },
+      kind: 'move',
+      label: 'Rotate',
+    });
+    expect(vfx.hasActiveTacticalPing()).toBe(true);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    expect(pingObj.position.x).toBe(8);
+    expect(getPingColorHex()).toBe(new THREE.Color('#22d3ee').getHex());
+
+    // Step forward 2.5s -> transient rift_tear (1.35s), flag_captured (2.1s), augment_activate (1.15s) expire,
+    // while tactical_ping (16s) remains active!
+    for (let i = 0; i < 50; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveRiftTearCount()).toBe(0);
+    expect(vfx.getActiveFlagCaptureCount()).toBe(0);
+    expect(vfx.getActiveAugmentVfxCount()).toBe(0);
+    expect(vfx.hasActiveTacticalPing()).toBe(true);
+    expect(vfx.getActiveEffectCount()).toBe(1);
+
+    // Step forward past 16s -> tactical_ping expires cleanly
+    for (let i = 0; i < 280; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.hasActiveTacticalPing()).toBe(false);
+    expect(pingObj.visible).toBe(false);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Edge cases: NaN coordinates & empty color never create NaN transforms
+    bus.emit('vfx:rift_tear', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+      skyPosition: { x: 0, y: 90, z: 0 },
+    });
+    bus.emit('vfx:augment_activate', {
+      position: { x: 1, y: 1, z: 1 },
+      color: '',
+    });
+    expect(vfx.getActiveRiftTearCount()).toBe(0);
+    expect(vfx.getActiveAugmentVfxCount()).toBe(1);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+    vfx.clear();
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // clear() resets all 4 Wave-4 VFX immediately
+    bus.emit('vfx:rift_tear', {
+      position: { x: 0, y: 0, z: 0 },
+      skyPosition: { x: 0, y: 92, z: 0 },
+    });
+    bus.emit('vfx:flag_captured', { position: { x: 0, y: 0, z: 0 }, poiName: 'market_row' });
+    bus.emit('vfx:augment_activate', { position: { x: 0, y: 0, z: 0 }, color: '#22d3ee' });
+    bus.emit('vfx:tactical_ping', {
+      position: { x: 5, y: 0, z: 5 },
+      kind: 'danger',
+      label: 'Danger',
+    });
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    vfx.clear();
+    expect(vfx.getActiveRiftTearCount()).toBe(0);
+    expect(vfx.getActiveFlagCaptureCount()).toBe(0);
+    expect(vfx.getActiveAugmentVfxCount()).toBe(0);
+    expect(vfx.hasActiveTacticalPing()).toBe(false);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all Wave-4 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:rift_tear', {
+      position: { x: 0, y: 0, z: 0 },
+      skyPosition: { x: 0, y: 92, z: 0 },
+    });
+    bus.emit('vfx:flag_captured', { position: { x: 0, y: 0, z: 0 }, poiName: 'sunny_suburbs' });
+    bus.emit('vfx:augment_activate', { position: { x: 0, y: 0, z: 0 }, color: '#fbbf24' });
+    bus.emit('vfx:tactical_ping', {
+      position: { x: 0, y: 0, z: 0 },
+      kind: 'move',
+      label: 'Ping',
+    });
+    expect(vfx.getActiveRiftTearCount()).toBe(0);
+    expect(vfx.getActiveFlagCaptureCount()).toBe(0);
+    expect(vfx.getActiveAugmentVfxCount()).toBe(0);
+    expect(vfx.hasActiveTacticalPing()).toBe(false);
+    expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

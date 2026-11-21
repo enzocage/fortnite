@@ -6,15 +6,18 @@ import type {
   BuildPiece,
   BuildPieceType,
   CampfireEntity,
+  CapturePointEntity,
   CharacterRenderState,
   ChestEntity,
   EmoteId,
+  ExplosiveBarrelEntity,
   HarvestableProp,
   ItemInstance,
   LaunchPadEntity,
   LootDrop,
   MaterialType,
   Rarity,
+  RiftEntity,
   SlurpBarrelEntity,
   StormState,
   TerrainQuery,
@@ -201,7 +204,7 @@ export interface BotEntity {
   /** Deterministic PRNG state for per-bot variation */
   rngState: number;
 
-  // Boss & Wave 1/2/3 tactical/traversal state
+  // Boss & Wave 1/2/3/4 tactical/traversal state
   isBoss?: boolean;
   bossPoiId?: string;
   bossHomePos?: Vec3Like;
@@ -217,6 +220,9 @@ export interface BotEntity {
   overshield?: number;
   maxOvershield?: number;
   campfireTargetId?: string | null;
+  riftCooldown?: number;
+  riftTargetId?: string | null;
+  captureTargetId?: string | null;
 }
 
 export interface BotWorldContext {
@@ -285,6 +291,20 @@ export interface BotWorldContext {
   ) => { destroyed: boolean; shieldAmount: number; position: Vec3Like } | null;
   getCampfires?: () => CampfireEntity[];
   igniteCampfire?: (id: string) => boolean;
+  getRifts?: () => RiftEntity[];
+  triggerRift?: (id: string) => { skyPos: Vec3Like } | null;
+  getCapturePoints?: () => CapturePointEntity[];
+  advanceCapturePoint?: (
+    id: string,
+    actorId: string,
+    actorName: string,
+    dt: number,
+  ) => { capturedNow: boolean; progress: number; lootPos?: Vec3Like; poiName: string };
+  getExplosiveBarrels?: () => ExplosiveBarrelEntity[];
+  damageExplosiveBarrel?: (
+    id: string,
+    dmg: number,
+  ) => { exploded: boolean; position: Vec3Like; blastRadius: number; blastDamage: number } | null;
   dropBotLoot(bot: BotEntity): void;
   eventBus: EventBus;
 }

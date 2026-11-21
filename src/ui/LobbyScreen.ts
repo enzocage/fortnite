@@ -1,4 +1,5 @@
 import {
+  CONTRAILS,
   DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   EMOTES,
@@ -44,6 +45,7 @@ export const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
   selectedEmote: EMOTES[0]?.id ?? 'victory_groove',
   gameMode: 'solo',
   weaponWrapId: WEAPON_WRAPS[0]?.id ?? 'factory_matte',
+  contrailId: CONTRAILS[0]?.id ?? 'wind_stream',
 };
 
 function getSafeStorage(): Storage | null {
@@ -102,11 +104,17 @@ export function loadStoredLobbyConfig(): LobbyConfig {
       WEAPON_WRAPS.some((w) => w.id === parsed.weaponWrapId)
         ? parsed.weaponWrapId
         : DEFAULT_LOBBY_CONFIG.weaponWrapId;
+    const contrailId =
+      typeof parsed.contrailId === 'string' &&
+      CONTRAILS.some((c) => c.id === parsed.contrailId)
+        ? parsed.contrailId
+        : DEFAULT_LOBBY_CONFIG.contrailId;
     return {
       ...DEFAULT_LOBBY_CONFIG,
       ...parsed,
       gameMode,
       weaponWrapId,
+      contrailId,
       botCount:
         typeof parsed.botCount === 'number' && Number.isFinite(parsed.botCount)
           ? Math.max(1, Math.min(99, Math.round(parsed.botCount)))
@@ -133,7 +141,7 @@ export interface LobbyScreenCallbacks {
     cosmetics: Pick<
       LobbyConfig,
       'skinId' | 'pickaxeId' | 'gliderId' | 'selectedEmote'
-    > & { weaponWrapId?: string },
+    > & { weaponWrapId?: string; contrailId?: string },
   ) => void;
   onSettingsChange: (settings: GameSettings) => void;
   onPreviewEmote: (emoteId: EmoteId) => void;
@@ -441,6 +449,7 @@ export class LobbyScreen {
       gliderId: this.config.gliderId,
       selectedEmote: this.config.selectedEmote,
       weaponWrapId: this.config.weaponWrapId,
+      contrailId: this.config.contrailId,
     });
   }
 
@@ -615,6 +624,9 @@ export class LobbyScreen {
     const wrapName =
       WEAPON_WRAPS.find((w) => w.id === this.config.weaponWrapId)?.name ??
       'Tactical Matte';
+    const contrailName =
+      CONTRAILS.find((c) => c.id === this.config.contrailId)?.name ??
+      'Aero Vapor';
 
     const loadoutHead = document.createElement('div');
     loadoutHead.className = 'fdr-section-head';
@@ -627,7 +639,8 @@ export class LobbyScreen {
       <div class="fdr-loadout-chip">PICKAXE<b>${pickaxeName}</b></div>
       <div class="fdr-loadout-chip">GLIDER<b>${gliderName}</b></div>
       <div class="fdr-loadout-chip">EMOTE<b>${emoteName}</b></div>
-      <div class="fdr-loadout-chip fdr-loadout-chip-wide">WEAPON WRAP<b>${wrapName}</b></div>
+      <div class="fdr-loadout-chip">WEAPON WRAP<b>${wrapName}</b></div>
+      <div class="fdr-loadout-chip">CONTRAIL<b>${contrailName}</b></div>
     `;
 
     const danceBtn = document.createElement('button');
@@ -909,6 +922,68 @@ export class LobbyScreen {
       wrapGrid.appendChild(card);
     }
     panel.appendChild(wrapGrid);
+
+    // Skydiving Contrails
+    panel.appendChild(
+      this.makeSectionHeader(
+        `SKYDIVING CONTRAILS (${CONTRAILS.length})`,
+        'SKYDIVE STREAMS',
+      ),
+    );
+    const contrailGrid = document.createElement('div');
+    contrailGrid.className = 'fdr-locker-grid';
+    for (const contrail of CONTRAILS) {
+      const selected = this.config.contrailId === contrail.id;
+      const meta = getRarityMeta(contrail.rarity);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `fdr-cosmetic-card fdr-contrail-card rarity-${contrail.rarity}${selected ? ' selected' : ''}`;
+      card.dataset.contrailId = contrail.id;
+      card.style.borderColor = meta.border;
+
+      if (selected) {
+        const eqTag = document.createElement('span');
+        eqTag.className = 'fdr-equipped-tag';
+        eqTag.textContent = 'EQUIPPED';
+        card.appendChild(eqTag);
+      } else if (contrail.rarity === 'mythic') {
+        const crown = document.createElement('span');
+        crown.className = 'fdr-card-crown';
+        crown.innerHTML = getCrownSvg();
+        card.appendChild(crown);
+      }
+
+      const swatch = document.createElement('div');
+      swatch.className = `fdr-contrail-swatch style-${contrail.style}`;
+      swatch.style.background = `linear-gradient(115deg, ${contrail.primaryColor} 0%, ${contrail.secondaryColor} 68%, rgba(8, 16, 36, 0.72) 100%)`;
+      swatch.style.borderColor = meta.border;
+      const trailA = document.createElement('span');
+      trailA.className = 'fdr-contrail-stream stream-a';
+      trailA.style.background = `linear-gradient(90deg, ${contrail.primaryColor}, transparent)`;
+      const trailB = document.createElement('span');
+      trailB.className = 'fdr-contrail-stream stream-b';
+      trailB.style.background = `linear-gradient(90deg, ${contrail.secondaryColor}, ${contrail.primaryColor})`;
+      swatch.append(trailA, trailB);
+
+      const metaWrap = document.createElement('div');
+      const rarityEl = document.createElement('div');
+      rarityEl.className = 'fdr-card-rarity';
+      rarityEl.textContent = `${meta.label} • ${contrail.style}`;
+      const nameEl = document.createElement('div');
+      nameEl.className = 'fdr-card-name';
+      nameEl.textContent = contrail.name;
+      metaWrap.append(rarityEl, nameEl);
+
+      card.append(swatch, metaWrap);
+      card.addEventListener('click', () => {
+        this.playClick();
+        this.config.contrailId = contrail.id;
+        this.emitCosmetics();
+        this.renderTab();
+      });
+      contrailGrid.appendChild(card);
+    }
+    panel.appendChild(contrailGrid);
 
     this.contentEl.appendChild(panel);
   }

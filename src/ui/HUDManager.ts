@@ -1,5 +1,6 @@
 import { EMOTES, WEAPONS, WORLD_SIZE } from '../core';
 import type {
+  AugmentId,
   BuildPieceType,
   DamageNumberEvent,
   EmoteId,
@@ -14,6 +15,7 @@ import type {
 import {
   angleRadToDeg,
   cloneSettings,
+  computeCaptureProgressPct,
   computeFallbackStormDistance,
   computeOvershieldPct,
   computeQuestProgressPct,
@@ -23,8 +25,10 @@ import {
   formatKeyCodeLabel,
   formatModeBadgeLabel,
   formatSafeZoneDistance,
+  formatTacticalPingLabel,
   formatVehicleKindLabel,
   formatWeatherLabel,
+  getAugmentMeta,
   getBearingDeg,
   getContextualHudHints,
   getKillStreakCallout,
@@ -35,14 +39,17 @@ import {
   worldToMapNorm,
 } from './UIHelpers';
 import {
+  getAugmentIconSvg,
   getBountyTargetSvg,
   getBuildIconSvg,
   getCampfireIconSvg,
+  getCaptureFlagIconSvg,
   getCrownSvg,
   getMaterialIconSvg,
   getOvershieldBoltSvg,
   getSkullSvg,
   getStormEyeSvg,
+  getTacticalPingIconSvg,
   getVaultKeySvg,
   getVehicleIconSvg,
   getVisualAudioIconSvg,
@@ -58,7 +65,10 @@ export interface HUDCallbacks {
   onRequestPointerLock?: () => void;
   onSpectateNext?: () => void;
   onSpectateMatchSummary?: () => void;
+  onAugmentSelect?: (choiceIndex: 0 | 1) => void;
 }
+
+export type HUDManagerCallbacks = HUDCallbacks;
 
 interface ActiveDamageNum {
   id: string;
@@ -106,6 +116,15 @@ export class HUDManager {
   private questsListEl: HTMLDivElement;
   private questToastLayerEl: HTMLDivElement;
   private activeQuestToastTimers = new Set<ReturnType<typeof setTimeout>>();
+  private activeAugmentsEl: HTMLDivElement;
+  private augmentPickerEl: HTMLDivElement;
+  private augmentChoiceEls: Array<{
+    btn: HTMLButtonElement;
+    icon: HTMLSpanElement;
+    badge: HTMLSpanElement;
+    name: HTMLDivElement;
+    sub: HTMLDivElement;
+  }> = [];
 
   // Compass & Boss Bar
   private compassTapeEl: HTMLDivElement;
@@ -142,6 +161,11 @@ export class HUDManager {
   // Bottom center & Vehicle Dashboard & Spectator Bar
   private contextHintsEl: HTMLDivElement;
   private siphonBadgeEl: HTMLDivElement;
+  private captureBarEl: HTMLDivElement;
+  private captureIconEl: HTMLSpanElement;
+  private captureLabelEl: HTMLSpanElement;
+  private captureContestedEl: HTMLSpanElement;
+  private captureFillEl: HTMLDivElement;
   private interactEl: HTMLDivElement;
   private interactKeyEl: HTMLSpanElement;
   private interactLabelEl: HTMLSpanElement;
@@ -193,6 +217,10 @@ export class HUDManager {
 
   // Center overlays
   private visualAudioRingEl: HTMLDivElement;
+  private tacticalPingEl: HTMLDivElement;
+  private tacticalPingIconEl: HTMLSpanElement;
+  private tacticalPingLabelEl: HTMLSpanElement;
+  private tacticalPingDistEl: HTMLSpanElement;
   private crosshairEl: HTMLDivElement;
   private scopeEl: HTMLDivElement;
   private hitmarkerEl: HTMLDivElement;
@@ -264,6 +292,14 @@ export class HUDManager {
   private lastNearCampfire = false;
   private lastQuestsKey = '';
   private lastVisualAudioKey = '';
+  private lastActiveAugmentsKey = '';
+  private lastPendingAugmentsKey = '';
+  private lastCaptureKey = '';
+  private captureCelebrateUntil = 0;
+  private captureCelebratePoi = '';
+  private celebratedCapturePois = new Set<string>();
+  private lastTacticalPingVis: boolean | null = null;
+  private lastTacticalPingKey = '';
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -349,12 +385,16 @@ export class HUDManager {
     this.questsListEl.className = 'fdr-quests-list';
     this.questsPanelEl.append(questsHead, this.questsListEl);
 
+    this.activeAugmentsEl = document.createElement('div');
+    this.activeAugmentsEl.className = 'fdr-augments-strip fdr-hidden';
+
     topLeftStack.append(
       this.fpsBadgeEl,
       this.killStreakEl,
       this.vaultKeyBadgeEl,
       this.bountyCardEl,
       this.questsPanelEl,
+      this.activeAugmentsEl,
     );
 
     // Compass
@@ -485,6 +525,57 @@ export class HUDManager {
     );
     minimapCluster.append(minimapFrame, teleRow, zoneMetaRow);
 
+    // Reality Augment Picker (middle-right below minimap cluster, above hotbar/materials)
+    this.augmentPickerEl = document.createElement('div');
+    this.augmentPickerEl.className = 'fdr-augment-picker fdr-hidden';
+    const pickerHead = document.createElement('div');
+    pickerHead.className = 'fdr-augment-picker-head';
+    const pickerTitle = document.createElement('span');
+    pickerTitle.className = 'fdr-augment-picker-title';
+    pickerTitle.textContent = 'AUGMENT READY';
+    const pickerHint = document.createElement('span');
+    pickerHint.className = 'fdr-augment-picker-hint';
+    pickerHint.textContent = 'CHOOSE [7] OR [8]';
+    pickerHead.append(pickerTitle, pickerHint);
+    this.augmentPickerEl.appendChild(pickerHead);
+
+    for (const choiceIdx of [0, 1] as const) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'fdr-augment-choice';
+      btn.dataset.choiceIndex = String(choiceIdx);
+
+      const topRow = document.createElement('div');
+      topRow.className = 'fdr-augment-choice-top';
+
+      const keycap = document.createElement('span');
+      keycap.className = 'fdr-keycap fdr-augment-key';
+      keycap.textContent = choiceIdx === 0 ? '[7]' : '[8]';
+
+      const icon = document.createElement('span');
+      icon.className = 'fdr-augment-icon';
+
+      const badge = document.createElement('span');
+      badge.className = 'fdr-augment-badge';
+
+      topRow.append(keycap, icon, badge);
+
+      const name = document.createElement('div');
+      name.className = 'fdr-augment-name';
+
+      const sub = document.createElement('div');
+      sub.className = 'fdr-augment-sub';
+
+      btn.append(topRow, name, sub);
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation?.();
+        this.callbacks.onAugmentSelect?.(choiceIdx);
+      });
+
+      this.augmentChoiceEls.push({ btn, icon, badge, name, sub });
+      this.augmentPickerEl.appendChild(btn);
+    }
+
     // Bottom-Left Kill Feed
     this.killFeedEl = document.createElement('div');
     this.killFeedEl.className = 'fdr-killfeed';
@@ -499,6 +590,26 @@ export class HUDManager {
     this.siphonBadgeEl = document.createElement('div');
     this.siphonBadgeEl.className = 'fdr-siphon-badge fdr-hidden';
     this.siphonBadgeEl.textContent = '+50 SIPHON';
+
+    this.captureBarEl = document.createElement('div');
+    this.captureBarEl.className = 'fdr-capture-bar fdr-hidden';
+    const capTop = document.createElement('div');
+    capTop.className = 'fdr-capture-top';
+    this.captureIconEl = document.createElement('span');
+    this.captureIconEl.className = 'fdr-capture-icon';
+    this.captureIconEl.innerHTML = getCaptureFlagIconSvg(false);
+    this.captureLabelEl = document.createElement('span');
+    this.captureLabelEl.className = 'fdr-capture-label';
+    this.captureContestedEl = document.createElement('span');
+    this.captureContestedEl.className = 'fdr-capture-contested fdr-hidden';
+    this.captureContestedEl.textContent = 'CONTESTED';
+    capTop.append(this.captureIconEl, this.captureLabelEl, this.captureContestedEl);
+    const capTrack = document.createElement('div');
+    capTrack.className = 'fdr-capture-track';
+    this.captureFillEl = document.createElement('div');
+    this.captureFillEl.className = 'fdr-capture-fill';
+    capTrack.appendChild(this.captureFillEl);
+    this.captureBarEl.append(capTop, capTrack);
 
     this.interactEl = document.createElement('div');
     this.interactEl.className = 'fdr-interact-prompt fdr-hidden';
@@ -650,6 +761,7 @@ export class HUDManager {
     bottomCenter.append(
       this.contextHintsEl,
       this.siphonBadgeEl,
+      this.captureBarEl,
       this.interactEl,
       this.channelEl,
       this.vehicleDashEl,
@@ -811,6 +923,22 @@ export class HUDManager {
     this.visualAudioRingEl = document.createElement('div');
     this.visualAudioRingEl.className = 'fdr-visual-audio-ring fdr-hidden';
 
+    this.tacticalPingEl = document.createElement('div');
+    this.tacticalPingEl.className = 'fdr-tactical-ping fdr-hidden';
+    const pingDiamond = document.createElement('div');
+    pingDiamond.className = 'fdr-ping-diamond';
+    this.tacticalPingIconEl = document.createElement('span');
+    this.tacticalPingIconEl.className = 'fdr-ping-diamond-icon';
+    pingDiamond.appendChild(this.tacticalPingIconEl);
+    const pingMeta = document.createElement('div');
+    pingMeta.className = 'fdr-ping-meta';
+    this.tacticalPingLabelEl = document.createElement('span');
+    this.tacticalPingLabelEl.className = 'fdr-ping-label';
+    this.tacticalPingDistEl = document.createElement('span');
+    this.tacticalPingDistEl.className = 'fdr-ping-dist';
+    pingMeta.append(this.tacticalPingLabelEl, this.tacticalPingDistEl);
+    this.tacticalPingEl.append(pingDiamond, pingMeta);
+
     this.questToastLayerEl = document.createElement('div');
     this.questToastLayerEl.className = 'fdr-quest-toast-layer';
 
@@ -960,10 +1088,12 @@ export class HUDManager {
       this.bossBarEl,
       this.phaseHintEl,
       minimapCluster,
+      this.augmentPickerEl,
       this.killFeedEl,
       bottomCenter,
       this.spectatorBarEl,
       bottomRight,
+      this.tacticalPingEl,
       this.crosshairEl,
       this.visualAudioRingEl,
       this.scopeEl,
@@ -1090,6 +1220,20 @@ export class HUDManager {
     this.visualAudioRingEl.classList.add('fdr-hidden');
     this.visualAudioRingEl.innerHTML = '';
     this.lastVisualAudioKey = '';
+    this.activeAugmentsEl.classList.add('fdr-hidden');
+    this.activeAugmentsEl.innerHTML = '';
+    this.lastActiveAugmentsKey = '';
+    this.augmentPickerEl.classList.add('fdr-hidden');
+    this.lastPendingAugmentsKey = '';
+    this.captureBarEl.classList.add('fdr-hidden');
+    this.captureBarEl.classList.remove('captured', 'contested');
+    this.lastCaptureKey = '';
+    this.captureCelebrateUntil = 0;
+    this.captureCelebratePoi = '';
+    this.celebratedCapturePois.clear();
+    this.tacticalPingEl.classList.add('fdr-hidden');
+    this.lastTacticalPingVis = false;
+    this.lastTacticalPingKey = '';
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
     }
@@ -1301,6 +1445,7 @@ export class HUDManager {
     this.updateHotbar(state);
     this.updateWave2HUD(state);
     this.updateWave3HUD(state);
+    this.updateWave4HUD(state, now);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -1999,6 +2144,172 @@ export class HUDManager {
 
         cueEl.append(arcEl, badgeEl);
         this.visualAudioRingEl.appendChild(cueEl);
+      }
+    }
+  }
+
+  private updateWave4HUD(state: HUDState, now: number): void {
+    // 1. Reality Augment Picker (middle-right card with clickable [7] / [8] buttons)
+    const pending =
+      !state.spectating &&
+      Array.isArray(state.pendingAugmentChoices) &&
+      state.pendingAugmentChoices.length === 2
+        ? state.pendingAugmentChoices
+        : null;
+    const pendingKey = pending ? `${pending[0]}|${pending[1]}` : '';
+    if (pendingKey !== this.lastPendingAugmentsKey) {
+      this.lastPendingAugmentsKey = pendingKey;
+      this.augmentPickerEl.classList.toggle('fdr-hidden', !pending);
+      if (pending) {
+        pending.forEach((augId: AugmentId, idx: number) => {
+          const slot = this.augmentChoiceEls[idx];
+          if (!slot) return;
+          const def = getAugmentMeta(augId);
+          slot.btn.dataset.augmentId = def.id;
+          slot.btn.style.borderLeftColor = def.accentColor;
+          slot.btn.style.setProperty('--aug-accent', def.accentColor);
+          slot.icon.innerHTML = getAugmentIconSvg(def.id);
+          slot.badge.textContent = def.badge;
+          slot.badge.style.color = def.accentColor;
+          slot.name.textContent = def.name;
+          slot.sub.textContent = def.subtitle;
+        });
+      }
+    }
+
+    // 2. Active Augments Strip (3 max mini perk pills in top-left stack)
+    const activeAugs =
+      !state.spectating && Array.isArray(state.activeAugments)
+        ? state.activeAugments.slice(0, 3)
+        : [];
+    const activeAugKey = activeAugs.join('|');
+    if (activeAugKey !== this.lastActiveAugmentsKey) {
+      this.lastActiveAugmentsKey = activeAugKey;
+      this.activeAugmentsEl.classList.toggle(
+        'fdr-hidden',
+        activeAugs.length === 0,
+      );
+      this.activeAugmentsEl.innerHTML = '';
+      for (const augId of activeAugs) {
+        const def = getAugmentMeta(augId);
+        const pill = document.createElement('div');
+        pill.className = 'fdr-augment-pill';
+        pill.dataset.augmentId = def.id;
+        pill.style.borderColor = def.accentColor;
+
+        const icon = document.createElement('span');
+        icon.className = 'fdr-augment-pill-icon';
+        icon.innerHTML = getAugmentIconSvg(def.id);
+
+        const textWrap = document.createElement('div');
+        textWrap.className = 'fdr-augment-pill-text';
+
+        const badge = document.createElement('span');
+        badge.className = 'fdr-augment-pill-badge';
+        badge.style.color = def.accentColor;
+        badge.textContent = def.badge;
+
+        const name = document.createElement('span');
+        name.className = 'fdr-augment-pill-name';
+        name.textContent = def.name;
+
+        textWrap.append(badge, name);
+        pill.append(icon, textWrap);
+        this.activeAugmentsEl.appendChild(pill);
+      }
+    }
+
+    // 3. POI Capture Progress Bar (centered above [E] interact prompt)
+    const cap = !state.spectating ? state.captureStatus ?? null : null;
+    let showCap = false;
+    let capText = '';
+    let capPct = 0;
+    let capCaptured = false;
+    let capContested = false;
+
+    if (cap) {
+      const poiUpper = cap.poiName.trim().toUpperCase() || 'POI';
+      if (!cap.captured) {
+        this.celebratedCapturePois.delete(poiUpper);
+        if (this.captureCelebratePoi === poiUpper) {
+          this.captureCelebrateUntil = 0;
+          this.captureCelebratePoi = '';
+        }
+        showCap = true;
+        capPct = Math.round(computeCaptureProgressPct(cap.progress, false));
+        capText = `CAPTURING ${poiUpper} • ${capPct}%`;
+        capContested = Boolean(cap.contested);
+      } else {
+        if (!this.celebratedCapturePois.has(poiUpper)) {
+          this.celebratedCapturePois.add(poiUpper);
+          this.captureCelebratePoi = poiUpper;
+          this.captureCelebrateUntil = now + 2400;
+        }
+        if (this.captureCelebratePoi === poiUpper && now < this.captureCelebrateUntil) {
+          showCap = true;
+          capPct = 100;
+          capCaptured = true;
+          capText = `${poiUpper} CAPTURED • 100%`;
+        }
+      }
+    } else {
+      this.captureCelebrateUntil = 0;
+      this.captureCelebratePoi = '';
+    }
+
+    const capKey = showCap
+      ? `${capText}:${capPct}:${capCaptured ? 1 : 0}:${capContested ? 1 : 0}`
+      : '';
+    if (capKey !== this.lastCaptureKey) {
+      this.lastCaptureKey = capKey;
+      this.captureBarEl.classList.toggle('fdr-hidden', !showCap);
+      if (showCap) {
+        this.captureBarEl.classList.toggle('captured', capCaptured);
+        this.captureBarEl.classList.toggle('contested', capContested);
+        this.captureContestedEl.classList.toggle('fdr-hidden', !capContested);
+        this.captureIconEl.innerHTML = getCaptureFlagIconSvg(capCaptured);
+        this.captureLabelEl.textContent = capText;
+        this.captureFillEl.style.width = `${capPct}%`;
+      } else {
+        this.captureBarEl.classList.remove('captured', 'contested');
+      }
+    }
+
+    // 4. 3D Tactical Ping Floating Marker
+    const ping = !state.spectating ? state.tacticalPing ?? null : null;
+    const showPing = Boolean(ping && ping.visible);
+    if (!showPing || !ping) {
+      if (this.lastTacticalPingVis !== false) {
+        this.lastTacticalPingVis = false;
+        this.tacticalPingEl.classList.add('fdr-hidden');
+      }
+    } else {
+      if (this.lastTacticalPingVis !== true) {
+        this.lastTacticalPingVis = true;
+        this.tacticalPingEl.classList.remove('fdr-hidden');
+      }
+      const winW = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const winH = typeof window !== 'undefined' ? window.innerHeight : 720;
+      const sx =
+        typeof ping.screenX === 'number' && Number.isFinite(ping.screenX)
+          ? ping.screenX
+          : winW * 0.5;
+      const sy =
+        typeof ping.screenY === 'number' && Number.isFinite(ping.screenY)
+          ? ping.screenY
+          : winH * 0.45;
+      this.tacticalPingEl.style.left = `${sx.toFixed(1)}px`;
+      this.tacticalPingEl.style.top = `${sy.toFixed(1)}px`;
+
+      const fmt = formatTacticalPingLabel(ping);
+      const pingKey = `${ping.kind}:${fmt.text}:${fmt.distanceText}`;
+      if (pingKey !== this.lastTacticalPingKey) {
+        this.lastTacticalPingKey = pingKey;
+        this.tacticalPingEl.className = `fdr-tactical-ping kind-${ping.kind}`;
+        this.tacticalPingEl.dataset.pingKind = ping.kind;
+        this.tacticalPingIconEl.innerHTML = getTacticalPingIconSvg(ping.kind);
+        this.tacticalPingLabelEl.textContent = fmt.text;
+        this.tacticalPingDistEl.textContent = fmt.distanceText;
       }
     }
   }

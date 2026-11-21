@@ -3807,7 +3807,449 @@
 
 /* FullMapOverlay Station Legend Icons */
 .fdr-legend-swatch.bench svg,
-.fdr-legend-swatch.campfire svg {
+.fdr-legend-swatch.campfire svg,
+.fdr-legend-swatch.rift svg,
+.fdr-legend-swatch.flag svg {
   width: 14px;
   height: 14px;
+}
+
+/* ============================================================================
+   WAVE 4 UI: SKYDIVING CONTRAILS, REALITY AUGMENTS, CAPTURE BAR,
+   3D TACTICAL PING & MATCH SUMMARY AUGMENTS / POIS CAPTURED
+   ============================================================================ */
+
+/* Locker Skydiving Contrail Swatch Cards */
+.fdr-contrail-card {
+  padding-top: 24px;
+}
+
+.fdr-contrail-swatch {
+  position: relative;
+  width: 100%;
+  height: 28px;
+  border-radius: 5px;
+  border: 2px solid rgba(255, 255, 255, 0.65);
+  overflow: hidden;
+  box-shadow: inset 0 1px 4px rgba(255, 255, 255, 0.25), 0 3px 8px rgba(0, 0, 0, 0.45);
+  margin-bottom: 4px;
+}
+
+.fdr-contrail-stream {
+  position: absolute;
+  left: -4px;
+  right: 10%;
+  height: 5px;
+  border-radius: 999px;
+  opacity: 0.92;
+  transform: skewX(-24deg);
+}
+
+.fdr-contrail-stream.stream-a {
+  top: 5px;
+}
+
+.fdr-contrail-stream.stream-b {
+  bottom: 5px;
+  right: 22%;
+  height: 4px;
+  opacity: 0.85;
+}
+
+/* Reality Augment Picker (Middle-Right below Minimap Stack, above Hotbar) */
+.fdr-augment-picker {
+  position: absolute;
+  right: 14px;
+  top: clamp(326px, 45.5vh, 376px);
+  width: clamp(238px, 20vw, 292px);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: linear-gradient(155deg, rgba(10, 20, 44, 0.86), rgba(7, 13, 28, 0.92));
+  border: 1.5px solid rgba(56, 189, 248, 0.62);
+  border-right: 4px solid #ffd000;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.56), 0 0 18px rgba(56, 189, 248, 0.24);
+  pointer-events: auto;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fdr-augment-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fdr-augment-picker-title {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #ffd000;
+}
+
+.fdr-augment-picker-hint {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #7dd3fc;
+}
+
+.fdr-augment-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  border-left: 4px solid var(--aug-accent, #38bdf8);
+  background: rgba(14, 28, 56, 0.88);
+  color: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.1s ease, border-color 0.1s ease, background 0.1s ease, box-shadow 0.1s ease;
+}
+
+.fdr-augment-choice:hover {
+  transform: translateX(-3px);
+  border-color: #ffd000;
+  background: rgba(22, 44, 86, 0.96);
+  box-shadow: 0 0 14px rgba(255, 208, 0, 0.35);
+}
+
+.fdr-augment-choice-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fdr-augment-key {
+  padding: 1px 6px;
+  font-size: 12px;
+}
+
+.fdr-augment-icon {
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-augment-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-augment-badge {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.fdr-augment-name {
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.1;
+  color: #ffffff;
+}
+
+.fdr-augment-sub {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #cbd5e1;
+  text-transform: none;
+}
+
+/* Active Augments Strip (Top-Left Stack below Match Quests) */
+.fdr-augments-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: clamp(210px, 22vw, 290px);
+}
+
+.fdr-augment-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: rgba(9, 18, 38, 0.88);
+  border: 1.5px solid #38bdf8;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-augment-pill-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-augment-pill-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-augment-pill-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.fdr-augment-pill-badge {
+  font-size: 9.5px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.fdr-augment-pill-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+/* POI Capture Progress Bar (Centered above [E] Interact Prompt) */
+.fdr-capture-bar {
+  width: 92%;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(8, 16, 36, 0.9);
+  border: 1.5px solid rgba(56, 189, 248, 0.78);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55), 0 0 14px rgba(56, 189, 248, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fdr-capture-bar.contested {
+  border-color: #fb923c;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55), 0 0 14px rgba(251, 146, 60, 0.4);
+}
+
+.fdr-capture-bar.captured {
+  border-color: #ffd000;
+  background: linear-gradient(90deg, rgba(120, 53, 15, 0.92), rgba(17, 24, 39, 0.92));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.58), 0 0 18px rgba(255, 208, 0, 0.48);
+}
+
+.fdr-capture-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #e0f2fe;
+}
+
+.fdr-capture-bar.captured .fdr-capture-top {
+  color: #fde047;
+}
+
+.fdr-capture-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-capture-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-capture-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fdr-capture-contested {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(239, 68, 68, 0.3);
+  border: 1px solid #f87171;
+  color: #fecaca;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.fdr-capture-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fdr-capture-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22d3ee, #38bdf8);
+  transition: width 0.1s linear;
+}
+
+.fdr-capture-bar.contested .fdr-capture-fill {
+  background: linear-gradient(90deg, #f97316, #fbbf24);
+}
+
+.fdr-capture-bar.captured .fdr-capture-fill {
+  background: linear-gradient(90deg, #f59e0b, #ffd000, #fef08a);
+}
+
+/* 3D Tactical Ping Floating Marker */
+.fdr-tactical-ping {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  pointer-events: none;
+  z-index: 12;
+}
+
+.fdr-ping-diamond {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  transform: rotate(45deg);
+  background: rgba(10, 20, 44, 0.92);
+  border: 2px solid #22d3ee;
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fdr-tactical-ping.kind-danger .fdr-ping-diamond {
+  border-color: #ef4444;
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.72);
+}
+
+.fdr-tactical-ping.kind-loot .fdr-ping-diamond {
+  border-color: #ffd000;
+  box-shadow: 0 0 14px rgba(255, 208, 0, 0.72);
+}
+
+.fdr-ping-diamond-icon {
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  transform: rotate(-45deg);
+}
+
+.fdr-ping-diamond-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-ping-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(8, 15, 32, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.55);
+}
+
+.fdr-ping-label {
+  color: #ffffff;
+}
+
+.fdr-ping-dist {
+  color: #22d3ee;
+}
+
+.fdr-tactical-ping.kind-danger .fdr-ping-dist {
+  color: #fca5a5;
+}
+
+.fdr-tactical-ping.kind-loot .fdr-ping-dist {
+  color: #ffd000;
+}
+
+/* MatchOverlay Summary POIs Captured Wide Stat & Active Augments */
+.fdr-stat-box-wide {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fdr-summary-augments {
+  margin-bottom: 14px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: rgba(11, 22, 48, 0.84);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.fdr-summary-augments-title {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #38bdf8;
+  margin-bottom: 7px;
+}
+
+.fdr-summary-augments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.fdr-summary-augment-badge {
+  flex: 1 1 135px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: rgba(7, 13, 28, 0.86);
+  border: 1.5px solid #38bdf8;
+}
+
+.fdr-summary-augment-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-summary-augment-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-summary-augment-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.08;
+}
+
+.fdr-summary-augment-tag {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.fdr-summary-augment-name {
+  font-size: 13px;
+  font-weight: 800;
+  color: #ffffff;
 }

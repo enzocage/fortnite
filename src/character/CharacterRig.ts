@@ -3,12 +3,13 @@ import type {
   AnimState,
   BackblingStyle,
   CharacterRenderState,
+  ContrailDef,
   GliderDef,
   PickaxeDef,
   SkinDef,
   WeaponId,
 } from '../types';
-import { GLIDERS, PICKAXES, SKINS, WEAPON_WRAPS, clamp } from '../core';
+import { CONTRAILS, GLIDERS, PICKAXES, SKINS, WEAPON_WRAPS, clamp } from '../core';
 import {
   applyWeaponWrap,
   createBlueprintModel,
@@ -16,6 +17,44 @@ import {
   disposeObject3D,
   getWeaponWrapDef,
 } from './WeaponModels';
+
+export function getContrailDef(contrailId?: string): ContrailDef {
+  if (contrailId) {
+    const found = CONTRAILS.find((c) => c.id === contrailId);
+    if (found) return found;
+  }
+  return CONTRAILS[0];
+}
+
+export function shouldActivateContrail(
+  state: Pick<CharacterRenderState, 'animState' | 'grounded' | 'velocityY'>,
+  resolvedAnim?: AnimState,
+): boolean {
+  const anim = resolvedAnim ?? state.animState;
+  if (anim === 'glide') return false;
+  return anim === 'skydive' || (!state.grounded && (state.velocityY ?? 0) < -8);
+}
+
+const CONTRAIL_WHITE = new THREE.Color('#ffffff');
+const CONTRAIL_PARTICLES_PER_LIMB = 6;
+
+interface ContrailParticle {
+  mesh: THREE.Mesh;
+  phaseOffset: number;
+  radialAngle: number;
+  radialRadius: number;
+  speed: number;
+}
+
+interface ContrailLimbStream {
+  group: THREE.Group;
+  cuffMesh: THREE.Mesh;
+  primaryRibbon: THREE.Mesh;
+  secondaryRibbon: THREE.Mesh;
+  particles: ContrailParticle[];
+  isFoot: boolean;
+  sideSign: 1 | -1;
+}
 
 export interface CharacterJoints {
   root: THREE.Group;
@@ -192,6 +231,7 @@ export class CharacterRig {
 
   private equippedWeaponId: WeaponId = 'pickaxe';
   private currentWrapId: string = WEAPON_WRAPS[0]?.id ?? 'factory_matte';
+  private currentContrailId: string = CONTRAILS[0]?.id ?? 'wind_stream';
   private buildMode = false;
   private gliderOpen = false;
   private gliderOpenFactor = 0;
@@ -213,9 +253,15 @@ export class CharacterRig {
   private bossCoreBeamMat: THREE.MeshBasicMaterial | null = null;
   private bossAuraHaloMesh: THREE.Mesh | null = null;
   private bossAuraHaloMat: THREE.MeshBasicMaterial | null = null;
+  private contrailActive = false;
+  private contrailTime = 0;
+  private contrailPrimaryMat: THREE.MeshBasicMaterial | null = null;
+  private contrailSecondaryMat: THREE.MeshBasicMaterial | null = null;
+  private contrailCoreMat: THREE.MeshBasicMaterial | null = null;
+  private readonly contrailStreams: ContrailLimbStream[] = [];
   private disposed = false;
 
-  constructor(skin?: SkinDef, pickaxe?: PickaxeDef, glider?: GliderDef) {
+  constructor(skin?: SkinDef, pickaxe?: PickaxeDef, glider?: GliderDef, contrailId?: string) {
     this.skin = skin ?? SKINS[0];
     this.pickaxe = pickaxe ?? PICKAXES[0];
     this.glider = glider ?? GLIDERS[0];
@@ -229,6 +275,8 @@ export class CharacterRig {
     this.buildGroundShadow();
     this.buildSkinVisuals();
     this.buildGliderVisual();
+    this.buildContrailVisuals();
+    this.setContrail(contrailId);
     this.setGliderOpen(false, 0);
     this.equipWeapon('pickaxe', false);
   }
@@ -1138,7 +1186,16 @@ export class CharacterRig {
     if (state.weaponWrapId !== undefined) {
       this.setWeaponWrap(state.weaponWrapId);
     }
+    if (state.contrailId !== undefined) {
+      this.setContrail(state.contrailId);
+    }
     this.updateGroundShadow(state.grounded, py, groundY, state.animState);
+    const contrailActive = shouldActivateContrail(state);
+    this.updateContrail(
+      contrailActive,
+      1 / 60,
+      contrailActive ? this.contrailTime + 1 / 60 : this.contrailTime,
+    );
 
     if (state.isBoss !== undefined) {
       this.setBossAura(Boolean(state.isBoss));
@@ -1346,6 +1403,317 @@ export class CharacterRig {
     }
   }
 
+  private buildContrailVisuals(): void {
+    const def = getContrailDef(this.currentContrailId);
+
+    this.contrailPrimaryMat = new THREE.MeshBasicMaterial({
+      color: def.primaryColor,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    this.contrailSecondaryMat = new THREE.MeshBasicMaterial({
+      color: def.secondaryColor,
+      transparent: true,
+      opacity: 0.74,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    this.contrailCoreMat = new THREE.MeshBasicMaterial({
+      color: def.primaryColor,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+
+    const attachments: Array<{
+      parent: THREE.Group;
+      name: string;
+      isFoot: boolean;
+      sideSign: 1 | -1;
+      offsetY: number;
+      offsetZ: number;
+    }> = [
+      {
+        parent: this.joints.leftHand,
+        name: 'contrail_left_hand',
+        isFoot: false,
+        sideSign: 1,
+        offsetY: -0.04,
+        offsetZ: 0,
+      },
+      {
+        parent: this.joints.rightHand,
+        name: 'contrail_right_hand',
+        isFoot: false,
+        sideSign: -1,
+        offsetY: -0.04,
+        offsetZ: 0,
+      },
+      {
+        parent: this.joints.leftFoot,
+        name: 'contrail_left_foot',
+        isFoot: true,
+        sideSign: 1,
+        offsetY: -0.02,
+        offsetZ: -0.04,
+      },
+      {
+        parent: this.joints.rightFoot,
+        name: 'contrail_right_foot',
+        isFoot: true,
+        sideSign: -1,
+        offsetY: -0.02,
+        offsetZ: -0.04,
+      },
+    ];
+
+    for (const att of attachments) {
+      const grp = new THREE.Group();
+      grp.name = att.name;
+      grp.position.set(0, att.offsetY, att.offsetZ);
+      grp.visible = false;
+      grp.scale.setScalar(0.001);
+
+      const cuffMesh = new THREE.Mesh(
+        new THREE.TorusGeometry(att.isFoot ? 0.075 : 0.056, 0.012, 6, 14),
+        this.contrailPrimaryMat,
+      );
+      cuffMesh.rotation.x = Math.PI / 2;
+      cuffMesh.castShadow = true;
+      grp.add(cuffMesh);
+
+      const primaryRibbon = new THREE.Mesh(
+        new THREE.ConeGeometry(att.isFoot ? 0.068 : 0.052, 0.85, 6, 1, true),
+        this.contrailPrimaryMat,
+      );
+      primaryRibbon.rotation.x = Math.PI;
+      primaryRibbon.position.y = -0.44;
+      primaryRibbon.castShadow = true;
+      grp.add(primaryRibbon);
+
+      const secondaryRibbon = new THREE.Mesh(
+        new THREE.CylinderGeometry(att.isFoot ? 0.036 : 0.028, 0.004, 0.72, 6, 1, true),
+        this.contrailSecondaryMat,
+      );
+      secondaryRibbon.position.y = -0.38;
+      secondaryRibbon.castShadow = true;
+      grp.add(secondaryRibbon);
+
+      const particles: ContrailParticle[] = [];
+      for (let i = 0; i < CONTRAIL_PARTICLES_PER_LIMB; i++) {
+        const mat =
+          i % 3 === 0
+            ? this.contrailCoreMat
+            : i % 2 === 0
+              ? this.contrailPrimaryMat
+              : this.contrailSecondaryMat;
+        const pMesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.042, 0), mat);
+        pMesh.castShadow = true;
+        grp.add(pMesh);
+        particles.push({
+          mesh: pMesh,
+          phaseOffset: i / CONTRAIL_PARTICLES_PER_LIMB,
+          radialAngle: (i / CONTRAIL_PARTICLES_PER_LIMB) * Math.PI * 2,
+          radialRadius: att.isFoot ? 0.065 : 0.05,
+          speed: 1.55 + (i % 3) * 0.35,
+        });
+      }
+
+      att.parent.add(grp);
+      this.contrailStreams.push({
+        group: grp,
+        cuffMesh,
+        primaryRibbon,
+        secondaryRibbon,
+        particles,
+        isFoot: att.isFoot,
+        sideSign: att.sideSign,
+      });
+    }
+  }
+
+  public setContrail(contrailId?: string): void {
+    if (this.disposed) return;
+    const def = getContrailDef(contrailId);
+    this.currentContrailId = def.id;
+
+    if (this.contrailPrimaryMat) {
+      this.contrailPrimaryMat.color.set(def.primaryColor);
+    }
+    if (this.contrailSecondaryMat) {
+      this.contrailSecondaryMat.color.set(def.secondaryColor);
+    }
+    if (this.contrailCoreMat) {
+      this.contrailCoreMat.color.set(def.primaryColor).lerp(CONTRAIL_WHITE, 0.55);
+    }
+  }
+
+  public getContrailId(): string {
+    return this.currentContrailId;
+  }
+
+  public isContrailActive(): boolean {
+    return this.contrailActive;
+  }
+
+  public updateContrail(active: boolean, dt: number, elapsed: number): void {
+    if (this.disposed) return;
+
+    if (!active) {
+      this.contrailActive = false;
+      for (let i = 0; i < this.contrailStreams.length; i++) {
+        const stream = this.contrailStreams[i];
+        stream.group.visible = false;
+        stream.group.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    this.contrailActive = true;
+    const safeDt = Number.isFinite(dt) ? Math.max(0, dt) : 0;
+    const t = Number.isFinite(elapsed) ? elapsed : this.contrailTime + safeDt;
+    this.contrailTime = t;
+
+    const style = getContrailDef(this.currentContrailId).style;
+
+    let ribbonWidth = 1.0;
+    let ribbonLength = 1.0;
+    let swirlSpeed = 5.0;
+    let flutterAmp = 0.06;
+    let flicker = 1.0;
+    let pScaleX = 1.0;
+    let pScaleY = 1.0;
+    let pScaleZ = 1.0;
+
+    switch (style) {
+      case 'wind':
+        ribbonWidth = 0.92;
+        ribbonLength = 1.18;
+        swirlSpeed = 4.2;
+        flutterAmp = 0.05;
+        flicker = 0.85 + 0.15 * Math.sin(t * 9);
+        pScaleX = 0.7;
+        pScaleY = 1.85;
+        pScaleZ = 0.7;
+        break;
+      case 'plasma':
+        ribbonWidth = 1.15;
+        ribbonLength = 1.12;
+        swirlSpeed = 10.5;
+        flutterAmp = 0.09;
+        flicker = 0.82 + 0.18 * Math.sin(t * 16);
+        pScaleX = 1.1;
+        pScaleY = 1.1;
+        pScaleZ = 1.1;
+        break;
+      case 'solar':
+        ribbonWidth = 1.38;
+        ribbonLength = 1.25;
+        swirlSpeed = 7.5;
+        flutterAmp = 0.1;
+        flicker = 0.76 + 0.24 * Math.sin(t * 22);
+        pScaleX = 1.25;
+        pScaleY = 1.45;
+        pScaleZ = 1.25;
+        break;
+      case 'frost':
+        ribbonWidth = 0.96;
+        ribbonLength = 1.05;
+        swirlSpeed = 6.0;
+        flutterAmp = 0.04;
+        flicker = 0.88 + 0.12 * Math.cos(t * 11);
+        pScaleX = 0.72;
+        pScaleY = 2.1;
+        pScaleZ = 0.72;
+        break;
+      case 'sakura':
+        ribbonWidth = 1.08;
+        ribbonLength = 0.96;
+        swirlSpeed = 3.8;
+        flutterAmp = 0.15;
+        flicker = 0.86 + 0.14 * Math.sin(t * 6.5);
+        pScaleX = 1.45;
+        pScaleY = 0.28;
+        pScaleZ = 1.05;
+        break;
+      case 'void':
+        ribbonWidth = 1.18;
+        ribbonLength = 1.22;
+        swirlSpeed = 13.5;
+        flutterAmp = 0.12;
+        flicker = 0.68 + 0.32 * Math.abs(Math.sin(t * 20));
+        pScaleX = 0.8;
+        pScaleY = 2.35;
+        pScaleZ = 0.8;
+        break;
+    }
+
+    if (this.contrailPrimaryMat) {
+      this.contrailPrimaryMat.opacity = clamp(0.82 * flicker, 0.25, 0.98);
+    }
+    if (this.contrailSecondaryMat) {
+      this.contrailSecondaryMat.opacity = clamp(0.72 * flicker, 0.2, 0.95);
+    }
+    if (this.contrailCoreMat) {
+      this.contrailCoreMat.opacity = clamp(0.9 * flicker, 0.3, 1.0);
+    }
+
+    for (let i = 0; i < this.contrailStreams.length; i++) {
+      const stream = this.contrailStreams[i];
+      stream.group.visible = true;
+      stream.group.scale.setScalar(1);
+
+      const wave = Math.sin(t * 10 + i * 1.4);
+      const pulse = 1 + 0.12 * Math.sin(t * 14 + i);
+      const zigZag = style === 'void' ? Math.sin(t * 28 + i * 2.1) * 0.22 : wave * 0.08;
+
+      stream.cuffMesh.rotation.z = t * swirlSpeed * stream.sideSign;
+      stream.cuffMesh.scale.setScalar(pulse);
+
+      stream.primaryRibbon.scale.set(
+        ribbonWidth * pulse,
+        ribbonLength * (0.94 + 0.1 * wave),
+        ribbonWidth * pulse,
+      );
+      stream.primaryRibbon.rotation.y = t * swirlSpeed * stream.sideSign;
+      stream.primaryRibbon.rotation.z = zigZag;
+
+      stream.secondaryRibbon.scale.set(
+        ribbonWidth * 0.95,
+        ribbonLength * (0.92 - 0.1 * wave),
+        ribbonWidth * 0.95,
+      );
+      stream.secondaryRibbon.rotation.y = -t * swirlSpeed * 1.25 * stream.sideSign;
+      stream.secondaryRibbon.rotation.x = wave * flutterAmp;
+      stream.secondaryRibbon.rotation.z = -zigZag;
+
+      const trailLen = (stream.isFoot ? 1.05 : 0.9) * ribbonLength;
+      for (let p = 0; p < stream.particles.length; p++) {
+        const pt = stream.particles[p];
+        const rawProg = (t * pt.speed + pt.phaseOffset) % 1;
+        const prog = rawProg < 0 ? rawProg + 1 : rawProg;
+        const ang = pt.radialAngle + t * swirlSpeed * stream.sideSign + prog * 2.6;
+        const spread = pt.radialRadius + prog * flutterAmp * 1.8;
+        const driftX =
+          style === 'void'
+            ? Math.sin(t * 30 + p * 2.3) * 0.08
+            : Math.cos(ang) * spread;
+        const driftZ = Math.sin(ang) * spread;
+        const fadeScale = Math.max(0.15, (1 - prog * 0.72) * (0.75 + 0.35 * Math.sin(prog * Math.PI)));
+
+        pt.mesh.position.set(driftX, -0.08 - prog * trailLen, driftZ);
+        pt.mesh.rotation.set(t * 4.5 + p, t * 5.2 * stream.sideSign, t * 3.8);
+        pt.mesh.scale.set(pScaleX * fadeScale, pScaleY * fadeScale, pScaleZ * fadeScale);
+      }
+    }
+  }
+
   public isBossAuraEnabled(): boolean {
     return this.bossAuraEnabled;
   }
@@ -1425,5 +1793,10 @@ export class CharacterRig {
     this.joints.root.parent?.remove(this.joints.root);
     this.groundShadowMesh = null;
     this.groundShadowMat = null;
+    this.contrailStreams.length = 0;
+    this.contrailPrimaryMat = null;
+    this.contrailSecondaryMat = null;
+    this.contrailCoreMat = null;
+    this.contrailActive = false;
   }
 }

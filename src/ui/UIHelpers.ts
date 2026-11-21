@@ -1,4 +1,6 @@
 import {
+  AUGMENTS,
+  CONTRAILS,
   DEFAULT_KEYBINDS,
   GAME_MODES,
   RARITY_COLORS,
@@ -6,7 +8,10 @@ import {
   WORLD_SIZE,
 } from '../core';
 import type {
+  AugmentDef,
+  AugmentId,
   BiomeType,
+  ContrailDef,
   GameModeId,
   GameSettings,
   HUDState,
@@ -623,4 +628,53 @@ export function selectVisibleVisualSoundCues(
 export function angleRadToDeg(angleRad: number): number {
   if (!Number.isFinite(angleRad)) return 0;
   return (angleRad * 180) / Math.PI;
+}
+
+/**
+ * Resolves AugmentDef metadata for an AugmentId (falls back to first augment).
+ */
+export function getAugmentMeta(id: AugmentId | string): AugmentDef {
+  return AUGMENTS.find((a) => a.id === id) ?? AUGMENTS[0];
+}
+
+/**
+ * Resolves ContrailDef metadata for a contrail id (falls back to default contrail).
+ */
+export function getContrailMeta(id?: string): ContrailDef {
+  return CONTRAILS.find((c) => c.id === id) ?? CONTRAILS[0];
+}
+
+/**
+ * Computes clamped [0, 100] POI capture progress percentage.
+ */
+export function computeCaptureProgressPct(
+  progress: number,
+  captured?: boolean,
+): number {
+  if (captured) return 100;
+  if (typeof progress !== 'number' || !Number.isFinite(progress) || progress <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, progress * 100));
+}
+
+/**
+ * Formats tactical 3D ping label and rounded distance string (e.g. "42M").
+ */
+export function formatTacticalPingLabel(ping: {
+  label?: string;
+  kind: 'move' | 'danger' | 'loot';
+  distance: number;
+}): { text: string; distanceText: string } {
+  const fallback =
+    ping.kind === 'danger' ? 'DANGER' : ping.kind === 'loot' ? 'LOOT' : 'MOVE';
+  const cleaned = typeof ping.label === 'string' ? ping.label.trim().toUpperCase() : '';
+  const safeDist =
+    typeof ping.distance === 'number' && Number.isFinite(ping.distance)
+      ? Math.max(0, Math.round(ping.distance))
+      : 0;
+  return {
+    text: cleaned || fallback,
+    distanceText: `${safeDist}M`,
+  };
 }

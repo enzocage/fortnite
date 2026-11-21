@@ -375,6 +375,107 @@ interface ImpactDecalSlot {
   material: THREE.MeshBasicMaterial;
 }
 
+interface RiftTearEndpoint {
+  group: THREE.Group;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  innerRingMesh: THREE.Mesh;
+  innerRingMat: THREE.MeshBasicMaterial;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  crackShards: THREE.Mesh[];
+  crackMatCyan: THREE.MeshBasicMaterial;
+  crackMatViolet: THREE.MeshBasicMaterial;
+  baseScale: number;
+}
+
+interface RiftTearSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  ground: RiftTearEndpoint;
+  sky: RiftTearEndpoint;
+}
+
+interface FlagCaptureSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+  phase: number;
+}
+
+interface FlagCaptureSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  beaconMesh: THREE.Mesh;
+  beaconMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  sparks: FlagCaptureSpark[];
+}
+
+interface AugmentVfxMote {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface AugmentVfxSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  lowerHexMesh: THREE.Mesh;
+  lowerHexMat: THREE.MeshBasicMaterial;
+  upperHexMesh: THREE.Mesh;
+  upperHexMat: THREE.MeshBasicMaterial;
+  shellMesh: THREE.Mesh;
+  shellMat: THREE.MeshBasicMaterial;
+  motes: AugmentVfxMote[];
+}
+
+interface TacticalPingSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  kind: 'move' | 'danger' | 'loot';
+  group: THREE.Group;
+  outerDiamondMesh: THREE.Mesh;
+  outerDiamondMat: THREE.MeshBasicMaterial;
+  rippleDiamondMesh: THREE.Mesh;
+  rippleDiamondMat: THREE.MeshBasicMaterial;
+  markerMesh: THREE.Mesh;
+  markerMat: THREE.MeshBasicMaterial;
+  beamMesh: THREE.Mesh;
+  beamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+}
+
+function getTacticalPingColor(kind: 'move' | 'danger' | 'loot'): string {
+  switch (kind) {
+    case 'danger':
+      return '#ef4444';
+    case 'loot':
+      return '#fbbf24';
+    case 'move':
+    default:
+      return '#22d3ee';
+  }
+}
+
 function createImpactDecalTexture(): THREE.CanvasTexture {
   const size = 128;
   let canvas: HTMLCanvasElement;
@@ -463,6 +564,13 @@ const CAMPFIRE_HEAL_POOL_SIZE = 12;
 const CAMPFIRE_HEAL_MOTE_COUNT = 12;
 const IMPACT_DECAL_POOL_SIZE = 40;
 const IMPACT_DECAL_DURATION = 12.0;
+const RIFT_TEAR_POOL_SIZE = 6;
+const RIFT_TEAR_SHARD_COUNT = 6;
+const FLAG_CAPTURE_POOL_SIZE = 6;
+const FLAG_CAPTURE_SPARK_COUNT = 20;
+const AUGMENT_VFX_POOL_SIZE = 8;
+const AUGMENT_VFX_MOTE_COUNT = 12;
+const TACTICAL_PING_DURATION = 16.0;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -493,6 +601,9 @@ export class VFXManager {
   private readonly droneRotorGeo: THREE.TorusGeometry;
   private readonly beamCylGeo: THREE.CylinderGeometry;
   private readonly hexDomeGeo: THREE.IcosahedronGeometry;
+  private readonly hexRingGeo: THREE.RingGeometry;
+  private readonly hexPrismGeo: THREE.CylinderGeometry;
+  private readonly diamondRingGeo: THREE.RingGeometry;
   private readonly impactDecalTex: THREE.CanvasTexture;
 
   private readonly tracers: TracerSlot[] = [];
@@ -513,6 +624,10 @@ export class VFXManager {
   private readonly slurpBursts: SlurpBurstSlot[] = [];
   private readonly campfireHeals: CampfireHealSlot[] = [];
   private readonly impactDecals: ImpactDecalSlot[] = [];
+  private readonly riftTears: RiftTearSlot[] = [];
+  private readonly flagCaptures: FlagCaptureSlot[] = [];
+  private readonly augmentVfx: AugmentVfxSlot[] = [];
+  private tacticalPing!: TacticalPingSlot;
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -550,6 +665,9 @@ export class VFXManager {
   private slurpBurstCursor = 0;
   private campfireHealCursor = 0;
   private impactDecalCursor = 0;
+  private riftTearCursor = 0;
+  private flagCaptureCursor = 0;
+  private augmentVfxCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -583,6 +701,9 @@ export class VFXManager {
     this.droneRotorGeo = this.trackGeo(new THREE.TorusGeometry(0.14, 0.022, 6, 12));
     this.beamCylGeo = this.trackGeo(new THREE.CylinderGeometry(0.42, 0.68, 1, 12, 1, true));
     this.hexDomeGeo = this.trackGeo(new THREE.IcosahedronGeometry(1, 1));
+    this.hexRingGeo = this.trackGeo(new THREE.RingGeometry(0.68, 1.0, 6));
+    this.hexPrismGeo = this.trackGeo(new THREE.CylinderGeometry(0.85, 0.85, 1, 6, 1, true));
+    this.diamondRingGeo = this.trackGeo(new THREE.RingGeometry(0.68, 1.0, 4));
     this.impactDecalTex = createImpactDecalTexture();
     this.ownedTextures.push(this.impactDecalTex);
 
@@ -1844,6 +1965,433 @@ export class VFXManager {
         material,
       });
     }
+
+    // 19. Sky Rift Tears (cyan-violet jagged crack + expanding portal rings at ground & sky endpoints)
+    for (let i = 0; i < RIFT_TEAR_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const ground = this.createRiftEndpoint(1.0);
+      const sky = this.createRiftEndpoint(1.65);
+      group.add(ground.group);
+      group.add(sky.group);
+
+      this.root.add(group);
+      this.riftTears.push({
+        active: false,
+        age: 0,
+        duration: 1.35,
+        group,
+        ground,
+        sky,
+      });
+    }
+
+    // 20. Flag Captured (tall golden beacon column + rising celebratory fireworks sparks)
+    for (let i = 0; i < FLAG_CAPTURE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const beaconMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const beaconMesh = new THREE.Mesh(this.beamCylGeo, beaconMat);
+      beaconMesh.position.y = 8;
+      beaconMesh.scale.set(0.85, 16, 0.85);
+      group.add(beaconMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.7,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      coreBeamMesh.position.y = 9;
+      coreBeamMesh.scale.set(0.28, 18, 0.28);
+      group.add(coreBeamMesh);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfde047,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const sparks: FlagCaptureSpark[] = [];
+      for (let s = 0; s < FLAG_CAPTURE_SPARK_COUNT; s++) {
+        const sparkColor =
+          s % 4 === 0 ? 0xffffff : s % 3 === 0 ? 0x22d3ee : s % 2 === 0 ? 0xfde047 : 0xfbbf24;
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: sparkColor,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = s % 2 === 0 ? this.unitCrystalGeo : this.unitSphereGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.14,
+          phase: s * 0.7,
+        });
+      }
+
+      this.root.add(group);
+      this.flagCaptures.push({
+        active: false,
+        age: 0,
+        duration: 2.1,
+        group,
+        beaconMesh,
+        beaconMat,
+        coreBeamMesh,
+        coreBeamMat,
+        ringMesh,
+        ringMat,
+        sparks,
+      });
+    }
+
+    // 21. Augment Activate (ascending holographic hex/ring aura tinted by augment color)
+    for (let i = 0; i < AUGMENT_VFX_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const lowerHexMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const lowerHexMesh = new THREE.Mesh(this.hexRingGeo, lowerHexMat);
+      lowerHexMesh.rotation.x = -Math.PI / 2;
+      group.add(lowerHexMesh);
+
+      const upperHexMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const upperHexMesh = new THREE.Mesh(this.hexRingGeo, upperHexMat);
+      upperHexMesh.rotation.x = -Math.PI / 2;
+      group.add(upperHexMesh);
+
+      const shellMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.34,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const shellMesh = new THREE.Mesh(this.hexPrismGeo, shellMat);
+      shellMesh.position.y = 0.9;
+      group.add(shellMesh);
+
+      const motes: AugmentVfxMote[] = [];
+      for (let m = 0; m < AUGMENT_VFX_MOTE_COUNT; m++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        motes.push({
+          mesh,
+          material,
+          angle: (m / AUGMENT_VFX_MOTE_COUNT) * Math.PI * 2,
+          radius: 0.72,
+          speedY: 1.9,
+          spin: 4.0,
+          baseScale: 0.095,
+        });
+      }
+
+      this.root.add(group);
+      this.augmentVfx.push({
+        active: false,
+        age: 0,
+        duration: 1.15,
+        group,
+        lowerHexMesh,
+        lowerHexMat,
+        upperHexMesh,
+        upperHexMat,
+        shellMesh,
+        shellMat,
+        motes,
+      });
+    }
+
+    // 22. Tactical World Ping (singleton pulsing diamond ring + slender color-coded beacon beam up to 16s)
+    {
+      const group = new THREE.Group();
+      group.name = 'vfx_tactical_ping';
+      group.visible = false;
+
+      const outerDiamondMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerDiamondMesh = new THREE.Mesh(this.diamondRingGeo, outerDiamondMat);
+      outerDiamondMesh.rotation.x = -Math.PI / 2;
+      outerDiamondMesh.position.y = 0.08;
+      group.add(outerDiamondMesh);
+
+      const rippleDiamondMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const rippleDiamondMesh = new THREE.Mesh(this.diamondRingGeo, rippleDiamondMat);
+      rippleDiamondMesh.rotation.x = -Math.PI / 2;
+      rippleDiamondMesh.position.y = 0.09;
+      group.add(rippleDiamondMesh);
+
+      const markerMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const markerMesh = new THREE.Mesh(this.unitCrystalGeo, markerMat);
+      markerMesh.position.y = 1.65;
+      markerMesh.scale.set(0.36, 0.54, 0.36);
+      group.add(markerMesh);
+
+      const beamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.32,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const beamMesh = new THREE.Mesh(this.unitCylinderGeo, beamMat);
+      beamMesh.position.y = 11;
+      beamMesh.scale.set(0.16, 22, 0.16);
+      group.add(beamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      coreBeamMesh.position.y = 11;
+      coreBeamMesh.scale.set(0.055, 22, 0.055);
+      group.add(coreBeamMesh);
+
+      this.root.add(group);
+      this.tacticalPing = {
+        active: false,
+        age: 0,
+        duration: TACTICAL_PING_DURATION,
+        kind: 'move',
+        group,
+        outerDiamondMesh,
+        outerDiamondMat,
+        rippleDiamondMesh,
+        rippleDiamondMat,
+        markerMesh,
+        markerMat,
+        beamMesh,
+        beamMat,
+        coreBeamMesh,
+        coreBeamMat,
+      };
+    }
+  }
+
+  private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
+    const group = new THREE.Group();
+
+    const outerRingMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x22d3ee,
+        transparent: true,
+        opacity: 0.94,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+    outerRingMesh.rotation.x = -Math.PI / 2;
+    group.add(outerRingMesh);
+
+    const innerRingMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0xa855f7,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    const innerRingMesh = new THREE.Mesh(this.unitRingGeo, innerRingMat);
+    innerRingMesh.rotation.set(Math.PI / 3, 0, Math.PI / 5);
+    group.add(innerRingMesh);
+
+    const coreMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0xe0f2fe,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    const coreMesh = new THREE.Mesh(this.unitSphereGeo, coreMat);
+    coreMesh.position.y = 1.1 * baseScale;
+    group.add(coreMesh);
+
+    const crackMatCyan = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x22d3ee,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    const crackMatViolet = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x8b5cf6,
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+
+    const crackShards: THREE.Mesh[] = [];
+    for (let i = 0; i < RIFT_TEAR_SHARD_COUNT; i++) {
+      const mat = i % 2 === 0 ? crackMatCyan : crackMatViolet;
+      const shard = new THREE.Mesh(this.unitCrystalGeo, mat);
+      const frac = i / (RIFT_TEAR_SHARD_COUNT - 1);
+      const zig = (i % 2 === 0 ? 1 : -1) * 0.24 * baseScale;
+      shard.position.set(zig, (0.3 + frac * 2.1) * baseScale, (i % 3 - 1) * 0.1 * baseScale);
+      shard.rotation.z = (i % 2 === 0 ? -1 : 1) * 0.42;
+      shard.scale.set(0.22 * baseScale, 0.88 * baseScale, 0.12 * baseScale);
+      group.add(shard);
+      crackShards.push(shard);
+    }
+
+    return {
+      group,
+      outerRingMesh,
+      outerRingMat,
+      innerRingMesh,
+      innerRingMat,
+      coreMesh,
+      coreMat,
+      crackShards,
+      crackMatCyan,
+      crackMatViolet,
+      baseScale,
+    };
+  }
+
+  private updateRiftEndpoint(
+    ep: RiftTearEndpoint,
+    t: number,
+    age: number,
+    safeDt: number,
+  ): void {
+    const easeOut = 1 - Math.pow(1 - t, 3);
+    const fade = 1 - t;
+    const sc = ep.baseScale;
+
+    ep.outerRingMesh.scale.setScalar(sc * (0.45 + 3.4 * easeOut));
+    ep.outerRingMat.opacity = 0.94 * fade;
+
+    ep.innerRingMesh.rotation.y += 4.2 * safeDt;
+    ep.innerRingMesh.scale.setScalar(sc * (0.35 + 2.6 * easeOut));
+    ep.innerRingMat.opacity = 0.9 * fade;
+
+    const corePulse = sc * (0.45 + 1.15 * Math.sin(t * Math.PI));
+    ep.coreMesh.scale.set(corePulse * 0.7, corePulse * 1.4, corePulse * 0.7);
+    ep.coreMat.opacity = 0.85 * fade * fade;
+
+    const crackWidth = Math.max(0.05, 1 - t * 0.65);
+    ep.crackMatCyan.opacity = 0.95 * fade;
+    ep.crackMatViolet.opacity = 0.92 * fade;
+
+    for (let i = 0; i < ep.crackShards.length; i++) {
+      const shard = ep.crackShards[i];
+      shard.rotation.y += (i % 2 === 0 ? 3.5 : -3.5) * safeDt;
+      shard.scale.set(
+        0.24 * sc * crackWidth,
+        0.92 * sc * (0.65 + 0.55 * Math.sin(t * Math.PI + age * 2)),
+        0.14 * sc * crackWidth,
+      );
+    }
   }
 
   private subscribeEvents(): void {
@@ -1873,6 +2421,12 @@ export class VFXManager {
       ),
       this.eventBus.on('vfx:slurp_burst', (e) => this.spawnSlurpBurst(e.position, e.radius)),
       this.eventBus.on('vfx:campfire_heal', (e) => this.spawnCampfireHeal(e.position)),
+      this.eventBus.on('vfx:rift_tear', (e) => this.spawnRiftTear(e.position, e.skyPosition)),
+      this.eventBus.on('vfx:flag_captured', (e) => this.spawnFlagCapture(e.position)),
+      this.eventBus.on('vfx:augment_activate', (e) =>
+        this.spawnAugmentVfx(e.position, e.color),
+      ),
+      this.eventBus.on('vfx:tactical_ping', (e) => this.spawnTacticalPing(e.position, e.kind)),
     );
   }
 
@@ -3096,6 +3650,138 @@ export class VFXManager {
       }
       d.material.opacity = d.baseOpacity * (1 - Math.pow(t, 1.35));
     }
+
+    // 20. Sky Rift Tears (ground + sky cyan-violet jagged cracks & expanding portal rings)
+    for (let i = 0; i < RIFT_TEAR_POOL_SIZE; i++) {
+      const rt = this.riftTears[i];
+      if (!rt.active) continue;
+      rt.age += safeDt;
+      const t = rt.age / rt.duration;
+      if (t >= 1) {
+        rt.active = false;
+        rt.group.visible = false;
+        continue;
+      }
+      this.updateRiftEndpoint(rt.ground, t, rt.age, safeDt);
+      this.updateRiftEndpoint(rt.sky, t, rt.age, safeDt);
+    }
+
+    // 21. Flag Captured (tall golden beacon column + rising fireworks sparks)
+    for (let i = 0; i < FLAG_CAPTURE_POOL_SIZE; i++) {
+      const fc = this.flagCaptures[i];
+      if (!fc.active) continue;
+      fc.age += safeDt;
+      const t = fc.age / fc.duration;
+      if (t >= 1) {
+        fc.active = false;
+        fc.group.visible = false;
+        continue;
+      }
+
+      const pop = clamp(fc.age / 0.16, 0, 1);
+      const fade = 1 - t;
+      const pulse = 1 + 0.12 * Math.sin(fc.age * 10);
+      const colW = (1 - 0.55 * t) * pulse;
+      const colH = 16 * pop;
+
+      fc.beaconMesh.position.y = colH * 0.5;
+      fc.beaconMesh.scale.set(0.95 * colW, Math.max(0.1, colH), 0.95 * colW);
+      fc.beaconMat.opacity = 0.44 * fade;
+
+      fc.coreBeamMesh.position.y = colH * 0.55;
+      fc.coreBeamMesh.scale.set(0.32 * colW, Math.max(0.1, colH * 1.1), 0.32 * colW);
+      fc.coreBeamMat.opacity = 0.72 * fade;
+
+      const ringEase = 1 - Math.pow(1 - Math.min(1, t * 1.6), 2);
+      fc.ringMesh.scale.setScalar(0.5 + 4.5 * ringEase);
+      fc.ringMat.opacity = 0.92 * fade;
+
+      for (let s = 0; s < FLAG_CAPTURE_SPARK_COUNT; s++) {
+        const sp = fc.sparks[s];
+        sp.vy -= 5.2 * safeDt;
+        sp.mesh.position.x += sp.vx * safeDt;
+        sp.mesh.position.y += sp.vy * safeDt;
+        sp.mesh.position.z += sp.vz * safeDt;
+        sp.mesh.rotation.y += 6.5 * safeDt;
+        const twinkle = 0.72 + 0.28 * Math.sin(fc.age * 18 + sp.phase);
+        sp.mesh.scale.setScalar(sp.baseScale * twinkle * (1 - 0.45 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 22. Augment Activate (ascending holographic hex/ring aura)
+    for (let i = 0; i < AUGMENT_VFX_POOL_SIZE; i++) {
+      const av = this.augmentVfx[i];
+      if (!av.active) continue;
+      av.age += safeDt;
+      const t = av.age / av.duration;
+      if (t >= 1) {
+        av.active = false;
+        av.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      av.lowerHexMesh.position.y = 0.08 + 1.3 * easeOut;
+      av.lowerHexMesh.rotation.z += 3.6 * safeDt;
+      av.lowerHexMesh.scale.setScalar(0.6 + 1.15 * easeOut);
+      av.lowerHexMat.opacity = 0.92 * fade;
+
+      av.upperHexMesh.position.y = 0.35 + 2.15 * easeOut;
+      av.upperHexMesh.rotation.z -= 2.8 * safeDt;
+      av.upperHexMesh.scale.setScalar(0.45 + 0.95 * easeOut);
+      av.upperHexMat.opacity = 0.86 * fade;
+
+      av.shellMesh.position.y = 0.8 + 0.9 * t;
+      av.shellMesh.rotation.y += 2.2 * safeDt;
+      av.shellMesh.scale.set(0.85 + 0.45 * easeOut, 1.4 + 0.8 * t, 0.85 + 0.45 * easeOut);
+      av.shellMat.opacity = 0.36 * fade;
+
+      for (let m = 0; m < AUGMENT_VFX_MOTE_COUNT; m++) {
+        const mt = av.motes[m];
+        const ang = mt.angle + av.age * mt.spin;
+        const rad = mt.radius * (1 + 0.25 * t);
+        mt.mesh.position.x = Math.cos(ang) * rad;
+        mt.mesh.position.y += mt.speedY * safeDt;
+        mt.mesh.position.z = Math.sin(ang) * rad;
+        mt.mesh.rotation.y += 5.5 * safeDt;
+        mt.mesh.scale.setScalar(mt.baseScale * (1 - 0.45 * t));
+        mt.material.opacity = fade;
+      }
+    }
+
+    // 23. Tactical World Ping (pulsing diamond ring + slender color-coded beacon up to 16s)
+    if (this.tacticalPing.active) {
+      const ping = this.tacticalPing;
+      ping.age += safeDt;
+      const t = ping.age / ping.duration;
+      if (t >= 1) {
+        ping.active = false;
+        ping.group.visible = false;
+      } else {
+        const fadeOut = t > 0.9 ? clamp((1 - t) / 0.1, 0, 1) : 1;
+        const pulse = 0.5 + 0.5 * Math.sin(ping.age * 5.0);
+        const ringCycle = (ping.age * 1.1) % 1;
+
+        ping.outerDiamondMesh.rotation.z += 0.9 * safeDt;
+        ping.outerDiamondMesh.scale.setScalar(0.95 + 0.18 * pulse);
+        ping.outerDiamondMat.opacity = (0.78 + 0.2 * pulse) * fadeOut;
+
+        ping.rippleDiamondMesh.scale.setScalar(0.45 + 1.25 * ringCycle);
+        ping.rippleDiamondMat.opacity = 0.92 * (1 - ringCycle) * fadeOut;
+
+        ping.markerMesh.position.y = 1.65 + Math.sin(ping.age * 3.8) * 0.18;
+        ping.markerMesh.rotation.y += 2.6 * safeDt;
+        ping.markerMat.opacity = 0.95 * fadeOut;
+
+        const beamW = 0.14 + 0.04 * pulse;
+        ping.beamMesh.scale.set(beamW, 22, beamW);
+        ping.beamMat.opacity = (0.26 + 0.14 * pulse) * fadeOut;
+        ping.coreBeamMat.opacity = 0.55 * fadeOut;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -3383,6 +4069,149 @@ export class VFXManager {
     slot.mesh.visible = true;
   }
 
+  private spawnRiftTear(position: Vec3Like, skyPosition?: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.riftTears[this.riftTearCursor];
+    this.riftTearCursor = (this.riftTearCursor + 1) % RIFT_TEAR_POOL_SIZE;
+
+    const safeSky: Vec3Like = isFiniteVec3(skyPosition)
+      ? skyPosition
+      : { x: position.x, y: position.y + 92, z: position.z };
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.35;
+    slot.group.visible = true;
+
+    slot.ground.group.position.set(position.x, position.y + 0.15, position.z);
+    slot.sky.group.position.set(safeSky.x, safeSky.y, safeSky.z);
+    this.updateRiftEndpoint(slot.ground, 0, 0, 0);
+    this.updateRiftEndpoint(slot.sky, 0, 0, 0);
+  }
+
+  private spawnFlagCapture(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.flagCaptures[this.flagCaptureCursor];
+    this.flagCaptureCursor = (this.flagCaptureCursor + 1) % FLAG_CAPTURE_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 2.1;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.beaconMesh.position.y = 1.5;
+    slot.beaconMesh.scale.set(0.95, 3, 0.95);
+    slot.beaconMat.opacity = 0.44;
+
+    slot.coreBeamMesh.position.y = 1.8;
+    slot.coreBeamMesh.scale.set(0.32, 3.6, 0.32);
+    slot.coreBeamMat.opacity = 0.72;
+
+    slot.ringMesh.scale.setScalar(0.5);
+    slot.ringMat.opacity = 0.92;
+
+    for (let s = 0; s < FLAG_CAPTURE_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      const ang = (s / FLAG_CAPTURE_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      const horiz = 1.8 + this.nextRand() * 3.4;
+      sp.vx = Math.cos(ang) * horiz;
+      sp.vy = 6.2 + this.nextRand() * 5.8;
+      sp.vz = Math.sin(ang) * horiz;
+      sp.baseScale = 0.12 + this.nextRand() * 0.08;
+      sp.phase = s * 0.7;
+      sp.mesh.position.set(Math.cos(ang) * 0.35, 0.4 + this.nextRand() * 0.6, Math.sin(ang) * 0.35);
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 1;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnAugmentVfx(position: Vec3Like, color: string): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.augmentVfx[this.augmentVfxCursor];
+    this.augmentVfxCursor = (this.augmentVfxCursor + 1) % AUGMENT_VFX_POOL_SIZE;
+
+    const safeColor =
+      typeof color === 'string' && color.trim().length > 0 ? color.trim() : '#38bdf8';
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.15;
+
+    slot.group.position.set(position.x, position.y + 0.05, position.z);
+    slot.group.visible = true;
+
+    slot.lowerHexMat.color.set(safeColor);
+    slot.lowerHexMat.opacity = 0.92;
+    slot.lowerHexMesh.position.y = 0.08;
+    slot.lowerHexMesh.scale.setScalar(0.6);
+
+    slot.upperHexMat.color.set(safeColor);
+    slot.upperHexMat.opacity = 0.86;
+    slot.upperHexMesh.position.y = 0.35;
+    slot.upperHexMesh.scale.setScalar(0.45);
+
+    slot.shellMat.color.set(safeColor);
+    slot.shellMat.opacity = 0.36;
+    slot.shellMesh.position.y = 0.8;
+    slot.shellMesh.scale.set(0.85, 1.4, 0.85);
+
+    for (let m = 0; m < AUGMENT_VFX_MOTE_COUNT; m++) {
+      const mt = slot.motes[m];
+      mt.angle = (m / AUGMENT_VFX_MOTE_COUNT) * Math.PI * 2 + this.nextRand() * 0.25;
+      mt.radius = 0.55 + this.nextRand() * 0.35;
+      mt.speedY = 1.6 + this.nextRand() * 1.4;
+      mt.spin = (m % 2 === 0 ? 1 : -1) * (3.2 + this.nextRand() * 2.2);
+      mt.baseScale = 0.08 + this.nextRand() * 0.045;
+      mt.mesh.position.set(
+        Math.cos(mt.angle) * mt.radius,
+        0.1 + this.nextRand() * 0.3,
+        Math.sin(mt.angle) * mt.radius,
+      );
+      mt.mesh.scale.setScalar(mt.baseScale);
+      mt.material.color.set(m % 4 === 0 ? '#ffffff' : safeColor);
+      mt.material.opacity = 1;
+      mt.mesh.visible = true;
+    }
+  }
+
+  private spawnTacticalPing(position: Vec3Like, kind: 'move' | 'danger' | 'loot'): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const ping = this.tacticalPing;
+    const pingColor = getTacticalPingColor(kind);
+
+    ping.active = true;
+    ping.age = 0;
+    ping.duration = TACTICAL_PING_DURATION;
+    ping.kind = kind;
+
+    ping.group.position.set(position.x, position.y, position.z);
+    ping.group.visible = true;
+
+    ping.outerDiamondMat.color.set(pingColor);
+    ping.outerDiamondMat.opacity = 0.95;
+    ping.outerDiamondMesh.scale.setScalar(1.0);
+
+    ping.rippleDiamondMat.color.set(pingColor);
+    ping.rippleDiamondMat.opacity = 0.92;
+    ping.rippleDiamondMesh.scale.setScalar(0.45);
+
+    ping.markerMat.color.set(pingColor);
+    ping.markerMat.opacity = 0.95;
+    ping.markerMesh.position.y = 1.65;
+
+    ping.beamMat.color.set(pingColor);
+    ping.beamMat.opacity = 0.32;
+    ping.beamMesh.scale.set(0.16, 22, 0.16);
+    ping.coreBeamMat.opacity = 0.55;
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -3503,6 +4332,10 @@ export class VFXManager {
     for (const s of this.weaponUpgrades) if (s.active) count++;
     for (const s of this.slurpBursts) if (s.active) count++;
     for (const s of this.campfireHeals) if (s.active) count++;
+    for (const s of this.riftTears) if (s.active) count++;
+    for (const s of this.flagCaptures) if (s.active) count++;
+    for (const s of this.augmentVfx) if (s.active) count++;
+    if (this.tacticalPing.active) count++;
     return count;
   }
 
@@ -3584,6 +4417,28 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveRiftTearCount(): number {
+    let count = 0;
+    for (const rt of this.riftTears) if (rt.active) count++;
+    return count;
+  }
+
+  public getActiveFlagCaptureCount(): number {
+    let count = 0;
+    for (const fc of this.flagCaptures) if (fc.active) count++;
+    return count;
+  }
+
+  public getActiveAugmentVfxCount(): number {
+    let count = 0;
+    for (const av of this.augmentVfx) if (av.active) count++;
+    return count;
+  }
+
+  public hasActiveTacticalPing(): boolean {
+    return this.tacticalPing.active;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -3658,6 +4513,22 @@ export class VFXManager {
     for (const d of this.impactDecals) {
       d.active = false;
       d.mesh.visible = false;
+    }
+    for (const rt of this.riftTears) {
+      rt.active = false;
+      rt.group.visible = false;
+    }
+    for (const fc of this.flagCaptures) {
+      fc.active = false;
+      fc.group.visible = false;
+    }
+    for (const av of this.augmentVfx) {
+      av.active = false;
+      av.group.visible = false;
+    }
+    if (this.tacticalPing) {
+      this.tacticalPing.active = false;
+      this.tacticalPing.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

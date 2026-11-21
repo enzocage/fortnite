@@ -1,5 +1,6 @@
 import type {
   AmmoType,
+  AugmentId,
   BuildPieceType,
   MaterialType,
   VehicleKind,
@@ -442,5 +443,99 @@ export function getCampfireIconSvg(lit = true): string {
 export function getOvershieldBoltSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
     <path d="M13.5 2L5 13.5H11.5L10.5 22L19 10.5H12.5L13.5 2Z" fill="#e9d5ff" stroke="#22d3ee" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+export function getAugmentIconSvg(id: AugmentId): string {
+  switch (id) {
+    case 'parkour_boost':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M6 21L16 11L26 21" stroke="#38bdf8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M9 26L16 19L23 26" stroke="#bae6fd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="16" cy="7" r="2.6" fill="#38bdf8"/>
+      </svg>`;
+    case 'light_fingers':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M23 11A9 9 0 1 0 25 18" stroke="#fbbf24" stroke-width="2.8" stroke-linecap="round"/>
+        <path d="M24 6V12H18" stroke="#fef08a" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="13" y="13" width="6" height="8" rx="1.5" fill="#fbbf24"/>
+      </svg>`;
+    case 'siphon_master':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M16 5L25 9.5V16.5C25 22 21 25.8 16 27.5C11 25.8 7 22 7 16.5V9.5L16 5Z" fill="#065f46" stroke="#34d399" stroke-width="2"/>
+        <path d="M16 11V21M11 16H21" stroke="#a7f3d0" stroke-width="2.8" stroke-linecap="round"/>
+      </svg>`;
+    case 'aerialist':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M4 15L16 7L28 15L22 18L16 14L10 18L4 15Z" fill="#60a5fa" stroke="#e0f2fe" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M16 14V25M12 25H20" stroke="#93c5fd" stroke-width="2.4" stroke-linecap="round"/>
+      </svg>`;
+    case 'storm_mark':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="10" stroke="#c084fc" stroke-width="2.2" stroke-dasharray="4 3"/>
+        <circle cx="16" cy="16" r="4.5" fill="#a855f7" stroke="#f5d0fe" stroke-width="1.5"/>
+        <path d="M16 3V7M16 25V29M3 16H7M25 16H29" stroke="#e9d5ff" stroke-width="2" stroke-linecap="round"/>
+      </svg>`;
+    case 'demolisher':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4L19.5 11.5L27.5 9.5L22 16L27.5 22L19.5 21L16 28L12.5 21L4.5 22L10 16L4.5 9.5L12.5 11.5L16 4Z" fill="#fb923c" stroke="#fed7aa" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>`;
+    case 'first_assault':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="9.5" stroke="#f472b6" stroke-width="2.2"/>
+        <circle cx="16" cy="16" r="3" fill="#fbcfe8"/>
+        <path d="M16 3V10M16 22V29M3 16H10M22 16H29" stroke="#f472b6" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>`;
+    case 'mechanic_overdrive':
+    default:
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="9" stroke="#22d3ee" stroke-width="2.6" stroke-dasharray="5 3"/>
+        <path d="M17.5 8.5L12 17H16.5L14.5 23.5L20 15H15.5L17.5 8.5Z" fill="#a5f3fc" stroke="#0891b2" stroke-width="1"/>
+      </svg>`;
+  }
+}
+
+export function getTacticalPingIconSvg(
+  kind: 'move' | 'danger' | 'loot',
+): string {
+  switch (kind) {
+    case 'danger':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M16 5L28 26H4L16 5Z" fill="#ef4444" stroke="#fee2e2" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M16 13V19" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round"/>
+        <circle cx="16" cy="22.5" r="1.4" fill="#ffffff"/>
+      </svg>`;
+    case 'loot':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M7 13C7 10.5 9 9 11.5 9H20.5C23 9 25 10.5 25 13V16H7V13Z" fill="#fbbf24" stroke="#78350f" stroke-width="1.6"/>
+        <rect x="7" y="16" width="18" height="9" rx="2" fill="#f59e0b" stroke="#78350f" stroke-width="1.6"/>
+        <rect x="13.5" y="14" width="5" height="4" rx="1" fill="#fef08a"/>
+      </svg>`;
+    case 'move':
+    default:
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4L25 25L16 20.5L7 25L16 4Z" fill="#22d3ee" stroke="#e0f2fe" stroke-width="1.8" stroke-linejoin="round"/>
+      </svg>`;
+  }
+}
+
+export function getSkyRiftIconSvg(active = true): string {
+  const stroke = active ? '#22d3ee' : '#64748b';
+  const fill = active ? '#e0f2fe' : '#94a3b8';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="16" r="11" stroke="${stroke}" stroke-width="2.2" fill="rgba(8, 24, 52, 0.85)"/>
+    <path d="M16 4.5L19 13L27.5 16L19 19L16 27.5L13 19L4.5 16L13 13L16 4.5Z" fill="${fill}" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+export function getCaptureFlagIconSvg(captured = false): string {
+  const border = captured ? '#ffd000' : '#38bdf8';
+  const bg = captured ? 'rgba(120, 53, 15, 0.9)' : 'rgba(10, 24, 52, 0.9)';
+  const pole = captured ? '#fef08a' : '#e2e8f0';
+  const pennant = captured ? '#ffd000' : '#38bdf8';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="16" r="12" fill="${bg}" stroke="${border}" stroke-width="2.2"/>
+    <path d="M10 24V8" stroke="${pole}" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M11 8.5L24 13.5L11 18.5V8.5Z" fill="${pennant}" stroke="#0f172a" stroke-width="1.3" stroke-linejoin="round"/>
   </svg>`;
 }

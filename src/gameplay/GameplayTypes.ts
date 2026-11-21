@@ -1,9 +1,12 @@
 import type {
   AmmoType,
+  AugmentId,
   BuildPieceType,
   CampfireEntity,
+  CapturePointEntity,
   DamageEvent,
   EditModeState,
+  ExplosiveBarrelEntity,
   GameModeId,
   GamePhase,
   HarvestableProp,
@@ -11,6 +14,7 @@ import type {
   LaunchPadEntity,
   LootDrop,
   LootLlamaEntity,
+  RiftEntity,
   SlurpBarrelEntity,
   SupplyDrop,
   ItemInstance,
@@ -54,6 +58,33 @@ export interface WorldStationBridge {
     id: string,
     dmg: number,
   ): { destroyed: boolean; shieldAmount: number; position: Vec3Like } | null;
+}
+
+export interface WorldRiftCaptureBridge {
+  getRifts(): RiftEntity[];
+  triggerRift(id: string): { skyPos: Vec3Like } | null;
+  getCapturePoints(): CapturePointEntity[];
+  advanceCapturePoint(
+    id: string,
+    actorId: string,
+    actorName: string,
+    dt: number,
+  ): {
+    capturedNow: boolean;
+    progress: number;
+    lootPos?: Vec3Like;
+    poiName: string;
+  };
+  getExplosiveBarrels(): ExplosiveBarrelEntity[];
+  damageExplosiveBarrel(
+    id: string,
+    dmg: number,
+  ): {
+    exploded: boolean;
+    position: Vec3Like;
+    blastRadius: number;
+    blastDamage: number;
+  } | null;
 }
 
 export interface ShieldBubbleState {
@@ -128,6 +159,8 @@ export interface CombatActor {
   radius: number;
   height: number;
   alive: boolean;
+  hasDemolisher?: boolean;
+  hasFirstAssault?: boolean;
   onDamage?: (ev: DamageEvent) => void;
   onHeal?: (hpAdded: number, shieldAdded: number) => void;
   onImpulse?: (impulse: Vec3Like, grantFallImmunity: boolean) => void;
@@ -168,6 +201,9 @@ export interface FireWeaponParams {
   isPlayer: boolean;
   vehicleBridge?: VehicleBridge | null;
   stationBridge?: WorldStationBridge | null;
+  riftCaptureBridge?: WorldRiftCaptureBridge | null;
+  hasDemolisher?: boolean;
+  hasFirstAssault?: boolean;
   onAmmoConsumed?: () => void;
   onHarvest?: (matType: MaterialType, amount: number, isCrit: boolean) => void;
 }
@@ -193,6 +229,7 @@ export interface PlayerMatchStats {
   structuresBuilt: number;
   chestsOpened: number;
   questsCompleted?: number;
+  poisCaptured?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -256,4 +293,20 @@ export interface PlayerHudSnapshot {
   overshield: number;
   maxOvershield: number;
   nearCampfireHealing: boolean;
+  activeAugments: AugmentId[];
+  pendingAugmentChoices: [AugmentId, AugmentId] | null;
+  captureStatus: {
+    poiName: string;
+    progress: number;
+    captured: boolean;
+    contested?: boolean;
+  } | null;
+  tacticalPing: {
+    x: number;
+    y: number;
+    z: number;
+    label: string;
+    kind: 'move' | 'danger' | 'loot';
+    distance: number;
+  } | null;
 }

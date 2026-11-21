@@ -104,25 +104,24 @@ function hashCell(cx: number, cz: number): string {
 
 export class CollisionSystem {
   private terrain: TerrainQuery;
-  private staticColliders: ColliderBox[] = [];
-  private propColliders: ColliderBox[] = [];
   private staticGrid = new Map<string, ColliderBox[]>();
   private propGrid = new Map<string, ColliderBox[]>();
   private buildPiecesProvider: (() => BuildPiece[]) | null = null;
   private buildGrid = new Map<string, BuildPiece[]>();
   private lastBuildSig = '';
+  private cachedPropsRef: HarvestableProp[] | null = null;
+  private cachedPropsSig = '';
+  private cachedPropsGrid = new Map<string, HarvestableProp[]>();
 
   constructor(terrain: TerrainQuery) {
     this.terrain = terrain;
   }
 
   setStaticColliders(boxes: ColliderBox[]): void {
-    this.staticColliders = boxes;
     this.staticGrid = this.buildSpatialGrid(boxes);
   }
 
   setPropColliders(boxes: ColliderBox[]): void {
-    this.propColliders = boxes;
     this.propGrid = this.buildSpatialGrid(boxes);
   }
 
@@ -152,6 +151,98 @@ export class CollisionSystem {
       }
     }
     return grid;
+  }
+
+  private getPropsSpatialGrid(
+    props: HarvestableProp[],
+  ): Map<string, HarvestableProp[]> {
+    const firstId = props.length > 0 ? props[0].id : '';
+    const lastId = props.length > 0 ? props[props.length - 1].id : '';
+    const sig = `${props.length}:${firstId}:${lastId}`;
+    if (props !== this.cachedPropsRef || sig !== this.cachedPropsSig) {
+      this.cachedPropsRef = props;
+      this.cachedPropsSig = sig;
+      const grid = new Map<string, HarvestableProp[]>();
+      for (let i = 0; i < props.length; i++) {
+        const prop = props[i];
+        const r = Math.max(0.25, prop.radius);
+        const minCx = Math.floor((prop.x - r) / SPATIAL_CELL_SIZE);
+        const maxCx = Math.floor((prop.x + r) / SPATIAL_CELL_SIZE);
+        const minCz = Math.floor((prop.z - r) / SPATIAL_CELL_SIZE);
+        const maxCz = Math.floor((prop.z + r) / SPATIAL_CELL_SIZE);
+        for (let cx = minCx; cx <= maxCx; cx++) {
+          for (let cz = minCz; cz <= maxCz; cz++) {
+            const key = hashCell(cx, cz);
+            let arr = grid.get(key);
+            if (!arr) {
+              arr = [];
+              grid.set(key, arr);
+            }
+            arr.push(prop);
+          }
+        }
+      }
+      this.cachedPropsGrid = grid;
+    }
+    return this.cachedPropsGrid;
+  }
+
+  private traverseRayGridCells(
+    originX: number,
+    originZ: number,
+    dx: number,
+    dz: number,
+    maxDist: number,
+    getMaxT: () => number,
+    visitCell: (cx: number, cz: number) => void,
+  ): void {
+    let cx = Math.floor(originX / SPATIAL_CELL_SIZE);
+    let cz = Math.floor(originZ / SPATIAL_CELL_SIZE);
+    visitCell(cx, cz);
+
+    const hasX = Math.abs(dx) > 1e-8;
+    const hasZ = Math.abs(dz) > 1e-8;
+    if (!hasX && !hasZ) return;
+
+    const stepX = dx > 0 ? 1 : -1;
+    const stepZ = dz > 0 ? 1 : -1;
+
+    let tMaxX = hasX
+      ? ((stepX > 0 ? cx + 1 : cx) * SPATIAL_CELL_SIZE - originX) / dx
+      : Infinity;
+    let tMaxZ = hasZ
+      ? ((stepZ > 0 ? cz + 1 : cz) * SPATIAL_CELL_SIZE - originZ) / dz
+      : Infinity;
+
+    if (tMaxX < 0) tMaxX = 0;
+    if (tMaxZ < 0) tMaxZ = 0;
+
+    const tDeltaX = hasX ? Math.abs(SPATIAL_CELL_SIZE / dx) : Infinity;
+    const tDeltaZ = hasZ ? Math.abs(SPATIAL_CELL_SIZE / dz) : Infinity;
+    const maxSteps = Math.max(256, Math.ceil((maxDist * 2) / SPATIAL_CELL_SIZE) + 8);
+
+    for (let step = 0; step < maxSteps; step++) {
+      const nextT = Math.min(tMaxX, tMaxZ);
+      if (nextT > getMaxT() + 1e-4) break;
+
+      if (Math.abs(tMaxX - tMaxZ) <= 1e-6) {
+        visitCell(cx + stepX, cz);
+        visitCell(cx, cz + stepZ);
+        cx += stepX;
+        cz += stepZ;
+        tMaxX += tDeltaX;
+        tMaxZ += tDeltaZ;
+        visitCell(cx, cz);
+      } else if (tMaxX < tMaxZ) {
+        cx += stepX;
+        tMaxX += tDeltaX;
+        visitCell(cx, cz);
+      } else {
+        cz += stepZ;
+        tMaxZ += tDeltaZ;
+        visitCell(cx, cz);
+      }
+    }
   }
 
   private queryGridBoxes(
@@ -976,66 +1067,158 @@ export class CollisionSystem {
       }
     };
 
-    // 1. Static colliders
-    for (let i = 0; i < this.staticColliders.length; i++) {
-      const b = this.staticColliders[i];
-      if (ignoreSet && ignoreSet.has(b.id)) continue;
-      testAABB(
-        b.minX,
-        b.minY,
-        b.minZ,
-        b.maxX,
-        b.maxY,
-        b.maxZ,
-        'static',
-        b.id,
-        b.material,
+    // 1 & 2. Static colliders + Props via 2D spatial grid DDA (O(cells) per raycast)
+    const checkProps = options?.checkProps !== false;
+    const propsArray = checkProps ? options?.props : undefined;
+    const usePropGrid = checkProps && !propsArray && this.propGrid.size > 0;
+    const propsSpatialGrid =
+      propsArray && propsArray.length > 24
+        ? this.getPropsSpatialGrid(propsArray)
+        : null;
+
+    if (this.staticGrid.size > 0 || usePropGrid || propsSpatialGrid) {
+      const seenStatic = new Set<ColliderBox>();
+      const seenPropBoxes = new Set<ColliderBox>();
+      const seenProps = new Set<HarvestableProp>();
+      const seenCells = new Set<string>();
+
+      this.traverseRayGridCells(
+        origin.x,
+        origin.z,
+        dx,
+        dz,
+        maxDist,
+        () => bestDist,
+        (cx, cz) => {
+          const key = hashCell(cx, cz);
+          if (seenCells.has(key)) return;
+          seenCells.add(key);
+
+          const sArr = this.staticGrid.get(key);
+          if (sArr) {
+            for (let i = 0; i < sArr.length; i++) {
+              const b = sArr[i];
+              if (seenStatic.has(b)) continue;
+              seenStatic.add(b);
+              if (ignoreSet && ignoreSet.has(b.id)) continue;
+              testAABB(
+                b.minX,
+                b.minY,
+                b.minZ,
+                b.maxX,
+                b.maxY,
+                b.maxZ,
+                'static',
+                b.id,
+                b.material,
+              );
+            }
+          }
+
+          if (usePropGrid) {
+            const pArr = this.propGrid.get(key);
+            if (pArr) {
+              for (let i = 0; i < pArr.length; i++) {
+                const b = pArr[i];
+                if (seenPropBoxes.has(b)) continue;
+                seenPropBoxes.add(b);
+                if (ignoreSet && ignoreSet.has(b.id)) continue;
+                testAABB(
+                  b.minX,
+                  b.minY,
+                  b.minZ,
+                  b.maxX,
+                  b.maxY,
+                  b.maxZ,
+                  'prop',
+                  b.id,
+                  b.material,
+                );
+              }
+            }
+          }
+
+          if (propsSpatialGrid) {
+            const prArr = propsSpatialGrid.get(key);
+            if (prArr) {
+              for (let i = 0; i < prArr.length; i++) {
+                const prop = prArr[i];
+                if (seenProps.has(prop)) continue;
+                seenProps.add(prop);
+                if (prop.destroyed) continue;
+                if (ignoreSet && ignoreSet.has(prop.id)) continue;
+                const r = Math.max(0.25, prop.radius);
+                testAABB(
+                  prop.x - r,
+                  prop.y,
+                  prop.z - r,
+                  prop.x + r,
+                  prop.y + prop.height,
+                  prop.z + r,
+                  'prop',
+                  prop.id,
+                  prop.material,
+                );
+              }
+            }
+          }
+        },
       );
     }
 
-    // 2. Props
-    if (options?.checkProps !== false) {
-      if (options?.props) {
-        const props = options.props;
-        for (let i = 0; i < props.length; i++) {
-          const prop = props[i];
-          if (prop.destroyed) continue;
-          if (ignoreSet && ignoreSet.has(prop.id)) continue;
-          const r = Math.max(0.25, prop.radius);
-          testAABB(
-            prop.x - r,
-            prop.y,
-            prop.z - r,
-            prop.x + r,
-            prop.y + prop.height,
-            prop.z + r,
-            'prop',
-            prop.id,
-            prop.material,
-          );
-        }
-      } else {
-        for (let i = 0; i < this.propColliders.length; i++) {
-          const b = this.propColliders[i];
-          if (ignoreSet && ignoreSet.has(b.id)) continue;
-          testAABB(
-            b.minX,
-            b.minY,
-            b.minZ,
-            b.maxX,
-            b.maxY,
-            b.maxZ,
-            'prop',
-            b.id,
-            b.material,
-          );
-        }
+    if (checkProps && propsArray && !propsSpatialGrid) {
+      for (let i = 0; i < propsArray.length; i++) {
+        const prop = propsArray[i];
+        if (prop.destroyed) continue;
+        if (ignoreSet && ignoreSet.has(prop.id)) continue;
+        const r = Math.max(0.25, prop.radius);
+        testAABB(
+          prop.x - r,
+          prop.y,
+          prop.z - r,
+          prop.x + r,
+          prop.y + prop.height,
+          prop.z + r,
+          'prop',
+          prop.id,
+          prop.material,
+        );
       }
     }
 
     // 3. BuildPieces
     if (options?.checkBuilds !== false) {
-      const pieces = this.getBuildPieces();
+      const allPieces = this.getBuildPieces();
+      let pieces: BuildPiece[];
+      if (allPieces.length > 24) {
+        pieces = [];
+        const seenBuilds = new Set<BuildPiece>();
+        const seenBuildCells = new Set<string>();
+        this.traverseRayGridCells(
+          origin.x,
+          origin.z,
+          dx,
+          dz,
+          maxDist,
+          () => bestDist,
+          (cx, cz) => {
+            const key = hashCell(cx, cz);
+            if (seenBuildCells.has(key)) return;
+            seenBuildCells.add(key);
+            const bArr = this.buildGrid.get(key);
+            if (!bArr) return;
+            for (let i = 0; i < bArr.length; i++) {
+              const bp = bArr[i];
+              if (!seenBuilds.has(bp)) {
+                seenBuilds.add(bp);
+                pieces.push(bp);
+              }
+            }
+          },
+        );
+      } else {
+        pieces = allPieces;
+      }
       for (let i = 0; i < pieces.length; i++) {
         const p = pieces[i];
         if (p.hp <= 0) continue;

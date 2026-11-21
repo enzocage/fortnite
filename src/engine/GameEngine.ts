@@ -17,6 +17,7 @@ import {
 } from '../core';
 import type {
   AmmoType,
+  AugmentId,
   BuildPieceType,
   CharacterRenderState,
   DamageEvent,
@@ -54,6 +55,7 @@ import {
   VFXManager,
 } from '../character';
 import {
+  AugmentManager,
   BuildingSystem,
   CollisionSystem,
   PlayerController,
@@ -103,6 +105,7 @@ export interface FortdropDebugAPI {
   spawnVehicleNearby(kind?: VehicleKind, distance?: number): boolean;
   setWeather(kind?: WeatherKind): WeatherKind;
   giveWave2Loadout(): void;
+  forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
 declare global {
@@ -144,6 +147,7 @@ export class GameEngine {
   private playerController: PlayerController;
   private botManager: BotManager;
   private questTracker: QuestTracker;
+  private augmentManager: AugmentManager;
 
   private playerRig: CharacterRig;
   private characterAnimator = new CharacterAnimator();
@@ -334,6 +338,7 @@ export class GameEngine {
 
     // 6. UI Manager (loads persisted config & settings)
     this.questTracker = new QuestTracker(this.eventBus);
+    this.augmentManager = new AugmentManager(this.eventBus);
     this.uiManager = new UIManager(this.uiRoot, this.eventBus, {
       onStartMatch: (cfg) => this.startMatch(cfg),
       onCosmeticChange: (cosmetics) => this.applyCosmetics(cosmetics),
@@ -349,6 +354,7 @@ export class GameEngine {
       onPreviewEmote: (emoteId) => this.previewLobbyEmote(emoteId),
       onSpectateNext: () => this.cycleSpectateTarget(1),
       onSpectateMatchSummary: () => this.toggleSpectatorSummary(),
+      onAugmentSelect: (idx) => this.playerController.selectAugmentChoice(idx),
     });
     this.uiManager.setTerrainMapCanvas(this.terrain.getMapTextureCanvas());
     this.uiManager.setWorldTraversal(
@@ -360,6 +366,10 @@ export class GameEngine {
     this.uiManager.setWorldStations(
       this.worldInteractables.getUpgradeBenches(),
       this.worldInteractables.getCampfires(),
+    );
+    this.uiManager.setWorldRiftsAndFlags(
+      this.worldInteractables.getRifts(),
+      this.worldInteractables.getCapturePoints(),
     );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
@@ -387,6 +397,7 @@ export class GameEngine {
       ...this.worldInteractables.getVaultColliders(),
       ...this.worldInteractables.getUpgradeBenchColliders(),
       ...this.worldInteractables.getSlurpBarrelColliders(),
+      ...this.worldInteractables.getExplosiveBarrelColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -401,6 +412,7 @@ export class GameEngine {
     );
     this.weaponSystem.setVehicleBridge(this.vehicleSystem);
     this.weaponSystem.setStationBridge(this.worldInteractables);
+    this.weaponSystem.setRiftCaptureBridge(this.worldInteractables);
     this.weaponSystem.setOnSlurpBarrelBroken((actorId) => {
       if (actorId === 'player') {
         this.questTracker.record('slurp_break', 1);
@@ -423,11 +435,16 @@ export class GameEngine {
     this.playerController.setVehicleBridge(this.vehicleSystem);
     this.playerController.setVaultBridge(this.worldInteractables);
     this.playerController.setStationBridge(this.worldInteractables);
+    this.playerController.setRiftCaptureBridge(this.worldInteractables);
+    this.playerController.setAugmentManager(this.augmentManager);
     this.playerController.setOnWeaponUpgraded(() => {
       this.questTracker.record('weapon_upgrade', 1);
     });
     this.playerController.setOnCampfireLit(() => {
       this.questTracker.record('campfire_ignite', 1);
+    });
+    this.playerController.setOnPoiCaptured((poiName, lootPos) => {
+      this.handlePoiCaptured(poiName, lootPos);
     });
     this.playerController.setVaultUnlockHandler((lootPos, _poiId) =>
       this.spawnVaultLootBurst(lootPos),
@@ -436,6 +453,7 @@ export class GameEngine {
     // 9. Player Character Rig
     this.playerRig = this.createCharacterRigFromConfig(this.lobbyConfig);
     this.playerRig.setWeaponWrap(this.lobbyConfig.weaponWrapId ?? 'factory_matte');
+    this.playerRig.setContrail(this.lobbyConfig.contrailId ?? 'wind_stream');
     this.scene.add(this.playerRig.getGroup());
 
     // 10. AI Bot Manager
@@ -521,10 +539,41 @@ export class GameEngine {
             },
           );
         }
+        if (search.get('qaCapture') === '1') {
+          const cps = this.worldInteractables.getCapturePoints();
+          const cp = cps.find((c) => c.poiId === qaPoi) ?? cps[0];
+          if (cp) {
+            const cx = cp.x + 1.5;
+            const cz = cp.z + 1.5;
+            const cy = this.terrain.getHeightAt(cx, cz) + 0.3;
+            this.playerController.teleport({ x: cx, y: cy, z: cz });
+          }
+        } else if (search.get('qaRift') === '1') {
+          const rifts = this.worldInteractables.getRifts();
+          const r = rifts.find((rf) => rf.poiId === qaPoi && rf.active) ?? rifts.find((rf) => rf.active);
+          if (r) {
+            const rx = r.x + 3.1;
+            const rz = r.z + 3.1;
+            const ry = this.terrain.getHeightAt(rx, rz) + 0.3;
+            this.playerController.teleport({ x: rx, y: ry, z: rz });
+          }
+        }
+        if (search.get('qaAugment') === '1') {
+          this.augmentManager.forceOffer();
+        }
+        if (search.get('qaPing') === '1') {
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const px = p.x + Math.sin(yaw) * 18;
+          const pz = p.z + Math.cos(yaw) * 18;
+          const py = this.terrain.getHeightAt(px, pz) + 0.2;
+          this.playerController.placeTacticalPing({ x: px, y: py, z: pz });
+        }
         const qaWeather = search.get('qaWeather') as WeatherKind | null;
         if (qaWeather) {
           this.environmentFX.setWeather(qaWeather);
         }
+        this.pushHUDState(false);
       }
     }
     this.startLoop();
@@ -733,6 +782,14 @@ export class GameEngine {
       damageSlurpBarrel: (id, dmg) => this.worldInteractables.damageSlurpBarrel(id, dmg),
       getCampfires: () => this.worldInteractables.getCampfires(),
       igniteCampfire: (id) => this.worldInteractables.igniteCampfire(id),
+      getRifts: () => this.worldInteractables.getRifts(),
+      triggerRift: (id) => this.worldInteractables.triggerRift(id),
+      getCapturePoints: () => this.worldInteractables.getCapturePoints(),
+      advanceCapturePoint: (id, actorId, actorName, dt) =>
+        this.worldInteractables.advanceCapturePoint(id, actorId, actorName, dt),
+      getExplosiveBarrels: () => this.worldInteractables.getExplosiveBarrels(),
+      damageExplosiveBarrel: (id, dmg) =>
+        this.worldInteractables.damageExplosiveBarrel(id, dmg),
       eventBus: this.eventBus,
     };
   }
@@ -1011,12 +1068,14 @@ export class GameEngine {
     this.audioEngine.setPaused(paused);
     if (paused) {
       this.audioEngine.updateVehicleEngine(false, 0, false);
+      this.audioEngine.updateWindRush(false, 0);
     }
   }
 
   private applyCosmetics(
     cosmetics: Pick<LobbyConfig, 'skinId' | 'pickaxeId' | 'gliderId' | 'selectedEmote'> & {
       weaponWrapId?: string;
+      contrailId?: string;
     },
   ): void {
     this.lobbyConfig = { ...this.lobbyConfig, ...cosmetics };
@@ -1028,6 +1087,7 @@ export class GameEngine {
     this.playerRig.setPickaxe(pickaxe);
     this.playerRig.setGlider(glider);
     this.playerRig.setWeaponWrap(this.lobbyConfig.weaponWrapId ?? 'factory_matte');
+    this.playerRig.setContrail(this.lobbyConfig.contrailId ?? 'wind_stream');
     this.playerController.setSelectedEmote(cosmetics.selectedEmote);
   }
 
@@ -1127,6 +1187,7 @@ export class GameEngine {
     this.paused = false;
     this.audioEngine.setPaused(false);
     this.audioEngine.updateVehicleEngine(false, 0, false);
+    this.audioEngine.updateWindRush(false, 0);
     this.phase = 'lobby';
     this.victoryPendingSummary = false;
     this.matchSummaryShown = false;
@@ -1176,6 +1237,7 @@ export class GameEngine {
     this.paused = false;
     this.audioEngine.setPaused(false);
     this.audioEngine.updateVehicleEngine(false, 0, false);
+    this.audioEngine.updateWindRush(false, 0);
     this.lobbyActiveEmote = null;
     this.lobbyEmoteTimer = 0;
     this.activeEmoteMusic = null;
@@ -1218,6 +1280,10 @@ export class GameEngine {
       this.worldInteractables.getUpgradeBenches(),
       this.worldInteractables.getCampfires(),
     );
+    this.uiManager.setWorldRiftsAndFlags(
+      this.worldInteractables.getRifts(),
+      this.worldInteractables.getCapturePoints(),
+    );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
       this.worldBuildResult.floorLootSpots,
@@ -1229,6 +1295,7 @@ export class GameEngine {
       ...this.worldInteractables.getVaultColliders(),
       ...this.worldInteractables.getUpgradeBenchColliders(),
       ...this.worldInteractables.getSlurpBarrelColliders(),
+      ...this.worldInteractables.getExplosiveBarrelColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -1270,8 +1337,9 @@ export class GameEngine {
     this.createBotVisuals();
     this.totalPlayers = config.botCount + 1;
 
-    // Reset player controller
+    // Reset player controller & augments
     this.playerController.resetForMatch(this.busStart, config.playerName, this.gameMode);
+    this.augmentManager.reset(this.matchSeed, this.gameMode);
     this.playerController.setSelectedEmote(config.selectedEmote);
     this.phase = 'bus';
     this.uiManager.setPhase('bus');
@@ -1399,6 +1467,7 @@ export class GameEngine {
       ...this.worldInteractables.getVaultColliders(),
       ...this.worldInteractables.getUpgradeBenchColliders(),
       ...this.worldInteractables.getSlurpBarrelColliders(),
+      ...this.worldInteractables.getExplosiveBarrelColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
     this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
@@ -1406,6 +1475,10 @@ export class GameEngine {
     this.uiManager.setWorldStations(
       this.worldInteractables.getUpgradeBenches(),
       this.worldInteractables.getCampfires(),
+    );
+    this.uiManager.setWorldRiftsAndFlags(
+      this.worldInteractables.getRifts(),
+      this.worldInteractables.getCapturePoints(),
     );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
@@ -1446,6 +1519,34 @@ export class GameEngine {
         tone: 'storm',
         durationMs: 2800,
       });
+      if (this.augmentManager.hasAugment('storm_mark')) {
+        const pPos = this.playerController.getPosition();
+        let marked = 0;
+        for (const bot of this.botManager.getAliveBots()) {
+          if (bot.state === 'bus') continue;
+          if (dist2D(pPos.x, pPos.z, bot.position.x, bot.position.z) <= 60) {
+            this.audioBlips.push({
+              id: `storm_mark_${this.blipSeq++}`,
+              x: bot.position.x,
+              z: bot.position.z,
+              kind: 'bot',
+              age: 0,
+              maxAge: 6.5,
+            });
+            marked += 1;
+          }
+        }
+        if (this.audioBlips.length > 48) {
+          this.audioBlips.splice(0, this.audioBlips.length - 48);
+        }
+        this.eventBus.emit('ui:banner', {
+          id: `storm_mark_${Date.now()}`,
+          title: 'STORM FORECAST SCAN',
+          subtitle: marked > 0 ? `${marked} OPPONENT(S) MARKED WITHIN 60M` : 'AREA CLEAR WITHIN 60M',
+          tone: 'info',
+          durationMs: 2600,
+        });
+      }
     }
 
     // 4. Player update + character rig sync
@@ -1464,6 +1565,13 @@ export class GameEngine {
 
     const pRender = this.playerController.getCharacterRenderState();
     this.syncPlayerRig(pRender, dt);
+
+    const windActive =
+      currPlayerPhase !== 'bus' &&
+      !this.paused &&
+      (pRender.animState === 'skydive' || (!pRender.grounded && (pRender.velocityY ?? 0) < -9));
+    const fallSpeed = Math.abs(pRender.velocityY ?? 0);
+    this.audioEngine.updateWindRush(windActive, fallSpeed);
 
     // Track QuestTracker chest opening & hover vehicle travel distance + continuous engine audio
     const pStatsNow = this.playerController.getStats();
@@ -1682,6 +1790,7 @@ export class GameEngine {
       animState: this.lobbyActiveEmote ? 'emote' : 'idle',
       weaponId: 'pickaxe',
       weaponWrapId: this.lobbyConfig.weaponWrapId ?? 'factory_matte',
+      contrailId: this.lobbyConfig.contrailId ?? 'wind_stream',
       isAiming: false,
       isFiring: false,
       isBuilding: false,
@@ -1719,6 +1828,7 @@ export class GameEngine {
 
     this.playerRig.equipWeapon(state.weaponId, state.isBuilding);
     this.playerRig.setWeaponWrap(state.weaponWrapId ?? this.lobbyConfig.weaponWrapId ?? 'factory_matte');
+    this.playerRig.setContrail(state.contrailId ?? this.lobbyConfig.contrailId ?? 'wind_stream');
     const targetGlider = state.animState === 'glide' ? 1 : 0;
     this.playerGliderFactor = lerp(
       this.playerGliderFactor,
@@ -1730,14 +1840,13 @@ export class GameEngine {
       this.playerGliderFactor,
     );
     const groundY = this.terrain.getHeightAt(state.position.x, state.position.z);
-    this.playerRig.updateFromState(
-      {
-        ...state,
-        weaponWrapId: state.weaponWrapId ?? this.lobbyConfig.weaponWrapId ?? 'factory_matte',
-      },
-      groundY,
-    );
-    this.characterAnimator.update(this.playerRig, state, dt);
+    const syncedState: CharacterRenderState = {
+      ...state,
+      weaponWrapId: state.weaponWrapId ?? this.lobbyConfig.weaponWrapId ?? 'factory_matte',
+      contrailId: state.contrailId ?? this.lobbyConfig.contrailId ?? 'wind_stream',
+    };
+    this.playerRig.updateFromState(syncedState, groundY);
+    this.characterAnimator.update(this.playerRig, syncedState, dt);
 
     const muzzle = this.playerRig.getMuzzleWorldPosition();
     this.playerController.setMuzzleWorldPosition({
@@ -1977,7 +2086,9 @@ export class GameEngine {
       eliminatedBy,
       gameMode: this.gameMode,
       questsCompleted: this.questTracker.getCompletedCount(),
-      bonusXp: this.questTracker.getCompletedBonusXp(),
+      bonusXp: this.questTracker.getCompletedBonusXp() + (stats.poisCaptured ?? 0) * 300,
+      activeAugments: this.augmentManager.getActiveAugments(),
+      poisCaptured: stats.poisCaptured ?? 0,
     };
     this.lastMatchSummary = summary;
     recordMatchCareerStats(summary);
@@ -2008,6 +2119,66 @@ export class GameEngine {
       this.uiManager.showMatchSummary(this.lastMatchSummary);
     } else {
       this.uiManager.hideMatchSummary();
+    }
+  }
+
+  private handlePoiCaptured(poiName: string, lootPos?: Vec3Like): void {
+    this.eventBus.emit('ui:banner', {
+      id: `poi_cap_${Date.now()}`,
+      title: `${poiName.toUpperCase()} CAPTURED!`,
+      subtitle: 'LEGENDARY LOOT DROP, RADAR SCAN & +300 BONUS XP',
+      tone: 'victory',
+      durationMs: 3600,
+    });
+    const pPos = this.playerController.getPosition();
+    for (const bot of this.botManager.getAliveBots()) {
+      if (bot.state === 'bus') continue;
+      if (dist2D(pPos.x, pPos.z, bot.position.x, bot.position.z) <= 65) {
+        this.audioBlips.push({
+          id: `cap_scan_${this.blipSeq++}`,
+          x: bot.position.x,
+          z: bot.position.z,
+          kind: 'bot',
+          age: 0,
+          maxAge: 5.5,
+        });
+      }
+    }
+    if (lootPos) {
+      this.spawnFlagLootBurst(lootPos);
+    }
+  }
+
+  private spawnFlagLootBurst(lootPos: Vec3Like): void {
+    const flagRewards: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic' | 'rare'; stack: number }> = [
+      { id: 'heavy_shotgun', rarity: 'legendary', stack: 1 },
+      { id: 'ar', rarity: 'legendary', stack: 1 },
+      { id: 'shield_potion', rarity: 'rare', stack: 2 },
+      { id: 'chug_splash', rarity: 'rare', stack: 2 },
+    ];
+    flagRewards.forEach((entry, idx) => {
+      const a = (idx / flagRewards.length) * Math.PI * 2;
+      const def = WEAPONS[entry.id];
+      this.propsAndLoot.spawnLootDrop(
+        { x: lootPos.x, y: lootPos.y + 0.6, z: lootPos.z },
+        {
+          item: {
+            uid: `flag_drop_${Date.now()}_${idx}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          },
+        },
+        { x: Math.cos(a) * 2.1, y: 4.1, z: Math.sin(a) * 2.1 },
+      );
+    });
+    for (const mat of ['wood', 'brick', 'metal'] as MaterialType[]) {
+      this.propsAndLoot.spawnLootDrop(
+        { x: lootPos.x, y: lootPos.y + 0.6, z: lootPos.z },
+        { materials: { type: mat, amount: 100 } },
+        { x: (Math.random() - 0.5) * 2.6, y: 3.8, z: (Math.random() - 0.5) * 2.6 },
+      );
     }
   }
 
@@ -2191,9 +2362,30 @@ export class GameEngine {
       activeQuests: this.questTracker.getQuests(),
       visualSoundCues: this.computeVisualSoundCues(snap.playerPos),
       nearCampfireHealing: snap.nearCampfireHealing ?? false,
+      activeAugments: snap.activeAugments ?? this.augmentManager.getActiveAugments(),
+      pendingAugmentChoices: snap.pendingAugmentChoices ?? this.augmentManager.getPendingChoices(),
+      captureStatus: snap.captureStatus ?? null,
+      tacticalPing: this.projectTacticalPing(snap.tacticalPing),
     };
 
     this.uiManager.updateHUD(hudState);
+  }
+
+  private projectTacticalPing(
+    ping: ReturnType<PlayerController['getHudSnapshot']>['tacticalPing'],
+  ): HUDState['tacticalPing'] {
+    if (!ping) return null;
+    this.projVec.set(ping.x, ping.y + 1.25, ping.z);
+    this.projVec.project(this.camera);
+    const visible = this.projVec.z >= -1 && this.projVec.z <= 1;
+    const w = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const h = typeof window !== 'undefined' ? window.innerHeight : 720;
+    return {
+      ...ping,
+      screenX: (this.projVec.x * 0.5 + 0.5) * w,
+      screenY: (-this.projVec.y * 0.5 + 0.5) * h,
+      visible,
+    };
   }
 
   private computeVisualSoundCues(playerPos: Vec3Like): VisualSoundCue[] {
@@ -2541,6 +2733,9 @@ export class GameEngine {
           upgradeBenches: engine.worldInteractables.getUpgradeBenches().length,
           campfires: engine.worldInteractables.getCampfires().length,
           slurpBarrels: engine.worldInteractables.getSlurpBarrels().length,
+          rifts: engine.worldInteractables.getRifts().length,
+          capturePoints: engine.worldInteractables.getCapturePoints().length,
+          explosiveBarrels: engine.worldInteractables.getExplosiveBarrels().length,
           vehicles: engine.vehicleSystem.getVehicles().length,
           vaults: engine.worldInteractables.getVaults().length,
           fps: Math.round(engine.fps),
@@ -2635,6 +2830,11 @@ export class GameEngine {
         inv.setActiveSlot(1);
         engine.pushHUDState(false);
       },
+      forceAugmentOffer() {
+        const offer = engine.augmentManager.forceOffer();
+        engine.pushHUDState(false);
+        return offer;
+      },
     };
   }
 
@@ -2673,6 +2873,7 @@ export class GameEngine {
     this.stormSystem.dispose();
     this.terrain.dispose();
     this.audioEngine.updateVehicleEngine(false, 0, false);
+    this.audioEngine.updateWindRush(false, 0);
     this.audioEngine.dispose();
     this.uiManager.dispose();
 

@@ -1,9 +1,11 @@
 import { POIS, WORLD_SIZE } from '../core';
 import type {
   CampfireEntity,
+  CapturePointEntity,
   GameSettings,
   HUDState,
   LaunchPadEntity,
+  RiftEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
@@ -18,7 +20,9 @@ import {
 } from './UIHelpers';
 import {
   getCampfireIconSvg,
+  getCaptureFlagIconSvg,
   getCrownSvg,
+  getSkyRiftIconSvg,
   getUpgradeBenchIconSvg,
   getVaultLockSvg,
   getVehicleIconSvg,
@@ -47,6 +51,8 @@ export class FullMapOverlay {
   private vaults: VaultEntity[] = [];
   private upgradeBenches: UpgradeBenchEntity[] = [];
   private campfires: CampfireEntity[] = [];
+  private rifts: RiftEntity[] = [];
+  private capturePoints: CapturePointEntity[] = [];
 
   private open = false;
   private lastState: HUDState | null = null;
@@ -166,6 +172,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch campfire">${getCampfireIconSvg(true)}</span>
         <span>CAMPFIRE</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch rift">${getSkyRiftIconSvg(true)}</span>
+        <span>SKY RIFT</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch flag">${getCaptureFlagIconSvg(true)}</span>
+        <span>CAPTURE FLAG</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -219,6 +233,17 @@ export class FullMapOverlay {
   ): void {
     this.upgradeBenches = benches;
     this.campfires = campfires;
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldRiftsAndFlags(
+    rifts: RiftEntity[],
+    capturePoints: CapturePointEntity[],
+  ): void {
+    this.rifts = rifts;
+    this.capturePoints = capturePoints;
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -433,8 +458,7 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
-    // 10 POI Labels + Named POI Boss Zones
-    ctx.save();
+    // Named POI Boss Zone dashed perimeters (underneath markers & text)
     for (const poi of POIS) {
       const p = toPx(poi.x, poi.z);
       const bossName = BOSS_POI_LABELS[poi.id];
@@ -452,33 +476,8 @@ export class FullMapOverlay {
       }
     }
 
-    ctx.font = '800 13px "Barlow Condensed", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (const poi of POIS) {
-      const p = toPx(poi.x, poi.z);
-      const bossName = BOSS_POI_LABELS[poi.id];
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = 'rgba(6, 12, 26, 0.92)';
-      ctx.strokeText(poi.name, p.x, p.y);
-      ctx.fillStyle = bossName ? '#fde047' : '#ffffff';
-      ctx.fillText(poi.name, p.x, p.y);
-
-      if (bossName) {
-        ctx.save();
-        ctx.font = '800 10px "Barlow Condensed", sans-serif';
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(6, 12, 26, 0.95)';
-        const tag = `★ BOSS: ${bossName}`;
-        ctx.strokeText(tag, p.x, p.y + 13);
-        ctx.fillStyle = '#ffd000';
-        ctx.fillText(tag, p.x, p.y + 13);
-        ctx.restore();
-      }
-    }
-    ctx.restore();
-
-    // Upgrade Benches (cyan anvil/wrench marker) & Campfires (orange flame / dim stone ring)
+    // Stationary station markers drawn BEFORE POI text labels so no icons cross over POI names:
+    // Upgrade Benches (cyan anvil/wrench marker)
     if (this.upgradeBenches.length > 0) {
       ctx.save();
       for (const bench of this.upgradeBenches) {
@@ -516,6 +515,7 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
+    // Campfires (orange flame / dim stone ring)
     if (this.campfires.length > 0) {
       ctx.save();
       for (const campfire of this.campfires) {
@@ -574,13 +574,167 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
-    // Interactive Boss Vaults (locked gold padlock vs unlocked green/gold padlock)
+    // Sky Rifts (glowing cyan portal star)
+    if (this.rifts.length > 0) {
+      ctx.save();
+      for (const rift of this.rifts) {
+        const rp = toPx(rift.x, rift.z);
+        ctx.save();
+        ctx.translate(rp.x, rp.y);
+
+        if (rift.active) {
+          const glow = ctx.createRadialGradient(0, 0, 1, 0, 0, 12);
+          glow.addColorStop(0, 'rgba(34, 211, 238, 0.72)');
+          glow.addColorStop(0.6, 'rgba(168, 85, 247, 0.35)');
+          glow.addColorStop(1, 'rgba(34, 211, 238, 0)');
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(0, 0, 12, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(8, 24, 52, 0.9)';
+          ctx.fill();
+          ctx.strokeStyle = '#67e8f9';
+          ctx.lineWidth = 1.6;
+          ctx.stroke();
+
+          ctx.beginPath();
+          const outerR = 6.2;
+          const innerR = 2.0;
+          for (let i = 0; i < 8; i++) {
+            const angle = (i * Math.PI) / 4 - Math.PI / 2;
+            const r = i % 2 === 0 ? outerR : innerR;
+            const sx = Math.cos(angle) * r;
+            const sy = Math.sin(angle) * r;
+            if (i === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
+          }
+          ctx.closePath();
+          ctx.fillStyle = '#e0f2fe';
+          ctx.strokeStyle = '#22d3ee';
+          ctx.lineWidth = 1.2;
+          ctx.fill();
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+          ctx.fill();
+          ctx.setLineDash([2.5, 2.5]);
+          ctx.strokeStyle = '#64748b';
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.beginPath();
+          ctx.moveTo(0, -4);
+          ctx.lineTo(1.5, 0);
+          ctx.lineTo(0, 4);
+          ctx.lineTo(-1.5, 0);
+          ctx.closePath();
+          ctx.fillStyle = '#94a3b8';
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // Capture Flags (pennant icon, gold when captured)
+    if (this.capturePoints.length > 0) {
+      ctx.save();
+      for (const cp of this.capturePoints) {
+        const fp = toPx(cp.x, cp.z);
+        ctx.save();
+        ctx.translate(fp.x, fp.y);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 7.8, 0, Math.PI * 2);
+        ctx.fillStyle = cp.captured
+          ? 'rgba(120, 53, 15, 0.92)'
+          : 'rgba(10, 24, 52, 0.9)';
+        ctx.fill();
+        ctx.strokeStyle = cp.captured ? '#ffd000' : '#38bdf8';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        if (!cp.captured && cp.progress > 0) {
+          const clamped = Math.max(0, Math.min(1, cp.progress));
+          ctx.beginPath();
+          ctx.arc(
+            0,
+            0,
+            7.8,
+            -Math.PI / 2,
+            -Math.PI / 2 + Math.PI * 2 * clamped,
+          );
+          ctx.strokeStyle = '#ffd000';
+          ctx.lineWidth = 2.2;
+          ctx.stroke();
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(-3.2, 5.0);
+        ctx.lineTo(-3.2, -5.0);
+        ctx.strokeStyle = cp.captured ? '#fef08a' : '#e2e8f0';
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(-2.6, -4.8);
+        ctx.lineTo(5.4, -1.8);
+        ctx.lineTo(-2.6, 1.2);
+        ctx.closePath();
+        ctx.fillStyle = cp.captured ? '#ffd000' : '#38bdf8';
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.0;
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // Interactive Boss Vaults (offset cleanly above POI center so zero icons cross over POI names)
     if (this.vaults.length > 0) {
       ctx.save();
       for (const vault of this.vaults) {
         const vp = toPx(vault.x, vault.z);
+
+        // Anchor dot at true vault coordinate
         ctx.save();
         ctx.translate(vp.x, vp.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = vault.unlocked ? '#34eb5e' : '#ffd000';
+        ctx.fill();
+        ctx.restore();
+
+        const poi =
+          POIS.find((p) => p.id === vault.poiId) ??
+          POIS.find((p) => {
+            const pp = toPx(p.x, p.z);
+            return Math.abs(vp.x - pp.x) < 48 && Math.abs(vp.y - pp.y) < 26;
+          });
+        let badgeX = vp.x;
+        let badgeY = vp.y;
+        if (poi) {
+          const pp = toPx(poi.x, poi.z);
+          if (
+            Math.abs(vp.x - pp.x) < 48 &&
+            vp.y >= pp.y - 16 &&
+            vp.y <= pp.y + 24
+          ) {
+            badgeY = pp.y - 17;
+          }
+        }
+
+        ctx.save();
+        ctx.translate(badgeX, badgeY);
 
         // Backdrop badge
         ctx.beginPath();
@@ -621,6 +775,34 @@ export class FullMapOverlay {
       }
       ctx.restore();
     }
+
+    // 10 POI Text Labels + Boss Tags (rendered AFTER stationary markers for crisp readability)
+    ctx.save();
+    ctx.font = '800 13px "Barlow Condensed", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const poi of POIS) {
+      const p = toPx(poi.x, poi.z);
+      const bossName = BOSS_POI_LABELS[poi.id];
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(6, 12, 26, 0.92)';
+      ctx.strokeText(poi.name, p.x, p.y);
+      ctx.fillStyle = bossName ? '#fde047' : '#ffffff';
+      ctx.fillText(poi.name, p.x, p.y);
+
+      if (bossName) {
+        ctx.save();
+        ctx.font = '800 10px "Barlow Condensed", sans-serif';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(6, 12, 26, 0.95)';
+        const tag = `★ BOSS: ${bossName}`;
+        ctx.strokeText(tag, p.x, p.y + 13);
+        ctx.fillStyle = '#ffd000';
+        ctx.fillText(tag, p.x, p.y + 13);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
 
     // Supply drops / active blips
     for (const blip of state.audioBlips) {

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type {
+  AugmentId,
   BiomeType,
   CampfireEntity,
+  CapturePointEntity,
   ChestEntity,
+  ColliderBox,
   DamageEvent,
+  ExplosiveBarrelEntity,
   HarvestableProp,
   ItemInstance,
   LaunchPadEntity,
@@ -13,6 +17,7 @@ import type {
   MatchQuest,
   POIDef,
   Rarity,
+  RiftEntity,
   SlurpBarrelEntity,
   SoundEventId,
   SupplyDrop,
@@ -24,6 +29,7 @@ import type {
   ZiplineEntity,
 } from '../../types';
 import {
+  AUGMENTS,
   DEFAULT_SETTINGS,
   EventBus,
   GLIDER_FORCE_HEIGHT,
@@ -40,9 +46,13 @@ import {
 } from '../../core';
 import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from '../../world';
 import {
+  AUGMENT_INTERVAL_BLITZ,
+  AUGMENT_INTERVAL_DEFAULT,
+  AugmentManager,
   BuildingSystem,
   CollisionSystem,
   InventorySystem,
+  MAX_ACTIVE_AUGMENTS,
   PlayerController,
   QuestTracker,
   ROOF_HEIGHT,
@@ -55,6 +65,7 @@ import {
   type PropsInteractionBridge,
   type VaultBridge,
   type VehicleBridge,
+  type WorldRiftCaptureBridge,
   type WorldStationBridge,
 } from '../index';
 
@@ -2656,5 +2667,872 @@ describe('Wave 3 Gameplay Systems', () => {
     trackerA.record(kind, 10);
     expect(completedEvents.length).toBe(1);
     expect(trackerA.getCompletedCount()).toBe(1);
+  });
+});
+
+describe('Wave 4 Gameplay Systems', () => {
+  function setupWave4Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'Wave4Tester');
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockRiftCaptureBridge(init?: {
+    rifts?: RiftEntity[];
+    capturePoints?: CapturePointEntity[];
+    explosiveBarrels?: ExplosiveBarrelEntity[];
+  }): WorldRiftCaptureBridge & {
+    rifts: RiftEntity[];
+    capturePoints: CapturePointEntity[];
+    explosiveBarrels: ExplosiveBarrelEntity[];
+  } {
+    const rifts = init?.rifts ?? [];
+    const capturePoints = init?.capturePoints ?? [];
+    const explosiveBarrels = init?.explosiveBarrels ?? [];
+    return {
+      rifts,
+      capturePoints,
+      explosiveBarrels,
+      getRifts: () => rifts,
+      triggerRift: (id) => {
+        const r = rifts.find((item) => item.id === id);
+        if (!r || !r.active) return null;
+        r.openRemainingSec = 8;
+        return { skyPos: { x: r.x, y: r.y + 92, z: r.z } };
+      },
+      getCapturePoints: () => capturePoints,
+      advanceCapturePoint: (id, actorId, actorName, dt) => {
+        const cp = capturePoints.find((item) => item.id === id)!;
+        if (!cp.captured) {
+          cp.progress = Math.min(1, cp.progress + dt / 12);
+          if (cp.progress >= 1 - 1e-6) {
+            cp.progress = 1;
+            cp.captured = true;
+            cp.ownerId = actorId;
+            cp.ownerName = actorName;
+            return {
+              capturedNow: true,
+              progress: 1,
+              lootPos: { x: cp.x, y: cp.y + 0.6, z: cp.z },
+              poiName: cp.poiName,
+            };
+          }
+        }
+        return {
+          capturedNow: false,
+          progress: cp.progress,
+          poiName: cp.poiName,
+        };
+      },
+      getExplosiveBarrels: () => explosiveBarrels,
+      damageExplosiveBarrel: (id, dmg) => {
+        const b = explosiveBarrels.find((item) => item.id === id);
+        if (!b || b.exploded || b.hp <= 0) return null;
+        b.hp = Math.max(0, b.hp - dmg);
+        if (b.hp <= 0) b.exploded = true;
+        return {
+          exploded: b.exploded,
+          position: { x: b.x, y: b.y, z: b.z },
+          blastRadius: b.blastRadius,
+          blastDamage: b.blastDamage,
+        };
+      },
+    };
+  }
+
+  function acquireSpecificAugment(
+    player: PlayerController,
+    targetId: AugmentId,
+  ): void {
+    const mgr = player.getAugmentManager();
+    for (let seed = 1; seed <= 100; seed++) {
+      mgr.reset(seed, 'solo');
+      const pair = mgr.forceOffer();
+      if (pair && pair.includes(targetId)) {
+        const idx = pair[0] === targetId ? 0 : 1;
+        player.pressKey(idx === 0 ? 'Digit7' : 'Digit8');
+        expect(mgr.hasAugment(targetId)).toBe(true);
+        return;
+      }
+    }
+    throw new Error(`Could not find augment ${targetId} in seeded offers`);
+  }
+
+  it('manages deterministic AugmentManager offer cadence (solo 55s vs blitz 30s), selection, and max 3 cap', () => {
+    const bus = new EventBus();
+    const sounds: SoundEventId[] = [];
+    const activateVfx: Array<{ position: Vec3Like; color: string }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:augment_activate', (ev) => activateVfx.push(ev));
+
+    const mgrA = new AugmentManager(bus);
+    const mgrB = new AugmentManager(new EventBus());
+    mgrA.reset(1234, 'solo');
+    mgrB.reset(1234, 'solo');
+
+    // Solo cadence = 55s
+    expect(AUGMENT_INTERVAL_DEFAULT).toBe(55);
+    expect(AUGMENT_INTERVAL_BLITZ).toBe(30);
+    expect(MAX_ACTIVE_AUGMENTS).toBe(3);
+
+    mgrA.update(54);
+    expect(mgrA.getPendingChoices()).toBeNull();
+    mgrA.update(1);
+    const soloFirst = mgrA.getPendingChoices();
+    expect(soloFirst).not.toBeNull();
+    expect(soloFirst![0]).not.toBe(soloFirst![1]);
+    expect(sounds).toContain('augment_ready');
+
+    // Deterministic matching seed/mode
+    mgrB.update(55);
+    expect(mgrB.getPendingChoices()).toEqual(soloFirst);
+
+    // Selection with position emits augment_select + vfx:augment_activate
+    const picked1 = mgrA.selectChoice(0, { x: 10, y: 2, z: -5 });
+    expect(picked1).toBe(soloFirst![0]);
+    expect(mgrA.hasAugment(picked1!)).toBe(true);
+    expect(mgrA.getPendingChoices()).toBeNull();
+    expect(mgrA.getActiveAugments()).toEqual([picked1]);
+    expect(sounds).toContain('augment_select');
+    expect(activateVfx.length).toBe(1);
+    expect(activateVfx[0].color).toBe(
+      AUGMENTS.find((a) => a.id === picked1)!.accentColor,
+    );
+
+    // Blitz cadence = 30s, max 3 augments cap
+    mgrA.reset(5678, 'blitz');
+    mgrA.update(29);
+    expect(mgrA.getPendingChoices()).toBeNull();
+    mgrA.update(1);
+    const blitzOffer1 = mgrA.getPendingChoices()!;
+    expect(blitzOffer1).not.toBeNull();
+    const b1 = mgrA.selectChoice(1)!;
+
+    mgrA.update(30, 60);
+    const blitzOffer2 = mgrA.getPendingChoices()!;
+    expect(blitzOffer2).not.toBeNull();
+    expect(blitzOffer2).not.toContain(b1);
+    const b2 = mgrA.selectChoice(0)!;
+
+    mgrA.update(30, 90);
+    const blitzOffer3 = mgrA.getPendingChoices()!;
+    expect(blitzOffer3).not.toBeNull();
+    expect(blitzOffer3).not.toContain(b1);
+    expect(blitzOffer3).not.toContain(b2);
+    mgrA.selectChoice(1);
+
+    expect(mgrA.getActiveAugments().length).toBe(3);
+
+    // 4th offer is blocked by MAX_ACTIVE_AUGMENTS = 3
+    mgrA.update(120, 210);
+    expect(mgrA.getPendingChoices()).toBeNull();
+    expect(mgrA.forceOffer()).toBeNull();
+    expect(mgrA.selectChoice(0)).toBeNull();
+  });
+
+  it('applies Reality Augment effects: parkour_boost, light_fingers, siphon_master, aerialist, demolisher, first_assault, and mechanic_overdrive', () => {
+    // 1. light_fingers (-30% reload time), siphon_master (+75), and aerialist (>6m glider redeploy)
+    {
+      const { bus, weapons, player } = setupWave4Harness();
+      const sounds: SoundEventId[] = [];
+      const siphonAmounts: number[] = [];
+      bus.on('sound:play', (ev) => sounds.push(ev.id));
+      bus.on('combat:siphon', (ev) => siphonAmounts.push(ev.amount));
+
+      player.teleport({ x: 0, y: 0, z: 0 });
+      player.getInventory().addAmmo('medium', 90);
+      player.getInventory().addItem({
+        uid: 'ar_aug',
+        weaponId: 'ar',
+        rarity: 'rare',
+        magAmmo: 10,
+        stackCount: 1,
+      });
+      player.getInventory().setActiveSlot(1);
+
+      acquireSpecificAugment(player, 'light_fingers');
+      expect(player.getHudSnapshot().activeAugments).toContain('light_fingers');
+
+      // AR base reloadTime = 2.1s -> with light_fingers = 1.47s (completes after 1.5s)
+      player.pressKey('KeyR');
+      expect(player.getHudSnapshot().reloadProgress).not.toBeNull();
+      for (let i = 0; i < 31; i++) {
+        player.update(0.05, (i + 1) * 0.05);
+      }
+      expect(player.getHudSnapshot().reloadProgress).toBeNull();
+      expect(player.getInventory().getSlot(1)?.magAmmo).toBe(WEAPONS.ar.magSize);
+
+      // Siphon Master: +75 health/shield on elim instead of +50
+      acquireSpecificAugment(player, 'siphon_master');
+      player.applyDamage({
+        targetId: 'player',
+        attackerId: 'bot_dmg',
+        attackerName: 'Bot',
+        weaponId: 'ar',
+        rarity: 'common',
+        damage: 60,
+        hpDamage: 60,
+        shieldDamage: 0,
+        isHeadshot: false,
+        isElimination: false,
+        hitPoint: { x: 0, y: 1, z: -5 },
+        distance: 5,
+      }); // HP = 40, Shield = 0
+      const botTarget: CombatActor = {
+        id: 'bot_siphon',
+        name: 'SiphonBot',
+        position: { x: 0, y: 0, z: -12 },
+        eyePos: { x: 0, y: 1.6, z: -12 },
+        hp: 20,
+        shield: 0,
+        radius: 0.42,
+        height: 1.85,
+        alive: true,
+      };
+      weapons.registerActorsProvider(() => [player.getCombatActor(), botTarget]);
+      weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: player.getInventory().getSlot(1)!,
+        origin: { x: 0, y: 1.2, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+      });
+      expect(botTarget.alive).toBe(false);
+      // 40 + 75 = 100 HP + 15 Shield
+      expect(player.getHealth()).toBe(100);
+      expect(player.getShield()).toBe(15);
+      expect(siphonAmounts[0]).toBe(75);
+
+      // Aerialist: <= 6m does NOT deploy; > 6m deploys glider cleanly
+      acquireSpecificAugment(player, 'aerialist');
+      player.teleport({ x: 0, y: 4.0, z: 0 });
+      player.update(0.016, 2.0);
+      player.pressKey('Space');
+      expect(player.getPhase()).toBe('playing');
+
+      player.teleport({ x: 0, y: 10.0, z: 0 });
+      player.update(0.016, 2.05);
+      expect(player.getHudSnapshot().canDeployGlider).toBe(true);
+      player.pressKey('Space');
+      expect(player.getPhase()).toBe('gliding');
+      expect(sounds).toContain('glider_deploy');
+    }
+
+    // 2. first_assault (+25% full mag first shot) & demolisher (+30% structure & vehicle dmg)
+    {
+      const { building, weapons, player } = setupWave4Harness();
+      player.teleport({ x: 0, y: 0, z: 0 });
+
+      acquireSpecificAugment(player, 'first_assault');
+
+      const enemy: CombatActor = {
+        id: 'bot_fa',
+        name: 'Target',
+        position: { x: 0, y: 0, z: -12 },
+        eyePos: { x: 0, y: 1.6, z: -12 },
+        hp: 300,
+        shield: 0,
+        maxHp: 300,
+        radius: 0.42,
+        height: 1.85,
+        alive: true,
+      };
+      weapons.registerActorsProvider(() => [player.getCombatActor(), enemy]);
+
+      const arItem: ItemInstance = {
+        uid: 'ar_fa',
+        weaponId: 'ar',
+        rarity: 'common',
+        magAmmo: 30,
+        stackCount: 1,
+      };
+      // Shot 1 at full mag (30/30): round(30 * 1.25) = 38
+      const shot1 = weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: arItem,
+        origin: { x: 0, y: 1.1, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+        onAmmoConsumed: () => {
+          arItem.magAmmo -= 1;
+        },
+      });
+      expect(shot1.damageDealt).toBe(38);
+      expect(arItem.magAmmo).toBe(29);
+
+      // Shot 2 at 29/30: normal 30 damage
+      const shot2 = weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: arItem,
+        origin: { x: 0, y: 1.1, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+        onAmmoConsumed: () => {
+          arItem.magAmmo -= 1;
+        },
+      });
+      expect(shot2.damageDealt).toBe(30);
+
+      // Sniper full mag (1/1): round(computeWeaponDamage('sniper','rare',12,false) * 1.25)
+      const hpBeforeSniper = enemy.hp;
+      const sniperItem: ItemInstance = {
+        uid: 'sniper_fa',
+        weaponId: 'sniper',
+        rarity: 'rare',
+        magAmmo: 1,
+        stackCount: 1,
+      };
+      weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: sniperItem,
+        origin: { x: 0, y: 1.1, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+        onAmmoConsumed: () => {
+          sniperItem.magAmmo -= 1;
+        },
+      });
+      for (let i = 0; i < 6; i++) weapons.update(0.02);
+      const expectedBaseSniper = computeWeaponDamage('sniper', 'rare', 12, false);
+      expect(hpBeforeSniper - enemy.hp).toBe(Math.round(expectedBaseSniper * 1.25));
+
+      // Demolisher: +30% structure damage on BuildPiece (33 * 1.3 = 43) & vehicle damage
+      acquireSpecificAugment(player, 'demolisher');
+      const wall = building.placePieceForEntity('bot', 'wall', 'metal', 0, 0, -1, 'N', 0)!;
+      const wallHpBefore = wall.hp;
+      weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: { uid: 'ar_dem', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 },
+        origin: { x: 2, y: 1.2, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+      });
+      expect(wallHpBefore - wall.hp).toBe(Math.round(33 * 1.3));
+
+      const veh: VehicleEntity = {
+        id: 'veh_dem',
+        kind: 'hover_atv',
+        x: 10,
+        y: 0,
+        z: -8,
+        yaw: 0,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 400,
+        maxHp: 400,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: null,
+        destroyed: false,
+      };
+      const vBridge: VehicleBridge = {
+        getVehicles: () => [veh],
+        enterVehicle: () => false,
+        exitVehicle: () => null,
+        driveVehicle: () => {},
+        damageVehicle: (_id, dmg) => {
+          veh.hp -= dmg;
+          return true;
+        },
+      };
+      weapons.setVehicleBridge(vBridge);
+      weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: { uid: 'ar_dem_v', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 },
+        origin: { x: 10, y: 0.6, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+      });
+      expect(400 - veh.hp).toBe(Math.round(33 * 1.3));
+    }
+
+    // 3. parkour_boost (+35% sprint jump + 0.84x gravity) & mechanic_overdrive (+25% speed & 4 HP/s repair)
+    {
+      const baseHarness = setupWave4Harness();
+      baseHarness.player.teleport({ x: 0, y: 0, z: 0 });
+      baseHarness.player.pressKey('ShiftLeft');
+      baseHarness.player.pressKey('KeyW');
+      baseHarness.player.update(0.03, 0.03);
+      baseHarness.player.pressKey('Space');
+      const baseJumpVy = baseHarness.player.getCharacterRenderState().velocityY ?? 0;
+
+      const parkourHarness = setupWave4Harness();
+      parkourHarness.player.teleport({ x: 0, y: 0, z: 0 });
+      acquireSpecificAugment(parkourHarness.player, 'parkour_boost');
+      parkourHarness.player.pressKey('ShiftLeft');
+      parkourHarness.player.pressKey('KeyW');
+      parkourHarness.player.update(0.03, 0.03);
+      parkourHarness.player.pressKey('Space');
+      const boostedJumpVy =
+        parkourHarness.player.getCharacterRenderState().velocityY ?? 0;
+      expect(boostedJumpVy).toBeCloseTo(baseJumpVy * 1.35, 1);
+
+      let basePeakY = 0;
+      let parkourPeakY = 0;
+      for (let i = 0; i < 30; i++) {
+        baseHarness.player.update(0.03, 0.06 + i * 0.03);
+        parkourHarness.player.update(0.03, 0.06 + i * 0.03);
+        basePeakY = Math.max(basePeakY, baseHarness.player.getPosition().y);
+        parkourPeakY = Math.max(parkourPeakY, parkourHarness.player.getPosition().y);
+      }
+      expect(parkourPeakY).toBeGreaterThan(basePeakY + 1.2);
+
+      // Mechanic Overdrive: +25% speed & 4 HP/s self-repair
+      const veh: VehicleEntity = {
+        id: 'veh_mo',
+        kind: 'hover_atv',
+        x: 0,
+        y: 0,
+        z: -2.0,
+        yaw: 0,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 300,
+        maxHp: 400,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: null,
+        destroyed: false,
+      };
+      const vBridge: VehicleBridge = {
+        getVehicles: () => [veh],
+        enterVehicle: (_id, driverId) => {
+          veh.driverId = driverId;
+          return true;
+        },
+        exitVehicle: () => {
+          veh.driverId = null;
+          return { x: veh.x, y: veh.y, z: veh.z };
+        },
+        driveVehicle: (_id, throttle, _steer, _boost, dt) => {
+          veh.vx = 0;
+          veh.vz = throttle * 16;
+          veh.z += veh.vz * dt;
+        },
+        damageVehicle: () => true,
+      };
+      parkourHarness.player.setVehicleBridge(vBridge);
+      acquireSpecificAugment(parkourHarness.player, 'mechanic_overdrive');
+      parkourHarness.player.teleport({ x: 0, y: 0, z: 0 });
+      parkourHarness.player.update(0.016, 0.5);
+      parkourHarness.player.pressKey('KeyE');
+      expect(parkourHarness.player.getActiveVehicleId()).toBe('veh_mo');
+
+      parkourHarness.player.pressKey('KeyW');
+      for (let i = 0; i < 20; i++) {
+        parkourHarness.player.update(0.05, 0.6 + i * 0.05);
+      }
+      // 1s driving: base speed 16 * 1.25 = 20 m/s = 72 km/h, +4 HP/s repair -> 304 HP
+      expect(parkourHarness.player.getHudSnapshot().vehicle?.speedKmh).toBe(72);
+      expect(veh.z).toBeCloseTo(18.0, 1);
+      expect(veh.hp).toBeCloseTo(304, 1);
+    }
+  });
+
+  it('optimizes setPropColliders with 2D spatial grid for O(1) movement and raycastWorld lookups', () => {
+    const { collision } = setupWave4Harness();
+    const boxes: ColliderBox[] = [];
+    for (let i = 0; i < 400; i++) {
+      const gx = ((i % 20) - 10) * 32 + 8;
+      const gz = (Math.floor(i / 20) - 10) * 32 + 8;
+      boxes.push({
+        id: `prop_grid_${i}`,
+        minX: gx - 0.6,
+        minY: 0,
+        minZ: gz - 0.6,
+        maxX: gx + 0.6,
+        maxY: 2.0,
+        maxZ: gz + 0.6,
+        material: 'metal',
+      });
+    }
+    boxes.push({
+      id: 'barrel_center',
+      minX: -0.6,
+      minY: 0,
+      minZ: -10.6,
+      maxX: 0.6,
+      maxY: 1.5,
+      maxZ: -9.4,
+      material: 'metal',
+    });
+    collision.setPropColliders(boxes);
+
+    const rayHit = collision.raycastWorld(
+      { x: 0, y: 0.8, z: 0 },
+      { x: 0, y: 0, z: -1 },
+      50,
+    );
+    expect(rayHit.hit).toBe(true);
+    expect(rayHit.targetType).toBe('prop');
+    expect(rayHit.targetId).toBe('barrel_center');
+    expect(rayHit.distance).toBeCloseTo(9.4, 2);
+
+    const moveRes = collision.resolveCharacterMovement(
+      { x: 0, y: 0, z: -9.1 },
+      { x: 0, y: 0, z: -8 },
+      PLAYER_RADIUS,
+      PLAYER_HEIGHT,
+      0.05,
+    );
+    expect(moveRes.position.z).toBeGreaterThanOrEqual(-9.4 + PLAYER_RADIUS - 0.02);
+  });
+
+  it('warps player into skydiving with fall immunity on Sky Rift entry (auto <=2.2m and [E] <=3.8m)', () => {
+    const { bus, player } = setupWave4Harness();
+    const sounds: SoundEventId[] = [];
+    const riftVfx: Array<{ position: Vec3Like; skyPosition: Vec3Like }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:rift_tear', (ev) => riftVfx.push(ev));
+
+    const bridge = createMockRiftCaptureBridge({
+      rifts: [
+        {
+          id: 'rift_1',
+          poiId: 'skyline_spire',
+          x: 0,
+          y: 0,
+          z: -3.2,
+          active: true,
+          openRemainingSec: 0,
+          cooldownSec: 0,
+        },
+        {
+          id: 'rift_2',
+          poiId: 'frostpeak_citadel',
+          x: 30,
+          y: 0,
+          z: 0,
+          active: true,
+          openRemainingSec: 0,
+          cooldownSec: 0,
+        },
+      ],
+    });
+    player.setRiftCaptureBridge(bridge);
+
+    // Within 3.8m -> shows ENTER SKY RIFT prompt & triggers on KeyE
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.016, 0.016);
+    expect(player.getInteractPrompt()?.label).toBe('ENTER SKY RIFT');
+
+    player.pressKey('KeyE');
+    expect(player.getPhase()).toBe('skydiving');
+    expect(player.isFallImmune()).toBe(true);
+    expect(player.getPosition().y).toBeCloseTo(92, 1);
+    expect(sounds).toContain('rift_teleport');
+    expect(riftVfx.length).toBe(1);
+    expect(riftVfx[0].skyPosition.y).toBeCloseTo(92, 1);
+
+    // Auto-trigger on walking within <= 2.2m of rift_2
+    player.teleport({ x: 30, y: 0, z: 1.8 });
+    for (let i = 0; i < 25; i++) {
+      player.update(0.05, 0.2 + i * 0.05); // Wait out 1.0s riftCooldown
+      if (player.getPhase() === 'skydiving') break;
+    }
+    expect(player.getPhase()).toBe('skydiving');
+    expect(player.getPosition().y).toBeCloseTo(92, 1);
+  });
+
+  it('advances POI Capture Point within 6.5m, emits flag_tick, flag_captured, vfx:flag_captured, and updates poisCaptured', () => {
+    const { bus, weapons, player } = setupWave4Harness();
+    const sounds: SoundEventId[] = [];
+    const flagVfx: Array<{ position: Vec3Like; poiName: string }> = [];
+    const capturedCalls: Array<{ poiName: string; lootPos?: Vec3Like }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:flag_captured', (ev) => flagVfx.push(ev));
+
+    const bridge = createMockRiftCaptureBridge({
+      capturePoints: [
+        {
+          id: 'cp_metro',
+          poiId: 'metro_towers',
+          poiName: 'Metro Towers',
+          x: 0,
+          y: 0,
+          z: -4.0,
+          radius: 6.5,
+          progress: 0,
+          captured: false,
+          ownerId: null,
+          ownerName: null,
+        },
+      ],
+    });
+    player.setRiftCaptureBridge(bridge);
+    player.setOnPoiCaptured((poiName, lootPos) => {
+      capturedCalls.push({ poiName, lootPos });
+    });
+
+    const contestingEnemy: CombatActor = {
+      id: 'bot_contest',
+      name: 'Contester',
+      position: { x: 1.5, y: 0, z: -4.0 },
+      eyePos: { x: 1.5, y: 1.6, z: -4.0 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), contestingEnemy]);
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    let t = 0;
+    for (let i = 0; i < 40; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 2.0s inside capture ring
+    }
+    const midSnap = player.getHudSnapshot();
+    expect(midSnap.captureStatus).not.toBeNull();
+    expect(midSnap.captureStatus?.poiName).toBe('Metro Towers');
+    expect(midSnap.captureStatus?.progress).toBeGreaterThan(0.14);
+    expect(midSnap.captureStatus?.captured).toBe(false);
+    expect(midSnap.captureStatus?.contested).toBe(true);
+    expect(sounds.filter((s) => s === 'flag_tick').length).toBeGreaterThanOrEqual(2);
+
+    // Enemy leaves -> contested clears and capture finishes after remaining ~10s
+    contestingEnemy.alive = false;
+    for (let i = 0; i < 210; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(bridge.capturePoints[0].captured).toBe(true);
+    expect(sounds).toContain('flag_captured');
+    expect(flagVfx.length).toBe(1);
+    expect(flagVfx[0].poiName).toBe('Metro Towers');
+    expect(player.getStats().poisCaptured).toBe(1);
+    expect(capturedCalls.length).toBe(1);
+    expect(capturedCalls[0].poiName).toBe('Metro Towers');
+    expect(capturedCalls[0].lootPos).toEqual({ x: 0, y: 0.6, z: -4.0 });
+  });
+
+  it('detonates Explosive Fuel Barrels via hitscan, pickaxe, and chain splash across 6.8m blastRadius', () => {
+    const { bus, building, weapons, player } = setupWave4Harness();
+    const sounds: SoundEventId[] = [];
+    const explosions: Array<{ position: Vec3Like; radius: number }> = [];
+    const shakes: number[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:explosion', (ev) => explosions.push(ev));
+    bus.on('vfx:camera_shake', (ev) => shakes.push(ev.intensity));
+
+    const bridge = createMockRiftCaptureBridge({
+      explosiveBarrels: [
+        {
+          id: 'exp_1',
+          x: 0,
+          y: 0,
+          z: -6,
+          hp: 35,
+          maxHp: 35,
+          blastRadius: 6.8,
+          blastDamage: 85,
+          exploded: false,
+        },
+        {
+          id: 'exp_chain',
+          x: 3.0,
+          y: 0,
+          z: -6,
+          hp: 35,
+          maxHp: 35,
+          blastRadius: 6.8,
+          blastDamage: 85,
+          exploded: false,
+        },
+        {
+          id: 'exp_pick',
+          x: 0,
+          y: 0,
+          z: 2.0,
+          hp: 35,
+          maxHp: 35,
+          blastRadius: 6.8,
+          blastDamage: 85,
+          exploded: false,
+        },
+      ],
+    });
+    weapons.setRiftCaptureBridge(bridge);
+
+    const nearbyBot: CombatActor = {
+      id: 'bot_exp',
+      name: 'BarrelVictim',
+      position: { x: 1.5, y: 0, z: -6 },
+      eyePos: { x: 1.5, y: 1.6, z: -6 },
+      hp: 100,
+      shield: 50,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const nearbyVeh: VehicleEntity = {
+      id: 'veh_exp',
+      kind: 'hover_atv',
+      x: -2.5,
+      y: 0,
+      z: -6,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 400,
+      maxHp: 400,
+      boostCharge: 1,
+      isBoosting: false,
+      driverId: null,
+      destroyed: false,
+    };
+    weapons.setVehicleBridge({
+      getVehicles: () => [nearbyVeh],
+      enterVehicle: () => false,
+      exitVehicle: () => null,
+      driveVehicle: () => {},
+      damageVehicle: (_id, dmg) => {
+        nearbyVeh.hp -= dmg;
+        return true;
+      },
+    });
+    weapons.registerActorsProvider(() => [player.getCombatActor(), nearbyBot]);
+    const wall = building.placePieceForEntity('bot', 'wall', 'wood', 0, 0, -2, 'N', 0)!;
+
+    // 1. Hitscan AR shot (33 dmg) weakens exp_1 to 2 HP, 2nd shot explodes and chains to exp_chain
+    const arItem: ItemInstance = {
+      uid: 'ar_exp',
+      weaponId: 'ar',
+      rarity: 'common',
+      magAmmo: 30,
+      stackCount: 1,
+    };
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arItem,
+      origin: { x: 0, y: 0.7, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(bridge.explosiveBarrels[0].hp).toBe(2);
+    expect(bridge.explosiveBarrels[0].exploded).toBe(false);
+
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arItem,
+      origin: { x: 0, y: 0.7, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(bridge.explosiveBarrels[0].exploded).toBe(true);
+    expect(bridge.explosiveBarrels[1].exploded).toBe(true); // chained explosion!
+    expect(sounds).toContain('explosion');
+    expect(sounds).toContain('barrel_explode');
+    expect(explosions.length).toBe(2);
+    expect(shakes.length).toBeGreaterThan(0);
+    expect(nearbyBot.shield + nearbyBot.hp).toBeLessThan(150);
+    expect(nearbyVeh.hp).toBeLessThan(400);
+    expect(wall.hp).toBeLessThan(wall.maxHp);
+
+    // 2. Pickaxe swing (50 structureDamage) explodes exp_pick within 3.2m
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'pick_exp', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+      origin: { x: 0, y: 0.7, z: 0 },
+      aimDir: { x: 0, y: 0, z: 1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(bridge.explosiveBarrels[2].exploded).toBe(true);
+  });
+
+  it('places 16s 3D Tactical Pings on KeyQ and Middle Mouse with danger/loot/move tagging', () => {
+    const { bus, propsBridge, weapons, player } = setupWave4Harness();
+    const sounds: SoundEventId[] = [];
+    const pingVfx: Array<{ position: Vec3Like; kind: 'move' | 'danger' | 'loot'; label: string }> =
+      [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:tactical_ping', (ev) => pingVfx.push(ev));
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, -0.15); // Looking down at terrain ahead (-Z)
+
+    // 1. KeyQ on empty terrain -> 'move'
+    player.pressKey('KeyQ');
+    const moveSnap = player.getHudSnapshot().tacticalPing;
+    expect(moveSnap).not.toBeNull();
+    expect(moveSnap!.kind).toBe('move');
+    expect(moveSnap!.distance).toBeGreaterThan(0);
+    expect(sounds).toContain('tactical_ping');
+    expect(pingVfx[0].kind).toBe('move');
+
+    // 2. KeyQ aimed at unopened chest -> 'loot'
+    propsBridge.chests.push({
+      id: 'chest_ping',
+      x: 0,
+      y: 0,
+      z: -12,
+      rotationY: 0,
+      opened: false,
+      openProgress: 0,
+    });
+    player.setLook(Math.PI, -0.11);
+    player.pressKey('KeyQ');
+    expect(player.getHudSnapshot().tacticalPing?.kind).toBe('loot');
+    expect(player.getHudSnapshot().tacticalPing?.label).toBe('CHEST');
+
+    // 3. Middle mouse aimed at alive enemy -> 'danger'
+    const enemy: CombatActor = {
+      id: 'bot_ping',
+      name: 'PingedEnemy',
+      position: { x: 0, y: 0, z: -20 },
+      eyePos: { x: 0, y: 1.6, z: -20 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), enemy]);
+    player.setLook(Math.PI, 0);
+    player.setMouseButton(1, true);
+    expect(player.getHudSnapshot().tacticalPing?.kind).toBe('danger');
+    expect(player.getHudSnapshot().tacticalPing?.distance).toBeCloseTo(20, 0);
+
+    // 4. Expires cleanly after 16s
+    for (let i = 0; i < 325; i++) {
+      player.update(0.05, 1.0 + i * 0.05);
+    }
+    expect(player.getHudSnapshot().tacticalPing).toBeNull();
   });
 });

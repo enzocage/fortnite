@@ -7,9 +7,15 @@ import {
 import {
   cloneSettings,
   formatSurvivalTime,
+  getAugmentMeta,
   getGameModeMeta,
 } from './UIHelpers';
-import { getBountyTargetSvg, getCrownSvg, getSkullSvg } from './WeaponIcons';
+import {
+  getAugmentIconSvg,
+  getBountyTargetSvg,
+  getCrownSvg,
+  getSkullSvg,
+} from './WeaponIcons';
 
 export interface MatchOverlayCallbacks {
   onResume: () => void;
@@ -446,7 +452,13 @@ export class MatchOverlay {
 
     const statsGrid = document.createElement('div');
     statsGrid.className = 'fdr-stats-grid';
-    const statItems: Array<{ k: string; v: string; highlight?: boolean }> = [
+    const poisCaptured = Math.max(0, Math.floor(summary.poisCaptured ?? 0));
+    const statItems: Array<{
+      k: string;
+      v: string;
+      highlight?: boolean;
+      wide?: boolean;
+    }> = [
       {
         k: 'PLACEMENT',
         v: `#${summary.placement} / ${summary.totalPlayers}`,
@@ -465,16 +477,61 @@ export class MatchOverlay {
         k: 'SURVIVAL TIME',
         v: formatSurvivalTime(summary.survivalTimeSec),
       },
+      {
+        k: 'POIS CAPTURED',
+        v: String(poisCaptured),
+        highlight: poisCaptured > 0,
+        wide: true,
+      },
     ];
 
     for (const item of statItems) {
       const box = document.createElement('div');
-      box.className = `fdr-stat-box${item.highlight ? ' highlight' : ''}`;
+      box.className = `fdr-stat-box${item.highlight ? ' highlight' : ''}${item.wide ? ' fdr-stat-box-wide' : ''}`;
       box.innerHTML = `
         <div class="fdr-stat-k">${item.k}</div>
         <div class="fdr-stat-v">${item.v}</div>
       `;
       statsGrid.appendChild(box);
+    }
+
+    const activeAugments = Array.isArray(summary.activeAugments)
+      ? summary.activeAugments
+      : [];
+    const augmentsRow = document.createElement('div');
+    augmentsRow.className = 'fdr-summary-augments';
+    if (activeAugments.length > 0) {
+      const augTitle = document.createElement('div');
+      augTitle.className = 'fdr-summary-augments-title';
+      augTitle.textContent = 'REALITY AUGMENTS';
+      const augList = document.createElement('div');
+      augList.className = 'fdr-summary-augments-list';
+      for (const augId of activeAugments) {
+        const def = getAugmentMeta(augId);
+        const badgeEl = document.createElement('div');
+        badgeEl.className = 'fdr-summary-augment-badge';
+        badgeEl.dataset.augmentId = def.id;
+        badgeEl.style.borderColor = def.accentColor;
+
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'fdr-summary-augment-icon';
+        iconSpan.innerHTML = getAugmentIconSvg(def.id);
+
+        const txtCol = document.createElement('div');
+        txtCol.className = 'fdr-summary-augment-text';
+        const tag = document.createElement('span');
+        tag.className = 'fdr-summary-augment-tag';
+        tag.style.color = def.accentColor;
+        tag.textContent = def.badge;
+        const name = document.createElement('span');
+        name.className = 'fdr-summary-augment-name';
+        name.textContent = def.name;
+        txtCol.append(tag, name);
+
+        badgeEl.append(iconSpan, txtCol);
+        augList.appendChild(badgeEl);
+      }
+      augmentsRow.append(augTitle, augList);
     }
 
     const career = recordMatchCareerStats(summary);
@@ -573,7 +630,19 @@ export class MatchOverlay {
     });
 
     actions.append(playAgainBtn, lobbyBtn);
-    this.summaryCardEl.append(header, modeRow, sub, statsGrid, xpPanel, actions);
+    if (activeAugments.length > 0) {
+      this.summaryCardEl.append(
+        header,
+        modeRow,
+        sub,
+        statsGrid,
+        augmentsRow,
+        xpPanel,
+        actions,
+      );
+    } else {
+      this.summaryCardEl.append(header, modeRow, sub, statsGrid, xpPanel, actions);
+    }
   }
 
   dispose(): void {

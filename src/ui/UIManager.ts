@@ -3,6 +3,7 @@ import { EventBus } from '../core';
 import type {
   BannerMessage,
   CampfireEntity,
+  CapturePointEntity,
   DamageNumberEvent,
   EmoteId,
   GamePhase,
@@ -13,6 +14,7 @@ import type {
   LobbyConfig,
   MatchQuest,
   MatchSummary,
+  RiftEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
@@ -31,7 +33,7 @@ export interface UIManagerCallbacks {
     cosmetics: Pick<
       LobbyConfig,
       'skinId' | 'pickaxeId' | 'gliderId' | 'selectedEmote'
-    > & { weaponWrapId?: string },
+    > & { weaponWrapId?: string; contrailId?: string },
   ) => void;
   onSettingsChange?: (settings: GameSettings) => void;
   onEmoteSelect?: (emoteId: EmoteId) => void;
@@ -45,6 +47,7 @@ export interface UIManagerCallbacks {
   onPreviewEmote?: (emoteId: EmoteId) => void;
   onSpectateNext?: () => void;
   onSpectateMatchSummary?: () => void;
+  onAugmentSelect?: (choiceIndex: 0 | 1) => void;
 }
 
 export class UIManager {
@@ -95,6 +98,8 @@ export class UIManager {
       onEditReset: () => this.callbacks.onEditReset?.(),
       onSpectateNext: () => this.callbacks.onSpectateNext?.(),
       onSpectateMatchSummary: () => this.callbacks.onSpectateMatchSummary?.(),
+      onAugmentSelect: (choiceIndex) =>
+        this.callbacks.onAugmentSelect?.(choiceIndex),
     });
 
     this.fullMap = new FullMapOverlay(this.containerEl, {
@@ -154,6 +159,13 @@ export class UIManager {
     campfires: CampfireEntity[],
   ): void {
     this.fullMap.setWorldStations(benches, campfires);
+  }
+
+  setWorldRiftsAndFlags(
+    rifts: RiftEntity[],
+    capturePoints: CapturePointEntity[],
+  ): void {
+    this.fullMap.setWorldRiftsAndFlags(rifts, capturePoints);
   }
 
   setPhase(phase: GamePhase): void {

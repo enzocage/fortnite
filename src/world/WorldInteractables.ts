@@ -2,8 +2,11 @@ import * as THREE from 'three';
 import { EventBus, POIS } from '../core';
 import type {
   CampfireEntity,
+  CapturePointEntity,
   ColliderBox,
+  ExplosiveBarrelEntity,
   LaunchPadEntity,
+  RiftEntity,
   SlurpBarrelEntity,
   TerrainQuery,
   UpgradeBenchEntity,
@@ -49,6 +52,24 @@ export interface SlurpBarrelDamageResult {
   position: Vec3Like;
 }
 
+export interface RiftTriggerResult {
+  skyPos: Vec3Like;
+}
+
+export interface CapturePointAdvanceResult {
+  capturedNow: boolean;
+  progress: number;
+  lootPos?: Vec3Like;
+  poiName: string;
+}
+
+export interface ExplosiveBarrelDamageResult {
+  exploded: boolean;
+  position: Vec3Like;
+  blastRadius: number;
+  blastDamage: number;
+}
+
 interface UpgradeBenchVisual {
   data: UpgradeBenchEntity;
   group: THREE.Group;
@@ -77,6 +98,55 @@ interface SlurpBarrelVisual {
   hitAnim: number;
 }
 
+interface RiftVisual {
+  data: RiftEntity;
+  group: THREE.Group;
+  portalGroup: THREE.Group;
+  diamond: THREE.Group;
+  shardsGroup: THREE.Group;
+  haloGroup: THREE.Group;
+  baseRing: THREE.Mesh;
+  baseDiamondY: number;
+}
+
+interface CapturePointVisual {
+  data: CapturePointEntity;
+  group: THREE.Group;
+  flagGroup: THREE.Group;
+  bannerMesh: THREE.Mesh;
+  trimMesh: THREE.Mesh;
+  finialMesh: THREE.Mesh;
+  outerRing: THREE.Mesh;
+  innerRing: THREE.Mesh;
+  uncapturedFlagMat: THREE.Material;
+  capturedFlagMat: THREE.Material;
+  uncapturedTrimMat: THREE.Material;
+  capturedTrimMat: THREE.Material;
+  uncapturedRingMat: THREE.Material;
+  capturedRingMat: THREE.Material;
+  flagMinY: number;
+  flagMaxY: number;
+  claimedThisFrame: boolean;
+}
+
+interface ExplosiveBarrelVisual {
+  data: ExplosiveBarrelEntity;
+  group: THREE.Group;
+  bodyGroup: THREE.Group;
+  collider: ColliderBox;
+  hitAnim: number;
+}
+
+const RIFT_SKY_OFFSET_Y = 92;
+const RIFT_OPEN_WINDOW_SEC = 8;
+const RIFT_COOLDOWN_SEC = 45;
+const CAPTURE_DURATION_SEC = 12;
+const CAPTURE_DECAY_SEC = 18;
+const CAPTURE_RADIUS = 6.5;
+const EXPLOSIVE_BARREL_HP = 35;
+const EXPLOSIVE_BARREL_BLAST_RADIUS = 6.8;
+const EXPLOSIVE_BARREL_BLAST_DAMAGE = 85;
+
 export class WorldInteractables {
   private group = new THREE.Group();
   private eventBus?: EventBus;
@@ -90,6 +160,12 @@ export class WorldInteractables {
   private campfiresMap = new Map<string, CampfireVisual>();
   private slurpBarrels: SlurpBarrelEntity[] = [];
   private slurpBarrelsMap = new Map<string, SlurpBarrelVisual>();
+  private rifts: RiftEntity[] = [];
+  private riftsMap = new Map<string, RiftVisual>();
+  private capturePoints: CapturePointEntity[] = [];
+  private capturePointsMap = new Map<string, CapturePointVisual>();
+  private explosiveBarrels: ExplosiveBarrelEntity[] = [];
+  private explosiveBarrelsMap = new Map<string, ExplosiveBarrelVisual>();
   private padVisuals: PadVisual[] = [];
   private ziplineOrbs: ZiplineOrb[] = [];
   private geometries: THREE.BufferGeometry[] = [];
@@ -104,6 +180,9 @@ export class WorldInteractables {
     this.buildUpgradeBenches(terrain);
     this.buildCampfires(terrain);
     this.buildSlurpBarrels(terrain);
+    this.buildRifts(terrain);
+    this.buildCapturePoints(terrain);
+    this.buildExplosiveBarrels(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -1090,6 +1169,510 @@ export class WorldInteractables {
     }
   }
 
+  private buildRifts(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{ id: string; poiId: string; dx: number; dz: number }> = [
+      { id: 'rift_frostpeak_citadel', poiId: 'frostpeak_citadel', dx: -28, dz: 6 },
+      { id: 'rift_scorched_caldera', poiId: 'scorched_caldera', dx: -26, dz: -18 },
+      { id: 'rift_sunken_oasis', poiId: 'sunken_oasis', dx: -28, dz: 10 },
+      { id: 'rift_whispering_pines', poiId: 'whispering_pines', dx: 34, dz: 4 },
+      { id: 'rift_skyline_spire', poiId: 'skyline_spire', dx: 26, dz: 16 },
+    ];
+
+    const diamondCoreMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#67e8f9',
+        emissive: '#22d3ee',
+        emissiveIntensity: 1.65,
+        roughness: 0.14,
+        metalness: 0.25,
+      }),
+    );
+    const diamondAuraMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#a855f7',
+        transparent: true,
+        opacity: 0.36,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const shardCyanMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.45,
+        roughness: 0.18,
+        metalness: 0.35,
+      }),
+    );
+    const shardVioletMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#c084fc',
+        emissive: '#9333ea',
+        emissiveIntensity: 1.45,
+        roughness: 0.18,
+        metalness: 0.35,
+      }),
+    );
+    const haloCyanMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#67e8f9',
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const haloVioletMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#c084fc',
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const baseRingMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const diamondGeo = this.addGeo(new THREE.OctahedronGeometry(0.5, 0));
+    const diamondAuraGeo = this.addGeo(new THREE.OctahedronGeometry(0.7, 0));
+    const shardGeo = this.addGeo(new THREE.ConeGeometry(0.14, 0.92, 4));
+    const haloGeo = this.addGeo(new THREE.TorusGeometry(1.18, 0.045, 8, 28));
+    const moteGeo = this.addGeo(new THREE.OctahedronGeometry(0.11, 0));
+    const baseRingGeo = this.addGeo(new THREE.RingGeometry(0.95, 1.45, 24));
+    baseRingGeo.rotateX(-Math.PI * 0.5);
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+
+      const x = poi.x + spec.dx;
+      const z = poi.z + spec.dz;
+      const y = terrain.getHeightAt(x, z);
+
+      const data: RiftEntity = {
+        id: spec.id,
+        poiId: spec.poiId,
+        x,
+        y,
+        z,
+        active: true,
+        openRemainingSec: 0,
+        cooldownSec: 0,
+      };
+      this.rifts.push(data);
+
+      const riftGroup = new THREE.Group();
+      riftGroup.name = `SkyRift_${spec.id}`;
+      riftGroup.position.set(x, y, z);
+
+      const baseRing = new THREE.Mesh(baseRingGeo, baseRingMat);
+      baseRing.position.y = 0.06;
+      riftGroup.add(baseRing);
+
+      const portalGroup = new THREE.Group();
+
+      // Vertical distortion diamond
+      const diamond = new THREE.Group();
+      const baseDiamondY = 1.65;
+      diamond.position.set(0, baseDiamondY, 0);
+      const coreMesh = new THREE.Mesh(diamondGeo, diamondCoreMat);
+      coreMesh.scale.set(0.78, 1.95, 0.78);
+      const auraMesh = new THREE.Mesh(diamondAuraGeo, diamondAuraMat);
+      auraMesh.scale.set(0.92, 2.25, 0.92);
+      diamond.add(coreMesh, auraMesh);
+      portalGroup.add(diamond);
+
+      // Glowing cracked cyan-violet spatial portal shards
+      const shardsGroup = new THREE.Group();
+      shardsGroup.position.set(0, baseDiamondY, 0);
+      const shardCount = 6;
+      for (let s = 0; s < shardCount; s++) {
+        const ang = (s / shardCount) * Math.PI * 2;
+        const rad = 0.88 + (s % 2) * 0.24;
+        const shard = new THREE.Mesh(shardGeo, s % 2 === 0 ? shardCyanMat : shardVioletMat);
+        shard.position.set(Math.cos(ang) * rad, ((s % 3) - 1) * 0.34, Math.sin(ang) * rad);
+        shard.rotation.order = 'YXZ';
+        shard.rotation.y = ang;
+        shard.rotation.z = (s % 2 === 0 ? 1 : -1) * 0.38;
+        shard.rotation.x = 0.18 * (s % 3 - 1);
+        shardsGroup.add(shard);
+      }
+      portalGroup.add(shardsGroup);
+
+      // Hovering orbiting energy halo
+      const haloGroup = new THREE.Group();
+      haloGroup.position.set(0, baseDiamondY, 0);
+      const ring1 = new THREE.Mesh(haloGeo, haloCyanMat);
+      ring1.rotation.x = Math.PI * 0.38;
+      const ring2 = new THREE.Mesh(haloGeo, haloVioletMat);
+      ring2.rotation.x = -Math.PI * 0.34;
+      ring2.rotation.y = Math.PI * 0.25;
+      haloGroup.add(ring1, ring2);
+
+      for (let m = 0; m < 3; m++) {
+        const mAng = (m / 3) * Math.PI * 2;
+        const mote = new THREE.Mesh(moteGeo, m % 2 === 0 ? shardCyanMat : shardVioletMat);
+        mote.position.set(Math.cos(mAng) * 1.18, 0, Math.sin(mAng) * 1.18);
+        haloGroup.add(mote);
+      }
+      portalGroup.add(haloGroup);
+
+      riftGroup.add(portalGroup);
+      this.group.add(riftGroup);
+
+      this.riftsMap.set(spec.id, {
+        data,
+        group: riftGroup,
+        portalGroup,
+        diamond,
+        shardsGroup,
+        haloGroup,
+        baseRing,
+        baseDiamondY,
+      });
+    }
+  }
+
+  private buildCapturePoints(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{ id: string; poiId: string; dx: number; dz: number }> = [
+      { id: 'cp_metro_towers', poiId: 'metro_towers', dx: 0, dz: 12 },
+      { id: 'cp_market_row', poiId: 'market_row', dx: 0, dz: 14 },
+      { id: 'cp_crater_depot', poiId: 'crater_depot', dx: 14, dz: 2 },
+      { id: 'cp_sunny_suburbs', poiId: 'sunny_suburbs', dx: 0, dz: 1 },
+    ];
+
+    const poleMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.3, metalness: 0.86 }),
+    );
+    const baseSteelMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.42, metalness: 0.78 }),
+    );
+    const uncapturedFlagMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#38bdf8',
+        emissive: '#0284c7',
+        emissiveIntensity: 1.05,
+        transparent: true,
+        opacity: 0.84,
+        roughness: 0.2,
+        metalness: 0.25,
+      }),
+    );
+    const capturedFlagMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#f59e0b',
+        emissiveIntensity: 1.55,
+        transparent: true,
+        opacity: 0.94,
+        roughness: 0.18,
+        metalness: 0.35,
+      }),
+    );
+    const uncapturedTrimMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#67e8f9',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.35,
+        roughness: 0.2,
+      }),
+    );
+    const capturedTrimMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.75,
+        roughness: 0.15,
+      }),
+    );
+    const uncapturedRingMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.6,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const capturedRingMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#facc15',
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const basePedestalGeo = this.addGeo(new THREE.CylinderGeometry(0.55, 0.72, 0.28, 12));
+    const baseCollarGeo = this.addGeo(new THREE.CylinderGeometry(0.24, 0.34, 0.24, 12));
+    const poleGeo = this.addGeo(new THREE.CylinderGeometry(0.08, 0.11, 7.2, 10));
+    const finialGeo = this.addGeo(new THREE.OctahedronGeometry(0.24, 0));
+    const crossbarGeo = this.addGeo(new THREE.BoxGeometry(1.9, 0.08, 0.08));
+    const bannerGeo = this.addGeo(new THREE.BoxGeometry(1.85, 1.05, 0.05));
+    const trimGeo = this.addGeo(new THREE.BoxGeometry(1.88, 0.14, 0.07));
+    const outerRingGeo = this.addGeo(
+      new THREE.RingGeometry(CAPTURE_RADIUS - 0.28, CAPTURE_RADIUS, 48),
+    );
+    outerRingGeo.rotateX(-Math.PI * 0.5);
+    const innerRingGeo = this.addGeo(new THREE.RingGeometry(1.05, 1.35, 32));
+    innerRingGeo.rotateX(-Math.PI * 0.5);
+
+    const flagMinY = 1.2;
+    const flagMaxY = 6.2;
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+
+      const x = poi.x + spec.dx;
+      const z = poi.z + spec.dz;
+      const y = terrain.getHeightAt(x, z);
+
+      const data: CapturePointEntity = {
+        id: spec.id,
+        poiId: spec.poiId,
+        poiName: poi.name,
+        x,
+        y,
+        z,
+        radius: CAPTURE_RADIUS,
+        progress: 0,
+        captured: false,
+        ownerId: null,
+        ownerName: null,
+      };
+      this.capturePoints.push(data);
+
+      const cpGroup = new THREE.Group();
+      cpGroup.name = `CapturePoint_${spec.id}`;
+      cpGroup.position.set(x, y, z);
+
+      const pedestal = new THREE.Mesh(basePedestalGeo, baseSteelMat);
+      pedestal.position.y = 0.14;
+      pedestal.castShadow = true;
+      pedestal.receiveShadow = true;
+
+      const collar = new THREE.Mesh(baseCollarGeo, poleMat);
+      collar.position.y = 0.4;
+      collar.castShadow = true;
+
+      const pole = new THREE.Mesh(poleGeo, poleMat);
+      pole.position.y = 3.8;
+      pole.castShadow = true;
+
+      const finialMesh = new THREE.Mesh(finialGeo, uncapturedTrimMat);
+      finialMesh.position.y = 7.55;
+
+      const outerRing = new THREE.Mesh(outerRingGeo, uncapturedRingMat);
+      outerRing.position.y = 0.05;
+
+      const innerRing = new THREE.Mesh(innerRingGeo, uncapturedTrimMat);
+      innerRing.position.y = 0.06;
+
+      const flagGroup = new THREE.Group();
+      flagGroup.position.set(0, flagMinY, 0);
+
+      const crossbar = new THREE.Mesh(crossbarGeo, poleMat);
+      crossbar.position.set(0.95, 0, 0);
+
+      const bannerMesh = new THREE.Mesh(bannerGeo, uncapturedFlagMat);
+      bannerMesh.position.set(0.95, -0.52, 0);
+
+      const trimMesh = new THREE.Mesh(trimGeo, uncapturedTrimMat);
+      trimMesh.position.set(0.95, -0.98, 0);
+
+      flagGroup.add(crossbar, bannerMesh, trimMesh);
+      cpGroup.add(pedestal, collar, pole, finialMesh, outerRing, innerRing, flagGroup);
+      this.group.add(cpGroup);
+
+      this.capturePointsMap.set(spec.id, {
+        data,
+        group: cpGroup,
+        flagGroup,
+        bannerMesh,
+        trimMesh,
+        finialMesh,
+        outerRing,
+        innerRing,
+        uncapturedFlagMat,
+        capturedFlagMat,
+        uncapturedTrimMat,
+        capturedTrimMat,
+        uncapturedRingMat,
+        capturedRingMat,
+        flagMinY,
+        flagMaxY,
+        claimedThisFrame: false,
+      });
+    }
+  }
+
+  private buildExplosiveBarrels(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{ id: string; poiId?: string; dx: number; dz: number }> = [
+      // Industrial / Container / Warehouse clusters (Crater Depot)
+      { id: 'exp_crater_red_wh', poiId: 'crater_depot', dx: -10, dz: -12 },
+      { id: 'exp_crater_blue_wh', poiId: 'crater_depot', dx: -10, dz: 16 },
+      { id: 'exp_crater_gray_wh', poiId: 'crater_depot', dx: 18, dz: -22 },
+      // River Suspension Bridges & Crystal Basin Bridge approaches
+      { id: 'exp_bridge_n_west', dx: 75.5, dz: 11.2 },
+      { id: 'exp_bridge_n_east', dx: 115.5, dz: 5.0 },
+      { id: 'exp_bridge_s_west', dx: 78.0, dz: 159.0 },
+      { id: 'exp_bridge_s_east', dx: 118.0, dz: 153.0 },
+      { id: 'exp_bridge_crystal_w', poiId: 'crystal_basin', dx: -60, dz: -3 },
+      // POI streets, alleys, labs, bunkers & docks
+      { id: 'exp_market_gas', poiId: 'market_row', dx: 21, dz: 15 },
+      { id: 'exp_market_mall', poiId: 'market_row', dx: 23, dz: -16 },
+      { id: 'exp_metro_north', poiId: 'metro_towers', dx: 9, dz: -16 },
+      { id: 'exp_metro_south', poiId: 'metro_towers', dx: 10, dz: 17 },
+      { id: 'exp_suburbs_ne', poiId: 'sunny_suburbs', dx: 26, dz: -18 },
+      { id: 'exp_frost_gate', poiId: 'frostpeak_citadel', dx: 5, dz: 21 },
+      { id: 'exp_caldera_lab1', poiId: 'scorched_caldera', dx: 16, dz: -10 },
+      { id: 'exp_caldera_lab2', poiId: 'scorched_caldera', dx: 4, dz: 18 },
+      { id: 'exp_oasis_bazaar', poiId: 'sunken_oasis', dx: -14, dz: 18 },
+      { id: 'exp_skyline_pavilion', poiId: 'skyline_spire', dx: -23, dz: -12 },
+    ];
+
+    const drumRedMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#dc2626',
+        emissive: '#7f1d1d',
+        emissiveIntensity: 0.28,
+        roughness: 0.36,
+        metalness: 0.45,
+      }),
+    );
+    const cautionYellowMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#ca8a04',
+        emissiveIntensity: 0.42,
+        roughness: 0.38,
+        metalness: 0.22,
+      }),
+    );
+    const hazardDarkMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#1e293b',
+        roughness: 0.38,
+        metalness: 0.8,
+      }),
+    );
+    const capOrangeMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#f97316',
+        emissive: '#ea580c',
+        emissiveIntensity: 0.65,
+        roughness: 0.28,
+        metalness: 0.4,
+      }),
+    );
+
+    const drumGeo = this.addGeo(new THREE.CylinderGeometry(0.41, 0.41, 1.14, 16));
+    const cautionGeo = this.addGeo(new THREE.CylinderGeometry(0.425, 0.425, 0.24, 16));
+    const stripeBorderGeo = this.addGeo(new THREE.CylinderGeometry(0.422, 0.422, 0.05, 16));
+    const rimGeo = this.addGeo(new THREE.CylinderGeometry(0.44, 0.44, 0.08, 16));
+    const lidGeo = this.addGeo(new THREE.CylinderGeometry(0.38, 0.41, 0.06, 16));
+    const bungGeo = this.addGeo(new THREE.CylinderGeometry(0.1, 0.1, 0.09, 10));
+
+    for (const spec of specs) {
+      let x = spec.dx;
+      let z = spec.dz;
+      if (spec.poiId) {
+        const poi = poiMap.get(spec.poiId);
+        if (!poi) continue;
+        x = poi.x + spec.dx;
+        z = poi.z + spec.dz;
+      }
+      const y = terrain.getHeightAt(x, z);
+
+      const data: ExplosiveBarrelEntity = {
+        id: spec.id,
+        x,
+        y,
+        z,
+        hp: EXPLOSIVE_BARREL_HP,
+        maxHp: EXPLOSIVE_BARREL_HP,
+        blastRadius: EXPLOSIVE_BARREL_BLAST_RADIUS,
+        blastDamage: EXPLOSIVE_BARREL_BLAST_DAMAGE,
+        exploded: false,
+      };
+      this.explosiveBarrels.push(data);
+
+      const barrelGroup = new THREE.Group();
+      barrelGroup.name = `ExplosiveBarrel_${spec.id}`;
+      barrelGroup.position.set(x, y, z);
+
+      const bodyGroup = new THREE.Group();
+
+      const drum = new THREE.Mesh(drumGeo, drumRedMat);
+      drum.position.y = 0.58;
+      drum.castShadow = true;
+      drum.receiveShadow = true;
+      bodyGroup.add(drum);
+
+      const cautionStripe = new THREE.Mesh(cautionGeo, cautionYellowMat);
+      cautionStripe.position.y = 0.58;
+      bodyGroup.add(cautionStripe);
+
+      for (const sy of [0.44, 0.72]) {
+        const border = new THREE.Mesh(stripeBorderGeo, hazardDarkMat);
+        border.position.y = sy;
+        bodyGroup.add(border);
+      }
+
+      for (const ry of [0.08, 1.08]) {
+        const rim = new THREE.Mesh(rimGeo, hazardDarkMat);
+        rim.position.y = ry;
+        rim.castShadow = true;
+        bodyGroup.add(rim);
+      }
+
+      const lid = new THREE.Mesh(lidGeo, drumRedMat);
+      lid.position.y = 1.15;
+      bodyGroup.add(lid);
+
+      const bung = new THREE.Mesh(bungGeo, capOrangeMat);
+      bung.position.set(0.14, 1.2, 0);
+      bodyGroup.add(bung);
+
+      barrelGroup.add(bodyGroup);
+      this.group.add(barrelGroup);
+
+      const collider: ColliderBox = {
+        id: `${spec.id}_col`,
+        minX: x - 0.52,
+        minY: y,
+        minZ: z - 0.52,
+        maxX: x + 0.52,
+        maxY: y + 1.25,
+        maxZ: z + 0.52,
+        material: 'metal',
+        tag: `explosive_barrel:${spec.id}`,
+      };
+
+      this.explosiveBarrelsMap.set(spec.id, {
+        data,
+        group: barrelGroup,
+        bodyGroup,
+        collider,
+        hitAnim: 0,
+      });
+    }
+  }
+
   getGroup(): THREE.Group {
     return this.group;
   }
@@ -1215,6 +1798,138 @@ export class WorldInteractables {
     return out;
   }
 
+  getRifts(): RiftEntity[] {
+    return this.rifts;
+  }
+
+  triggerRift(id: string): RiftTriggerResult | null {
+    const entry = this.riftsMap.get(id);
+    if (!entry || !entry.data.active) {
+      return null;
+    }
+    if (entry.data.openRemainingSec <= 0) {
+      entry.data.openRemainingSec = RIFT_OPEN_WINDOW_SEC;
+    }
+    return {
+      skyPos: {
+        x: entry.data.x,
+        y: entry.data.y + RIFT_SKY_OFFSET_Y,
+        z: entry.data.z,
+      },
+    };
+  }
+
+  getCapturePoints(): CapturePointEntity[] {
+    return this.capturePoints;
+  }
+
+  private syncCapturePointVisual(cp: CapturePointVisual): void {
+    const t = Math.max(0, Math.min(1, cp.data.progress));
+    cp.flagGroup.position.y = cp.flagMinY + (cp.flagMaxY - cp.flagMinY) * t;
+    const isCaptured = cp.data.captured;
+    cp.bannerMesh.material = isCaptured ? cp.capturedFlagMat : cp.uncapturedFlagMat;
+    cp.trimMesh.material = isCaptured ? cp.capturedTrimMat : cp.uncapturedTrimMat;
+    cp.finialMesh.material = isCaptured ? cp.capturedTrimMat : cp.uncapturedTrimMat;
+    cp.innerRing.material = isCaptured ? cp.capturedTrimMat : cp.uncapturedTrimMat;
+    cp.outerRing.material = isCaptured ? cp.capturedRingMat : cp.uncapturedRingMat;
+  }
+
+  advanceCapturePoint(
+    id: string,
+    actorId: string,
+    actorName: string,
+    dt: number,
+  ): CapturePointAdvanceResult {
+    const entry = this.capturePointsMap.get(id);
+    if (!entry) {
+      return { capturedNow: false, progress: 0, poiName: '' };
+    }
+    if (entry.data.captured) {
+      return {
+        capturedNow: false,
+        progress: 1,
+        poiName: entry.data.poiName,
+      };
+    }
+
+    entry.claimedThisFrame = true;
+    const safeDt = Math.max(0, dt);
+    entry.data.progress = Math.min(1, entry.data.progress + safeDt / CAPTURE_DURATION_SEC);
+
+    if (entry.data.progress >= 1 - 1e-7) {
+      entry.data.progress = 1;
+      entry.data.captured = true;
+      entry.data.ownerId = actorId;
+      entry.data.ownerName = actorName;
+      this.syncCapturePointVisual(entry);
+      return {
+        capturedNow: true,
+        progress: 1,
+        lootPos: { x: entry.data.x, y: entry.data.y + 0.6, z: entry.data.z },
+        poiName: entry.data.poiName,
+      };
+    }
+
+    this.syncCapturePointVisual(entry);
+    return {
+      capturedNow: false,
+      progress: entry.data.progress,
+      poiName: entry.data.poiName,
+    };
+  }
+
+  getExplosiveBarrels(): ExplosiveBarrelEntity[] {
+    return this.explosiveBarrels;
+  }
+
+  damageExplosiveBarrel(id: string, dmg: number): ExplosiveBarrelDamageResult | null {
+    const entry = this.explosiveBarrelsMap.get(id);
+    if (!entry || entry.data.exploded) {
+      return null;
+    }
+    const pos: Vec3Like = { x: entry.data.x, y: entry.data.y, z: entry.data.z };
+    if (dmg <= 0) {
+      return {
+        exploded: false,
+        position: pos,
+        blastRadius: entry.data.blastRadius,
+        blastDamage: entry.data.blastDamage,
+      };
+    }
+
+    entry.data.hp = Math.max(0, entry.data.hp - dmg);
+    if (entry.data.hp <= 0) {
+      entry.data.hp = 0;
+      entry.data.exploded = true;
+      entry.group.visible = false;
+      entry.hitAnim = 0;
+      return {
+        exploded: true,
+        position: pos,
+        blastRadius: entry.data.blastRadius,
+        blastDamage: entry.data.blastDamage,
+      };
+    }
+
+    entry.hitAnim = 1.0;
+    return {
+      exploded: false,
+      position: pos,
+      blastRadius: entry.data.blastRadius,
+      blastDamage: entry.data.blastDamage,
+    };
+  }
+
+  getExplosiveBarrelColliders(): ColliderBox[] {
+    const out: ColliderBox[] = [];
+    for (const entry of this.explosiveBarrelsMap.values()) {
+      if (!entry.data.exploded) {
+        out.push(entry.collider);
+      }
+    }
+    return out;
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -1227,6 +1942,7 @@ export class WorldInteractables {
       ...this.getVaultColliders(),
       ...this.getUpgradeBenchColliders(),
       ...this.getSlurpBarrelColliders(),
+      ...this.getExplosiveBarrelColliders(),
     ];
   }
 
@@ -1263,6 +1979,36 @@ export class WorldInteractables {
       sb.bodyGroup.rotation.set(0, 0, 0);
       sb.hitAnim = 0;
     }
+
+    for (const r of this.riftsMap.values()) {
+      r.data.active = true;
+      r.data.openRemainingSec = 0;
+      r.data.cooldownSec = 0;
+      r.portalGroup.visible = true;
+      r.shardsGroup.scale.set(1, 1, 1);
+      r.diamond.position.y = r.baseDiamondY;
+    }
+
+    for (const cp of this.capturePointsMap.values()) {
+      cp.data.progress = 0;
+      cp.data.captured = false;
+      cp.data.ownerId = null;
+      cp.data.ownerName = null;
+      cp.claimedThisFrame = false;
+      cp.flagGroup.rotation.set(0, 0, 0);
+      cp.innerRing.scale.set(1, 1, 1);
+      this.syncCapturePointVisual(cp);
+    }
+
+    for (const eb of this.explosiveBarrelsMap.values()) {
+      eb.data.hp = EXPLOSIVE_BARREL_HP;
+      eb.data.maxHp = EXPLOSIVE_BARREL_HP;
+      eb.data.exploded = false;
+      eb.group.visible = true;
+      eb.bodyGroup.scale.set(1, 1, 1);
+      eb.bodyGroup.rotation.set(0, 0, 0);
+      eb.hitAnim = 0;
+    }
   }
 
   unlockVault(vaultId: string): UnlockVaultResult {
@@ -1289,6 +2035,22 @@ export class WorldInteractables {
       unlocked: true,
       lootPos: { ...entry.lootPos },
     };
+  }
+
+  private stepBarrelHitWobble(
+    entry: { bodyGroup: THREE.Group; hitAnim: number },
+    safeDt: number,
+  ): void {
+    if (entry.hitAnim <= 0) return;
+    entry.hitAnim = Math.max(0, entry.hitAnim - safeDt * 5.5);
+    const wobble = Math.sin(entry.hitAnim * Math.PI * 3.0) * entry.hitAnim * 0.12;
+    entry.bodyGroup.rotation.z = wobble;
+    const squash = 1.0 - entry.hitAnim * 0.08;
+    entry.bodyGroup.scale.set(1.0 + entry.hitAnim * 0.06, squash, 1.0 + entry.hitAnim * 0.06);
+    if (entry.hitAnim === 0) {
+      entry.bodyGroup.rotation.z = 0;
+      entry.bodyGroup.scale.set(1, 1, 1);
+    }
   }
 
   update(dt: number, elapsed: number): void {
@@ -1380,19 +2142,74 @@ export class WorldInteractables {
       cfIdx++;
     }
 
-    // Decay hit wobble animation on damaged Slurp Barrels
-    for (const sb of this.slurpBarrelsMap.values()) {
-      if (sb.hitAnim > 0) {
-        sb.hitAnim = Math.max(0, sb.hitAnim - safeDt * 5.5);
-        const wobble = Math.sin(sb.hitAnim * Math.PI * 3.0) * sb.hitAnim * 0.12;
-        sb.bodyGroup.rotation.z = wobble;
-        const squash = 1.0 - sb.hitAnim * 0.08;
-        sb.bodyGroup.scale.set(1.0 + sb.hitAnim * 0.06, squash, 1.0 + sb.hitAnim * 0.06);
-        if (sb.hitAnim === 0) {
-          sb.bodyGroup.rotation.z = 0;
-          sb.bodyGroup.scale.set(1, 1, 1);
+    // Update & animate 5 Shimmering Sky Rifts (8s open window -> 45s cooldown -> auto reopen)
+    let riftIdx = 0;
+    for (const r of this.riftsMap.values()) {
+      if (r.data.active) {
+        if (r.data.openRemainingSec > 0) {
+          r.data.openRemainingSec = Math.max(0, r.data.openRemainingSec - safeDt);
+          if (r.data.openRemainingSec <= 0) {
+            r.data.openRemainingSec = 0;
+            r.data.active = false;
+            r.data.cooldownSec = RIFT_COOLDOWN_SEC;
+          }
+        }
+      } else if (r.data.cooldownSec > 0) {
+        r.data.cooldownSec = Math.max(0, r.data.cooldownSec - safeDt);
+        if (r.data.cooldownSec <= 0) {
+          r.data.cooldownSec = 0;
+          r.data.active = true;
+          r.data.openRemainingSec = 0;
         }
       }
+
+      r.portalGroup.visible = r.data.active;
+      r.baseRing.visible = r.data.active;
+      if (r.data.active) {
+        const isOpenWindow = r.data.openRemainingSec > 0;
+        const spinMul = isOpenWindow ? 2.15 : 1.0;
+        const t = elapsed + riftIdx * 0.85;
+        r.diamond.position.y = r.baseDiamondY + Math.sin(t * 2.6) * 0.16;
+        r.diamond.rotation.y = t * 1.9 * spinMul;
+        r.shardsGroup.rotation.y = -t * 0.9 * spinMul;
+        const pulseScale = 1.0 + Math.sin(t * (isOpenWindow ? 7.5 : 3.2)) * (isOpenWindow ? 0.12 : 0.05);
+        r.shardsGroup.scale.set(pulseScale, pulseScale, pulseScale);
+        r.haloGroup.rotation.y = t * 1.65 * spinMul;
+        r.haloGroup.rotation.z = Math.sin(t * 1.3) * 0.25;
+        const ringPulse = 1.0 + Math.sin(t * 3.4) * 0.08;
+        r.baseRing.scale.set(ringPulse, ringPulse, ringPulse);
+      }
+      riftIdx++;
+    }
+
+    // Update & animate 4 Capture Points (smooth decay if not advanced this frame)
+    let cpIdx = 0;
+    for (const cp of this.capturePointsMap.values()) {
+      if (!cp.data.captured) {
+        if (cp.claimedThisFrame) {
+          cp.claimedThisFrame = false;
+        } else if (cp.data.progress > 0) {
+          cp.data.progress = Math.max(0, cp.data.progress - safeDt / CAPTURE_DECAY_SEC);
+        }
+      } else {
+        cp.claimedThisFrame = false;
+      }
+
+      this.syncCapturePointVisual(cp);
+      const t = elapsed + cpIdx * 1.1;
+      cp.flagGroup.rotation.y = Math.sin(t * 2.8) * 0.22;
+      cp.finialMesh.rotation.y = t * 1.7;
+      const ringPulse = 1.0 + Math.sin(t * 3.2) * 0.09;
+      cp.innerRing.scale.set(ringPulse, ringPulse, ringPulse);
+      cpIdx++;
+    }
+
+    // Decay hit wobble animation on damaged Slurp Barrels & Explosive Barrels
+    for (const sb of this.slurpBarrelsMap.values()) {
+      this.stepBarrelHitWobble(sb, safeDt);
+    }
+    for (const eb of this.explosiveBarrelsMap.values()) {
+      this.stepBarrelHitWobble(eb, safeDt);
     }
   }
 
@@ -1414,5 +2231,11 @@ export class WorldInteractables {
     this.campfiresMap.clear();
     this.slurpBarrels = [];
     this.slurpBarrelsMap.clear();
+    this.rifts = [];
+    this.riftsMap.clear();
+    this.capturePoints = [];
+    this.capturePointsMap.clear();
+    this.explosiveBarrels = [];
+    this.explosiveBarrelsMap.clear();
   }
 }

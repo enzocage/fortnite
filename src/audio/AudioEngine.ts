@@ -56,6 +56,12 @@ export interface VehicleEngineState {
   kind: VehicleKind;
 }
 
+export interface WindRushState {
+  active: boolean;
+  filterHz: number;
+  gain: number;
+}
+
 export const BIOME_AMBIENCE_PROFILES: Record<
   BiomeType,
   Omit<BiomeAmbienceProfile, 'stormOverlayGain' | 'stormFilterFreq' | 'stormFilterQ'>
@@ -280,6 +286,12 @@ interface VehicleEngineRig {
   boostOsc: OscillatorNode;
 }
 
+interface WindRushRig {
+  masterGain: GainNode;
+  bandpassFilter: BiquadFilterNode | null;
+  noiseSource: AudioBufferSourceNode;
+}
+
 /**
  * Pure gain calculation for the Master, SFX, and Music buses.
  * Clamps all inputs safely to [0, 1] and treats non-finite values as 0.
@@ -319,6 +331,10 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'weather_thunder':
     case 'bounty_alert':
     case 'quest_complete':
+    case 'rift_teleport':
+    case 'augment_ready':
+    case 'flag_captured':
+    case 'barrel_explode':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -343,7 +359,10 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'zipline_loop':
     case 'grappler_reel':
     case 'campfire_heal':
+    case 'flag_tick':
       return 1;
+    case 'augment_select':
+    case 'tactical_ping':
     default:
       return 2;
   }
@@ -365,8 +384,13 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'slide_loop':
     case 'mantle_climb':
       return 55;
+    case 'flag_tick':
+      return 60;
     case 'overshield_recharge':
       return 65;
+    case 'augment_ready':
+    case 'augment_select':
+      return 80;
     case 'pickaxe_swing':
     case 'hit_wood':
     case 'hit_brick':
@@ -390,12 +414,15 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 130;
     case 'shield_bubble_deploy':
       return 140;
+    case 'tactical_ping':
+      return 150;
     case 'vehicle_horn':
       return 180;
     case 'vehicle_boost':
       return 190;
     case 'vehicle_crash':
     case 'vault_unlock':
+    case 'flag_captured':
       return 220;
     case 'shot_sniper':
     case 'shot_rocket':
@@ -403,6 +430,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'shockwave_blast':
     case 'bus_horn':
     case 'launch_pad':
+    case 'rift_teleport':
+    case 'barrel_explode':
       return 240;
     case 'weather_thunder':
       return 350;
@@ -453,6 +482,12 @@ export class AudioEngine {
   private vehicleEngineSpeedKmh = 0;
   private vehicleEngineBoosting = false;
   private vehicleEngineKind: VehicleKind = 'hover_atv';
+
+  private windRushRig: WindRushRig | null = null;
+  private windRushActive = false;
+  private windRushSpeedMs = 0;
+  private windRushFilterHz = 0;
+  private windRushGain = 0;
 
   constructor(
     eventBus: EventBus,
@@ -518,6 +553,7 @@ export class AudioEngine {
     this.applyBusGains();
     if (this.isSfxMuted()) {
       this.teardownVehicleEngine();
+      this.teardownWindRush();
     }
   }
 
@@ -526,6 +562,7 @@ export class AudioEngine {
     this.paused = Boolean(paused);
     if (this.paused) {
       this.teardownVehicleEngine();
+      this.teardownWindRush();
     }
   }
 
@@ -890,6 +927,69 @@ export class AudioEngine {
     };
   }
 
+  /**
+   * Maintains a continuous speed-mapped skydiving/freefall wind rush synthesizer loop
+   * using filtered pink/white noise modulated across ~280Hz..1600Hz.
+   * Cleanly ramps down and stops/disconnects nodes when inactive, paused, muted, or disposed.
+   */
+  updateWindRush(active: boolean, speedMs: number): void {
+    if (this.disposed) return;
+
+    const cleanSpeed = Number.isFinite(speedMs) ? clamp(speedMs, 0, 60) : 0;
+
+    if (!active || this.paused || this.isSfxMuted()) {
+      this.teardownWindRush();
+      return;
+    }
+
+    if (!this.ctx && (this.unlocked || typeof window === 'undefined')) {
+      this.ensureContext();
+    }
+
+    if (
+      !this.ctx ||
+      !this.sfxGain ||
+      this.ctx.state === 'closed' ||
+      (!this.unlocked && this.ctx.state === 'suspended')
+    ) {
+      this.teardownWindRush();
+      return;
+    }
+
+    if (
+      this.windRushActive &&
+      this.windRushRig &&
+      Math.abs(this.windRushSpeedMs - cleanSpeed) < 0.05
+    ) {
+      return;
+    }
+
+    this.pruneVoices(this.ctx.currentTime);
+
+    if (!this.windRushActive && !this.ensurePolyphonyRoom(2)) {
+      return;
+    }
+
+    if (!this.windRushRig) {
+      this.windRushRig = this.createWindRushRig(this.ctx, this.sfxGain);
+      if (!this.windRushRig) {
+        return;
+      }
+    }
+
+    this.windRushActive = true;
+    this.windRushSpeedMs = cleanSpeed;
+    this.applyWindRushParams(this.ctx, this.windRushRig, cleanSpeed);
+  }
+
+  getWindRushState(): WindRushState {
+    return {
+      active: this.windRushActive,
+      filterHz: this.windRushFilterHz,
+      gain: this.windRushGain,
+    };
+  }
+
   getActiveVoiceCount(): number {
     if (this.ctx) {
       this.pruneVoices(this.ctx.currentTime);
@@ -916,6 +1016,7 @@ export class AudioEngine {
     }
     this.unsubscribers.length = 0;
 
+    this.teardownWindRush();
     this.teardownVehicleEngine();
     this.teardownBiomeAmbience();
 
@@ -1092,7 +1193,8 @@ export class AudioEngine {
     return (
       this.chestLoops.size +
       (this.ambienceActive ? 1 : 0) +
-      (this.vehicleEngineActive ? 1 : 0)
+      (this.vehicleEngineActive ? 1 : 0) +
+      (this.windRushActive ? 1 : 0)
     );
   }
 
@@ -1489,6 +1591,144 @@ export class AudioEngine {
     this.safeDisconnect(rig.whineGain);
     this.safeDisconnect(rig.boostGain);
     this.safeDisconnect(rig.masterGain);
+  }
+
+  private createWindRushRig(
+    ctx: AudioContext,
+    destination: AudioNode,
+  ): WindRushRig | null {
+    if (typeof ctx.createGain !== 'function' || typeof ctx.createBufferSource !== 'function') {
+      return null;
+    }
+
+    const noiseBuf = this.buildWindNoiseBuffer(ctx);
+    if (!noiseBuf) {
+      return null;
+    }
+
+    let masterGain: GainNode | null = null;
+    let bandpassFilter: BiquadFilterNode | null = null;
+    let noiseSource: AudioBufferSourceNode | null = null;
+
+    try {
+      const now = ctx.currentTime;
+      masterGain = ctx.createGain();
+      this.setParam(masterGain.gain, 0.0001, now);
+      masterGain.connect(destination);
+
+      noiseSource = ctx.createBufferSource();
+      noiseSource.buffer = noiseBuf;
+      noiseSource.loop = true;
+
+      bandpassFilter = this.safeCreateFilter(ctx);
+      if (bandpassFilter) {
+        bandpassFilter.type = 'bandpass';
+        this.setParam(bandpassFilter.frequency, 280, now);
+        this.setParam(bandpassFilter.Q, 1.1, now);
+        noiseSource.connect(bandpassFilter);
+        bandpassFilter.connect(masterGain);
+      } else {
+        noiseSource.connect(masterGain);
+      }
+
+      noiseSource.start(now);
+
+      return {
+        masterGain,
+        bandpassFilter,
+        noiseSource,
+      };
+    } catch {
+      this.safeDisconnect(noiseSource);
+      this.safeDisconnect(bandpassFilter);
+      this.safeDisconnect(masterGain);
+      return null;
+    }
+  }
+
+  private applyWindRushParams(
+    ctx: AudioContext,
+    rig: WindRushRig,
+    speedMs: number,
+  ): void {
+    const now = ctx.currentTime;
+    const speedNorm = clamp(speedMs / 60, 0, 1);
+    const filterHz = clamp(280 + speedNorm * 1320, 280, 1600);
+    const filterQ = 1.1 + speedNorm * 0.7;
+    const gain = clamp(0.016 + Math.pow(speedNorm, 1.1) * 0.164, 0.0001, 0.2);
+
+    this.windRushFilterHz = filterHz;
+    this.windRushGain = gain;
+
+    try {
+      if (rig.bandpassFilter) {
+        this.smoothParam(rig.bandpassFilter.frequency, filterHz, now, 0.06, 0.08);
+        this.smoothParam(rig.bandpassFilter.Q, filterQ, now, 0.06, 0.08);
+      }
+      this.smoothParam(rig.masterGain.gain, gain, now, 0.06, 0.08);
+    } catch {
+      // Gracefully tolerate incomplete AudioNode mocks
+    }
+  }
+
+  private teardownWindRush(): void {
+    const rig = this.windRushRig;
+    this.windRushRig = null;
+    this.windRushActive = false;
+    this.windRushSpeedMs = 0;
+    this.windRushFilterHz = 0;
+    this.windRushGain = 0;
+
+    if (!rig) return;
+
+    const now = this.ctx ? this.ctx.currentTime : 0;
+    const stopAt = now + 0.05;
+    try {
+      this.rampParam(rig.masterGain.gain, 0.0001, now, 0.04);
+    } catch {
+      // Ignore ramp errors during teardown
+    }
+
+    try {
+      rig.noiseSource.stop(stopAt);
+    } catch {
+      // Ignore stop errors during teardown
+    }
+
+    this.safeDisconnect(rig.noiseSource);
+    this.safeDisconnect(rig.bandpassFilter);
+    this.safeDisconnect(rig.masterGain);
+  }
+
+  private buildWindNoiseBuffer(ctx: AudioContext): AudioBuffer | null {
+    if (typeof ctx.createBuffer !== 'function') return null;
+    try {
+      const rate = ctx.sampleRate || 44100;
+      const len = Math.max(256, Math.floor(rate * 1.5));
+      const buf = ctx.createBuffer(1, len, rate);
+      const data = buf.getChannelData(0);
+      const rand = mulberry32(0xc7f193);
+      let b0 = 0;
+      let b1 = 0;
+      let b2 = 0;
+      for (let i = 0; i < len; i++) {
+        const w = rand() * 2 - 1;
+        b0 = 0.997 * b0 + w * 0.029;
+        b1 = 0.985 * b1 + w * 0.032;
+        b2 = 0.95 * b2 + w * 0.048;
+        // Blend warm pink rush with crisp white air hiss
+        data[i] = clamp((b0 + b1 + b2 + w * 0.24) * 0.28, -1, 1);
+      }
+      // Crossfade loop seam to eliminate wrap clicks
+      const fadeLen = Math.min(256, Math.floor(len / 8));
+      for (let i = 0; i < fadeLen; i++) {
+        const alpha = i / fadeLen;
+        data[i] = data[i] * alpha + data[len - fadeLen + i] * (1 - alpha);
+      }
+      return buf;
+    } catch {
+      return null;
+    }
   }
 
   private safeCreateFilter(ctx: AudioContext): BiquadFilterNode | null {

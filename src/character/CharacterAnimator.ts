@@ -1,6 +1,6 @@
 import type { AnimState, CharacterRenderState, EmoteId, WeaponId } from '../types';
 import { clamp, damp } from '../core';
-import type { CharacterRig } from './CharacterRig';
+import { shouldActivateContrail, type CharacterRig } from './CharacterRig';
 
 interface PoseTarget {
   hipsX: number;
@@ -224,6 +224,9 @@ export class CharacterAnimator {
     if (state.weaponWrapId !== undefined) {
       rig.setWeaponWrap(state.weaponWrapId);
     }
+    if (state.contrailId !== undefined) {
+      rig.setContrail(state.contrailId);
+    }
 
     const anim = resolveAnimState(state);
     rig.updateGroundShadow(state.grounded, finiteOr(state.position.y), undefined, anim);
@@ -240,6 +243,7 @@ export class CharacterAnimator {
         rig.setGliderOpen(true, data.gliderFactor);
       }
     }
+    rig.updateContrail(shouldActivateContrail(state, anim), safeDt, data.time);
 
     const p = data.target;
     resetPose(p);

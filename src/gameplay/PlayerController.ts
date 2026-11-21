@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type {
   AnimState,
+  AugmentId,
   BuildPiece,
   BuildPieceType,
   BuildPreviewState,
@@ -14,6 +15,7 @@ import type {
   KeybindMap,
   MaterialType,
   Rarity,
+  RiftEntity,
   SoundEventId,
   TerrainQuery,
   Vec3Like,
@@ -43,6 +45,7 @@ import {
   normalizeAngle,
 } from '../core';
 import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from '../world';
+import { AugmentManager } from './AugmentManager';
 import type { BuildingSystem } from './BuildingSystem';
 import type { CollisionSystem } from './CollisionSystem';
 import type {
@@ -54,6 +57,7 @@ import type {
   PropsInteractionBridge,
   VaultBridge,
   VehicleBridge,
+  WorldRiftCaptureBridge,
   WorldStationBridge,
   WorldTraversalBridge,
 } from './GameplayTypes';
@@ -74,9 +78,12 @@ export class PlayerController {
   private vehicleBridge: VehicleBridge | null = null;
   private vaultBridge: VaultBridge | null = null;
   private stationBridge: WorldStationBridge | null = null;
+  private riftCaptureBridge: WorldRiftCaptureBridge | null = null;
+  private augmentManager: AugmentManager;
   private onVaultUnlocked: ((lootPos: Vec3Like, poiId: string) => void) | null = null;
   private onWeaponUpgraded: ((item: ItemInstance, cost: number) => void) | null = null;
   private onCampfireLit: ((campfireId: string) => void) | null = null;
+  private onPoiCaptured: ((poiName: string, lootPos?: Vec3Like) => void) | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
 
@@ -87,6 +94,31 @@ export class PlayerController {
   private overshieldRecharging = false;
   private nearCampfireHealing = false;
   private campfireHealVfxTimer = 0;
+  private playingElapsedSec = 0;
+  private riftCooldown = 0;
+  private captureStatus: {
+    poiName: string;
+    progress: number;
+    captured: boolean;
+    contested?: boolean;
+  } | null = null;
+  private captureCelebrationTimer = 0;
+  private flagTickTimer = 0;
+  private tacticalPing: {
+    x: number;
+    y: number;
+    z: number;
+    label: string;
+    kind: 'move' | 'danger' | 'loot';
+  } | null = null;
+  private tacticalPingTimer = 0;
+  private lastOverdriveApplied: {
+    id: string;
+    baseVx: number;
+    baseVz: number;
+    vx: number;
+    vz: number;
+  } | null = null;
 
   private activeZipline: { zip: ZiplineEntity; t: number; dir: 1 | -1 } | null = null;
   private ziplineCooldown = 0;
@@ -184,6 +216,7 @@ export class PlayerController {
     headshots: 0,
     structuresBuilt: 0,
     chestsOpened: 0,
+    poisCaptured: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -229,10 +262,13 @@ export class PlayerController {
       vehicleBridge?: VehicleBridge | null;
       vaultBridge?: VaultBridge | null;
       stationBridge?: WorldStationBridge | null;
+      riftCaptureBridge?: WorldRiftCaptureBridge | null;
+      augmentManager?: AugmentManager | null;
       gameMode?: GameModeId;
       onVaultUnlocked?: ((lootPos: Vec3Like, poiId: string) => void) | null;
       onWeaponUpgraded?: ((item: ItemInstance, cost: number) => void) | null;
       onCampfireLit?: ((campfireId: string) => void) | null;
+      onPoiCaptured?: ((poiName: string, lootPos?: Vec3Like) => void) | null;
     },
   ) {
     this.camera = camera;
@@ -242,6 +278,7 @@ export class PlayerController {
     this.weapons = weapons;
     this.propsBridge = propsBridge;
     this.eventBus = eventBus;
+    this.augmentManager = options?.augmentManager ?? new AugmentManager(eventBus);
     this.settings = {
       ...settings,
       keybinds: settings.keybinds ? { ...settings.keybinds } : undefined,
@@ -257,6 +294,9 @@ export class PlayerController {
     if (options?.stationBridge !== undefined) {
       this.setStationBridge(options.stationBridge);
     }
+    if (options?.riftCaptureBridge !== undefined) {
+      this.setRiftCaptureBridge(options.riftCaptureBridge);
+    }
     if (options?.gameMode !== undefined) {
       this.setGameMode(options.gameMode);
     }
@@ -268,6 +308,9 @@ export class PlayerController {
     }
     if (options?.onCampfireLit !== undefined) {
       this.setOnCampfireLit(options.onCampfireLit);
+    }
+    if (options?.onPoiCaptured !== undefined) {
+      this.setOnPoiCaptured(options.onPoiCaptured);
     }
 
     this.unsubHitmarker = this.eventBus.on('combat:hitmarker', (ev) => {
@@ -344,6 +387,28 @@ export class PlayerController {
     }
   }
 
+  setRiftCaptureBridge(bridge: WorldRiftCaptureBridge | null): void {
+    const prev = this.riftCaptureBridge;
+    this.riftCaptureBridge = bridge;
+    if (bridge !== null) {
+      this.weapons.setRiftCaptureBridge(bridge);
+    } else if (this.weapons.getRiftCaptureBridge() === prev) {
+      this.weapons.setRiftCaptureBridge(null);
+    }
+  }
+
+  setAugmentManager(mgr: AugmentManager | null): void {
+    this.augmentManager = mgr ?? new AugmentManager(this.eventBus);
+  }
+
+  getAugmentManager(): AugmentManager {
+    return this.augmentManager;
+  }
+
+  selectAugmentChoice(index: 0 | 1): AugmentId | null {
+    return this.augmentManager.selectChoice(index, { ...this.position });
+  }
+
   setVaultUnlockHandler(
     handler: ((lootPos: Vec3Like, poiId: string) => void) | null,
   ): void {
@@ -360,9 +425,207 @@ export class PlayerController {
     this.onCampfireLit = cb;
   }
 
+  setOnPoiCaptured(
+    cb: ((poiName: string, lootPos?: Vec3Like) => void) | null,
+  ): void {
+    this.onPoiCaptured = cb;
+  }
+
+  placeTacticalPing(forcePos?: Vec3Like): {
+    x: number;
+    y: number;
+    z: number;
+    label: string;
+    kind: 'move' | 'danger' | 'loot';
+    distance: number;
+  } | null {
+    if (!this.isAlive() || (this.phase !== 'playing' && !forcePos)) {
+      return null;
+    }
+
+    let pingPos: Vec3Like;
+    let directEnemyHit = false;
+
+    if (forcePos) {
+      pingPos = { x: forcePos.x, y: forcePos.y, z: forcePos.z };
+    } else {
+      const eye = this.getEyePosition();
+      const lookDir = this.getLookDirection();
+      const props = this.propsBridge.getProps();
+      const worldHit = this.collision.raycastWorld(eye, lookDir, 220, {
+        checkBuilds: true,
+        checkProps: true,
+        props,
+      });
+      const maxCheckDist = worldHit.hit ? worldHit.distance : 220;
+
+      // Check alive enemy actors along the aim ray
+      const actors = this.weapons.getActors();
+      let bestActorDist = maxCheckDist;
+      let hitEnemyPos: Vec3Like | null = null;
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (!actor.alive || actor.id === 'player') continue;
+        const cy = actor.position.y + actor.height * 0.52;
+        const r = Math.max(0.65, actor.radius * 1.6);
+        const ox = eye.x - actor.position.x;
+        const oy = eye.y - cy;
+        const oz = eye.z - actor.position.z;
+        const b = ox * lookDir.x + oy * lookDir.y + oz * lookDir.z;
+        const c = ox * ox + oy * oy + oz * oz - r * r;
+        const disc = b * b - c;
+        if (disc >= 0) {
+          const t = -b - Math.sqrt(disc);
+          if (t >= 0 && t < bestActorDist) {
+            bestActorDist = t;
+            hitEnemyPos = {
+              x: actor.position.x,
+              y: actor.position.y + actor.height * 0.8,
+              z: actor.position.z,
+            };
+          }
+        }
+      }
+
+      if (hitEnemyPos) {
+        pingPos = hitEnemyPos;
+        directEnemyHit = true;
+      } else if (worldHit.hit) {
+        pingPos = { ...worldHit.point };
+      } else {
+        const ex = clamp(eye.x + lookDir.x * 220, -395, 395);
+        const ez = clamp(eye.z + lookDir.z * 220, -395, 395);
+        const ty = this.terrain.getHeightAt(ex, ez);
+        pingPos = { x: ex, y: Math.max(eye.y + lookDir.y * 220, ty), z: ez };
+      }
+    }
+
+    let kind: 'move' | 'danger' | 'loot' = 'move';
+    let label = 'MOVE';
+
+    if (directEnemyHit) {
+      kind = 'danger';
+      label = 'DANGER';
+    } else {
+      const actors = this.weapons.getActors();
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (!actor.alive || actor.id === 'player') continue;
+        const center = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.5,
+          z: actor.position.z,
+        };
+        if (
+          dist3D(pingPos, actor.position) <= 5.5 ||
+          dist3D(pingPos, center) <= 5.5
+        ) {
+          kind = 'danger';
+          label = 'DANGER';
+          break;
+        }
+      }
+    }
+
+    if (kind === 'move') {
+      const vaults = this.vaultBridge?.getVaults() ?? [];
+      for (let i = 0; i < vaults.length; i++) {
+        const v = vaults[i];
+        if (!v.unlocked && dist3D(pingPos, { x: v.x, y: v.y, z: v.z }) <= 5.5) {
+          kind = 'loot';
+          label = 'VAULT';
+          break;
+        }
+      }
+    }
+
+    if (kind === 'move') {
+      const chests = this.propsBridge.getChests();
+      for (let i = 0; i < chests.length; i++) {
+        const c = chests[i];
+        if (!c.opened && dist3D(pingPos, { x: c.x, y: c.y, z: c.z }) <= 4.5) {
+          kind = 'loot';
+          label = 'CHEST';
+          break;
+        }
+      }
+    }
+
+    if (kind === 'move') {
+      const llamas = this.propsBridge.getLlamas?.() ?? [];
+      for (let i = 0; i < llamas.length; i++) {
+        const l = llamas[i];
+        if (!l.opened && dist3D(pingPos, { x: l.x, y: l.y, z: l.z }) <= 4.5) {
+          kind = 'loot';
+          label = 'LLAMA';
+          break;
+        }
+      }
+    }
+
+    if (kind === 'move') {
+      const supplyDrops = this.propsBridge.getSupplyDrops();
+      for (let i = 0; i < supplyDrops.length; i++) {
+        const sd = supplyDrops[i];
+        if (
+          sd.state !== 'opened' &&
+          dist3D(pingPos, { x: sd.x, y: sd.y, z: sd.z }) <= 5.0
+        ) {
+          kind = 'loot';
+          label = 'SUPPLY DROP';
+          break;
+        }
+      }
+    }
+
+    if (kind === 'move') {
+      const drops = this.propsBridge.getLootDrops();
+      for (let i = 0; i < drops.length; i++) {
+        const d = drops[i];
+        if (d.item && dist3D(pingPos, { x: d.x, y: d.y, z: d.z }) <= 3.5) {
+          kind = 'loot';
+          label = 'LOOT';
+          break;
+        }
+      }
+    }
+
+    this.tacticalPing = {
+      x: pingPos.x,
+      y: pingPos.y,
+      z: pingPos.z,
+      kind,
+      label,
+    };
+    this.tacticalPingTimer = 16.0;
+
+    this.eventBus.emit('sound:play', {
+      id: 'tactical_ping',
+      position: { ...pingPos },
+      spatial: false,
+    });
+    this.eventBus.emit('vfx:tactical_ping', {
+      position: { ...pingPos },
+      kind,
+      label,
+    });
+
+    return {
+      ...this.tacticalPing,
+      distance: Math.round(dist3D(this.position, pingPos)),
+    };
+  }
+
   setGameMode(mode: GameModeId): void {
     const prevMode = this.gameMode;
     this.gameMode = mode;
+    if (
+      this.playingElapsedSec === 0 &&
+      this.augmentManager.getActiveAugments().length === 0 &&
+      !this.augmentManager.getPendingChoices()
+    ) {
+      this.augmentManager.reset(4201, mode);
+    }
     if (mode === 'zero_build') {
       this.maxOvershield = 50;
       this.overshield = 50;
@@ -458,6 +721,9 @@ export class PlayerController {
       this.nearCampfireHealing = false;
       this.campfireHealVfxTimer = 0;
       this.overshieldRecharging = false;
+      this.captureStatus = null;
+      this.captureCelebrationTimer = 0;
+      this.flagTickTimer = 0;
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
       this.building.setPreviewVisible(false);
@@ -527,7 +793,7 @@ export class PlayerController {
 
   private grantEliminationSiphon(): void {
     this.killStreak += 1;
-    const siphonTotal = 50;
+    const siphonTotal = this.augmentManager.hasAugment('siphon_master') ? 75 : 50;
     const healthNeeded = Math.max(0, this.maxHealth - this.health);
     const healthAdded = Math.min(siphonTotal, healthNeeded);
     this.health += healthAdded;
@@ -616,6 +882,8 @@ export class PlayerController {
       radius: PLAYER_RADIUS,
       height: h,
       alive: this.isAlive(),
+      hasDemolisher: this.augmentManager.hasAugment('demolisher'),
+      hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
       onDamage: (ev) => this.applyDamage(ev),
       onHeal: (hpAdded, shieldAdded) => {
         if (!this.isAlive()) return;
@@ -635,9 +903,11 @@ export class PlayerController {
     busStartPos: Vec3Like,
     playerName?: string,
     gameMode?: GameModeId,
+    seed = 4201,
   ): void {
     if (playerName) this.playerName = playerName;
     if (gameMode !== undefined) this.gameMode = gameMode;
+    this.augmentManager.reset(seed, this.gameMode);
     this.inventory.reset();
     this.building.cancelEdit();
     this.building.setPreviewVisible(false);
@@ -733,6 +1003,14 @@ export class PlayerController {
     this.cameraShakeDuration = 0;
     this.cameraShakeIntensity = 0;
     this.elapsedTime = 0;
+    this.playingElapsedSec = 0;
+    this.riftCooldown = 0;
+    this.captureStatus = null;
+    this.captureCelebrationTimer = 0;
+    this.flagTickTimer = 0;
+    this.tacticalPing = null;
+    this.tacticalPingTimer = 0;
+    this.lastOverdriveApplied = null;
     this.stats = {
       damageDealt: 0,
       shotsFired: 0,
@@ -740,6 +1018,7 @@ export class PlayerController {
       headshots: 0,
       structuresBuilt: 0,
       chestsOpened: 0,
+      poisCaptured: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -1059,7 +1338,7 @@ export class PlayerController {
     this.keysDown.delete(code);
   }
 
-  setMouseButton(button: 0 | 2, down: boolean): void {
+  setMouseButton(button: 0 | 1 | 2, down: boolean): void {
     if (button === 0) {
       if (down) {
         this.handlePrimaryButtonDown();
@@ -1067,6 +1346,10 @@ export class PlayerController {
         this.leftMouseDown = false;
         this.isFiring = false;
         this.lastDraggedEditTile = -1;
+      }
+    } else if (button === 1) {
+      if (down && this.phase === 'playing') {
+        this.placeTacticalPing();
       }
     } else if (button === 2) {
       if (down) {
@@ -1117,6 +1400,14 @@ export class PlayerController {
       } catch {
         // Fallback drag-to-aim remains active
       }
+    }
+
+    if (e.button === 1) {
+      e.preventDefault?.();
+      if (this.phase === 'playing') {
+        this.placeTacticalPing();
+      }
+      return;
     }
 
     this.isMouseDragging = true;
@@ -1311,6 +1602,19 @@ export class PlayerController {
 
     if (this.phase !== 'playing') return;
 
+    if (code === 'Digit7') {
+      this.selectAugmentChoice(0);
+      return;
+    }
+    if (code === 'Digit8') {
+      this.selectAugmentChoice(1);
+      return;
+    }
+    if (code === 'KeyQ') {
+      this.placeTacticalPing();
+      return;
+    }
+
     const kb = this.getResolvedKeybinds();
 
     if (this.activeVehicleId !== null) {
@@ -1385,9 +1689,6 @@ export class PlayerController {
       case 'Digit6':
         this.selectSlot(5);
         break;
-      case 'KeyQ':
-        this.toggleBuildMode();
-        break;
       case 'F1':
         this.selectBuildPiece('wall');
         break;
@@ -1443,11 +1744,43 @@ export class PlayerController {
         }
         if (this.grounded) {
           this.isCrouching = false;
-          this.velocity.y = 8.4;
+          const isSprintingNow =
+            this.isSprinting ||
+            ((this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight')) &&
+              (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) &&
+              !this.isAiming &&
+              this.stamina > 1.5);
+          const jumpScale =
+            isSprintingNow && this.augmentManager.hasAugment('parkour_boost')
+              ? 1.35
+              : 1.0;
+          this.velocity.y = 8.4 * jumpScale;
           this.grounded = false;
           this.wasAirborne = true;
           this.fallPeakY = this.position.y;
           this.eventBus.emit('sound:play', { id: 'jump', position: this.position, spatial: true });
+        } else if (
+          !this.isSwimming &&
+          !this.isMantling &&
+          this.augmentManager.hasAugment('aerialist')
+        ) {
+          const terrainY = this.terrain.getHeightAt(this.position.x, this.position.z);
+          const floorY = this.collision.getFloorHeightAt(
+            this.position.x,
+            this.position.z,
+            this.position.y + 0.5,
+            0.2,
+          );
+          const alt = Math.min(this.position.y - terrainY, this.position.y - floorY);
+          if (alt > 6.0) {
+            this.isCrouching = false;
+            this.isSliding = false;
+            this.isBuildMode = false;
+            this.building.setPreviewVisible(false);
+            this.fallImmune = true;
+            this.phase = 'gliding';
+            this.eventBus.emit('sound:play', { id: 'glider_deploy' });
+          }
         }
         break;
       case 'Escape':
@@ -1540,11 +1873,14 @@ export class PlayerController {
     if (item.magAmmo >= def.magSize) return;
     if (this.inventory.getAmmo(def.ammoType) <= 0) return;
 
+    const reloadScale = this.augmentManager.hasAugment('light_fingers') ? 0.7 : 1.0;
+    const reloadDur = def.reloadTime * reloadScale;
+
     this.healTimer = 0;
     this.healLabel = null;
     this.reloadSlotIndex = slot;
-    this.reloadDuration = def.reloadTime;
-    this.reloadTimer = def.reloadTime;
+    this.reloadDuration = reloadDur;
+    this.reloadTimer = reloadDur;
     this.eventBus.emit('sound:play', { id: 'reload' });
   }
 
@@ -1610,6 +1946,9 @@ export class PlayerController {
       isPlayer: true,
       vehicleBridge: this.vehicleBridge,
       stationBridge: this.stationBridge,
+      riftCaptureBridge: this.riftCaptureBridge,
+      hasDemolisher: this.augmentManager.hasAugment('demolisher'),
+      hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
       onAmmoConsumed: () => {
         if (def.magSize > 0 && item.magAmmo > 0) {
           item.magAmmo -= 1;
@@ -1844,6 +2183,16 @@ export class PlayerController {
 
   private exitActiveVehicle(withCooldown: boolean): boolean {
     if (!this.activeVehicleId) return false;
+    const exitingVeh = this.getActiveVehicleEntity();
+    if (
+      exitingVeh &&
+      this.lastOverdriveApplied &&
+      this.lastOverdriveApplied.id === exitingVeh.id
+    ) {
+      exitingVeh.vx = this.lastOverdriveApplied.baseVx;
+      exitingVeh.vz = this.lastOverdriveApplied.baseVz;
+    }
+    this.lastOverdriveApplied = null;
     const exitPos =
       this.vehicleBridge?.exitVehicle(this.activeVehicleId, 'player') ?? null;
     this.activeVehicleId = null;
@@ -1954,6 +2303,7 @@ export class PlayerController {
       | 'loot_drop'
       | 'vault'
       | 'vehicle'
+      | 'rift'
       | 'upgrade_bench'
       | 'campfire';
     id: string;
@@ -1969,6 +2319,7 @@ export class PlayerController {
         | 'loot_drop'
         | 'vault'
         | 'vehicle'
+        | 'rift'
         | 'upgrade_bench'
         | 'campfire';
       id: string;
@@ -2088,6 +2439,31 @@ export class PlayerController {
               rarity: 'rare',
             },
           };
+        }
+      }
+    }
+
+    if (this.riftCooldown <= 0 && this.riftCaptureBridge) {
+      const rifts = this.riftCaptureBridge.getRifts();
+      for (let i = 0; i < rifts.length; i++) {
+        const rift = rifts[i];
+        if (!rift.active) continue;
+        const horiz = dist2D(this.position.x, this.position.z, rift.x, rift.z);
+        const dy = Math.abs(this.position.y - rift.y);
+        if (horiz <= 3.8 && dy <= 3.2) {
+          const d = dist3D(this.position, { x: rift.x, y: rift.y, z: rift.z });
+          if (d < bestDist) {
+            bestDist = d;
+            best = {
+              kind: 'rift',
+              id: rift.id,
+              prompt: {
+                label: 'ENTER SKY RIFT',
+                key: interactKey,
+                rarity: 'epic',
+              },
+            };
+          }
         }
       }
     }
@@ -2306,6 +2682,11 @@ export class PlayerController {
         return;
       }
 
+      if (candidate.kind === 'rift') {
+        this.triggerRiftById(candidate.id);
+        return;
+      }
+
       if (candidate.kind === 'campfire' && this.stationBridge) {
         if (this.stationBridge.igniteCampfire(candidate.id)) {
           const cf = this.stationBridge
@@ -2437,6 +2818,168 @@ export class PlayerController {
     };
   }
 
+  private triggerRiftById(riftId: string): boolean {
+    if (!this.riftCaptureBridge || this.riftCooldown > 0) return false;
+    const res = this.riftCaptureBridge.triggerRift(riftId);
+    if (!res) return false;
+
+    if (this.activeVehicleId !== null) {
+      this.exitActiveVehicle(false);
+    }
+    this.activeZipline = null;
+    this.isCrouching = false;
+    this.isSliding = false;
+    this.isMantling = false;
+    this.isSwimming = false;
+    this.isBuildMode = false;
+    this.building.setPreviewVisible(false);
+    this.building.cancelEdit();
+    this.cancelActionsOnModeChange();
+
+    const fromPos = { ...this.position };
+    this.position = { ...res.skyPos };
+    this.velocity = {
+      x: Math.sin(this.yaw) * 12,
+      y: -8,
+      z: Math.cos(this.yaw) * 12,
+    };
+    this.grounded = false;
+    this.wasAirborne = true;
+    this.fallPeakY = this.position.y;
+    this.fallImmune = true;
+    this.phase = 'skydiving';
+    this.riftCooldown = 1.0;
+    this.interactPrompt = null;
+    this.captureStatus = null;
+    this.captureCelebrationTimer = 0;
+
+    this.eventBus.emit('sound:play', {
+      id: 'rift_teleport',
+      position: fromPos,
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:rift_tear', {
+      position: fromPos,
+      skyPosition: { ...res.skyPos },
+    });
+    return true;
+  }
+
+  private checkAutoSkyRifts(): boolean {
+    if (
+      !this.riftCaptureBridge ||
+      this.riftCooldown > 0 ||
+      this.activeZipline !== null ||
+      this.activeVehicleId !== null
+    ) {
+      return false;
+    }
+    const rifts: RiftEntity[] = this.riftCaptureBridge.getRifts();
+    for (let i = 0; i < rifts.length; i++) {
+      const rift = rifts[i];
+      if (!rift.active) continue;
+      const horiz = dist2D(this.position.x, this.position.z, rift.x, rift.z);
+      const dy = Math.abs(this.position.y - rift.y);
+      if (horiz <= 2.2 && dy <= 2.8) {
+        if (this.triggerRiftById(rift.id)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private updateCapturePoints(dt: number): void {
+    if (!this.riftCaptureBridge || !this.isAlive()) {
+      this.captureStatus = null;
+      this.flagTickTimer = 0;
+      return;
+    }
+    const points = this.riftCaptureBridge.getCapturePoints();
+    let activePoint: (typeof points)[number] | null = null;
+    for (let i = 0; i < points.length; i++) {
+      const cp = points[i];
+      if (cp.captured) continue;
+      const radius = cp.radius > 0 ? cp.radius : 6.5;
+      const horiz = dist2D(this.position.x, this.position.z, cp.x, cp.z);
+      const dy = Math.abs(this.position.y - cp.y);
+      if (horiz <= radius && dy <= 4.5) {
+        activePoint = cp;
+        break;
+      }
+    }
+
+    if (!activePoint) {
+      this.flagTickTimer = 0;
+      if (this.captureCelebrationTimer > 0) {
+        this.captureCelebrationTimer -= dt;
+        if (this.captureCelebrationTimer <= 0) {
+          this.captureCelebrationTimer = 0;
+          this.captureStatus = null;
+        }
+      } else {
+        this.captureStatus = null;
+      }
+      return;
+    }
+
+    const r = activePoint.radius > 0 ? activePoint.radius : 6.5;
+    let contested = false;
+    const actors = this.weapons.getActors();
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (!actor.alive || actor.id === 'player') continue;
+      if (
+        dist2D(actor.position.x, actor.position.z, activePoint.x, activePoint.z) <= r &&
+        Math.abs(actor.position.y - activePoint.y) <= 4.5
+      ) {
+        contested = true;
+        break;
+      }
+    }
+
+    const res = this.riftCaptureBridge.advanceCapturePoint(
+      activePoint.id,
+      'player',
+      this.playerName,
+      dt,
+    );
+    const capturedNow = res.capturedNow;
+    this.captureStatus = {
+      poiName: res.poiName,
+      progress: res.progress,
+      captured: capturedNow || activePoint.captured,
+      contested,
+    };
+
+    if (capturedNow) {
+      this.stats.poisCaptured = (this.stats.poisCaptured ?? 0) + 1;
+      this.captureCelebrationTimer = 3.0;
+      this.flagTickTimer = 0;
+      const pos = { x: activePoint.x, y: activePoint.y, z: activePoint.z };
+      this.eventBus.emit('sound:play', {
+        id: 'flag_captured',
+        position: pos,
+        spatial: true,
+      });
+      this.eventBus.emit('vfx:flag_captured', {
+        position: pos,
+        poiName: res.poiName,
+      });
+      this.onPoiCaptured?.(res.poiName, res.lootPos);
+    } else {
+      this.flagTickTimer -= dt;
+      if (this.flagTickTimer <= 0) {
+        this.flagTickTimer = 1.2;
+        this.eventBus.emit('sound:play', {
+          id: 'flag_tick',
+          position: { x: activePoint.x, y: activePoint.y, z: activePoint.z },
+          spatial: true,
+        });
+      }
+    }
+  }
+
   update(
     dt: number,
     elapsed: number,
@@ -2456,7 +2999,14 @@ export class PlayerController {
       this.launchPadCooldown = Math.max(0, this.launchPadCooldown - safeDt);
     }
     if (this.vehicleCooldown > 0) this.vehicleCooldown = Math.max(0, this.vehicleCooldown - safeDt);
+    if (this.riftCooldown > 0) this.riftCooldown = Math.max(0, this.riftCooldown - safeDt);
     if (this.lavaCooldown > 0) this.lavaCooldown = Math.max(0, this.lavaCooldown - safeDt);
+    if (this.tacticalPing && this.tacticalPingTimer > 0) {
+      this.tacticalPingTimer = Math.max(0, this.tacticalPingTimer - safeDt);
+      if (this.tacticalPingTimer <= 0) {
+        this.tacticalPing = null;
+      }
+    }
     if (this.cameraShakeTimer > 0) {
       this.cameraShakeTimer = Math.max(0, this.cameraShakeTimer - safeDt);
     }
@@ -2489,6 +3039,10 @@ export class PlayerController {
     }
 
     if (this.phase === 'playing') {
+      if (this.isAlive()) {
+        this.playingElapsedSec += safeDt;
+        this.augmentManager.update(safeDt, this.playingElapsedSec);
+      }
       if (this.activeVehicleId !== null) {
         this.updateVehicleDriving(safeDt);
       } else if (this.isMantling) {
@@ -2498,7 +3052,12 @@ export class PlayerController {
       } else {
         this.updateGroundMovement(safeDt);
       }
+      if (this.checkAutoSkyRifts()) {
+        this.updateCamera(safeDt);
+        return;
+      }
       this.checkVolcanicLavaHazard();
+      this.updateCapturePoints(safeDt);
       this.updateCombatAndTimers(safeDt);
       this.updateAutoPickupAndPrompt();
       this.updateCamera(safeDt);
@@ -2517,6 +3076,16 @@ export class PlayerController {
     if (!veh || veh.destroyed || veh.hp <= 0 || veh.driverId !== 'player') {
       this.exitActiveVehicle(true);
       return;
+    }
+
+    if (
+      this.lastOverdriveApplied &&
+      this.lastOverdriveApplied.id === veh.id &&
+      Math.abs(veh.vx - this.lastOverdriveApplied.vx) < 1e-4 &&
+      Math.abs(veh.vz - this.lastOverdriveApplied.vz) < 1e-4
+    ) {
+      veh.vx = this.lastOverdriveApplied.baseVx;
+      veh.vz = this.lastOverdriveApplied.baseVz;
     }
 
     const { forwardInput, rightInput } = this.getMoveAxes();
@@ -2540,6 +3109,27 @@ export class PlayerController {
     ) {
       this.exitActiveVehicle(true);
       return;
+    }
+
+    if (this.augmentManager.hasAugment('mechanic_overdrive')) {
+      if (updated.hp < updated.maxHp) {
+        updated.hp = Math.min(updated.maxHp, updated.hp + 4.0 * dt);
+      }
+      const baseVx = updated.vx;
+      const baseVz = updated.vz;
+      updated.x = clamp(updated.x + baseVx * 0.25 * dt, -390, 390);
+      updated.z = clamp(updated.z + baseVz * 0.25 * dt, -390, 390);
+      updated.vx = baseVx * 1.25;
+      updated.vz = baseVz * 1.25;
+      this.lastOverdriveApplied = {
+        id: updated.id,
+        baseVx,
+        baseVz,
+        vx: updated.vx,
+        vz: updated.vz,
+      };
+    } else {
+      this.lastOverdriveApplied = null;
     }
 
     this.position = {
@@ -2854,16 +3444,21 @@ export class PlayerController {
       this.velocity.z = damp(this.velocity.z, targetVz, accel, dt);
     }
 
+    const gravScale =
+      !this.grounded && this.augmentManager.hasAugment('parkour_boost')
+        ? 0.84
+        : 1.0;
+
     if (inWater) {
       // Shallow swim buoyancy at water surface
       const swimY = WATER_LEVEL - 0.8;
       if (this.position.y < swimY) {
         this.velocity.y = damp(this.velocity.y, 4.0, 8.0, dt);
       } else {
-        this.velocity.y -= 20.0 * dt;
+        this.velocity.y -= 20.0 * gravScale * dt;
       }
     } else {
-      this.velocity.y -= 22.0 * dt;
+      this.velocity.y -= 22.0 * gravScale * dt;
     }
 
     const prevGrounded = this.grounded;
@@ -3738,7 +4333,24 @@ export class PlayerController {
       pointerLocked: this.pointerLocked,
       canDeployGlider:
         this.phase === 'skydiving' ||
-        (this.phase === 'gliding' && altitude > GLIDER_FORCE_HEIGHT),
+        (this.phase === 'gliding' && altitude > GLIDER_FORCE_HEIGHT) ||
+        (this.phase === 'playing' &&
+          !this.grounded &&
+          !this.isSwimming &&
+          !this.isMantling &&
+          this.activeVehicleId === null &&
+          this.activeZipline === null &&
+          this.augmentManager.hasAugment('aerialist') &&
+          Math.min(
+            altitude,
+            this.position.y -
+              this.collision.getFloorHeightAt(
+                this.position.x,
+                this.position.z,
+                this.position.y + 0.5,
+                0.2,
+              ),
+          ) > 6.0),
       canJumpBus: this.phase === 'bus',
       hitmarker: this.hitmarker,
       damageDirection: this.damageDirection,
@@ -3759,6 +4371,19 @@ export class PlayerController {
       overshield: Math.ceil(this.overshield),
       maxOvershield: this.maxOvershield,
       nearCampfireHealing: this.nearCampfireHealing,
+      activeAugments: this.augmentManager.getActiveAugments(),
+      pendingAugmentChoices: this.augmentManager.getPendingChoices(),
+      captureStatus: this.captureStatus ? { ...this.captureStatus } : null,
+      tacticalPing: this.tacticalPing
+        ? {
+            x: this.tacticalPing.x,
+            y: this.tacticalPing.y,
+            z: this.tacticalPing.z,
+            label: this.tacticalPing.label,
+            kind: this.tacticalPing.kind,
+            distance: Math.round(dist3D(this.position, this.tacticalPing)),
+          }
+        : null,
     };
   }
 }

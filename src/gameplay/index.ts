@@ -14,3 +14,9 @@ export { BuildingSystem, classifyEditMask } from './BuildingSystem';
 export { WeaponSystem, computeWeaponDamage } from './WeaponSystem';
 export { PlayerController } from './PlayerController';
 export { QuestTracker, type QuestEventKind } from './QuestTracker';
+export {
+  AugmentManager,
+  AUGMENT_INTERVAL_DEFAULT,
+  AUGMENT_INTERVAL_BLITZ,
+  MAX_ACTIVE_AUGMENTS,
+} from './AugmentManager';

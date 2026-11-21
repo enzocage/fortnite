@@ -21,6 +21,9 @@ export { EnvironmentFX } from './EnvironmentFX';
 export { StormSystem, type StormUpdateResult } from './StormSystem';
 export {
   WorldInteractables,
+  type CapturePointAdvanceResult,
+  type ExplosiveBarrelDamageResult,
+  type RiftTriggerResult,
   type SlurpBarrelDamageResult,
   type UnlockVaultResult,
 } from './WorldInteractables';

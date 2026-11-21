@@ -1105,7 +1105,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(barrels).toHaveLength(24);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
     expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
 
     for (const sb of barrels) {
       expect(sb.hp).toBe(40);
@@ -1151,7 +1151,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(sb0.destroyed).toBe(true);
     expect(sbGroup.visible).toBe(false);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18);
     expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
     expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1177,7 +1177,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     ).toBe(true);
     expect(sbGroup.visible).toBe(true);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
 
     interactables.dispose();
     builder.dispose();
@@ -1413,6 +1413,343 @@ describe('PropsAndLoot Wave-2 Loot Pools', () => {
     expect(supplyItemIds.has('shield_bubble')).toBe(true);
 
     pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', () => {
+  it('constructs 5 sky rifts, 4 POI flag capture points, and 18 explosive red barrels clear of water/buildings with full lifecycle and reset', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 0.6) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 2.2 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    // 1. 5 Shimmering Sky Rifts across the 5 edge/highland POIs
+    const rifts = interactables.getRifts();
+    expect(rifts).toHaveLength(5);
+    expect(new Set(rifts.map((r) => r.poiId))).toEqual(
+      new Set([
+        'frostpeak_citadel',
+        'scorched_caldera',
+        'sunken_oasis',
+        'whispering_pines',
+        'skyline_spire',
+      ]),
+    );
+
+    for (const r of rifts) {
+      expect(r.active).toBe(true);
+      expect(r.openRemainingSec).toBe(0);
+      expect(r.cooldownSec).toBe(0);
+      expect(terrain.isWater(r.x, r.z)).toBe(false);
+      expect(r.y).toBeCloseTo(terrain.getHeightAt(r.x, r.z), 4);
+      expect(terrain.getNormalAt(r.x, r.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(r.x, r.y, r.z, 1.0)).toBe(true);
+      for (const v of interactables.getVaults()) {
+        expect(Math.hypot(r.x - v.x, r.z - v.z)).toBeGreaterThan(4.0);
+      }
+      for (const p of interactables.getLaunchPads()) {
+        expect(Math.hypot(r.x - p.x, r.z - p.z)).toBeGreaterThan(4.0);
+      }
+      for (const b of interactables.getUpgradeBenches()) {
+        expect(Math.hypot(r.x - b.x, r.z - b.z)).toBeGreaterThan(3.0);
+      }
+      for (const cf of interactables.getCampfires()) {
+        expect(Math.hypot(r.x - cf.x, r.z - cf.z)).toBeGreaterThan(3.0);
+      }
+      for (const sb of interactables.getSlurpBarrels()) {
+        expect(Math.hypot(r.x - sb.x, r.z - sb.z)).toBeGreaterThan(2.5);
+      }
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(r.x - veh.x, r.z - veh.z)).toBeGreaterThan(3.0);
+      }
+      const riftMesh = interactables.getGroup().getObjectByName(`SkyRift_${r.id}`) as THREE.Group;
+      expect(riftMesh).toBeDefined();
+      expect(riftMesh.children.length).toBeGreaterThanOrEqual(2);
+      const portalGroup = riftMesh.children.find((ch) => ch instanceof THREE.Group) as THREE.Group;
+      expect(portalGroup.visible).toBe(true);
+    }
+
+    // Trigger rift -> 8s open window -> 45s cooldown -> auto reopen
+    const r0 = rifts[0];
+    const r0Mesh = interactables.getGroup().getObjectByName(`SkyRift_${r0.id}`) as THREE.Group;
+    const r0Portal = r0Mesh.children.find((ch) => ch instanceof THREE.Group) as THREE.Group;
+    expect(interactables.triggerRift('nonexistent_rift')).toBeNull();
+    const firstTrigger = interactables.triggerRift(r0.id);
+    expect(firstTrigger).toEqual({
+      skyPos: { x: r0.x, y: r0.y + 92, z: r0.z },
+    });
+    expect(r0.active).toBe(true);
+    expect(r0.openRemainingSec).toBe(8);
+    expect(r0.cooldownSec).toBe(0);
+
+    // Halfway through 8s open window, pursuers can still enter without resetting the 8s window
+    interactables.update(4.0, 4.0);
+    expect(r0.active).toBe(true);
+    expect(r0.openRemainingSec).toBeCloseTo(4.0, 4);
+    const pursuerTrigger = interactables.triggerRift(r0.id);
+    expect(pursuerTrigger).toEqual({
+      skyPos: { x: r0.x, y: r0.y + 92, z: r0.z },
+    });
+    expect(r0.openRemainingSec).toBeCloseTo(4.0, 4);
+
+    // Remaining 4s expire -> enters 45s cooldown and blocks triggers
+    interactables.update(4.0, 8.0);
+    expect(r0.active).toBe(false);
+    expect(r0.openRemainingSec).toBe(0);
+    expect(r0.cooldownSec).toBe(45);
+    expect(r0Portal.visible).toBe(false);
+    expect(interactables.triggerRift(r0.id)).toBeNull();
+
+    // Advance 30s into cooldown -> still inactive
+    interactables.update(30.0, 38.0);
+    expect(r0.active).toBe(false);
+    expect(r0.cooldownSec).toBeCloseTo(15.0, 4);
+    expect(interactables.triggerRift(r0.id)).toBeNull();
+
+    // Remaining 15s expire -> reopens automatically
+    interactables.update(15.0, 53.0);
+    expect(r0.active).toBe(true);
+    expect(r0.cooldownSec).toBe(0);
+    expect(r0.openRemainingSec).toBe(0);
+    expect(r0Portal.visible).toBe(true);
+    expect(interactables.triggerRift(r0.id)).toEqual({
+      skyPos: { x: r0.x, y: r0.y + 92, z: r0.z },
+    });
+
+    // 2. 4 Capturable POI Flag Control Points
+    const capturePoints = interactables.getCapturePoints();
+    expect(capturePoints).toHaveLength(4);
+    expect(new Set(capturePoints.map((c) => c.poiId))).toEqual(
+      new Set(['metro_towers', 'market_row', 'crater_depot', 'sunny_suburbs']),
+    );
+
+    for (const cp of capturePoints) {
+      expect(cp.radius).toBe(6.5);
+      expect(cp.progress).toBe(0);
+      expect(cp.captured).toBe(false);
+      expect(cp.ownerId).toBeNull();
+      expect(cp.ownerName).toBeNull();
+      expect(cp.poiName).toBe(POIS.find((p) => p.id === cp.poiId)!.name);
+      expect(terrain.isWater(cp.x, cp.z)).toBe(false);
+      expect(cp.y).toBeCloseTo(terrain.getHeightAt(cp.x, cp.z), 4);
+      expect(terrain.getNormalAt(cp.x, cp.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(cp.x, cp.y, cp.z, 1.2)).toBe(true);
+      for (const b of interactables.getUpgradeBenches()) {
+        expect(Math.hypot(cp.x - b.x, cp.z - b.z)).toBeGreaterThan(3.0);
+      }
+      for (const cf of interactables.getCampfires()) {
+        expect(Math.hypot(cp.x - cf.x, cp.z - cf.z)).toBeGreaterThan(3.0);
+      }
+      for (const sb of interactables.getSlurpBarrels()) {
+        expect(Math.hypot(cp.x - sb.x, cp.z - sb.z)).toBeGreaterThan(2.5);
+      }
+      for (const p of interactables.getLaunchPads()) {
+        expect(Math.hypot(cp.x - p.x, cp.z - p.z)).toBeGreaterThan(3.0);
+      }
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(cp.x - veh.x, cp.z - veh.z)).toBeGreaterThan(3.0);
+      }
+      const cpMesh = interactables.getGroup().getObjectByName(`CapturePoint_${cp.id}`) as THREE.Group;
+      expect(cpMesh).toBeDefined();
+      expect(cpMesh.children.length).toBeGreaterThanOrEqual(6);
+    }
+
+    const cp0 = capturePoints[0];
+    const cpMesh = interactables.getGroup().getObjectByName(`CapturePoint_${cp0.id}`) as THREE.Group;
+    const cpFlagGroup = cpMesh.children.find((ch) => ch instanceof THREE.Group) as THREE.Group;
+    const cpBannerMesh = cpFlagGroup.children[1] as THREE.Mesh;
+    const uncapturedColorHex = (cpBannerMesh.material as THREE.MeshStandardMaterial).color.getHexString();
+    const flagStartY = cpFlagGroup.position.y;
+
+    // Advance 6s -> progress 0.5; same-frame update(dt) must NOT decay it
+    const midAdvance = interactables.advanceCapturePoint(cp0.id, 'player', 'Hero', 6.0);
+    expect(midAdvance).toEqual({
+      capturedNow: false,
+      progress: 0.5,
+      poiName: cp0.poiName,
+    });
+    expect(cp0.progress).toBeCloseTo(0.5, 5);
+    expect(cpFlagGroup.position.y).toBeGreaterThan(flagStartY);
+
+    interactables.update(0.1, 53.1);
+    expect(cp0.progress).toBeCloseTo(0.5, 5);
+
+    // Subsequent frame without advancing decays at dt / 18
+    interactables.update(4.5, 57.6);
+    expect(cp0.progress).toBeCloseTo(0.25, 5);
+
+    // Decay clamps cleanly at 0
+    interactables.update(9.0, 66.6);
+    expect(cp0.progress).toBe(0);
+
+    // Advance across 12s in 0.1s frames with update() each tick -> captures smoothly at 12s
+    let capRes = interactables.advanceCapturePoint(cp0.id, 'player', 'Hero', 0);
+    for (let i = 0; i < 120; i++) {
+      capRes = interactables.advanceCapturePoint(cp0.id, 'player', 'Hero', 0.1);
+      interactables.update(0.1, 66.7 + i * 0.1);
+    }
+    expect(capRes.capturedNow).toBe(true);
+    expect(capRes.progress).toBe(1);
+    expect(capRes.poiName).toBe(cp0.poiName);
+    expect(capRes.lootPos).toEqual({ x: cp0.x, y: cp0.y + 0.6, z: cp0.z });
+    expect(cp0.captured).toBe(true);
+    expect(cp0.progress).toBe(1);
+    expect(cp0.ownerId).toBe('player');
+    expect(cp0.ownerName).toBe('Hero');
+    expect((cpBannerMesh.material as THREE.MeshStandardMaterial).color.getHexString()).toBe('facc15');
+    expect((cpBannerMesh.material as THREE.MeshStandardMaterial).color.getHexString()).not.toBe(
+      uncapturedColorHex,
+    );
+
+    // Already captured point does not re-trigger capturedNow, overwrite owner, or decay
+    const repeatRes = interactables.advanceCapturePoint(cp0.id, 'bot_1', 'Bot1', 5.0);
+    expect(repeatRes).toEqual({
+      capturedNow: false,
+      progress: 1,
+      poiName: cp0.poiName,
+    });
+    expect(cp0.ownerId).toBe('player');
+    interactables.update(10.0, 90.0);
+    expect(cp0.progress).toBe(1);
+    expect(cp0.captured).toBe(true);
+
+    // 3. 18 Destructible Explosive Red Fuel Barrels
+    const expBarrels = interactables.getExplosiveBarrels();
+    expect(expBarrels).toHaveLength(18);
+    expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
+
+    for (const eb of expBarrels) {
+      expect(eb.hp).toBe(35);
+      expect(eb.maxHp).toBe(35);
+      expect(eb.blastRadius).toBe(6.8);
+      expect(eb.blastDamage).toBe(85);
+      expect(eb.exploded).toBe(false);
+      expect(terrain.isWater(eb.x, eb.z)).toBe(false);
+      expect(eb.y).toBeCloseTo(terrain.getHeightAt(eb.x, eb.z), 4);
+      expect(terrain.getNormalAt(eb.x, eb.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(eb.x, eb.y, eb.z, 0.55)).toBe(true);
+      for (const other of expBarrels) {
+        if (other.id !== eb.id) {
+          expect(Math.hypot(eb.x - other.x, eb.z - other.z)).toBeGreaterThan(1.5);
+        }
+      }
+      for (const sb of interactables.getSlurpBarrels()) {
+        expect(Math.hypot(eb.x - sb.x, eb.z - sb.z)).toBeGreaterThan(1.5);
+      }
+      for (const b of interactables.getUpgradeBenches()) {
+        expect(Math.hypot(eb.x - b.x, eb.z - b.z)).toBeGreaterThan(2.0);
+      }
+      for (const cf of interactables.getCampfires()) {
+        expect(Math.hypot(eb.x - cf.x, eb.z - cf.z)).toBeGreaterThan(2.0);
+      }
+      for (const v of interactables.getVaults()) {
+        expect(Math.hypot(eb.x - v.x, eb.z - v.z)).toBeGreaterThan(3.0);
+      }
+      for (const p of interactables.getLaunchPads()) {
+        expect(Math.hypot(eb.x - p.x, eb.z - p.z)).toBeGreaterThan(2.5);
+      }
+      for (const r of rifts) {
+        expect(Math.hypot(eb.x - r.x, eb.z - r.z)).toBeGreaterThan(2.5);
+      }
+      for (const cp of capturePoints) {
+        expect(Math.hypot(eb.x - cp.x, eb.z - cp.z)).toBeGreaterThan(2.5);
+      }
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(eb.x - veh.x, eb.z - veh.z)).toBeGreaterThan(2.5);
+      }
+    }
+
+    const eb0 = expBarrels[0];
+    const ebGroup = interactables.getGroup().getObjectByName(`ExplosiveBarrel_${eb0.id}`) as THREE.Group;
+    expect(ebGroup.visible).toBe(true);
+
+    const chipDmg = interactables.damageExplosiveBarrel(eb0.id, 15);
+    expect(chipDmg).toEqual({
+      exploded: false,
+      position: { x: eb0.x, y: eb0.y, z: eb0.z },
+      blastRadius: 6.8,
+      blastDamage: 85,
+    });
+    expect(eb0.hp).toBe(20);
+    expect(eb0.exploded).toBe(false);
+    expect(ebGroup.visible).toBe(true);
+    expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
+
+    interactables.update(0.05, 90.05);
+
+    const lethalDmg = interactables.damageExplosiveBarrel(eb0.id, 25);
+    expect(lethalDmg).toEqual({
+      exploded: true,
+      position: { x: eb0.x, y: eb0.y, z: eb0.z },
+      blastRadius: 6.8,
+      blastDamage: 85,
+    });
+    expect(eb0.hp).toBe(0);
+    expect(eb0.exploded).toBe(true);
+    expect(ebGroup.visible).toBe(false);
+    expect(interactables.getExplosiveBarrelColliders()).toHaveLength(17);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17);
+    expect(interactables.damageExplosiveBarrel(eb0.id, 10)).toBeNull();
+    expect(interactables.damageExplosiveBarrel('nonexistent_barrel', 10)).toBeNull();
+
+    // 4. reset() restores all 5 rifts, 4 capture points, and 18 explosive barrels
+    interactables.triggerRift(r0.id);
+    interactables.update(8.0, 98.05); // r0 in cooldown
+    expect(r0.active).toBe(false);
+
+    interactables.reset();
+
+    expect(
+      interactables
+        .getRifts()
+        .every((r) => r.active && r.openRemainingSec === 0 && r.cooldownSec === 0),
+    ).toBe(true);
+    expect(
+      interactables
+        .getCapturePoints()
+        .every(
+          (cp) =>
+            cp.progress === 0 &&
+            !cp.captured &&
+            cp.ownerId === null &&
+            cp.ownerName === null,
+        ),
+    ).toBe(true);
+    expect(cpFlagGroup.position.y).toBeCloseTo(flagStartY, 4);
+    expect((cpBannerMesh.material as THREE.MeshStandardMaterial).color.getHexString()).toBe(
+      uncapturedColorHex,
+    );
+    expect(r0Portal.visible).toBe(true);
+    expect(
+      interactables
+        .getExplosiveBarrels()
+        .every((b) => b.hp === 35 && b.maxHp === 35 && !b.exploded),
+    ).toBe(true);
+    expect(ebGroup.visible).toBe(true);
+    expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
+
+    vehicles.dispose();
+    interactables.dispose();
     builder.dispose();
     terrain.dispose();
   });

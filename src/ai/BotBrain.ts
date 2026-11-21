@@ -2,12 +2,15 @@ import type {
   AmmoType,
   BuildPiece,
   CampfireEntity,
+  CapturePointEntity,
   Difficulty,
+  ExplosiveBarrelEntity,
   GameModeId,
   ItemInstance,
   LaunchPadEntity,
   MaterialType,
   POIDef,
+  RiftEntity,
   SlurpBarrelEntity,
   Vec3Like,
   VehicleEntity,
@@ -1958,6 +1961,289 @@ function stepHealingState(
   return moveIntent;
 }
 
+interface ExplosiveBarrelCandidate {
+  barrel: ExplosiveBarrelEntity;
+  aimPoint: Vec3Like;
+  distToBot: number;
+  firearm: { slotIndex: number; item: ItemInstance };
+}
+
+function selectBestFirearmForRange(
+  items: (ItemInstance | null)[],
+  distance: number,
+  ammo: Record<AmmoType, number>,
+): { slotIndex: number; item: ItemInstance } | null {
+  let bestSlot = -1;
+  let bestItem: ItemInstance | null = null;
+  let bestScore = -1;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item) continue;
+    const def = WEAPONS[item.weaponId];
+    if (
+      !def ||
+      item.weaponId === 'pickaxe' ||
+      def.isThrowable ||
+      def.isGrappler ||
+      def.isShieldBubble ||
+      isHealingItem(item.weaponId)
+    ) {
+      continue;
+    }
+    if (item.weaponId === 'rocket_launcher' && distance < 9) continue;
+    if (distance > def.range) continue;
+
+    if (def.ammoType !== null) {
+      const reserve = ammo[def.ammoType] ?? 0;
+      if (item.magAmmo <= 0 && reserve <= 0) continue;
+    }
+
+    const score = scoreWeaponForDistance(item, distance, item.magAmmo > 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestSlot = i;
+      bestItem = item;
+    }
+  }
+
+  if (bestSlot < 0 || !bestItem || bestScore <= 0) {
+    return null;
+  }
+  return { slotIndex: bestSlot, item: bestItem };
+}
+
+/**
+ * Selects an unexploded `ExplosiveBarrelEntity` within 6.2m of `target` that the bot
+ * has clear LOS and firearm range to shoot safely without blowing itself up.
+ */
+export function selectExplosiveBarrelTarget(
+  bot: Pick<BotEntity, 'position' | 'isCrouching' | 'inventory'>,
+  target: Pick<BotCombatTarget, 'position' | 'eyePos'>,
+  barrels: ReadonlyArray<ExplosiveBarrelEntity>,
+  hasLineOfSight: (from: Vec3Like, to: Vec3Like) => boolean,
+  activeBubbles: ReadonlyArray<ShieldBubbleZone> = [],
+): ExplosiveBarrelCandidate | null {
+  if (barrels.length === 0) return null;
+  const eye: Vec3Like = {
+    x: bot.position.x,
+    y: bot.position.y + (bot.isCrouching ? 1.05 : 1.55),
+    z: bot.position.z,
+  };
+
+  let best: ExplosiveBarrelCandidate | null = null;
+  let bestScore = Infinity;
+
+  for (const b of barrels) {
+    if (b.exploded || b.hp <= 0) continue;
+    const aimPoint: Vec3Like = { x: b.x, y: b.y + 0.65, z: b.z };
+    const dToTarget = Math.min(
+      dist3D(b, target.position),
+      dist3D(aimPoint, target.position),
+    );
+    if (dToTarget > 6.2) continue;
+
+    const dToBot = dist3D(eye, aimPoint);
+    if (dToBot <= 4.2) continue;
+
+    const firearm = selectBestFirearmForRange(
+      bot.inventory.items,
+      dToBot,
+      bot.inventory.ammo,
+    );
+    if (!firearm) continue;
+
+    if (
+      activeBubbles.length > 0 &&
+      (isShotBlockedByShieldBubbles(eye, aimPoint, activeBubbles) !== null ||
+        isShotBlockedByShieldBubbles(aimPoint, target.eyePos, activeBubbles) !== null)
+    ) {
+      continue;
+    }
+
+    if (!hasLineOfSight(eye, aimPoint)) continue;
+
+    const score = dToTarget + b.hp * 0.04;
+    if (score < bestScore) {
+      bestScore = score;
+      best = { barrel: b, aimPoint, distToBot: dToBot, firearm };
+    }
+  }
+
+  return best;
+}
+
+function triggerBarrelExplosionEffects(
+  botId: string,
+  ctx: BotWorldContext,
+  initialBarrelId: string,
+  initialPos: Vec3Like,
+  initialRadius: number,
+  initialDamage: number,
+  activeBubbles: ReadonlyArray<ShieldBubbleZone>,
+): void {
+  const emitExplosion = (pos: Vec3Like, radius: number) => {
+    ctx.eventBus.emit('vfx:explosion', {
+      position: { ...pos },
+      radius,
+    });
+    ctx.eventBus.emit('sound:play', {
+      id: 'barrel_explode',
+      position: { ...pos },
+      spatial: true,
+    });
+    ctx.eventBus.emit('audio:noise', {
+      position: { ...pos },
+      kind: 'gunfire',
+      sourceId: botId,
+      radius: 140,
+    });
+  };
+
+  emitExplosion(initialPos, initialRadius);
+
+  if (!ctx.getExplosiveBarrels || !ctx.damageExplosiveBarrel) return;
+  const visited = new Set<string>([initialBarrelId]);
+  const queue: Array<{ position: Vec3Like; blastRadius: number; blastDamage: number }> = [
+    { position: initialPos, blastRadius: initialRadius, blastDamage: initialDamage },
+  ];
+
+  while (queue.length > 0) {
+    const blast = queue.shift()!;
+    const allBarrels = ctx.getExplosiveBarrels();
+    for (const other of allBarrels) {
+      if (other.exploded || other.hp <= 0 || visited.has(other.id)) continue;
+      const otherCenter: Vec3Like = { x: other.x, y: other.y + 0.625, z: other.z };
+      const d = Math.min(dist3D(blast.position, other), dist3D(blast.position, otherCenter));
+      if (d > blast.blastRadius + 0.85) continue;
+      if (
+        activeBubbles.length > 0 &&
+        isShotBlockedByShieldBubbles(blast.position, otherCenter, activeBubbles) !== null
+      ) {
+        continue;
+      }
+      visited.add(other.id);
+      const chainRes = ctx.damageExplosiveBarrel(other.id, blast.blastDamage);
+      if (chainRes?.exploded) {
+        emitExplosion(chainRes.position, chainRes.blastRadius);
+        queue.push({
+          position: chainRes.position,
+          blastRadius: chainRes.blastRadius,
+          blastDamage: chainRes.blastDamage,
+        });
+      }
+    }
+  }
+}
+
+function tryShootExplosiveBarrel(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  profile: DifficultyProfile,
+  target: BotCombatTarget,
+  activeBubbles: ReadonlyArray<ShieldBubbleZone>,
+  safeDt: number,
+): boolean {
+  if (!ctx.getExplosiveBarrels || !ctx.damageExplosiveBarrel) return false;
+  const barrels = ctx.getExplosiveBarrels();
+  if (!barrels || barrels.length === 0) return false;
+
+  const candidate = selectExplosiveBarrelTarget(
+    bot,
+    target,
+    barrels,
+    ctx.hasLineOfSight,
+    activeBubbles,
+  );
+  if (!candidate) return false;
+
+  const { barrel, aimPoint, distToBot, firearm } = candidate;
+  if (bot.inventory.activeSlot !== firearm.slotIndex) {
+    bot.inventory.activeSlot = firearm.slotIndex;
+    bot.burstQueue = 0;
+  }
+
+  const item = firearm.item;
+  const def = WEAPONS[item.weaponId];
+  const eye = getBotEyePos(bot);
+  const dx = aimPoint.x - eye.x;
+  const dy = aimPoint.y - eye.y;
+  const dz = aimPoint.z - eye.z;
+  const horiz = Math.hypot(dx, dz) || 0.001;
+  const targetYaw = Math.atan2(dx, dz);
+  const targetPitch = Math.atan2(dy, horiz);
+
+  bot.yaw = lerpAngle(
+    bot.yaw,
+    targetYaw,
+    clamp(profile.turnSpeedRadPerSec * safeDt, 0, 1),
+  );
+  bot.pitch = clamp(targetPitch, -1.2, 1.2);
+
+  if (item.magAmmo <= 0) {
+    if (
+      bot.reloadTimer <= 0 &&
+      def.ammoType &&
+      (bot.inventory.ammo[def.ammoType] ?? 0) > 0
+    ) {
+      bot.reloadSlot = firearm.slotIndex;
+      bot.reloadTimer = def.reloadTime;
+      bot.burstQueue = 0;
+    }
+    return true;
+  }
+
+  if (bot.reloadTimer > 0 || bot.reactionTimer > 0 || bot.fireCooldown > 0) {
+    return true;
+  }
+
+  const yawDiff = Math.abs(normalizeAngle(targetYaw - bot.yaw));
+  if (yawDiff > 0.45) {
+    return true;
+  }
+
+  bot.isAiming = distToBot > 14;
+  const dmg = Math.max(
+    1,
+    Math.round(def.baseDamage * (RARITY_MULTIPLIER[item.rarity] ?? 1)),
+  );
+  const res = ctx.damageExplosiveBarrel(barrel.id, dmg);
+  if (!res) {
+    return false;
+  }
+
+  item.magAmmo = Math.max(0, item.magAmmo - 1);
+  bot.isFiring = true;
+  bot.recoilKick = 1.0;
+  bot.fireCooldown = 1 / Math.max(0.2, def.fireRate * profile.fireRateScale);
+
+  ctx.eventBus.emit('vfx:tracer', { from: eye, to: aimPoint });
+  ctx.eventBus.emit('vfx:impact', {
+    position: aimPoint,
+    normal: { x: 0, y: 1, z: 0 },
+    material: 'metal',
+  });
+  ctx.eventBus.emit('audio:noise', {
+    position: { ...bot.position },
+    kind: 'gunfire',
+    sourceId: bot.id,
+    radius: 48,
+  });
+
+  if (res.exploded) {
+    triggerBarrelExplosionEffects(
+      bot.id,
+      ctx,
+      barrel.id,
+      res.position,
+      res.blastRadius,
+      res.blastDamage,
+      activeBubbles,
+    );
+  }
+  return true;
+}
+
 function getPreferredCombatRange(
   weaponId: WeaponId | undefined,
   personality: BotEntity['personality'],
@@ -2051,6 +2337,11 @@ function stepCombatState(
     ) {
       bot.inventory.activeSlot = cqcWeapon.slotIndex;
     }
+  } else if (
+    !isFarLOD &&
+    tryShootExplosiveBarrel(bot, ctx, profile, target, activeBubbles, safeDt)
+  ) {
+    // Prioritized explosive barrel near target enemy
   } else if (bothInsideSameBubble && cqcWeapon) {
     if (bot.inventory.activeSlot !== cqcWeapon.slotIndex) {
       bot.inventory.activeSlot = cqcWeapon.slotIndex;
@@ -2664,12 +2955,26 @@ function recoverIfStuck(
   intent.dirX = rx;
   intent.dirZ = rz;
 
-  if (bot.lootTargetId || bot.chestTargetId || bot.harvestTargetId) {
-    bot.ignoredTargetId = bot.lootTargetId ?? bot.chestTargetId ?? bot.harvestTargetId;
+  if (
+    bot.lootTargetId ||
+    bot.chestTargetId ||
+    bot.harvestTargetId ||
+    bot.captureTargetId ||
+    bot.riftTargetId
+  ) {
+    bot.ignoredTargetId =
+      bot.lootTargetId ??
+      bot.chestTargetId ??
+      bot.harvestTargetId ??
+      bot.captureTargetId ??
+      bot.riftTargetId ??
+      null;
     bot.ignoredTargetUntil = elapsed + 6.0;
     bot.lootTargetId = null;
     bot.chestTargetId = null;
     bot.harvestTargetId = null;
+    bot.captureTargetId = null;
+    bot.riftTargetId = null;
     bot.moveTarget = pickSafeDestination(bot, ctx);
   }
 }
@@ -2991,6 +3296,315 @@ function tryCampfireHealing(
 }
 
 /**
+ * Selects an active `RiftEntity` within 24m for a bot escaping Storm or critical burst damage.
+ */
+export function selectEscapeRift(
+  bot: Pick<
+    BotEntity,
+    | 'position'
+    | 'hp'
+    | 'maxHp'
+    | 'shield'
+    | 'state'
+    | 'isBoss'
+    | 'lastDamageTime'
+    | 'recentDamageTaken'
+    | 'retreatTimer'
+    | 'riftCooldown'
+    | 'riftTargetId'
+    | 'ignoredTargetId'
+    | 'ignoredTargetUntil'
+  >,
+  rifts: ReadonlyArray<RiftEntity>,
+  inStormNow: boolean,
+  elapsed: number,
+): RiftEntity | null {
+  if (
+    (bot.riftCooldown ?? 0) > 0 ||
+    rifts.length === 0 ||
+    bot.state === 'bus' ||
+    bot.state === 'skydiving' ||
+    bot.state === 'gliding' ||
+    bot.state === 'eliminated'
+  ) {
+    return null;
+  }
+  if (bot.isBoss && !inStormNow) {
+    return null;
+  }
+
+  const maxHp = bot.maxHp || 100;
+  const recentWindow = bot.riftTargetId ? 5.0 : 3.5;
+  const recentlyBurstDamaged =
+    bot.lastDamageTime >= 0 &&
+    elapsed - bot.lastDamageTime <= recentWindow &&
+    (bot.recentDamageTaken ?? 0) >= 35;
+  const criticallyInjured =
+    bot.hp <= maxHp * 0.45 ||
+    (bot.hp <= maxHp * 0.6 && bot.shield <= 15);
+  const isRetreating = (bot.retreatTimer ?? 0) > 0;
+  const shouldEscape =
+    inStormNow ||
+    (recentlyBurstDamaged &&
+      (criticallyInjured || isRetreating || bot.state === 'healing')) ||
+    (isRetreating && criticallyInjured);
+  if (!shouldEscape) return null;
+
+  let best: RiftEntity | null = null;
+  let bestDist = Infinity;
+  for (const rift of rifts) {
+    if (!rift.active) continue;
+    if (rift.id === bot.ignoredTargetId && elapsed < bot.ignoredTargetUntil) continue;
+    if (Math.abs(rift.y - bot.position.y) > 10) continue;
+    if (isInVolcanoLavaHazard(rift.x, rift.z)) continue;
+    const d = dist2D(bot.position.x, bot.position.z, rift.x, rift.z);
+    const maxRange = bot.riftTargetId === rift.id ? 28 : 24;
+    if (d > maxRange) continue;
+    if (d < bestDist) {
+      bestDist = d;
+      best = rift;
+    }
+  }
+  return best;
+}
+
+function executeRiftWarp(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  rift: RiftEntity,
+): boolean {
+  if (!ctx.triggerRift) return false;
+  const res = ctx.triggerRift(rift.id);
+  if (!res) {
+    bot.riftTargetId = null;
+    return false;
+  }
+
+  const safeDest = pickSafeDestination(bot, ctx);
+  const dx = safeDest.x - res.skyPos.x;
+  const dz = safeDest.z - res.skyPos.z;
+  const len = Math.hypot(dx, dz) || 1;
+  const nx = dx / len;
+  const nz = dz / len;
+
+  bot.position = {
+    x: res.skyPos.x,
+    y: res.skyPos.y,
+    z: res.skyPos.z,
+  };
+  bot.velocity = {
+    x: nx * GLIDE_HORIZONTAL_SPEED,
+    y: -GLIDE_DESCENT_SPEED * 0.5,
+    z: nz * GLIDE_HORIZONTAL_SPEED,
+  };
+  bot.yaw = Math.atan2(nx, nz);
+  bot.dropTarget = { ...safeDest };
+  bot.moveTarget = { ...safeDest };
+  bot.state = 'gliding';
+  bot.animState = 'glide';
+  bot.gliderOpen = true;
+  bot.gliderFactor = 0.35;
+  bot.grounded = false;
+  bot.isCrouching = false;
+  bot.isSprinting = false;
+  bot.isBuilding = false;
+  bot.isAiming = false;
+  bot.isFiring = false;
+  bot.healTimer = 0;
+  bot.retreatTimer = 0;
+  bot.burstQueue = 0;
+  bot.stateTimer = 0;
+  bot.riftCooldown = 20.0;
+  bot.riftTargetId = null;
+  bot.captureTargetId = null;
+  bot.stuckTimer = 0;
+  bot.lastStuckCheckPos = { ...bot.position };
+
+  ctx.eventBus.emit('vfx:rift_tear', {
+    position: { x: rift.x, y: rift.y, z: rift.z },
+    skyPosition: { ...res.skyPos },
+  });
+  ctx.eventBus.emit('sound:play', {
+    id: 'rift_teleport',
+    position: { x: rift.x, y: rift.y, z: rift.z },
+    spatial: true,
+  });
+  return true;
+}
+
+function tryRiftEscape(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  inStormNow: boolean,
+  elapsed: number,
+  safeDt: number,
+): (MoveIntent & { warpedGliding?: boolean }) | null {
+  if ((bot.riftCooldown ?? 0) > 0 || !ctx.getRifts || !ctx.triggerRift) {
+    bot.riftTargetId = null;
+    return null;
+  }
+
+  const rifts = ctx.getRifts();
+  if (!rifts || rifts.length === 0) {
+    bot.riftTargetId = null;
+    return null;
+  }
+
+  const chosen = selectEscapeRift(bot, rifts, inStormNow, elapsed);
+  if (!chosen) {
+    bot.riftTargetId = null;
+    return null;
+  }
+
+  const d = dist2D(bot.position.x, bot.position.z, chosen.x, chosen.z);
+  const dy = Math.abs(bot.position.y - chosen.y);
+  if (d <= 2.5 && dy <= 4.0) {
+    if (executeRiftWarp(bot, ctx, chosen)) {
+      return { ...emptyMoveIntent(), warpedGliding: true };
+    }
+    return null;
+  }
+
+  bot.riftTargetId = chosen.id;
+  bot.captureTargetId = null;
+  bot.moveTarget = { x: chosen.x, y: chosen.y, z: chosen.z };
+  if (bot.state === 'healing' || bot.state === 'combat') {
+    bot.healTimer = 0;
+    bot.state = 'rotating';
+    bot.stateTimer = 0;
+  }
+  bot.isCrouching = false;
+  const intent = moveTowardPoint(bot, chosen.x, chosen.z, safeDt, 0);
+  bot.isSprinting = true;
+  intent.speed = SPRINT_SPEED;
+  return intent;
+}
+
+/**
+ * Selects an uncaptured `CapturePointEntity` within 35m for roaming/looting bots.
+ */
+export function selectCapturePointTarget(
+  bot: Pick<
+    BotEntity,
+    | 'position'
+    | 'state'
+    | 'isBoss'
+    | 'captureTargetId'
+    | 'ignoredTargetId'
+    | 'ignoredTargetUntil'
+  >,
+  capturePoints: ReadonlyArray<CapturePointEntity>,
+  elapsed: number,
+): CapturePointEntity | null {
+  if (
+    bot.isBoss ||
+    bot.state === 'bus' ||
+    bot.state === 'skydiving' ||
+    bot.state === 'gliding' ||
+    bot.state === 'combat' ||
+    bot.state === 'healing' ||
+    bot.state === 'eliminated' ||
+    capturePoints.length === 0
+  ) {
+    return null;
+  }
+
+  let best: CapturePointEntity | null = null;
+  let bestScore = Infinity;
+  for (const cp of capturePoints) {
+    if (cp.captured) continue;
+    if (cp.id === bot.ignoredTargetId && elapsed < bot.ignoredTargetUntil) continue;
+    if (Math.abs(cp.y - bot.position.y) > 8.0) continue;
+    if (isInVolcanoLavaHazard(cp.x, cp.z)) continue;
+    const d = dist2D(bot.position.x, bot.position.z, cp.x, cp.z);
+    const maxRange = bot.captureTargetId === cp.id ? 38 : 35;
+    if (d > maxRange) continue;
+    const score = d - (cp.id === bot.captureTargetId ? 4 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = cp;
+    }
+  }
+  return best;
+}
+
+function tryCapturePoint(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  combatMatch: { target: BotCombatTarget; hasLOS: boolean; distance: number } | null,
+  inStormNow: boolean,
+  needRotateStorm: boolean,
+  elapsed: number,
+  safeDt: number,
+  isFarLOD: boolean,
+): MoveIntent | null {
+  if (
+    isFarLOD ||
+    !ctx.getCapturePoints ||
+    !ctx.advanceCapturePoint ||
+    combatMatch !== null ||
+    bot.state === 'combat' ||
+    bot.state === 'healing' ||
+    inStormNow ||
+    needRotateStorm ||
+    bot.isBoss
+  ) {
+    bot.captureTargetId = null;
+    return null;
+  }
+
+  const points = ctx.getCapturePoints();
+  if (!points || points.length === 0) {
+    bot.captureTargetId = null;
+    return null;
+  }
+
+  const chosen = selectCapturePointTarget(bot, points, elapsed);
+  if (!chosen) {
+    bot.captureTargetId = null;
+    return null;
+  }
+
+  bot.captureTargetId = chosen.id;
+  bot.harvestTargetId = null;
+  bot.moveTarget = { x: chosen.x, y: chosen.y, z: chosen.z };
+  bot.isCrouching = false;
+
+  const d = dist2D(bot.position.x, bot.position.z, chosen.x, chosen.z);
+  const captureRadius = chosen.radius > 0 ? chosen.radius : 6.5;
+
+  if (d <= captureRadius && Math.abs(bot.position.y - chosen.y) <= 4.5) {
+    const res = ctx.advanceCapturePoint(chosen.id, bot.id, bot.name, safeDt);
+    if (res.capturedNow) {
+      ctx.eventBus.emit('vfx:flag_captured', {
+        position: { x: chosen.x, y: chosen.y, z: chosen.z },
+        poiName: res.poiName || chosen.poiName,
+      });
+      ctx.eventBus.emit('sound:play', {
+        id: 'flag_captured',
+        position: { x: chosen.x, y: chosen.y, z: chosen.z },
+        spatial: true,
+      });
+      bot.captureTargetId = null;
+      bot.moveTarget = null;
+      return emptyMoveIntent();
+    }
+
+    if (d > Math.min(2.4, captureRadius * 0.4)) {
+      const intent = moveTowardPoint(bot, chosen.x, chosen.z, safeDt, 16);
+      intent.speed = Math.min(intent.speed, WALK_SPEED);
+      bot.isSprinting = false;
+      return intent;
+    }
+
+    bot.isSprinting = false;
+    return emptyMoveIntent();
+  }
+
+  return moveTowardPoint(bot, chosen.x, chosen.z, safeDt, 12);
+}
+
+/**
  * Advances a single bot's state machine, physics, perception, combat, building, and animations.
  */
 export function updateBot(
@@ -3037,6 +3651,9 @@ export function updateBot(
   }
   if ((bot.launchPadCooldown ?? 0) > 0) {
     bot.launchPadCooldown = Math.max(0, (bot.launchPadCooldown ?? 0) - safeDt);
+  }
+  if ((bot.riftCooldown ?? 0) > 0) {
+    bot.riftCooldown = Math.max(0, (bot.riftCooldown ?? 0) - safeDt);
   }
   if (bot.buildAnimTimer > 0) {
     bot.buildAnimTimer = Math.max(0, bot.buildAnimTimer - safeDt);
@@ -3169,6 +3786,12 @@ export function updateBot(
     }
   }
 
+  const riftIntent = tryRiftEscape(bot, ctx, inStormNow, elapsed, safeDt);
+  if (riftIntent?.warpedGliding) {
+    updateAnimState(bot);
+    return;
+  }
+
   const healChoice = selectHealingItem(
     bot.inventory.items,
     bot.hp,
@@ -3179,6 +3802,7 @@ export function updateBot(
   const closeThreat = combatMatch !== null && combatMatch.hasLOS && combatMatch.distance < 18;
   const activeHealItem = bot.inventory.items[bot.healSlot];
   if (
+    !riftIntent &&
     bot.state === 'healing' &&
     bot.stateTimer > 1.1 &&
     activeHealItem?.weaponId !== 'chug_splash' &&
@@ -3213,7 +3837,7 @@ export function updateBot(
     !inStormNow &&
     (bot.hp < bot.maxHp * 0.85 || bot.shield < bot.maxShield * 0.85);
 
-  if (bot.state !== 'healing' && (wantsCriticalHeal || wantsSafeTopOff)) {
+  if (!riftIntent && bot.state !== 'healing' && (wantsCriticalHeal || wantsSafeTopOff)) {
     bot.state = 'healing';
     bot.healSlot = healChoice.slotIndex;
     bot.inventory.activeSlot = healChoice.slotIndex;
@@ -3225,7 +3849,7 @@ export function updateBot(
   }
 
   const weaponCount = countWeapons(bot);
-  if (bot.state !== 'healing') {
+  if (!riftIntent && bot.state !== 'healing') {
     if (combatMatch) {
       const bestGun = selectBestWeaponForDistance(
         bot.inventory.items,
@@ -3251,8 +3875,8 @@ export function updateBot(
     }
   }
 
-  let intent: MoveIntent | null = null;
-  if (bot.state !== 'healing') {
+  let intent: MoveIntent | null = riftIntent ?? null;
+  if (!intent && bot.state !== 'healing') {
     intent = trySlurpBarrelRecovery(
       bot,
       ctx,
@@ -3268,6 +3892,18 @@ export function updateBot(
         ctx,
         combatMatch,
         needRotateStorm,
+        safeDt,
+        isFarLOD,
+      );
+    }
+    if (!intent) {
+      intent = tryCapturePoint(
+        bot,
+        ctx,
+        combatMatch,
+        inStormNow,
+        needRotateStorm,
+        elapsed,
         safeDt,
         isFarLOD,
       );
@@ -3367,6 +4003,23 @@ export function updateBot(
     safeDt,
     isFarLOD,
   );
+  if (
+    bot.riftTargetId &&
+    (bot.riftCooldown ?? 0) <= 0 &&
+    ctx.getRifts &&
+    ctx.triggerRift
+  ) {
+    const targetRift = ctx
+      .getRifts()
+      .find((r) => r.id === bot.riftTargetId && r.active);
+    if (
+      targetRift &&
+      dist2D(bot.position.x, bot.position.z, targetRift.x, targetRift.z) <= 2.5 &&
+      Math.abs(bot.position.y - targetRift.y) <= 4.0
+    ) {
+      executeRiftWarp(bot, ctx, targetRift);
+    }
+  }
   updateAnimState(bot);
 }
 
@@ -3446,6 +4099,56 @@ export class BotBrain {
     preferNearbyStormPad = false,
   ): LaunchPadEntity | null {
     return selectLaunchPadForRotation(bot, launchPads, destination, preferNearbyStormPad);
+  }
+
+  selectEscapeRift(
+    bot: Pick<
+      BotEntity,
+      | 'position'
+      | 'hp'
+      | 'maxHp'
+      | 'shield'
+      | 'state'
+      | 'isBoss'
+      | 'lastDamageTime'
+      | 'recentDamageTaken'
+      | 'retreatTimer'
+      | 'riftCooldown'
+      | 'riftTargetId'
+      | 'ignoredTargetId'
+      | 'ignoredTargetUntil'
+    >,
+    rifts: ReadonlyArray<RiftEntity>,
+    inStormNow: boolean,
+    elapsed: number,
+  ): RiftEntity | null {
+    return selectEscapeRift(bot, rifts, inStormNow, elapsed);
+  }
+
+  selectCapturePointTarget(
+    bot: Pick<
+      BotEntity,
+      | 'position'
+      | 'state'
+      | 'isBoss'
+      | 'captureTargetId'
+      | 'ignoredTargetId'
+      | 'ignoredTargetUntil'
+    >,
+    capturePoints: ReadonlyArray<CapturePointEntity>,
+    elapsed: number,
+  ): CapturePointEntity | null {
+    return selectCapturePointTarget(bot, capturePoints, elapsed);
+  }
+
+  selectExplosiveBarrelTarget(
+    bot: Pick<BotEntity, 'position' | 'isCrouching' | 'inventory'>,
+    target: Pick<BotCombatTarget, 'position' | 'eyePos'>,
+    barrels: ReadonlyArray<ExplosiveBarrelEntity>,
+    hasLineOfSight: (from: Vec3Like, to: Vec3Like) => boolean,
+    activeBubbles: ReadonlyArray<ShieldBubbleZone> = [],
+  ): ExplosiveBarrelCandidate | null {
+    return selectExplosiveBarrelTarget(bot, target, barrels, hasLineOfSight, activeBubbles);
   }
 
   isInVolcanoLavaHazard(

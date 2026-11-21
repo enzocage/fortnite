@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   BuildPiece,
   CampfireEntity,
+  CapturePointEntity,
   ChestEntity,
   DamageEvent,
+  ExplosiveBarrelEntity,
   HarvestableProp,
   ItemInstance,
   LaunchPadEntity,
   LootDrop,
+  RiftEntity,
   SlurpBarrelEntity,
   StormState,
   TerrainQuery,
@@ -41,6 +44,9 @@ import {
   pickBotLoadoutCosmetics,
   segmentIntersectsSphere,
   selectBestWeaponForDistance,
+  selectCapturePointTarget,
+  selectEscapeRift,
+  selectExplosiveBarrelTarget,
   selectHealingItem,
   selectLaunchPadForRotation,
   selectThrowableForCombat,
@@ -2353,5 +2359,402 @@ describe('Wave 3 Game Modes (Zero Build & Blitz), Slurp Barrels, Campfires & Edg
 
     expect(launched).toBe(true);
     expect(edgeBot.position.x).toBeLessThan(76);
+  });
+});
+
+describe('Wave 4 Sky Rifts, POI Flag Capture & Explosive Barrel Opportunism', () => {
+  it('steers storm-trapped or burst-injured bots to active Sky Rifts <= 24m, warps to skyPos, and enters gliding', () => {
+    const brain = new BotBrain();
+    const rifts: RiftEntity[] = [
+      {
+        id: 'rift_inactive',
+        poiId: 'sunken_oasis',
+        x: 114,
+        y: 10,
+        z: 0,
+        active: false,
+        openRemainingSec: 0,
+        cooldownSec: 25,
+      },
+      {
+        id: 'rift_near',
+        poiId: 'sunken_oasis',
+        x: 106,
+        y: 10,
+        z: 0,
+        active: true,
+        openRemainingSec: 0,
+        cooldownSec: 0,
+      },
+      {
+        id: 'rift_far',
+        poiId: 'sunken_oasis',
+        x: 155,
+        y: 10,
+        z: 0,
+        active: true,
+        openRemainingSec: 0,
+        cooldownSec: 0,
+      },
+    ];
+
+    const triggerRift = vi.fn((id: string) => {
+      const r = rifts.find((entry) => entry.id === id && entry.active);
+      if (!r) return null;
+      r.openRemainingSec = 8;
+      return { skyPos: { x: r.x, y: r.y + 92, z: r.z } };
+    });
+
+    const riftVfx: Array<{ position: Vec3Like; skyPosition: Vec3Like }> = [];
+    const riftSounds: string[] = [];
+
+    const ctx = makeMockContext({
+      storm: makeDefaultStorm({
+        currentCenterX: 0,
+        currentCenterZ: 0,
+        currentRadius: 100,
+        nextCenterX: 0,
+        nextCenterZ: 0,
+        nextRadius: 60,
+      }),
+      getRifts: () => rifts,
+      triggerRift,
+    });
+    ctx.eventBus.on('vfx:rift_tear', (ev) => riftVfx.push(ev));
+    ctx.eventBus.on('sound:play', (s) => riftSounds.push(s.id));
+
+    const stormBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 120, y: 10, z: 0 }, // 14m from rift_near (<= 24m), inside storm (> 100m)
+      grounded: true,
+      hp: 100,
+      shield: 50,
+    });
+    stormBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    // Tick 1: should lock onto rift_near via moveTarget and sprint toward it
+    updateBot(stormBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10.0, 0.1, false);
+    expect(stormBot.moveTarget).toEqual({ x: 106, y: 10, z: 0 });
+    expect(stormBot.position.x).toBeLessThan(120);
+
+    // Step until bot enters <= 2.5m and triggers the rift
+    for (let i = 1; i <= 30 && stormBot.state !== 'gliding'; i++) {
+      updateBot(stormBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10.0 + i * 0.1, 0.1, false);
+    }
+
+    expect(triggerRift).toHaveBeenCalledTimes(1);
+    expect(triggerRift).toHaveBeenCalledWith('rift_near');
+    expect(stormBot.state).toBe('gliding');
+    expect(stormBot.gliderOpen).toBe(true);
+    expect(stormBot.grounded).toBe(false);
+    expect(stormBot.position.y).toBe(102);
+    expect(stormBot.riftCooldown ?? 0).toBeGreaterThan(0);
+    expect(riftVfx).toHaveLength(1);
+    expect(riftVfx[0].position).toEqual({ x: 106, y: 10, z: 0 });
+    expect(riftVfx[0].skyPosition).toEqual({ x: 106, y: 102, z: 0 });
+    expect(riftSounds).toContain('rift_teleport');
+
+    // Subsequent gliding ticks carry bot toward safe zone
+    const xAfterWarp = stormBot.position.x;
+    updateBot(stormBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 14.0, 0.1, false);
+    expect(stormBot.state).toBe('gliding');
+    expect(stormBot.position.x).toBeLessThan(xAfterWarp);
+
+    // Burst-injured bot inside safe zone also seeks active Sky Rift <= 24m
+    const hurtRifts: RiftEntity[] = [
+      {
+        id: 'rift_safe_zone',
+        poiId: 'whispering_pines',
+        x: 10,
+        y: 10,
+        z: 0,
+        active: true,
+        openRemainingSec: 0,
+        cooldownSec: 0,
+      },
+    ];
+    const burstBot = makeBotEntity({
+      state: 'combat',
+      position: { x: 2, y: 10, z: 0 },
+      grounded: true,
+      hp: 35,
+      maxHp: 100,
+      shield: 0,
+      lastDamageTime: 19.6,
+      recentDamageTaken: 55,
+      retreatTimer: 0.75,
+    });
+    expect(brain.selectEscapeRift(burstBot, hurtRifts, false, 20.0)?.id).toBe('rift_safe_zone');
+
+    // Healthy uninjured bot inside safe zone ignores rifts
+    const healthyBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 2, y: 10, z: 0 },
+      grounded: true,
+      hp: 100,
+      maxHp: 100,
+      shield: 100,
+    });
+    expect(selectEscapeRift(healthyBot, hurtRifts, false, 20.0)).toBeNull();
+  });
+
+  it('steers roaming/looting bots within 35m to uncaptured Capture Points, advances capture inside 6.5m, and emits flag_captured', () => {
+    const capturePoints: CapturePointEntity[] = [
+      {
+        id: 'cp_metro',
+        poiId: 'metro_towers',
+        poiName: 'Metro Towers',
+        x: 0,
+        y: 10,
+        z: 24,
+        radius: 6.5,
+        progress: 0,
+        captured: false,
+        ownerId: null,
+        ownerName: null,
+      },
+      {
+        id: 'cp_far',
+        poiId: 'market_row',
+        poiName: 'Market Row',
+        x: 0,
+        y: 10,
+        z: 95,
+        radius: 6.5,
+        progress: 0,
+        captured: false,
+        ownerId: null,
+        ownerName: null,
+      },
+    ];
+
+    const advanceCapturePoint = vi.fn(
+      (id: string, actorId: string, actorName: string, dt: number) => {
+        const cp = capturePoints.find((c) => c.id === id)!;
+        if (cp.captured) {
+          return {
+            capturedNow: false,
+            progress: 1,
+            lootPos: { x: cp.x, y: cp.y + 0.6, z: cp.z },
+            poiName: cp.poiName,
+          };
+        }
+        cp.progress = Math.min(1, cp.progress + dt / 12);
+        const capturedNow = cp.progress >= 1;
+        if (capturedNow) {
+          cp.captured = true;
+          cp.ownerId = actorId;
+          cp.ownerName = actorName;
+        }
+        return {
+          capturedNow,
+          progress: cp.progress,
+          lootPos: capturedNow ? { x: cp.x, y: cp.y + 0.6, z: cp.z } : undefined,
+          poiName: cp.poiName,
+        };
+      },
+    );
+
+    const flagVfx: Array<{ position: Vec3Like; poiName: string }> = [];
+    const flagSounds: string[] = [];
+
+    const ctx = makeMockContext({
+      getCapturePoints: () => capturePoints,
+      advanceCapturePoint,
+    });
+    ctx.eventBus.on('vfx:flag_captured', (ev) => flagVfx.push(ev));
+    ctx.eventBus.on('sound:play', (s) => flagSounds.push(s.id));
+
+    // Bot > 35m away does not pick cp_metro when out of range
+    const farBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: -20 }, // 44m from cp_metro
+      grounded: true,
+    });
+    expect(selectCapturePointTarget(farBot, capturePoints, 10)).toBeNull();
+
+    // Roaming/looting bot 24m away (<= 35m) steers in and captures cp_metro over 12s
+    const bot = makeBotEntity({
+      state: 'looting',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    bot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    for (let i = 0; i < 180 && !capturePoints[0].captured; i++) {
+      updateBot(bot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 15 + i * 0.1, 0.1, false);
+    }
+
+    expect(advanceCapturePoint).toHaveBeenCalled();
+    expect(capturePoints[0].captured).toBe(true);
+    expect(capturePoints[0].ownerId).toBe(bot.id);
+    expect(capturePoints[0].ownerName).toBe(bot.name);
+    expect(dist2D(bot.position.x, bot.position.z, 0, 24)).toBeLessThanOrEqual(6.5);
+    expect(flagVfx).toEqual([
+      { position: { x: 0, y: 10, z: 24 }, poiName: 'Metro Towers' },
+    ]);
+    expect(flagSounds).toContain('flag_captured');
+
+    // Bot in active combat abandons/skips flag capture to fight enemy
+    capturePoints[0].captured = false;
+    capturePoints[0].progress = 0;
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 14 },
+      eyePos: { x: 0, y: 11.6, z: 14 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const combatAdvanceSpy = vi.fn(() => ({
+      capturedNow: false,
+      progress: 0,
+      poiName: 'Metro Towers',
+    }));
+    const combatCtx = makeMockContext({
+      getCombatTargets: () => [enemy],
+      getCapturePoints: () => capturePoints,
+      advanceCapturePoint: combatAdvanceSpy,
+    });
+    const combatBot = makeBotEntity({
+      state: 'looting',
+      position: { x: 0, y: 10, z: 22 }, // inside capture radius, but enemy is visible!
+      yaw: Math.PI,
+      grounded: true,
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    combatBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    combatBot.inventory.ammo.medium = 60;
+
+    updateBot(combatBot, combatCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 25, 0.1, false);
+    expect(combatBot.state).toBe('combat');
+    expect(combatAdvanceSpy).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes shooting unexploded Explosive Barrels within 6.2m of combat target and triggers chain explosions', () => {
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 22 },
+      eyePos: { x: 0, y: 11.6, z: 22 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+
+    const barrels: ExplosiveBarrelEntity[] = [
+      {
+        id: 'exp_near_enemy',
+        x: 3.5,
+        y: 10,
+        z: 22, // 3.5m from enemy (<= 6.2m)
+        hp: 35,
+        maxHp: 35,
+        blastRadius: 6.8,
+        blastDamage: 85,
+        exploded: false,
+      },
+      {
+        id: 'exp_chain',
+        x: 7.5,
+        y: 10,
+        z: 22, // 4.0m from exp_near_enemy (<= 6.8m chain radius)
+        hp: 35,
+        maxHp: 35,
+        blastRadius: 6.8,
+        blastDamage: 85,
+        exploded: false,
+      },
+      {
+        id: 'exp_too_far',
+        x: -9.0,
+        y: 10,
+        z: 22, // 9.0m from enemy (> 6.2m)
+        hp: 35,
+        maxHp: 35,
+        blastRadius: 6.8,
+        blastDamage: 85,
+        exploded: false,
+      },
+    ];
+
+    const damageExplosiveBarrel = vi.fn((id: string, dmg: number) => {
+      const b = barrels.find((entry) => entry.id === id && !entry.exploded);
+      if (!b) return null;
+      b.hp = Math.max(0, b.hp - dmg);
+      if (b.hp <= 0) b.exploded = true;
+      return {
+        exploded: b.exploded,
+        position: { x: b.x, y: b.y, z: b.z },
+        blastRadius: b.blastRadius,
+        blastDamage: b.blastDamage,
+      };
+    });
+
+    const explosionEvents: Array<{ position: Vec3Like; radius: number }> = [];
+    const barrelSounds: string[] = [];
+
+    const ctx = makeMockContext({
+      getCombatTargets: () => [enemy],
+      getExplosiveBarrels: () => barrels,
+      damageExplosiveBarrel,
+    });
+    ctx.eventBus.on('vfx:explosion', (ev) => explosionEvents.push(ev));
+    ctx.eventBus.on('sound:play', (s) => barrelSounds.push(s.id));
+
+    const bot = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    bot.inventory.items[1] = makeItem('ar', 'rare', 30); // rare AR: 34 dmg/shot -> 2 shots to break 35 HP
+    bot.inventory.ammo.medium = 60;
+
+    // On first shot, bot prioritizes barrel over shooting enemy directly
+    updateBot(bot, ctx, 'sweaty', { x: 0, y: 175, z: 0 }, 10.0, 0.05, false);
+    expect(damageExplosiveBarrel).toHaveBeenCalledWith('exp_near_enemy', expect.any(Number));
+    expect(ctx.firedCalls).toHaveLength(0);
+
+    // Continue until barrel explodes (triggers chain explosion on exp_chain too!)
+    for (let i = 1; i <= 10 && !barrels[0].exploded; i++) {
+      updateBot(bot, ctx, 'sweaty', { x: 0, y: 175, z: 0 }, 10.0 + i * 0.08, 0.08, false);
+    }
+
+    expect(barrels[0].exploded).toBe(true);
+    expect(barrels[1].exploded).toBe(true);
+    expect(barrels[2].exploded).toBe(false);
+    expect(explosionEvents.length).toBeGreaterThanOrEqual(2);
+    expect(barrelSounds.filter((s) => s === 'barrel_explode').length).toBeGreaterThanOrEqual(2);
+
+    // Once nearby barrels are exploded, bot fires directly at enemy
+    const firedBefore = ctx.firedCalls.length;
+    for (let i = 0; i < 6; i++) {
+      updateBot(bot, ctx, 'sweaty', { x: 0, y: 175, z: 0 }, 11.2 + i * 0.08, 0.08, false);
+    }
+    expect(ctx.firedCalls.length).toBeGreaterThan(firedBefore);
+
+    // Blocked LOS skips barrel selection
+    const blockedBarrel: ExplosiveBarrelEntity = {
+      id: 'exp_blocked',
+      x: 2.0,
+      y: 10,
+      z: 22,
+      hp: 35,
+      maxHp: 35,
+      blastRadius: 6.8,
+      blastDamage: 85,
+      exploded: false,
+    };
+    expect(
+      selectExplosiveBarrelTarget(bot, enemy, [blockedBarrel], () => false),
+    ).toBeNull();
   });
 });

@@ -604,6 +604,88 @@ describe('SoundSynthesizer', () => {
     synth.dispose();
   });
 
+  it('creates bespoke multi-layered Wave 4 SFX with strictly positive ramps across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave4Ids: SoundEventId[] = [
+      'rift_teleport',
+      'augment_ready',
+      'augment_select',
+      'flag_tick',
+      'flag_captured',
+      'tactical_ping',
+      'barrel_explode',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave4Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(3);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(5);
+      expect(gainsCreated).toBeGreaterThanOrEqual(4);
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.flag_tick).toBeGreaterThan(0);
+    expect(durations.flag_tick).toBeLessThan(0.12);
+    expect(durations.rift_teleport).toBeGreaterThan(0.65);
+    expect(durations.augment_ready).toBeGreaterThan(0.5);
+    expect(durations.augment_select).toBeGreaterThan(0.45);
+    expect(durations.flag_captured).toBeGreaterThan(0.9);
+    expect(durations.tactical_ping).toBeGreaterThan(0.4);
+    expect(durations.barrel_explode).toBeGreaterThan(0.9);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThan(0);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThan(0);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave4Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+    synth.dispose();
+  });
+
   it('layers gunfire sub-thump & bolt tails cleanly across pitch/volume bounds', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
@@ -1409,6 +1491,254 @@ describe('AudioEngine', () => {
     expect(minOscs[0].frequency.value).toBeGreaterThan(78);
     expect(() => fallbackEngine.updateVehicleEngine(false, 0, false)).not.toThrow();
     expect(minOscs.every((o) => o.stopped)).toBe(true);
+    fallbackEngine.dispose();
+  });
+
+  it('starts, speed-modulates, and cleanly stops skydiving wind rush loop and applies Wave-4 priorities/distances', async () => {
+    const bus = new EventBus();
+
+    // 1. Headless safety (no AudioContext)
+    const headless = new AudioEngine(bus);
+    expect(() => headless.updateWindRush(true, 42)).not.toThrow();
+    expect(() => headless.updateWindRush(true, Number.NaN)).not.toThrow();
+    expect(() => headless.updateWindRush(true, -15)).not.toThrow();
+    expect(() => headless.updateWindRush(true, 120)).not.toThrow();
+    expect(() => headless.setPaused(true)).not.toThrow();
+    expect(headless.getWindRushState()).toEqual({ active: false, filterHz: 0, gain: 0 });
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    // 2. Suspended or muted contexts do not spawn wind buffer sources
+    const suspendedCtx = new MockAudioContext();
+    suspendedCtx.state = 'suspended';
+    const suspendedEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => suspendedCtx as unknown as AudioContext,
+    });
+    suspendedEngine.updateWindRush(true, 45);
+    expect(suspendedCtx.bufferSources.length).toBe(0);
+    expect(suspendedEngine.getWindRushState().active).toBe(false);
+    suspendedEngine.dispose();
+
+    const mutedCtx = new MockAudioContext();
+    const mutedEngine = new AudioEngine(
+      bus,
+      { ...DEFAULT_SETTINGS, sfxVolume: 0 },
+      { contextFactory: () => mutedCtx as unknown as AudioContext },
+    );
+    await mutedEngine.unlock();
+    mutedEngine.updateWindRush(true, 55);
+    expect(mutedCtx.bufferSources.length).toBe(0);
+    expect(mutedEngine.getWindRushState().active).toBe(false);
+    mutedEngine.dispose();
+
+    // 3. Active AudioContext: lazy start, zero-leak reuse, speed modulation, pause/mute/dispose cleanup
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+
+    // Inactive before first active=true call
+    engine.updateWindRush(false, 0);
+    expect(mockCtx.bufferSources.length).toBe(0);
+    expect(engine.getWindRushState()).toEqual({ active: false, filterHz: 0, gain: 0 });
+
+    // Lazy start at 0 m/s: 1 looping bufferSource + 1 bandpass filter
+    const gainsBefore = mockCtx.gains.length;
+    engine.updateWindRush(true, 0);
+    const idleState = engine.getWindRushState();
+    expect(idleState.active).toBe(true);
+    expect(idleState.filterHz).toBeCloseTo(280, 1);
+    expect(idleState.gain).toBeGreaterThan(0);
+    expect(engine.getActiveVoiceCount()).toBe(1);
+    expect(mockCtx.bufferSources.length).toBe(1);
+    expect(mockCtx.bufferSources[0].loop).toBe(true);
+    expect(mockCtx.bufferSources[0].started).toBe(true);
+    expect(mockCtx.bufferSources[0].stopped).toBe(false);
+    expect(mockCtx.filters.length).toBe(1);
+    expect(mockCtx.filters[0].type).toBe('bandpass');
+
+    const windFilter = mockCtx.filters[0];
+    const windGain = mockCtx.gains[gainsBefore];
+
+    // Calling repeatedly with identical speed allocates zero extra nodes
+    for (let i = 0; i < 60; i++) {
+      engine.updateWindRush(true, 0);
+    }
+    expect(mockCtx.bufferSources.length).toBe(1);
+    expect(mockCtx.filters.length).toBe(1);
+
+    // Speed modulation across 0 -> 28 -> 60 m/s increases bandpass cutoff & gain smoothly
+    engine.updateWindRush(true, 28);
+    const midState = engine.getWindRushState();
+    expect(midState.filterHz).toBeGreaterThan(idleState.filterHz);
+    expect(midState.gain).toBeGreaterThan(idleState.gain);
+    expect(windFilter.frequency.value).toBeCloseTo(midState.filterHz, 2);
+
+    engine.updateWindRush(true, 60);
+    const maxState = engine.getWindRushState();
+    expect(maxState.filterHz).toBeGreaterThan(midState.filterHz);
+    expect(maxState.filterHz).toBeLessThanOrEqual(1600);
+    expect(maxState.gain).toBeGreaterThan(midState.gain);
+    expect(windFilter.frequency.value).toBeCloseTo(maxState.filterHz, 2);
+
+    // Clamps out-of-range speeds safely
+    engine.updateWindRush(true, 120);
+    expect(engine.getWindRushState().filterHz).toBeCloseTo(1600, 1);
+    engine.updateWindRush(true, -10);
+    expect(engine.getWindRushState().filterHz).toBeCloseTo(280, 1);
+    expect(mockCtx.bufferSources.length).toBe(1);
+
+    // Clean stop on active=false
+    engine.updateWindRush(false, 0);
+    expect(engine.getWindRushState()).toEqual({ active: false, filterHz: 0, gain: 0 });
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.bufferSources[0].stopped).toBe(true);
+    expect(mockCtx.bufferSources[0].disconnected).toBe(true);
+    expect(windGain.gain.value).toBeCloseTo(0.0001, 4);
+
+    // Restart after active=false, then pause tears down active wind loop cleanly
+    engine.updateWindRush(true, 45);
+    expect(engine.getWindRushState().active).toBe(true);
+    expect(mockCtx.bufferSources.length).toBe(2);
+    expect(mockCtx.bufferSources[1].started).toBe(true);
+    expect(mockCtx.bufferSources[1].stopped).toBe(false);
+
+    engine.setPaused(true);
+    expect(engine.getWindRushState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.bufferSources[1].stopped).toBe(true);
+
+    // Remains silent while paused, then resumes cleanly when unpaused
+    engine.updateWindRush(true, 50);
+    expect(engine.getWindRushState().active).toBe(false);
+    expect(mockCtx.bufferSources.length).toBe(2);
+
+    engine.setPaused(false);
+    engine.updateWindRush(true, 50);
+    expect(engine.getWindRushState().active).toBe(true);
+    expect(mockCtx.bufferSources.length).toBe(3);
+
+    // Muting SFX stops active wind loop cleanly
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0 });
+    expect(engine.getWindRushState().active).toBe(false);
+    expect(mockCtx.bufferSources[2].stopped).toBe(true);
+
+    // Unmute, restart, and verify dispose() kills all loops with zero zombies
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0.85 });
+    engine.updateWindRush(true, 58);
+    expect(engine.getWindRushState().active).toBe(true);
+    expect(mockCtx.bufferSources.length).toBe(4);
+    expect(mockCtx.bufferSources[3].stopped).toBe(false);
+
+    // Wave-4 sound priority & max hear distance verification
+    expect(getSoundPriority('rift_teleport')).toBe(3);
+    expect(getSoundPriority('augment_ready')).toBe(3);
+    expect(getSoundPriority('flag_captured')).toBe(3);
+    expect(getSoundPriority('barrel_explode')).toBe(3);
+    expect(getSoundPriority('augment_select')).toBe(2);
+    expect(getSoundPriority('tactical_ping')).toBe(2);
+    expect(getSoundPriority('flag_tick')).toBe(1);
+
+    expect(getMaxHearDistance('flag_tick')).toBe(60);
+    expect(getMaxHearDistance('augment_ready')).toBe(80);
+    expect(getMaxHearDistance('augment_select')).toBe(80);
+    expect(getMaxHearDistance('tactical_ping')).toBe(150);
+    expect(getMaxHearDistance('flag_captured')).toBe(220);
+    expect(getMaxHearDistance('rift_teleport')).toBe(240);
+    expect(getMaxHearDistance('barrel_explode')).toBe(240);
+
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+    expect(engine.playSound({ id: 'rift_teleport', position: { x: 200, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'barrel_explode', position: { x: 200, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'flag_tick', position: { x: 100, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    engine.dispose();
+    expect(engine.getWindRushState()).toEqual({ active: false, filterHz: 0, gain: 0 });
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    const windSources = mockCtx.bufferSources.filter((s) => s.loop);
+    expect(windSources.length).toBe(4);
+    expect(windSources.every((s) => s.stopped)).toBe(true);
+
+    // Post-dispose calls are no-ops
+    const countAfterDispose = mockCtx.bufferSources.length;
+    engine.updateWindRush(true, 60);
+    expect(mockCtx.bufferSources.length).toBe(countAfterDispose);
+
+    // 4. Minimal AudioParam fallback without setTargetAtTime or createBiquadFilter
+    class MinimalLinearParam {
+      value = 0;
+      events: Array<{ kind: string; value: number }> = [];
+      setValueAtTime(v: number): this {
+        this.value = v;
+        this.events.push({ kind: 'set', value: v });
+        return this;
+      }
+      linearRampToValueAtTime(v: number): this {
+        this.value = v;
+        this.events.push({ kind: 'linear', value: v });
+        return this;
+      }
+      cancelScheduledValues(): this {
+        return this;
+      }
+    }
+    const minSources: Array<{
+      buffer: AudioBuffer | null;
+      loop: boolean;
+      started: boolean;
+      stopped: boolean;
+      start: () => void;
+      stop: () => void;
+      connect: () => void;
+      disconnect: () => void;
+    }> = [];
+    const minGains: Array<{ gain: MinimalLinearParam; connect: () => void; disconnect: () => void }> = [];
+    const minCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = { gain: new MinimalLinearParam(), connect: () => {}, disconnect: () => {} };
+        minGains.push(g);
+        return g;
+      },
+      createBuffer: (ch: number, len: number, sr: number) => new MockAudioBuffer(ch, len, sr),
+      createBufferSource: () => {
+        const s = {
+          buffer: null,
+          loop: false,
+          started: false,
+          stopped: false,
+          start() {
+            this.started = true;
+          },
+          stop() {
+            this.stopped = true;
+          },
+          connect() {},
+          disconnect() {},
+        };
+        minSources.push(s);
+        return s;
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const fallbackEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => minCtx,
+    });
+    await fallbackEngine.unlock();
+    expect(() => fallbackEngine.updateWindRush(true, 40)).not.toThrow();
+    expect(fallbackEngine.getWindRushState().active).toBe(true);
+    expect(minSources.length).toBe(1);
+    expect(minSources[0].loop).toBe(true);
+    expect(minSources[0].started).toBe(true);
+    const windMasterGain = minGains[minGains.length - 1].gain;
+    expect(windMasterGain.events.some((e) => e.kind === 'linear' && e.value > 0)).toBe(true);
+    expect(() => fallbackEngine.updateWindRush(false, 0)).not.toThrow();
+    expect(minSources[0].stopped).toBe(true);
+    expect(windMasterGain.value).toBeCloseTo(0.0001, 4);
     fallbackEngine.dispose();
   });
 });

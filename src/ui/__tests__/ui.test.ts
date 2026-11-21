@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  AUGMENTS,
+  CONTRAILS,
   DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   EMOTES,
@@ -16,13 +18,16 @@ import {
 } from '../../core';
 import type {
   AmmoType,
+  AugmentId,
   BiomeType,
   BuildPieceType,
   CampfireEntity,
+  CapturePointEntity,
   HUDState,
   MaterialType,
   MatchQuest,
   MatchSummary,
+  RiftEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
@@ -34,6 +39,7 @@ import {
   angleRadToDeg,
   BOSS_POI_LABELS,
   cloneSettings,
+  computeCaptureProgressPct,
   computeCareerLevelProgress,
   computeFallbackStormDistance,
   computeLevelFromXp,
@@ -48,15 +54,20 @@ import {
   formatModeBadgeLabel,
   formatSafeZoneDistance,
   formatSurvivalTime,
+  formatTacticalPingLabel,
   formatVehicleKindLabel,
   formatWeatherLabel,
   FullMapOverlay,
   getAmmoIconSvg,
+  getAugmentIconSvg,
+  getAugmentMeta,
   getBearingDeg,
   getBountyTargetSvg,
   getBuildIconSvg,
   getCampfireIconSvg,
+  getCaptureFlagIconSvg,
   getContextualHudHints,
+  getContrailMeta,
   getCrownSvg,
   getGameModeMeta,
   getHeadingFromYaw,
@@ -66,7 +77,9 @@ import {
   getRarityMeta,
   getShortestAngleDiffDeg,
   getSkullSvg,
+  getSkyRiftIconSvg,
   getStormEyeSvg,
+  getTacticalPingIconSvg,
   getTotalXpForLevel,
   getUpgradeBenchIconSvg,
   getVaultKeySvg,
@@ -76,6 +89,7 @@ import {
   getWeaponSvg,
   getWeatherIconSvg,
   HUDManager,
+  type HUDManagerCallbacks,
   KEYBIND_ACTION_DEFS,
   loadCareerStats,
   loadStoredLobbyConfig,
@@ -934,13 +948,15 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
         PICKAXES.length +
         GLIDERS.length +
         EMOTES.length +
-        WEAPON_WRAPS.length,
+        WEAPON_WRAPS.length +
+        CONTRAILS.length,
     );
     expect(SKINS.length).toBeGreaterThanOrEqual(10);
     expect(PICKAXES.length).toBe(6);
     expect(GLIDERS.length).toBe(6);
     expect(EMOTES.length).toBe(6);
     expect(WEAPON_WRAPS.length).toBe(6);
+    expect(CONTRAILS.length).toBe(6);
 
     // Complete a match -> MatchOverlay renders Match XP Breakdown & updates Career
     ui.setPhase('victory');
@@ -985,6 +1001,8 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
     expect(legend?.textContent).toContain('BOSS VAULT');
     expect(legend?.textContent).toContain('UPGRADE BENCH');
     expect(legend?.textContent).toContain('CAMPFIRE');
+    expect(legend?.textContent).toContain('SKY RIFT');
+    expect(legend?.textContent).toContain('CAPTURE FLAG');
 
     fullMap.dispose();
     ui.dispose();
@@ -1881,6 +1899,521 @@ describe('Wave 3 UI: Game Modes, Weapon Wraps, Overshield, Visual Audio, Match Q
     expect(hasTranslate(ubNorm.nx, ubNorm.nz)).toBe(true);
     expect(hasTranslate(cf1Norm.nx, cf1Norm.nz)).toBe(true);
     expect(hasTranslate(cf2Norm.nx, cf2Norm.nz)).toBe(true);
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 4 UI: Skydiving Contrails, Reality Augments, Capture Bar, Tactical Ping, Map Polish & Summary', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave 4 UI helpers & SVG icons for CONTRAILS, AUGMENTS, Capture Progress, Tactical Ping, Rifts & Flags', () => {
+    expect(CONTRAILS.length).toBe(6);
+    expect(AUGMENTS.length).toBe(8);
+
+    for (const c of CONTRAILS) {
+      const meta = getContrailMeta(c.id);
+      expect(meta.id).toBe(c.id);
+      expect(meta.name).toBe(c.name);
+      expect(meta.primaryColor).toMatch(/^#/);
+      expect(meta.secondaryColor).toMatch(/^#/);
+    }
+    expect(getContrailMeta('unknown_contrail').id).toBe(CONTRAILS[0].id);
+
+    const seenAugSvgs = new Set<string>();
+    for (const aug of AUGMENTS) {
+      const meta = getAugmentMeta(aug.id);
+      expect(meta.id).toBe(aug.id);
+      expect(meta.badge.length).toBeGreaterThan(0);
+      expect(meta.subtitle.length).toBeGreaterThan(0);
+      const svg = getAugmentIconSvg(aug.id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      expect(seenAugSvgs.has(svg)).toBe(false);
+      seenAugSvgs.add(svg);
+    }
+    expect(getAugmentMeta('nonexistent' as AugmentId).id).toBe(AUGMENTS[0].id);
+
+    expect(computeCaptureProgressPct(0.5, false)).toBe(50);
+    expect(computeCaptureProgressPct(1.5, false)).toBe(100);
+    expect(computeCaptureProgressPct(-0.2, false)).toBe(0);
+    expect(computeCaptureProgressPct(0.15, true)).toBe(100);
+
+    expect(
+      formatTacticalPingLabel({ kind: 'move', label: '  Push Ridge ', distance: 42.6 }),
+    ).toEqual({ text: 'PUSH RIDGE', distanceText: '43M' });
+    expect(
+      formatTacticalPingLabel({ kind: 'danger', distance: Number.NaN }),
+    ).toEqual({ text: 'DANGER', distanceText: '0M' });
+    expect(
+      formatTacticalPingLabel({ kind: 'loot', label: '', distance: 18 }),
+    ).toEqual({ text: 'LOOT', distanceText: '18M' });
+
+    for (const svg of [
+      getTacticalPingIconSvg('move'),
+      getTacticalPingIconSvg('danger'),
+      getTacticalPingIconSvg('loot'),
+      getSkyRiftIconSvg(true),
+      getSkyRiftIconSvg(false),
+      getCaptureFlagIconSvg(false),
+      getCaptureFlagIconSvg(true),
+    ]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+  });
+
+  it('persists contrailId in LobbyConfig and renders all 6 SKYDIVING CONTRAILS in LOCKER tab emitting onCosmeticChange', () => {
+    expect(DEFAULT_LOBBY_CONFIG.contrailId).toBe(
+      CONTRAILS[0]?.id ?? 'wind_stream',
+    );
+    expect(loadStoredLobbyConfig().contrailId).toBe('wind_stream');
+
+    const store = new Map<string, string>();
+    (globalThis as Record<string, unknown>).window = {
+      innerWidth: 1280,
+      innerHeight: 720,
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    saveStoredLobbyConfig({
+      ...DEFAULT_LOBBY_CONFIG,
+      contrailId: 'void_lightning',
+    });
+    expect(loadStoredLobbyConfig().contrailId).toBe('void_lightning');
+
+    store.set(
+      'fortdrop_lobby_v1',
+      JSON.stringify({ contrailId: 'invalid_contrail_xyz' }),
+    );
+    expect(loadStoredLobbyConfig().contrailId).toBe('wind_stream');
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const cosmeticChanges: Array<{ contrailId?: string }> = [];
+    const ui = new UIManager(root as unknown as HTMLElement, bus, {
+      onCosmeticChange: (c) => cosmeticChanges.push(c),
+    });
+
+    const navTabs = root.findAllByClass('fdr-nav-tab');
+    navTabs[1].click(); // LOCKER
+
+    const contrailCards = root.findAllByClass('fdr-contrail-card');
+    expect(contrailCards.length).toBe(6);
+    for (const contrail of CONTRAILS) {
+      const card = contrailCards.find(
+        (c) => c.dataset.contrailId === contrail.id,
+      );
+      expect(card).toBeDefined();
+      expect(card?.classList.contains(`rarity-${contrail.rarity}`)).toBe(true);
+      expect(card?.textContent).toContain(contrail.name);
+      expect(card?.textContent).toContain(contrail.rarity.toUpperCase());
+      expect(card?.findByClass('fdr-contrail-swatch')?.style.background).toContain(
+        'linear-gradient',
+      );
+    }
+
+    // Select Solar Flare (index 2)
+    contrailCards[2].click();
+    expect(ui.getLobbyConfig().contrailId).toBe(CONTRAILS[2].id);
+    expect(loadStoredLobbyConfig().contrailId).toBe(CONTRAILS[2].id);
+    expect(cosmeticChanges[cosmeticChanges.length - 1]?.contrailId).toBe(
+      CONTRAILS[2].id,
+    );
+
+    ui.dispose();
+  });
+
+  it('renders Augment Picker with clickable [7]/[8] callbacks, Active Augments Strip (3 max), Capture Progress Bar above [E], and 3D Tactical Ping in HUDManager', () => {
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    const selectedChoices: Array<0 | 1> = [];
+    const hudRoot = new MockElement('div');
+    const callbacks: HUDManagerCallbacks = {
+      onEmoteSelect: () => {},
+      onEditTileToggle: () => {},
+      onEditConfirm: () => {},
+      onEditReset: () => {},
+      onAugmentSelect: (idx) => selectedChoices.push(idx),
+    };
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      callbacks,
+    );
+    hud.setVisible(true);
+
+    hud.update(
+      makeBaseHUDState({
+        pointerLocked: false, // Unlocked UI still allows clicking [7] & [8]
+        pendingAugmentChoices: ['parkour_boost', 'siphon_master'],
+        activeAugments: [
+          'parkour_boost',
+          'light_fingers',
+          'siphon_master',
+          'aerialist',
+        ],
+        interactPrompt: { label: 'OPEN CHEST', key: 'E', rarity: 'rare' },
+        captureStatus: {
+          poiName: 'Metro Towers',
+          progress: 0.64,
+          captured: false,
+          contested: true,
+        },
+        tacticalPing: {
+          x: 120,
+          y: 14,
+          z: -60,
+          label: 'Vault Loot',
+          kind: 'loot',
+          distance: 84.7,
+          screenX: 412,
+          screenY: 235,
+          visible: true,
+        },
+      }),
+    );
+
+    // 1. Reality Augment Picker & clickable [7]/[8] buttons
+    const picker = hudRoot.findByClass('fdr-augment-picker');
+    expect(picker?.classList.contains('fdr-hidden')).toBe(false);
+    expect(picker?.textContent).toContain('AUGMENT READY');
+    const choiceBtns = picker?.findAllByClass('fdr-augment-choice') ?? [];
+    expect(choiceBtns.length).toBe(2);
+    expect(choiceBtns[0].textContent).toContain('[7]');
+    expect(choiceBtns[0].textContent).toContain('MOBILITY');
+    expect(choiceBtns[0].textContent).toContain('SOARING SPRINT');
+    expect(choiceBtns[1].textContent).toContain('[8]');
+    expect(choiceBtns[1].textContent).toContain('COMBAT');
+    expect(choiceBtns[1].textContent).toContain('SIPHON OVERDRIVE');
+
+    choiceBtns[0].click();
+    choiceBtns[1].click();
+    expect(selectedChoices).toEqual([0, 1]);
+
+    // Also verify UIManager forwards onAugmentSelect cleanly
+    const uiChoices: Array<0 | 1> = [];
+    const uiRoot = new MockElement('div');
+    const ui = new UIManager(uiRoot as unknown as HTMLElement, new EventBus(), {
+      onAugmentSelect: (idx) => uiChoices.push(idx),
+    });
+    ui.setPhase('playing');
+    ui.updateHUD(
+      makeBaseHUDState({
+        pendingAugmentChoices: ['aerialist', 'storm_mark'],
+      }),
+    );
+    const uiChoiceBtns = uiRoot.findAllByClass('fdr-augment-choice');
+    uiChoiceBtns[1]?.click();
+    expect(uiChoices).toEqual([1]);
+    ui.dispose();
+
+    // 2. Active Augments Strip capped at 3 pills
+    const strip = hudRoot.findByClass('fdr-augments-strip');
+    expect(strip?.classList.contains('fdr-hidden')).toBe(false);
+    const pills = strip?.findAllByClass('fdr-augment-pill') ?? [];
+    expect(pills.length).toBe(3);
+    expect(pills.map((p) => p.dataset.augmentId)).toEqual([
+      'parkour_boost',
+      'light_fingers',
+      'siphon_master',
+    ]);
+
+    // 3. POI Capture Progress Bar cleanly above [E] interact prompt in bottomCenter
+    const bottomCenter = hudRoot.findByClass('fdr-bottom-center');
+    const capBar = hudRoot.findByClass('fdr-capture-bar');
+    const interactEl = hudRoot.findByClass('fdr-interact-prompt');
+    expect(capBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(capBar?.classList.contains('contested')).toBe(true);
+    expect(capBar?.textContent).toContain('CAPTURING METRO TOWERS • 64%');
+    expect(capBar?.textContent).toContain('CONTESTED');
+    expect(capBar?.findByClass('fdr-capture-fill')?.style.width).toBe('64%');
+    const capIdx = bottomCenter?.children.indexOf(capBar!) ?? -1;
+    const interactIdx = bottomCenter?.children.indexOf(interactEl!) ?? -1;
+    expect(capIdx).toBeGreaterThanOrEqual(0);
+    expect(interactIdx).toBeGreaterThan(capIdx);
+
+    // Captured celebration transition
+    hud.update(
+      makeBaseHUDState({
+        pendingAugmentChoices: null,
+        captureStatus: {
+          poiName: 'Metro Towers',
+          progress: 1,
+          captured: true,
+        },
+        tacticalPing: {
+          x: 0,
+          y: 0,
+          z: 0,
+          label: 'Enemy',
+          kind: 'danger',
+          distance: 50,
+          screenX: 600,
+          screenY: 300,
+          visible: false,
+        },
+      }),
+    );
+    expect(picker?.classList.contains('fdr-hidden')).toBe(true);
+    expect(capBar?.classList.contains('captured')).toBe(true);
+    expect(capBar?.textContent).toContain('METRO TOWERS CAPTURED • 100%');
+
+    // 4. 3D Tactical Ping marker position, icon kind, label, and distance
+    const pingEl = hudRoot.findByClass('fdr-tactical-ping');
+    // Hidden after visible: false update above
+    expect(pingEl?.classList.contains('fdr-hidden')).toBe(true);
+
+    hud.update(
+      makeBaseHUDState({
+        captureStatus: null,
+        tacticalPing: {
+          x: 120,
+          y: 14,
+          z: -60,
+          label: 'Vault Loot',
+          kind: 'loot',
+          distance: 84.7,
+          screenX: 412,
+          screenY: 235,
+          visible: true,
+        },
+      }),
+    );
+    expect(capBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(pingEl?.classList.contains('fdr-hidden')).toBe(false);
+    expect(pingEl?.dataset.pingKind).toBe('loot');
+    expect(pingEl?.style.left).toBe('412.0px');
+    expect(pingEl?.style.top).toBe('235.0px');
+    expect(pingEl?.textContent).toContain('VAULT LOOT');
+    expect(pingEl?.textContent).toContain('85M');
+
+    hud.dispose();
+  });
+
+  it('draws Sky Rifts & Capture Flags via FullMapOverlay.setWorldRiftsAndFlags before POI text labels, offsets Boss Vault padlocks, and shows augments/poisCaptured on MatchOverlay', () => {
+    const drawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const mockCtx = {
+      clearRect: (...args: unknown[]) => drawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => drawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => drawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => drawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => drawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      arc: (...args: unknown[]) => drawCalls.push({ op: 'arc', args }),
+      fill: () => drawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => drawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => drawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => drawCalls.push({ op: 'rotate', args }),
+      setLineDash: () => {},
+      fillText: (...args: unknown[]) => drawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => drawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => mockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // MatchOverlay activeAugments & poisCaptured
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 7,
+      damageDealt: 1450,
+      shotsFired: 90,
+      shotsHit: 48,
+      accuracy: 53,
+      headshots: 4,
+      structuresBuilt: 14,
+      chestsOpened: 6,
+      survivalTimeSec: 210,
+      poisCaptured: 2,
+      activeAugments: ['parkour_boost', 'siphon_master'],
+    });
+    const statsGrid = root.findByClass('fdr-stats-grid');
+    expect(statsGrid?.textContent).toContain('POIS CAPTURED');
+    expect(statsGrid?.textContent).toContain('2');
+    const summaryAugments = root.findByClass('fdr-summary-augments');
+    expect(summaryAugments?.textContent).toContain('REALITY AUGMENTS');
+    const augBadges = root.findAllByClass('fdr-summary-augment-badge');
+    expect(augBadges.length).toBe(2);
+    expect(augBadges[0].textContent).toContain('SOARING SPRINT');
+    expect(augBadges[1].textContent).toContain('SIPHON OVERDRIVE');
+
+    // FullMapOverlay.setWorldRiftsAndFlags + Map Polish
+    const rifts: RiftEntity[] = [
+      {
+        id: 'rift-1',
+        poiId: 'frostpeak_citadel',
+        x: -25,
+        y: 36,
+        z: -240,
+        active: true,
+        openRemainingSec: 0,
+        cooldownSec: 0,
+      },
+      {
+        id: 'rift-2',
+        poiId: 'sunken_oasis',
+        x: -210,
+        y: 9,
+        z: -5,
+        active: false,
+        openRemainingSec: 0,
+        cooldownSec: 32,
+      },
+    ];
+    const capturePoints: CapturePointEntity[] = [
+      {
+        id: 'cp-1',
+        poiId: 'metro_towers',
+        poiName: 'METRO TOWERS',
+        x: -75,
+        y: 12,
+        z: -40,
+        radius: 6.5,
+        progress: 1,
+        captured: true,
+        ownerId: 'player',
+        ownerName: 'FORTDROPPER',
+      },
+      {
+        id: 'cp-2',
+        poiId: 'market_row',
+        poiName: 'MARKET ROW',
+        x: 175,
+        y: 13,
+        z: 35,
+        radius: 6.5,
+        progress: 0.4,
+        captured: false,
+        ownerId: null,
+        ownerName: null,
+      },
+    ];
+    const vaults: VaultEntity[] = [
+      {
+        id: 'vault-scorched',
+        poiId: 'scorched_caldera',
+        bossName: 'Obsidian Titan',
+        x: -178,
+        y: 20,
+        z: 114,
+        unlocked: false,
+        opened: false,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldVaults(vaults);
+    ui.setWorldRiftsAndFlags(rifts, capturePoints);
+    ui.toggleFullMap(true);
+    drawCalls.length = 0;
+    ui.updateHUD(makeBaseHUDState());
+
+    const r1Norm = worldToMapNorm(-25, -240);
+    const r2Norm = worldToMapNorm(-210, -5);
+    const cp1Norm = worldToMapNorm(-75, -40);
+    const cp2Norm = worldToMapNorm(175, 35);
+    const scorchedPoi = POIS.find((p) => p.id === 'scorched_caldera')!;
+    const scorchedPoiNorm = worldToMapNorm(scorchedPoi.x, scorchedPoi.z);
+    const vaultNorm = worldToMapNorm(-178, 114);
+
+    const findTranslateIdx = (px: number, py: number) =>
+      drawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+
+    const r1Idx = findTranslateIdx(r1Norm.nx * 640, r1Norm.nz * 640);
+    const r2Idx = findTranslateIdx(r2Norm.nx * 640, r2Norm.nz * 640);
+    const cp1Idx = findTranslateIdx(cp1Norm.nx * 640, cp1Norm.nz * 640);
+    const cp2Idx = findTranslateIdx(cp2Norm.nx * 640, cp2Norm.nz * 640);
+    const vaultOffsetIdx = findTranslateIdx(
+      vaultNorm.nx * 640,
+      scorchedPoiNorm.nz * 640 - 17,
+    );
+    const firstPoiLabelIdx = drawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+
+    expect(r1Idx).toBeGreaterThanOrEqual(0);
+    expect(r2Idx).toBeGreaterThanOrEqual(0);
+    expect(cp1Idx).toBeGreaterThanOrEqual(0);
+    expect(cp2Idx).toBeGreaterThanOrEqual(0);
+    expect(vaultOffsetIdx).toBeGreaterThanOrEqual(0);
+
+    // All stationary station markers & Boss Vault padlock must draw BEFORE POI text labels
+    expect(firstPoiLabelIdx).toBeGreaterThan(r1Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(r2Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(cp1Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(cp2Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(vaultOffsetIdx);
 
     ui.dispose();
   });
