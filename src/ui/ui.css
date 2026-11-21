@@ -195,11 +195,11 @@
 .fdr-nav-tabs {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
 .fdr-nav-tab {
-  padding: 8px 22px;
+  padding: 7px 15px;
   background: rgba(11, 20, 42, 0.8);
   border: 2px solid rgba(255, 255, 255, 0.22);
   border-radius: 5px;
@@ -208,8 +208,8 @@
   color: #cbd5e1;
   font-family: 'Barlow Condensed', 'Impact', sans-serif;
   font-weight: 800;
-  font-size: 19px;
-  letter-spacing: 0.08em;
+  font-size: 17px;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   transition: all 0.12s ease;
 }
@@ -874,12 +874,24 @@
   border-radius: 3px;
 }
 
-/* Drop / Glider Action Prompt beneath Compass */
-.fdr-phase-hint {
+/* Top-Center Stack beneath Compass (Phase Hint, Loot Island Chip, Boss Bar) */
+.fdr-top-center-stack {
   position: absolute;
   top: 62px;
   left: 50%;
-  transform: translateX(-50%) skewX(-10deg);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* Drop / Glider Action Prompt beneath Compass */
+.fdr-phase-hint {
+  position: relative;
+  transform: skewX(-10deg);
   padding: 6px 18px;
   background: linear-gradient(90deg, rgba(0, 180, 255, 0.92), rgba(14, 116, 144, 0.92));
   border: 2px solid #bae6fd;
@@ -1062,7 +1074,7 @@
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  width: clamp(280px, 27vw, 370px);
+  width: clamp(256px, 23vw, 336px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1391,14 +1403,26 @@
   left: -2px;
   top: -2px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--ch-color, #ffffff);
   box-shadow: 0 0 3px #000000;
 }
 
 .fdr-ch-tick {
   position: absolute;
-  background: #ffffff;
+  background: var(--ch-color, #ffffff);
   box-shadow: 0 0 3px rgba(0, 0, 0, 0.95);
+}
+
+.fdr-crosshair.style-dot .fdr-ch-tick {
+  display: none;
+}
+
+.fdr-crosshair.style-dot .fdr-ch-dot {
+  width: 5px;
+  height: 5px;
+  left: -2.5px;
+  top: -2.5px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.95);
 }
 
 .fdr-ch-tick.top {
@@ -2674,10 +2698,7 @@
 
 /* Boss Encounter Healthbar (Top-Center below Compass) */
 .fdr-boss-bar {
-  position: absolute;
-  top: 62px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: relative;
   width: clamp(290px, 31vw, 430px);
   padding: 7px 12px 8px;
   background: linear-gradient(180deg, rgba(16, 12, 34, 0.92), rgba(10, 16, 36, 0.9));
@@ -3809,7 +3830,10 @@
 .fdr-legend-swatch.bench svg,
 .fdr-legend-swatch.campfire svg,
 .fdr-legend-swatch.rift svg,
-.fdr-legend-swatch.flag svg {
+.fdr-legend-swatch.flag svg,
+.fdr-legend-swatch.vending svg,
+.fdr-legend-swatch.npc svg,
+.fdr-legend-swatch.island svg {
   width: 14px;
   height: 14px;
 }
@@ -4252,4 +4276,569 @@
   font-size: 13px;
   font-weight: 800;
   color: #ffffff;
+}
+
+/* ============================================================================
+   WAVE 5 UI: CAREER PROFILE TAB, CROSSHAIR STUDIO, GOLD BARS, KINETIC DASH,
+   HIRED ALLY CARD & FLOATING LOOT ISLAND CHIP
+   ============================================================================ */
+
+/* Lobby CAREER Tab */
+.fdr-career-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fdr-career-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(13, 28, 60, 0.9), rgba(7, 13, 28, 0.94));
+  border: 2px solid #ffd000;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-career-rank-emblem {
+  width: 78px;
+  height: 78px;
+  border-radius: 10px;
+  border: 2px solid #ffd000;
+  background: radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.14), rgba(6, 12, 28, 0.96));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.fdr-career-rank-badge {
+  font-family: 'Titan One', 'Impact', sans-serif;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
+}
+
+.fdr-career-rank-tier {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.fdr-career-hero-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fdr-career-hero-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fdr-career-hero-lvl {
+  font-size: 22px;
+  font-weight: 900;
+  color: #ffffff;
+  letter-spacing: 0.05em;
+}
+
+.fdr-career-hero-xp {
+  font-size: 14px;
+  font-weight: 800;
+  color: #38bdf8;
+}
+
+.fdr-career-hero-track {
+  height: 9px;
+}
+
+.fdr-career-hero-sub {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.04em;
+}
+
+.fdr-career-gold-vault {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: linear-gradient(95deg, rgba(120, 53, 15, 0.42), rgba(13, 24, 52, 0.92));
+  border: 1.5px solid rgba(255, 208, 0, 0.65);
+}
+
+.fdr-career-gold-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fdr-career-gold-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-career-gold-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-career-gold-label {
+  font-size: 16px;
+  font-weight: 900;
+  color: #ffd000;
+  letter-spacing: 0.07em;
+}
+
+.fdr-career-gold-sub {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #cbd5e1;
+  text-transform: none;
+}
+
+.fdr-career-gold-value {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.fdr-career-gold-value b {
+  font-size: 26px;
+  font-weight: 900;
+  color: #fef08a;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.65);
+}
+
+.fdr-career-gold-value span {
+  font-size: 13px;
+  font-weight: 800;
+  color: #94a3b8;
+}
+
+.fdr-career-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.fdr-career-stat-card {
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: rgba(14, 26, 54, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 4px solid #38bdf8;
+}
+
+.fdr-career-stat-card.accent {
+  border-left-color: #ffd000;
+}
+
+.fdr-career-stat-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+}
+
+.fdr-career-stat-val {
+  font-size: 24px;
+  font-weight: 900;
+  color: #ffffff;
+  line-height: 1.15;
+}
+
+/* Lobby SETTINGS Crosshair Studio */
+.fdr-crosshair-studio {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: rgba(10, 20, 42, 0.78);
+  border: 1.5px solid rgba(255, 208, 0, 0.42);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fdr-crosshair-studio-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fdr-ch-preview {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  background: rgba(5, 11, 24, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  flex-shrink: 0;
+}
+
+.fdr-ch-preview-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--ch-color, #ffffff);
+}
+
+.fdr-ch-preview.style-dot .fdr-ch-preview-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.fdr-ch-preview-tick {
+  position: absolute;
+  background: var(--ch-color, #ffffff);
+}
+
+.fdr-ch-preview.style-dot .fdr-ch-preview-tick {
+  display: none;
+}
+
+.fdr-ch-preview-tick.top {
+  width: 2px;
+  height: 7px;
+  left: 50%;
+  top: 7px;
+  transform: translateX(-50%);
+}
+
+.fdr-ch-preview-tick.bottom {
+  width: 2px;
+  height: 7px;
+  left: 50%;
+  bottom: 7px;
+  transform: translateX(-50%);
+}
+
+.fdr-ch-preview-tick.left {
+  width: 7px;
+  height: 2px;
+  top: 50%;
+  left: 7px;
+  transform: translateY(-50%);
+}
+
+.fdr-ch-preview-tick.right {
+  width: 7px;
+  height: 2px;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+}
+
+.fdr-ch-swatch-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fdr-ch-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease, outline-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.fdr-ch-swatch:hover {
+  transform: scale(1.08);
+  border-color: #ffffff;
+}
+
+.fdr-ch-swatch.active {
+  outline: 2.5px solid #ffd000;
+  outline-offset: 2px;
+  box-shadow: 0 0 12px rgba(255, 208, 0, 0.6);
+}
+
+.fdr-ch-swatch-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* HUD Bottom-Right Gold Bars Counter Pill */
+.fdr-gold-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  background: linear-gradient(90deg, rgba(120, 53, 15, 0.88), rgba(20, 28, 52, 0.9));
+  border: 2px solid rgba(255, 208, 0, 0.72);
+  border-radius: 4px;
+  transform: skewX(-8deg);
+  font-size: 14px;
+  font-weight: 900;
+  color: #fef08a;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-gold-pill > * {
+  transform: skewX(8deg);
+}
+
+.fdr-gold-pill-icon {
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-gold-pill-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* HUD Kinetic Blade Dash Charges Badge */
+.fdr-kinetic-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: rgba(12, 16, 42, 0.92);
+  border: 2px solid #a855f7;
+  border-radius: 5px;
+  transform: skewX(-8deg);
+  margin-right: 0;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.35);
+}
+
+.fdr-kinetic-badge > * {
+  transform: skewX(8deg);
+}
+
+.fdr-kinetic-badge.empty {
+  border-color: #64748b;
+  box-shadow: none;
+}
+
+.fdr-kinetic-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-kinetic-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-kinetic-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1;
+}
+
+.fdr-kinetic-title {
+  font-size: 10px;
+  font-weight: 900;
+  color: #e9d5ff;
+  letter-spacing: 0.06em;
+}
+
+.fdr-kinetic-pips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fdr-kinetic-pip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: rgba(148, 163, 184, 0.4);
+}
+
+.fdr-kinetic-pip.active {
+  background: linear-gradient(180deg, #22d3ee 0%, #7c3aed 100%);
+  border-color: #e0f2fe;
+  color: #fef08a;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.72);
+}
+
+/* HUD Allied Specialist Mini Card (Top-Left Stack) */
+.fdr-ally-card {
+  width: clamp(205px, 18vw, 256px);
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: linear-gradient(155deg, rgba(10, 20, 44, 0.9), rgba(7, 13, 28, 0.94));
+  border: 1.5px solid rgba(56, 189, 248, 0.6);
+  border-left: 4px solid #22d3ee;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fdr-ally-card.role-medic {
+  border-left-color: #34eb5e;
+  border-color: rgba(52, 235, 94, 0.55);
+}
+
+.fdr-ally-card.role-heavy {
+  border-left-color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.55);
+}
+
+.fdr-ally-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fdr-ally-role-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-ally-role-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-ally-name {
+  font-size: 13px;
+  font-weight: 900;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.fdr-ally-role-pill {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(34, 211, 238, 0.22);
+  color: #7dd3fc;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.fdr-ally-card.role-medic .fdr-ally-role-pill {
+  background: rgba(52, 235, 94, 0.22);
+  color: #86efac;
+}
+
+.fdr-ally-card.role-heavy .fdr-ally-role-pill {
+  background: rgba(251, 146, 60, 0.24);
+  color: #fed7aa;
+}
+
+.fdr-ally-dist {
+  font-size: 11px;
+  font-weight: 900;
+  color: #ffd000;
+  flex-shrink: 0;
+}
+
+.fdr-ally-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fdr-ally-track {
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fdr-ally-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.1s ease-out;
+}
+
+.fdr-ally-fill.shield {
+  background: linear-gradient(90deg, #0284c7, #22d3ee);
+}
+
+.fdr-ally-fill.hp {
+  background: linear-gradient(90deg, #16a34a, #34eb5e);
+}
+
+.fdr-ally-stats {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #cbd5e1;
+  letter-spacing: 0.04em;
+}
+
+/* HUD Floating Loot Island Active Chip (Top-Center beneath Compass) */
+.fdr-loot-island-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(8, 30, 62, 0.92), rgba(17, 24, 54, 0.92));
+  border: 1.5px solid #22d3ee;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.52), 0 0 14px rgba(34, 211, 238, 0.35);
+  color: #e0f2fe;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.fdr-loot-island-icon {
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-loot-island-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-loot-island-text {
+  color: #ffd000;
 }

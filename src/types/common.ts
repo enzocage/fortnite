@@ -43,6 +43,12 @@ export interface AugmentDef {
 
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
+export type CrosshairColor = '#ffffff' | '#22d3ee' | '#34eb5e' | '#f472b6' | '#ffd000';
+
+export type CrosshairStyle = 'dynamic' | 'dot' | 'classic';
+
+export type SpecialistRole = 'scout' | 'medic' | 'heavy';
+
 export type BiomeType =
   | 'ocean'
   | 'beach'
@@ -79,5 +85,7 @@ export interface GameSettings {
   showFps: boolean;
   invertY: boolean;
   visualAudio?: boolean;
+  crosshairColor?: CrosshairColor;
+  crosshairStyle?: CrosshairStyle;
   keybinds?: Partial<KeybindMap>;
 }

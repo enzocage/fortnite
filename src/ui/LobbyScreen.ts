@@ -1,16 +1,21 @@
 import {
   CONTRAILS,
+  CROSSHAIR_COLORS,
+  CROSSHAIR_STYLES,
   DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   EMOTES,
   EventBus,
   GAME_MODES,
   GLIDERS,
+  MAX_GOLD_BARS,
   PICKAXES,
   SKINS,
   WEAPON_WRAPS,
 } from '../core';
 import type {
+  CrosshairColor,
+  CrosshairStyle,
   Difficulty,
   EmoteId,
   GameModeId,
@@ -19,18 +24,24 @@ import type {
   KeybindMap,
   LobbyConfig,
 } from '../types';
-import { computeCareerLevelProgress, loadCareerStats } from './CareerProfile';
+import {
+  computeCareerLevelProgress,
+  computeCareerRank,
+  loadCareerStats,
+} from './CareerProfile';
 import {
   cloneSettings,
   formatKeyCodeLabel,
   getGameModeMeta,
   getRarityMeta,
   KEYBIND_ACTION_DEFS,
+  resolveCrosshairColor,
+  resolveCrosshairStyle,
   resolveKeybinds,
 } from './UIHelpers';
-import { getCrownSvg, getWeaponSvg } from './WeaponIcons';
+import { getCrownSvg, getGoldBarSvg, getWeaponSvg } from './WeaponIcons';
 
-export type LobbyTabId = 'play' | 'locker' | 'controls' | 'settings';
+export type LobbyTabId = 'play' | 'locker' | 'career' | 'controls' | 'settings';
 
 const SETTINGS_STORAGE_KEY = 'fortdrop_settings_v1';
 const LOBBY_STORAGE_KEY = 'fortdrop_lobby_v1';
@@ -48,10 +59,25 @@ export const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
   contrailId: CONTRAILS[0]?.id ?? 'wind_stream',
 };
 
+function isValidStorage(candidate: unknown): candidate is Storage {
+  return Boolean(
+    candidate &&
+      typeof candidate === 'object' &&
+      typeof (candidate as Storage).getItem === 'function' &&
+      typeof (candidate as Storage).setItem === 'function',
+  );
+}
+
 function getSafeStorage(): Storage | null {
   try {
-    if (typeof window !== 'undefined' && window.localStorage) {
+    if (typeof window !== 'undefined' && isValidStorage(window.localStorage)) {
       return window.localStorage;
+    }
+    if (typeof globalThis !== 'undefined') {
+      const desc = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+      if (desc && 'value' in desc && isValidStorage(desc.value)) {
+        return desc.value;
+      }
     }
   } catch {
     // Ignore storage access errors in restricted contexts
@@ -69,6 +95,8 @@ export function loadStoredSettings(): GameSettings {
     return cloneSettings({
       ...DEFAULT_SETTINGS,
       ...parsed,
+      crosshairColor: resolveCrosshairColor(parsed.crosshairColor),
+      crosshairStyle: resolveCrosshairStyle(parsed.crosshairStyle),
       keybinds: {
         ...DEFAULT_KEYBINDS,
         ...(parsed.keybinds ?? {}),
@@ -83,7 +111,7 @@ export function saveStoredSettings(settings: GameSettings): void {
   const storage = getSafeStorage();
   if (!storage) return;
   try {
-    storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(cloneSettings(settings)));
   } catch {
     // Ignore storage quota errors
   }
@@ -211,6 +239,7 @@ export class LobbyScreen {
     const tabs: Array<{ id: LobbyTabId; label: string }> = [
       { id: 'play', label: 'PLAY' },
       { id: 'locker', label: 'LOCKER' },
+      { id: 'career', label: 'CAREER' },
       { id: 'controls', label: 'CONTROLS' },
       { id: 'settings', label: 'SETTINGS' },
     ];
@@ -301,6 +330,9 @@ export class LobbyScreen {
       ? `MAX • ${stats.xp} XP`
       : `${prog.xpIntoLevel} / ${prog.xpRequiredForNext} XP`;
     this.careerXpFillEl.style.width = `${Math.round(prog.progressRatio * 100)}%`;
+    if (this.activeTab === 'career') {
+      this.renderTab();
+    }
   }
 
   getConfig(): LobbyConfig {
@@ -473,6 +505,9 @@ export class LobbyScreen {
         break;
       case 'locker':
         this.renderLockerTab();
+        break;
+      case 'career':
+        this.renderCareerTab();
         break;
       case 'controls':
         this.renderControlsTab();
@@ -995,6 +1030,106 @@ export class LobbyScreen {
     return el;
   }
 
+  private renderCareerTab(): void {
+    const stats = loadCareerStats();
+    const prog = computeCareerLevelProgress(stats.xp);
+    const rank = computeCareerRank(stats.level, stats.wins);
+    const winRateStr =
+      stats.matchesPlayed > 0
+        ? `${((stats.wins / stats.matchesPlayed) * 100).toFixed(1).replace(/\.0$/, '')}%`
+        : '0%';
+    const bestPlacementStr =
+      stats.bestPlacement !== null ? `#${stats.bestPlacement}` : '—';
+
+    const panel = document.createElement('div');
+    panel.className = 'fdr-wide-panel fdr-career-panel';
+
+    panel.appendChild(
+      this.makeSectionHeader('CAREER PROFILE', 'SEASON PROGRESSION'),
+    );
+
+    // Rank Tier Emblem + Level & XP Progress Hero Card
+    const hero = document.createElement('div');
+    hero.className = 'fdr-career-hero';
+    hero.style.borderColor = rank.color;
+
+    const emblem = document.createElement('div');
+    emblem.className = `fdr-career-rank-emblem tier-${rank.tier.toLowerCase()}`;
+    emblem.style.borderColor = rank.color;
+    emblem.style.boxShadow = `0 0 18px ${rank.color}44`;
+    emblem.innerHTML = `
+      <span class="fdr-career-rank-badge" style="color:${rank.color}">${rank.badge}</span>
+      <span class="fdr-career-rank-tier" style="color:${rank.color}">${rank.tier}</span>
+    `;
+
+    const levelCol = document.createElement('div');
+    levelCol.className = 'fdr-career-hero-col';
+    const levelHead = document.createElement('div');
+    levelHead.className = 'fdr-career-hero-head';
+    levelHead.innerHTML = `
+      <span class="fdr-career-hero-lvl">LEVEL ${stats.level}</span>
+      <span class="fdr-career-hero-xp">${
+        prog.isMaxLevel
+          ? `MAX LEVEL • ${stats.xp} XP`
+          : `${prog.xpIntoLevel} / ${prog.xpRequiredForNext} XP`
+      }</span>
+    `;
+    const xpTrack = document.createElement('div');
+    xpTrack.className = 'fdr-career-xp-track fdr-career-hero-track';
+    const xpFill = document.createElement('div');
+    xpFill.className = 'fdr-career-xp-fill';
+    xpFill.style.width = `${Math.round(prog.progressRatio * 100)}%`;
+    xpTrack.appendChild(xpFill);
+
+    const totalXpSub = document.createElement('div');
+    totalXpSub.className = 'fdr-career-hero-sub';
+    totalXpSub.textContent = `${stats.xp} TOTAL SEASON XP • RANK TIER: ${rank.tier}`;
+
+    levelCol.append(levelHead, xpTrack, totalXpSub);
+    hero.append(emblem, levelCol);
+
+    // Gold Bars Vault Balance Card
+    const goldCard = document.createElement('div');
+    goldCard.className = 'fdr-career-gold-vault';
+    goldCard.innerHTML = `
+      <div class="fdr-career-gold-left">
+        <span class="fdr-career-gold-icon">${getGoldBarSvg()}</span>
+        <div>
+          <div class="fdr-career-gold-label">GOLD BARS VAULT</div>
+          <div class="fdr-career-gold-sub">PERSISTENT VENDING &amp; SPECIALIST CURRENCY</div>
+        </div>
+      </div>
+      <div class="fdr-career-gold-value">
+        <b>${stats.goldBars}</b>
+        <span>/ ${MAX_GOLD_BARS}</span>
+      </div>
+    `;
+
+    // 6 Career Stat Cards
+    const statsGrid = document.createElement('div');
+    statsGrid.className = 'fdr-career-stats-grid';
+    const cards: Array<{ label: string; value: string; accent?: boolean }> = [
+      { label: 'TOTAL WINS', value: String(stats.wins), accent: true },
+      { label: 'ELIMINATIONS', value: String(stats.elims), accent: true },
+      { label: 'WIN RATE %', value: winRateStr },
+      { label: 'MATCHES PLAYED', value: String(stats.matchesPlayed) },
+      { label: 'BEST PLACEMENT', value: bestPlacementStr },
+      { label: 'TOTAL DAMAGE', value: String(Math.round(stats.damageDealt)) },
+    ];
+    for (const card of cards) {
+      const box = document.createElement('div');
+      box.className = `fdr-career-stat-card${card.accent ? ' accent' : ''}`;
+      box.innerHTML = `
+        <div class="fdr-career-stat-label">${card.label}</div>
+        <div class="fdr-career-stat-val">${card.value}</div>
+      `;
+      statsGrid.appendChild(box);
+    }
+
+    panel.append(hero, goldCard, statsGrid);
+    this.contentEl.appendChild(panel);
+  }
+
   private renderControlsTab(): void {
     const kb = resolveKeybinds(this.settings.keybinds);
     const panel = document.createElement('div');
@@ -1262,6 +1397,99 @@ export class LobbyScreen {
       'visualAudio',
     );
 
+    // Crosshair Studio Section
+    const crosshairSection = document.createElement('div');
+    crosshairSection.className = 'fdr-crosshair-studio';
+
+    const activeChColor: CrosshairColor = resolveCrosshairColor(
+      this.settings.crosshairColor,
+    );
+    const activeChStyle: CrosshairStyle = resolveCrosshairStyle(
+      this.settings.crosshairStyle,
+    );
+    const activeColorMeta =
+      CROSSHAIR_COLORS.find((c) => c.id === activeChColor) ??
+      CROSSHAIR_COLORS[0];
+
+    const chHead = document.createElement('div');
+    chHead.className = 'fdr-crosshair-studio-head';
+    chHead.innerHTML = `
+      <div>
+        <div class="fdr-keybinds-title">CROSSHAIR STUDIO</div>
+        <div class="fdr-keybinds-sub">CUSTOMIZE RETICLE COLOR &amp; STYLE FOR COMBAT CLARITY</div>
+      </div>
+      <div class="fdr-ch-preview style-${activeChStyle}" style="--ch-color:${activeChColor}">
+        <span class="fdr-ch-preview-dot"></span>
+        <span class="fdr-ch-preview-tick top"></span>
+        <span class="fdr-ch-preview-tick bottom"></span>
+        <span class="fdr-ch-preview-tick left"></span>
+        <span class="fdr-ch-preview-tick right"></span>
+      </div>
+    `;
+
+    const colorRow = document.createElement('div');
+    colorRow.className = 'fdr-setting-row fdr-ch-studio-row';
+    const colorLbl = document.createElement('div');
+    colorLbl.className = 'fdr-setting-label';
+    colorLbl.textContent = 'CROSSHAIR COLOR';
+
+    const swatchGroup = document.createElement('div');
+    swatchGroup.className = 'fdr-ch-swatch-group';
+    for (const c of CROSSHAIR_COLORS) {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.className = `fdr-ch-swatch${activeChColor === c.id ? ' active' : ''}`;
+      swatch.dataset.crosshairColor = c.id;
+      swatch.style.background = c.id;
+      swatch.title = c.name;
+      swatch.innerHTML = `<span class="fdr-ch-swatch-sr">${c.name}</span>`;
+      swatch.addEventListener('click', () => {
+        this.playClick();
+        this.settings.crosshairColor = c.id;
+        saveStoredSettings(this.settings);
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
+        this.renderTab();
+      });
+      swatchGroup.appendChild(swatch);
+    }
+
+    const colorVal = document.createElement('div');
+    colorVal.className = 'fdr-setting-val';
+    colorVal.textContent = activeColorMeta.name.toUpperCase();
+    colorRow.append(colorLbl, swatchGroup, colorVal);
+
+    const styleRow = document.createElement('div');
+    styleRow.className = 'fdr-setting-row fdr-ch-studio-row';
+    const styleLbl = document.createElement('div');
+    styleLbl.className = 'fdr-setting-label';
+    styleLbl.textContent = 'CROSSHAIR STYLE';
+
+    const styleGroup = document.createElement('div');
+    styleGroup.className = 'fdr-pill-group';
+    for (const s of CROSSHAIR_STYLES) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `fdr-pill fdr-ch-style-pill${activeChStyle === s.id ? ' active' : ''}`;
+      btn.dataset.crosshairStyle = s.id;
+      btn.title = s.name;
+      btn.innerHTML = `<span>${s.id.toUpperCase()}</span>`;
+      btn.addEventListener('click', () => {
+        this.playClick();
+        this.settings.crosshairStyle = s.id;
+        saveStoredSettings(this.settings);
+        this.callbacks.onSettingsChange(cloneSettings(this.settings));
+        this.renderTab();
+      });
+      styleGroup.appendChild(btn);
+    }
+
+    const styleVal = document.createElement('div');
+    styleVal.className = 'fdr-setting-val';
+    styleVal.textContent = activeChStyle.toUpperCase();
+    styleRow.append(styleLbl, styleGroup, styleVal);
+
+    crosshairSection.append(chHead, colorRow, styleRow);
+
     // Keybind Controls Section
     const keybindsSection = document.createElement('div');
     keybindsSection.className = 'fdr-keybinds-section';
@@ -1342,7 +1570,7 @@ export class LobbyScreen {
       this.renderTab();
     });
 
-    panel.append(header, list, keybindsSection, resetBtn);
+    panel.append(header, list, crosshairSection, keybindsSection, resetBtn);
     this.contentEl.appendChild(panel);
   }
 

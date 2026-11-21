@@ -10,6 +10,7 @@ import type {
   ItemInstance,
   LaunchPadEntity,
   LootDrop,
+  NpcSpecialistEntity,
   RiftEntity,
   SlurpBarrelEntity,
   StormState,
@@ -2756,5 +2757,453 @@ describe('Wave 4 Sky Rifts, POI Flag Capture & Explosive Barrel Opportunism', ()
     expect(
       selectExplosiveBarrelTarget(bot, enemy, [blockedBarrel], () => false),
     ).toBeNull();
+  });
+});
+
+describe('Wave 5 NPC Specialist Allies, Friendly-Fire Immunity & Support Events', () => {
+  function makeNpc(
+    role: NpcSpecialistEntity['role'],
+    overrides: Partial<NpcSpecialistEntity> = {},
+  ): NpcSpecialistEntity {
+    const defaults: Record<
+      NpcSpecialistEntity['role'],
+      { id: string; name: string; poiId: string; skinId: string }
+    > = {
+      scout: {
+        id: 'npc_scout',
+        name: 'Recon Nova',
+        poiId: 'whispering_pines',
+        skinId: 'neon_drift',
+      },
+      medic: {
+        id: 'npc_medic',
+        name: 'Doc Remedy',
+        poiId: 'sunken_oasis',
+        skinId: 'emerald_scout',
+      },
+      heavy: {
+        id: 'npc_heavy',
+        name: 'Tank Bastion',
+        poiId: 'frostpeak_citadel',
+        skinId: 'arctic_apex',
+      },
+    };
+    const spec = defaults[role];
+    return {
+      id: spec.id,
+      name: spec.name,
+      role,
+      poiId: spec.poiId,
+      skinId: spec.skinId,
+      x: 10,
+      y: 10,
+      z: 10,
+      priceGold: 200,
+      hiredBy: 'player',
+      ...overrides,
+    };
+  }
+
+  it('spawns role-configured allies, enforces at-most-1 companion, and excludes allies from getAliveCount & bounty', () => {
+    const ctx = makeMockContext();
+    const manager = new BotManager(ctx, 'standard', 777);
+    manager.spawnBots(2, 20);
+    const [bot1, bot2] = manager.getBots();
+    bot1.state = 'rotating';
+    bot1.position = { x: 25, y: 10, z: 0 };
+    bot2.state = 'rotating';
+    bot2.position = { x: 140, y: 10, z: 0 };
+
+    // 1. Scout loadout & vitals
+    const scout = manager.spawnAlliedSpecialist(makeNpc('scout'));
+    expect(scout.isAlly).toBe(true);
+    expect(scout.allyRole).toBe('scout');
+    expect(scout.hp).toBe(160);
+    expect(scout.maxHp).toBe(160);
+    expect(scout.shield).toBe(100);
+    expect(scout.maxShield).toBe(100);
+    expect(
+      scout.inventory.items.some((i) => i?.weaponId === 'ar' && i.rarity === 'rare'),
+    ).toBe(true);
+    expect(
+      scout.inventory.items.some(
+        (i) => i?.weaponId === 'tactical_dmr' || i?.weaponId === 'sniper',
+      ),
+    ).toBe(true);
+    expect(manager.getHiredAlly()?.id).toBe(scout.id);
+    expect(manager.getAliveCount()).toBe(2);
+
+    // 2. Medic replaces Scout cleanly
+    const medic = manager.spawnAlliedSpecialist(makeNpc('medic'));
+    expect(medic.allyRole).toBe('medic');
+    expect(medic.shield).toBe(100);
+    expect(medic.inventory.items.some((i) => i?.weaponId === 'smg')).toBe(true);
+    expect(medic.inventory.items.some((i) => i?.weaponId === 'chug_splash')).toBe(true);
+    expect(medic.inventory.items.some((i) => i?.weaponId === 'ar')).toBe(true);
+    expect(manager.getBots().filter((b) => b.isAlly)).toHaveLength(1);
+    expect(manager.getHiredAlly()?.id).toBe(medic.id);
+
+    // 3. Heavy replaces Medic with 125 shield & Epic Heavy Shotgun + AR
+    const heavy = manager.spawnAlliedSpecialist(makeNpc('heavy'));
+    expect(heavy.allyRole).toBe('heavy');
+    expect(heavy.hp).toBe(160);
+    expect(heavy.maxHp).toBe(160);
+    expect(heavy.shield).toBe(125);
+    expect(heavy.maxShield).toBe(125);
+    expect(
+      heavy.inventory.items.some(
+        (i) => i?.weaponId === 'heavy_shotgun' && i.rarity === 'epic',
+      ),
+    ).toBe(true);
+    expect(heavy.inventory.items.some((i) => i?.weaponId === 'ar')).toBe(true);
+    expect(manager.getBots().filter((b) => b.isAlly)).toHaveLength(1);
+    expect(manager.getHiredAlly()?.id).toBe(heavy.id);
+
+    // Render state exposes ally flags cleanly for CharacterRig visuals
+    const allyRender = manager.getRenderStates().find((r) => r.id === heavy.id);
+    expect(allyRender?.isAlly).toBe(true);
+    expect(allyRender?.allyRole).toBe('heavy');
+    expect(allyRender?.alive).toBe(true);
+
+    // Eliminate both hostile bots (1 by damage, 1 by storm) -> getAliveCount === 0 even with alive ally!
+    expect(
+      manager.onBotDamaged(
+        bot1.id,
+        {
+          targetId: bot1.id,
+          attackerId: heavy.id,
+          attackerName: heavy.name,
+          weaponId: 'heavy_shotgun',
+          rarity: 'epic',
+          damage: 150,
+          hpDamage: 150,
+          shieldDamage: 0,
+          isHeadshot: true,
+          isElimination: true,
+          hitPoint: { ...bot1.position },
+          distance: 8,
+        },
+        15,
+      ),
+    ).toBe(true);
+    expect(heavy.kills).toBe(1);
+    expect(manager.getAliveCount()).toBe(1);
+
+    ctx.storm = makeDefaultStorm({
+      currentCenterX: 0,
+      currentCenterZ: 0,
+      currentRadius: 50,
+      dps: 40,
+    });
+    manager.applyStormDamage(3.0);
+    expect(bot2.alive).toBe(false);
+    expect(manager.getAliveCount()).toBe(0);
+    expect(manager.getHiredAlly()?.alive).toBe(true);
+    expect(manager.assignBounty({ x: 0, y: 10, z: 0 }, 20)).toBeNull();
+
+    manager.reset();
+    expect(manager.getHiredAlly()).toBeNull();
+    manager.dispose();
+  });
+
+  it('grants allies friendly-fire immunity from player while allowing hostile vs ally combat damage', () => {
+    const ctx = makeMockContext();
+    const manager = new BotManager(ctx, 'standard', 101);
+    manager.spawnBots(1, 20);
+    const hostile = manager.getBotById('bot_1')!;
+    hostile.state = 'combat';
+    hostile.position = { x: 20, y: 10, z: 0 };
+
+    const ally = manager.spawnAlliedSpecialist(makeNpc('heavy', { x: 0, z: 0 }));
+
+    // Friendly fire from 'player' is completely ignored
+    const ffHit: DamageEvent = {
+      targetId: ally.id,
+      attackerId: 'player',
+      attackerName: 'Player',
+      weaponId: 'pump_shotgun',
+      rarity: 'legendary',
+      damage: 180,
+      hpDamage: 180,
+      shieldDamage: 0,
+      isHeadshot: true,
+      isElimination: false,
+      hitPoint: { ...ally.position },
+      distance: 4,
+    };
+    expect(manager.onBotDamaged(ally.id, ffHit, 10)).toBe(false);
+    expect(ally.hp).toBe(160);
+    expect(ally.shield).toBe(125);
+    expect(ally.targetEnemyId).toBeNull();
+
+    // Damage from hostile bot reduces ally shield/hp and alerts ally
+    const enemyHit: DamageEvent = {
+      targetId: ally.id,
+      attackerId: hostile.id,
+      attackerName: hostile.name,
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 80,
+      hpDamage: 0,
+      shieldDamage: 80,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { ...ally.position },
+      distance: 18,
+    };
+    expect(manager.onBotDamaged(ally.id, enemyHit, 11)).toBe(true);
+    expect(ally.shield).toBe(45);
+    expect(ally.hp).toBe(160);
+    expect(ally.targetEnemyId).toBe(hostile.id);
+
+    // Lethal hostile damage eliminates the ally cleanly
+    const lethalEnemyHit: DamageEvent = {
+      ...enemyHit,
+      damage: 250,
+      hpDamage: 205,
+      shieldDamage: 45,
+      isElimination: true,
+    };
+    expect(manager.onBotDamaged(ally.id, lethalEnemyHit, 12)).toBe(true);
+    expect(ally.alive).toBe(false);
+    expect(manager.getHiredAlly()).toBeNull();
+    expect(hostile.kills).toBe(1);
+
+    manager.dispose();
+  });
+
+  it('never fires at player, targets closest hostile within 45m, follows 5.5m..16m leash with >38m teleport catchup, and draws hostile aggro', () => {
+    let targets: BotCombatTarget[] = [];
+    const ctx = makeMockContext({
+      getCombatTargets: () => targets,
+    });
+    const manager = new BotManager(ctx, 'sweaty', 333);
+    const ally = manager.spawnAlliedSpecialist(makeNpc('scout', { x: 0, z: 10 }));
+    ally.yaw = 0;
+
+    // 1. Only player present -> ally NEVER targets or fires at player
+    targets = [
+      {
+        id: 'player',
+        name: 'Player',
+        position: { x: 0, y: 10, z: 0 },
+        eyePos: { x: 0, y: 11.6, z: 0 },
+        hp: 100,
+        shield: 100,
+        alive: true,
+        isPlayer: true,
+      },
+    ];
+    for (let i = 0; i < 15; i++) {
+      manager.update(0.05, 10 + i * 0.05, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    }
+    expect(ally.targetEnemyId).toBeNull();
+    expect(ctx.firedCalls).toHaveLength(0);
+
+    // 2. Hostile beyond 45m is ignored
+    targets.push({
+      id: 'far_enemy',
+      name: 'FarBot',
+      position: { x: 0, y: 10, z: 62 }, // > 45m from ally at z~10
+      eyePos: { x: 0, y: 11.6, z: 62 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      isPlayer: false,
+    });
+    manager.update(0.05, 11, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    expect(ally.targetEnemyId).toBeNull();
+    expect(ctx.firedCalls).toHaveLength(0);
+
+    // 3. Closest hostile within 45m is prioritized over farther hostile (and player is still ignored)
+    targets.push(
+      {
+        id: 'mid_enemy',
+        name: 'MidBot',
+        position: { x: 0, y: 10, z: 42 },
+        eyePos: { x: 0, y: 11.6, z: 42 },
+        hp: 100,
+        shield: 0,
+        alive: true,
+        isPlayer: false,
+      },
+      {
+        id: 'near_enemy',
+        name: 'NearBot',
+        position: { x: 0, y: 10, z: 24 },
+        eyePos: { x: 0, y: 11.6, z: 24 },
+        hp: 100,
+        shield: 50,
+        alive: true,
+        isPlayer: false,
+      },
+    );
+    for (let i = 0; i < 15; i++) {
+      manager.update(0.05, 12 + i * 0.05, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    }
+    expect(ally.targetEnemyId).toBe('near_enemy');
+    expect(ctx.firedCalls.some((c) => c.botId === ally.id)).toBe(true);
+
+    // 4. Leash behavior: teleport catchup when > 38m, sprint catchup when > 16m, step back when < 5.5m
+    targets = [targets[0]]; // player only
+    ally.position = { x: 110, y: 10, z: 0 };
+    manager.update(0.05, 15, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    expect(dist2D(ally.position.x, ally.position.z, 0, 0)).toBeLessThanOrEqual(16);
+
+    ally.position = { x: 28, y: 10, z: 0 };
+    for (let i = 0; i < 30; i++) {
+      manager.update(0.1, 16 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    }
+    expect(dist2D(ally.position.x, ally.position.z, 0, 0)).toBeLessThanOrEqual(16);
+
+    ally.position = { x: 1.5, y: 10, z: 0 };
+    for (let i = 0; i < 15; i++) {
+      manager.update(0.1, 20 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    }
+    expect(dist2D(ally.position.x, ally.position.z, 0, 0)).toBeGreaterThanOrEqual(5.4);
+
+    // 5. Hostile bots perceive alive ally targets nearby
+    const hostileBot = makeBotEntity({
+      id: 'hostile_observer',
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    hostileBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    hostileBot.inventory.ammo.medium = 60;
+    const hostileTargets: BotCombatTarget[] = [
+      {
+        id: ally.id,
+        name: ally.name,
+        position: { x: 0, y: 10, z: 14 },
+        eyePos: { x: 0, y: 11.6, z: 14 },
+        hp: ally.hp,
+        shield: ally.shield,
+        alive: true,
+        isPlayer: false,
+        isAlly: true,
+      },
+    ];
+    const hostileCtx = makeMockContext({
+      getCombatTargets: () => hostileTargets,
+    });
+    for (let i = 0; i < 8; i++) {
+      updateBot(
+        hostileBot,
+        hostileCtx,
+        'sweaty',
+        { x: 0, y: 175, z: 0 },
+        25 + i * 0.05,
+        0.05,
+        false,
+      );
+    }
+    expect(hostileBot.targetEnemyId).toBe(ally.id);
+    expect(hostileBot.state).toBe('combat');
+    expect(hostileCtx.firedCalls.some((c) => c.botId === hostileBot.id)).toBe(true);
+
+    manager.dispose();
+  });
+
+  it('triggers Scout scout_ping every 16s when hostiles are within 55m and Medic medic_heal every 18s', () => {
+    // Scout test
+    let scoutTargets: BotCombatTarget[] = [
+      {
+        id: 'far_bot',
+        name: 'FarBot',
+        position: { x: 75, y: 10, z: 0 }, // > 55m
+        eyePos: { x: 75, y: 11.6, z: 0 },
+        hp: 100,
+        shield: 0,
+        alive: true,
+      },
+    ];
+    const scoutCtx = makeMockContext({ getCombatTargets: () => scoutTargets });
+    const scoutMgr = new BotManager(scoutCtx, 'standard', 404);
+    scoutMgr.spawnAlliedSpecialist(makeNpc('scout', { x: 0, z: 0 }));
+
+    scoutMgr.update(0.1, 1.0, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 6 });
+    expect(scoutMgr.consumeAllySupportEvents()).toHaveLength(0);
+
+    // Bring hostile within 55m -> immediate scout_ping, then 16s cooldown
+    scoutTargets = [
+      {
+        id: 'near_bot',
+        name: 'NearBot',
+        position: { x: 35, y: 10, z: 0 },
+        eyePos: { x: 35, y: 11.6, z: 0 },
+        hp: 100,
+        shield: 0,
+        alive: true,
+      },
+    ];
+    scoutMgr.update(0.1, 2.0, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 6 });
+    const firstScoutEvents = scoutMgr.consumeAllySupportEvents();
+    expect(firstScoutEvents).toHaveLength(1);
+    expect(firstScoutEvents[0].kind).toBe('scout_ping');
+
+    // Step 15.5s (< 16s) -> still on cooldown
+    for (let i = 0; i < 155; i++) {
+      scoutMgr.update(0.1, 3.0 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 6 });
+    }
+    expect(scoutMgr.consumeAllySupportEvents()).toHaveLength(0);
+
+    // Cross 16s -> triggers second scout_ping
+    for (let i = 0; i < 6; i++) {
+      scoutMgr.update(0.1, 18.6 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 6 });
+    }
+    const secondScoutEvents = scoutMgr.consumeAllySupportEvents();
+    expect(secondScoutEvents).toHaveLength(1);
+    expect(secondScoutEvents[0].kind).toBe('scout_ping');
+    scoutMgr.dispose();
+
+    // Medic test
+    const medicCtx = makeMockContext();
+    const medicMgr = new BotManager(medicCtx, 'standard', 505);
+    const medic = medicMgr.spawnAlliedSpecialist(makeNpc('medic', { x: 0, z: 0 }));
+    medic.hp = 140;
+    medic.shield = 95;
+
+    medicMgr.update(0.1, 1.0, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 6 });
+    const firstMedicEvents = medicMgr.consumeAllySupportEvents();
+    expect(firstMedicEvents).toHaveLength(1);
+    expect(firstMedicEvents[0].kind).toBe('medic_heal');
+    expect(firstMedicEvents[0].amount).toBe(25);
+    expect(medic.hp).toBe(160);
+    expect(medic.shield).toBe(100);
+
+    // Step 17.5s (< 18s) -> no event yet
+    for (let i = 0; i < 175; i++) {
+      medicMgr.update(0.1, 2.0 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 6 });
+    }
+    expect(medicMgr.consumeAllySupportEvents()).toHaveLength(0);
+
+    // Cross 18s -> triggers second medic_heal
+    for (let i = 0; i < 6; i++) {
+      medicMgr.update(0.1, 19.6 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 6 });
+    }
+    const secondMedicEvents = medicMgr.consumeAllySupportEvents();
+    expect(secondMedicEvents).toHaveLength(1);
+    expect(secondMedicEvents[0]).toMatchObject({ kind: 'medic_heal', amount: 25 });
+    medicMgr.dispose();
+  });
+
+  it('scores Wave 5 tactical_dmr and kinetic_blade weapons cleanly in selectBestWeaponForDistance', () => {
+    const items: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('tactical_dmr', 'epic', 10),
+      makeItem('kinetic_blade', 'epic', 0),
+    ];
+    const ammo = { light: 0, medium: 60, shells: 0, heavy: 0, rockets: 0 };
+
+    expect(selectBestWeaponForDistance(items, 35, ammo)?.item.weaponId).toBe(
+      'tactical_dmr',
+    );
+    expect(
+      selectBestWeaponForDistance([makeItem('pickaxe', 'common', 0), makeItem('kinetic_blade', 'epic', 0)], 2.5, ammo)?.item.weaponId,
+    ).toBe('kinetic_blade');
   });
 });

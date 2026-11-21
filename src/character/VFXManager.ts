@@ -464,6 +464,91 @@ interface TacticalPingSlot {
   coreBeamMat: THREE.MeshBasicMaterial;
 }
 
+interface KineticDashStreak {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  radialX: number;
+  radialY: number;
+  progress: number;
+  width: number;
+  lengthFrac: number;
+}
+
+interface KineticDashSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  dashLength: number;
+  group: THREE.Group;
+  beamGroup: THREE.Group;
+  trailMesh: THREE.Mesh;
+  trailMat: THREE.MeshBasicMaterial;
+  coreTrailMesh: THREE.Mesh;
+  coreTrailMat: THREE.MeshBasicMaterial;
+  originRingMesh: THREE.Mesh;
+  originRingMat: THREE.MeshBasicMaterial;
+  crescentGroup: THREE.Group;
+  innerArcMesh: THREE.Mesh;
+  innerArcMat: THREE.MeshBasicMaterial;
+  outerArcMesh: THREE.Mesh;
+  outerArcMat: THREE.MeshBasicMaterial;
+  coreArcMesh: THREE.Mesh;
+  coreArcMat: THREE.MeshBasicMaterial;
+  streaks: KineticDashStreak[];
+}
+
+interface GoldBurstBar {
+  mesh: THREE.Mesh;
+  material: THREE.MeshStandardMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  baseScale: number;
+}
+
+interface GoldBurstSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  activeCount: number;
+  group: THREE.Group;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  glowMesh: THREE.Mesh;
+  glowMat: THREE.MeshBasicMaterial;
+  bars: GoldBurstBar[];
+}
+
+interface LootIslandShard {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  yOffset: number;
+  baseScale: number;
+}
+
+interface LootIslandRiftSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  violetRingMesh: THREE.Mesh;
+  violetRingMat: THREE.MeshBasicMaterial;
+  spireOuterMesh: THREE.Mesh;
+  spireOuterMat: THREE.MeshBasicMaterial;
+  spireCoreMesh: THREE.Mesh;
+  spireCoreMat: THREE.MeshBasicMaterial;
+  coreSphereMesh: THREE.Mesh;
+  coreSphereMat: THREE.MeshBasicMaterial;
+  shards: LootIslandShard[];
+}
+
 function getTacticalPingColor(kind: 'move' | 'danger' | 'loot'): string {
   switch (kind) {
     case 'danger':
@@ -571,6 +656,12 @@ const FLAG_CAPTURE_SPARK_COUNT = 20;
 const AUGMENT_VFX_POOL_SIZE = 8;
 const AUGMENT_VFX_MOTE_COUNT = 12;
 const TACTICAL_PING_DURATION = 16.0;
+const KINETIC_DASH_POOL_SIZE = 8;
+const KINETIC_DASH_STREAK_COUNT = 8;
+const GOLD_BURST_POOL_SIZE = 10;
+const GOLD_BURST_BAR_COUNT = 14;
+const LOOT_ISLAND_RIFT_POOL_SIZE = 4;
+const LOOT_ISLAND_SHARD_COUNT = 8;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -604,6 +695,9 @@ export class VFXManager {
   private readonly hexRingGeo: THREE.RingGeometry;
   private readonly hexPrismGeo: THREE.CylinderGeometry;
   private readonly diamondRingGeo: THREE.RingGeometry;
+  private readonly kineticArcGeo: THREE.TorusGeometry;
+  private readonly kineticOuterArcGeo: THREE.TorusGeometry;
+  private readonly goldBarGeo: THREE.BoxGeometry;
   private readonly impactDecalTex: THREE.CanvasTexture;
 
   private readonly tracers: TracerSlot[] = [];
@@ -628,6 +722,9 @@ export class VFXManager {
   private readonly flagCaptures: FlagCaptureSlot[] = [];
   private readonly augmentVfx: AugmentVfxSlot[] = [];
   private tacticalPing!: TacticalPingSlot;
+  private readonly kineticDashes: KineticDashSlot[] = [];
+  private readonly goldBursts: GoldBurstSlot[] = [];
+  private readonly lootIslandRifts: LootIslandRiftSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -668,6 +765,9 @@ export class VFXManager {
   private riftTearCursor = 0;
   private flagCaptureCursor = 0;
   private augmentVfxCursor = 0;
+  private kineticDashCursor = 0;
+  private goldBurstCursor = 0;
+  private lootIslandRiftCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -704,6 +804,11 @@ export class VFXManager {
     this.hexRingGeo = this.trackGeo(new THREE.RingGeometry(0.68, 1.0, 6));
     this.hexPrismGeo = this.trackGeo(new THREE.CylinderGeometry(0.85, 0.85, 1, 6, 1, true));
     this.diamondRingGeo = this.trackGeo(new THREE.RingGeometry(0.68, 1.0, 4));
+    this.kineticArcGeo = this.trackGeo(new THREE.TorusGeometry(1.15, 0.085, 6, 20, Math.PI * 1.05));
+    this.kineticOuterArcGeo = this.trackGeo(
+      new THREE.TorusGeometry(1.36, 0.05, 6, 20, Math.PI * 1.15),
+    );
+    this.goldBarGeo = this.trackGeo(new THREE.BoxGeometry(0.16, 0.075, 0.32));
     this.impactDecalTex = createImpactDecalTexture();
     this.ownedTextures.push(this.impactDecalTex);
 
@@ -2265,6 +2370,337 @@ export class VFXManager {
         coreBeamMat,
       };
     }
+
+    // 23. Kinetic Dash (sweeping cyan-violet plasma katana crescent ribbon + dash speed streaks)
+    for (let i = 0; i < KINETIC_DASH_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_kinetic_dash';
+      group.visible = false;
+
+      const beamGroup = new THREE.Group();
+      group.add(beamGroup);
+
+      const trailMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const trailMesh = new THREE.Mesh(this.unitCylinderGeo, trailMat);
+      trailMesh.rotation.x = Math.PI / 2;
+      beamGroup.add(trailMesh);
+
+      const coreTrailMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xc4b5fd,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreTrailMesh = new THREE.Mesh(this.unitCylinderGeo, coreTrailMat);
+      coreTrailMesh.rotation.x = Math.PI / 2;
+      beamGroup.add(coreTrailMesh);
+
+      const originRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const originRingMesh = new THREE.Mesh(this.unitRingGeo, originRingMat);
+      beamGroup.add(originRingMesh);
+
+      const crescentGroup = new THREE.Group();
+      beamGroup.add(crescentGroup);
+
+      const innerArcMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const innerArcMesh = new THREE.Mesh(this.kineticArcGeo, innerArcMat);
+      crescentGroup.add(innerArcMesh);
+
+      const outerArcMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerArcMesh = new THREE.Mesh(this.kineticOuterArcGeo, outerArcMat);
+      crescentGroup.add(outerArcMesh);
+
+      const coreArcMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreArcMesh = new THREE.Mesh(this.kineticArcGeo, coreArcMat);
+      coreArcMesh.scale.setScalar(0.84);
+      crescentGroup.add(coreArcMesh);
+
+      const streaks: KineticDashStreak[] = [];
+      for (let s = 0; s < KINETIC_DASH_STREAK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 2 === 0 ? 0x22d3ee : 0xa855f7,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCylinderGeo, material);
+        mesh.rotation.x = Math.PI / 2;
+        beamGroup.add(mesh);
+        streaks.push({
+          mesh,
+          material,
+          radialX: 0,
+          radialY: 0,
+          progress: 0.5,
+          width: 0.035,
+          lengthFrac: 0.35,
+        });
+      }
+
+      this.root.add(group);
+      this.kineticDashes.push({
+        active: false,
+        age: 0,
+        duration: 0.55,
+        dashLength: 1,
+        group,
+        beamGroup,
+        trailMesh,
+        trailMat,
+        coreTrailMesh,
+        coreTrailMat,
+        originRingMesh,
+        originRingMat,
+        crescentGroup,
+        innerArcMesh,
+        innerArcMat,
+        outerArcMesh,
+        outerArcMat,
+        coreArcMesh,
+        coreArcMat,
+        streaks,
+      });
+    }
+
+    // 24. Gold Burst (fountain of shiny spinning golden bars erupting outward and tumbling with gravity)
+    for (let i = 0; i < GOLD_BURST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_gold_burst';
+      group.visible = false;
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const glowMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const glowMesh = new THREE.Mesh(this.unitSphereGeo, glowMat);
+      group.add(glowMesh);
+
+      const bars: GoldBurstBar[] = [];
+      for (let b = 0; b < GOLD_BURST_BAR_COUNT; b++) {
+        const material = this.trackMat(
+          new THREE.MeshStandardMaterial({
+            color: b % 3 === 0 ? 0xfde047 : 0xfbbf24,
+            emissive: 0xd97706,
+            emissiveIntensity: 0.55,
+            metalness: 0.88,
+            roughness: 0.16,
+            transparent: true,
+            opacity: 1,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.goldBarGeo, material);
+        group.add(mesh);
+        bars.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          rz: 0,
+          baseScale: 1,
+        });
+      }
+
+      this.root.add(group);
+      this.goldBursts.push({
+        active: false,
+        age: 0,
+        duration: 1.05,
+        activeCount: GOLD_BURST_BAR_COUNT,
+        group,
+        ringMesh,
+        ringMat,
+        glowMesh,
+        glowMat,
+        bars,
+      });
+    }
+
+    // 25. Loot Island Rift (huge high-altitude spatial sky-crack shockwave ring + rising light spire)
+    for (let i = 0; i < LOOT_ISLAND_RIFT_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_loot_island_rift';
+      group.visible = false;
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+      outerRingMesh.rotation.x = -Math.PI / 2;
+      group.add(outerRingMesh);
+
+      const violetRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const violetRingMesh = new THREE.Mesh(this.unitRingGeo, violetRingMat);
+      violetRingMesh.rotation.set(-Math.PI / 2 + 0.28, 0.2, 0.25);
+      group.add(violetRingMesh);
+
+      const spireOuterMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.45,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const spireOuterMesh = new THREE.Mesh(this.beamCylGeo, spireOuterMat);
+      group.add(spireOuterMesh);
+
+      const spireCoreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const spireCoreMesh = new THREE.Mesh(this.unitCylinderGeo, spireCoreMat);
+      group.add(spireCoreMesh);
+
+      const coreSphereMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreSphereMesh = new THREE.Mesh(this.unitSphereGeo, coreSphereMat);
+      group.add(coreSphereMesh);
+
+      const shards: LootIslandShard[] = [];
+      for (let s = 0; s < LOOT_ISLAND_SHARD_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 2 === 0 ? 0x22d3ee : 0xa855f7,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        shards.push({
+          mesh,
+          material,
+          angle: (s / LOOT_ISLAND_SHARD_COUNT) * Math.PI * 2,
+          radius: 4.5,
+          yOffset: (s % 3 - 1) * 1.4,
+          baseScale: 1.6,
+        });
+      }
+
+      this.root.add(group);
+      this.lootIslandRifts.push({
+        active: false,
+        age: 0,
+        duration: 2.4,
+        group,
+        outerRingMesh,
+        outerRingMat,
+        violetRingMesh,
+        violetRingMat,
+        spireOuterMesh,
+        spireOuterMat,
+        spireCoreMesh,
+        spireCoreMat,
+        coreSphereMesh,
+        coreSphereMat,
+        shards,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -2427,6 +2863,9 @@ export class VFXManager {
         this.spawnAugmentVfx(e.position, e.color),
       ),
       this.eventBus.on('vfx:tactical_ping', (e) => this.spawnTacticalPing(e.position, e.kind)),
+      this.eventBus.on('vfx:kinetic_dash', (e) => this.spawnKineticDash(e.from, e.to)),
+      this.eventBus.on('vfx:gold_burst', (e) => this.spawnGoldBurst(e.position, e.amount)),
+      this.eventBus.on('vfx:loot_island_rift', (e) => this.spawnLootIslandRift(e.position)),
     );
   }
 
@@ -2490,6 +2929,9 @@ export class VFXManager {
     } else if (weaponId === 'sniper') {
       scale = 1.5;
       color = 0x93c5fd;
+    } else if (weaponId === 'tactical_dmr') {
+      scale = 1.15;
+      color = 0x22d3ee;
     } else if (weaponId === 'mythic_blade_rifle') {
       scale = 1.35;
       color = 0x22d3ee;
@@ -3782,6 +4224,150 @@ export class VFXManager {
         ping.coreBeamMat.opacity = 0.55 * fadeOut;
       }
     }
+
+    // 24. Kinetic Dash (sweeping cyan-violet plasma katana crescent + dash speed streaks)
+    for (let i = 0; i < KINETIC_DASH_POOL_SIZE; i++) {
+      const kd = this.kineticDashes[i];
+      if (!kd.active) continue;
+      kd.age += safeDt;
+      const t = kd.age / kd.duration;
+      if (t >= 1) {
+        kd.active = false;
+        kd.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const len = kd.dashLength;
+
+      const trailWidth = Math.max(0.02, 0.28 * (1 - 0.68 * t));
+      kd.trailMesh.scale.set(trailWidth, len, trailWidth);
+      kd.trailMat.opacity = 0.72 * fade;
+
+      const coreWidth = Math.max(0.01, 0.11 * (1 - 0.75 * t));
+      kd.coreTrailMesh.scale.set(coreWidth, len, coreWidth);
+      kd.coreTrailMat.opacity = 0.9 * fade;
+
+      kd.originRingMesh.scale.setScalar(0.55 + 1.85 * easeOut);
+      kd.originRingMat.opacity = 0.92 * fade * fade;
+
+      kd.crescentGroup.position.set(0, 0, len * (0.48 + 0.42 * easeOut));
+      kd.crescentGroup.rotation.set(0.42, 0.15, -0.85 + t * 2.15);
+      kd.crescentGroup.scale.setScalar(0.85 + 0.75 * easeOut);
+      kd.innerArcMat.opacity = 0.96 * fade;
+      kd.outerArcMat.opacity = 0.88 * fade;
+      kd.coreArcMat.opacity = 0.95 * fade * fade;
+
+      for (let s = 0; s < KINETIC_DASH_STREAK_COUNT; s++) {
+        const st = kd.streaks[s];
+        const zPos = clamp(st.progress + 0.25 * easeOut, 0.08, 0.95) * len;
+        st.mesh.position.set(st.radialX * (1 + 0.35 * t), st.radialY * (1 + 0.35 * t), zPos);
+        const w = Math.max(0.008, st.width * (1 - 0.7 * t));
+        st.mesh.scale.set(w, Math.max(0.25, len * st.lengthFrac), w);
+        st.material.opacity = 0.92 * fade;
+      }
+    }
+
+    // 25. Gold Burst (fountain of shiny spinning golden bars tumbling with gravity)
+    for (let i = 0; i < GOLD_BURST_POOL_SIZE; i++) {
+      const gb = this.goldBursts[i];
+      if (!gb.active) continue;
+      gb.age += safeDt;
+      const t = gb.age / gb.duration;
+      if (t >= 1) {
+        gb.active = false;
+        gb.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      gb.ringMesh.scale.setScalar(0.4 + 2.6 * easeOut);
+      gb.ringMat.opacity = 0.9 * fade * fade;
+
+      const glowScale = Math.max(0.05, (1.1 - t * 0.9) * (1 + 0.25 * Math.sin(gb.age * 14)));
+      gb.glowMesh.scale.setScalar(glowScale);
+      gb.glowMat.opacity = 0.85 * fade * fade;
+
+      const barFade = t > 0.72 ? clamp((1 - t) / 0.28, 0, 1) : 1;
+      for (let b = 0; b < gb.activeCount; b++) {
+        const bar = gb.bars[b];
+        bar.vy -= 15.5 * safeDt;
+        bar.mesh.position.x += bar.vx * safeDt;
+        bar.mesh.position.y += bar.vy * safeDt;
+        bar.mesh.position.z += bar.vz * safeDt;
+        if (bar.mesh.position.y < -0.15) {
+          bar.mesh.position.y = -0.15;
+          bar.vy = Math.abs(bar.vy) * 0.42;
+          bar.vx *= 0.78;
+          bar.vz *= 0.78;
+        }
+        bar.mesh.rotation.x += bar.rx * safeDt;
+        bar.mesh.rotation.y += bar.ry * safeDt;
+        bar.mesh.rotation.z += bar.rz * safeDt;
+        bar.mesh.scale.setScalar(bar.baseScale * (0.35 + 0.65 * barFade));
+        bar.material.opacity = barFade;
+      }
+    }
+
+    // 26. Loot Island Rift (huge spatial sky-crack shockwave ring + rising light spire)
+    for (let i = 0; i < LOOT_ISLAND_RIFT_POOL_SIZE; i++) {
+      const lr = this.lootIslandRifts[i];
+      if (!lr.active) continue;
+      lr.age += safeDt;
+      const t = lr.age / lr.duration;
+      if (t >= 1) {
+        lr.active = false;
+        lr.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const pop = clamp(lr.age / 0.22, 0, 1);
+
+      lr.outerRingMesh.scale.setScalar(2.5 + 28.0 * easeOut);
+      lr.outerRingMat.opacity = 0.95 * fade;
+
+      lr.violetRingMesh.rotation.z += 1.4 * safeDt;
+      lr.violetRingMesh.scale.setScalar(1.8 + 20.5 * easeOut);
+      lr.violetRingMat.opacity = 0.9 * fade;
+
+      const spireHeight = 46 * pop;
+      const spireWidth = 2.6 * (1 - 0.55 * t) * (1 + 0.1 * Math.sin(lr.age * 11));
+      lr.spireOuterMesh.position.y = spireHeight * 0.5;
+      lr.spireOuterMesh.scale.set(spireWidth, Math.max(0.5, spireHeight), spireWidth);
+      lr.spireOuterMat.opacity = 0.48 * fade;
+
+      const coreHeight = 54 * pop;
+      const coreWidth = 0.9 * (1 - 0.55 * t);
+      lr.spireCoreMesh.position.y = coreHeight * 0.5;
+      lr.spireCoreMesh.scale.set(coreWidth, Math.max(0.5, coreHeight), coreWidth);
+      lr.spireCoreMat.opacity = 0.88 * fade;
+
+      const coreScale = 3.2 + 4.5 * Math.sin(t * Math.PI);
+      lr.coreSphereMesh.scale.setScalar(coreScale);
+      lr.coreSphereMat.opacity = 0.9 * fade * fade;
+
+      for (let s = 0; s < LOOT_ISLAND_SHARD_COUNT; s++) {
+        const sh = lr.shards[s];
+        const ang = sh.angle + lr.age * (s % 2 === 0 ? 1.5 : -1.5);
+        const rad = sh.radius * (0.65 + 2.4 * easeOut);
+        sh.mesh.position.set(
+          Math.cos(ang) * rad,
+          sh.yOffset + 2.2 * t,
+          Math.sin(ang) * rad,
+        );
+        sh.mesh.rotation.y += 3.2 * safeDt;
+        sh.mesh.scale.set(
+          sh.baseScale * 0.65 * (1 - 0.45 * t),
+          sh.baseScale * 2.1 * (1 - 0.35 * t),
+          sh.baseScale * 0.65 * (1 - 0.45 * t),
+        );
+        sh.material.opacity = 0.95 * fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -4212,6 +4798,161 @@ export class VFXManager {
     ping.coreBeamMat.opacity = 0.55;
   }
 
+  private spawnKineticDash(from: Vec3Like, to: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(from) || !isFiniteVec3(to)) return;
+
+    const slot = this.kineticDashes[this.kineticDashCursor];
+    this.kineticDashCursor = (this.kineticDashCursor + 1) % KINETIC_DASH_POOL_SIZE;
+
+    this.tmpA.set(from.x, from.y, from.z);
+    this.tmpB.set(to.x, to.y, to.z);
+    this.tmpDir.subVectors(this.tmpB, this.tmpA);
+    const rawLen = this.tmpDir.length();
+    const safeLen = Math.max(0.6, rawLen);
+    if (rawLen < 1e-4) {
+      this.tmpDir.set(0, 0, 1);
+    } else {
+      this.tmpDir.divideScalar(rawLen);
+    }
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.55;
+    slot.dashLength = safeLen;
+
+    slot.group.position.copy(this.tmpA);
+    slot.group.visible = true;
+
+    this.tmpQuat.setFromUnitVectors(this.zAxis, this.tmpDir);
+    slot.beamGroup.quaternion.copy(this.tmpQuat);
+
+    slot.trailMesh.position.set(0, 0, safeLen * 0.5);
+    slot.trailMesh.scale.set(0.28, safeLen, 0.28);
+    slot.trailMat.opacity = 0.72;
+
+    slot.coreTrailMesh.position.set(0, 0, safeLen * 0.5);
+    slot.coreTrailMesh.scale.set(0.11, safeLen, 0.11);
+    slot.coreTrailMat.opacity = 0.9;
+
+    slot.originRingMesh.position.set(0, 0, 0.12);
+    slot.originRingMesh.scale.setScalar(0.55);
+    slot.originRingMat.opacity = 0.92;
+
+    slot.crescentGroup.position.set(0, 0, safeLen * 0.48);
+    slot.crescentGroup.rotation.set(0.42, 0.15, -0.85);
+    slot.crescentGroup.scale.setScalar(0.85);
+    slot.innerArcMat.opacity = 0.96;
+    slot.outerArcMat.opacity = 0.88;
+    slot.coreArcMat.opacity = 0.95;
+
+    for (let s = 0; s < KINETIC_DASH_STREAK_COUNT; s++) {
+      const st = slot.streaks[s];
+      const ang = (s / KINETIC_DASH_STREAK_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const rad = 0.24 + this.nextRand() * 0.48;
+      st.radialX = Math.cos(ang) * rad;
+      st.radialY = Math.sin(ang) * rad;
+      st.progress = 0.12 + this.nextRand() * 0.55;
+      st.width = 0.025 + this.nextRand() * 0.025;
+      st.lengthFrac = 0.24 + this.nextRand() * 0.28;
+      st.mesh.position.set(st.radialX, st.radialY, st.progress * safeLen);
+      st.mesh.scale.set(st.width, Math.max(0.25, safeLen * st.lengthFrac), st.width);
+      st.material.opacity = 0.92;
+      st.mesh.visible = true;
+    }
+  }
+
+  private spawnGoldBurst(position: Vec3Like, amount: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.goldBursts[this.goldBurstCursor];
+    this.goldBurstCursor = (this.goldBurstCursor + 1) % GOLD_BURST_POOL_SIZE;
+
+    const safeAmount = Number.isFinite(amount) && amount > 0 ? amount : 25;
+    const activeCount = Math.min(GOLD_BURST_BAR_COUNT, Math.max(6, Math.round(safeAmount / 8)));
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.05;
+    slot.activeCount = activeCount;
+
+    slot.group.position.set(position.x, position.y + 0.35, position.z);
+    slot.group.visible = true;
+
+    slot.ringMesh.scale.setScalar(0.4);
+    slot.ringMat.opacity = 0.9;
+    slot.glowMesh.scale.setScalar(1.1);
+    slot.glowMat.opacity = 0.85;
+
+    for (let b = 0; b < GOLD_BURST_BAR_COUNT; b++) {
+      const bar = slot.bars[b];
+      if (b >= activeCount) {
+        bar.mesh.visible = false;
+        continue;
+      }
+      const ang = (b / activeCount) * Math.PI * 2 + this.nextRand() * 0.45;
+      const speed = 1.8 + this.nextRand() * 3.4;
+      bar.vx = Math.cos(ang) * speed;
+      bar.vy = 4.6 + this.nextRand() * 4.4;
+      bar.vz = Math.sin(ang) * speed;
+      bar.rx = (this.nextRand() - 0.5) * 14;
+      bar.ry = (this.nextRand() - 0.5) * 16;
+      bar.rz = (this.nextRand() - 0.5) * 14;
+      bar.baseScale = 0.8 + this.nextRand() * 0.45;
+      bar.mesh.position.set(Math.cos(ang) * 0.14, 0.1 + this.nextRand() * 0.25, Math.sin(ang) * 0.14);
+      bar.mesh.rotation.set(this.nextRand() * Math.PI, this.nextRand() * Math.PI, 0);
+      bar.mesh.scale.setScalar(bar.baseScale);
+      bar.material.opacity = 1;
+      bar.mesh.visible = true;
+    }
+  }
+
+  private spawnLootIslandRift(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.lootIslandRifts[this.lootIslandRiftCursor];
+    this.lootIslandRiftCursor = (this.lootIslandRiftCursor + 1) % LOOT_ISLAND_RIFT_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 2.4;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.outerRingMesh.scale.setScalar(2.5);
+    slot.outerRingMat.opacity = 0.95;
+
+    slot.violetRingMesh.scale.setScalar(1.8);
+    slot.violetRingMat.opacity = 0.9;
+
+    slot.spireOuterMesh.position.y = 4;
+    slot.spireOuterMesh.scale.set(2.6, 8, 2.6);
+    slot.spireOuterMat.opacity = 0.48;
+
+    slot.spireCoreMesh.position.y = 5;
+    slot.spireCoreMesh.scale.set(0.9, 10, 0.9);
+    slot.spireCoreMat.opacity = 0.88;
+
+    slot.coreSphereMesh.scale.setScalar(3.2);
+    slot.coreSphereMat.opacity = 0.9;
+
+    for (let s = 0; s < LOOT_ISLAND_SHARD_COUNT; s++) {
+      const sh = slot.shards[s];
+      sh.angle = (s / LOOT_ISLAND_SHARD_COUNT) * Math.PI * 2;
+      sh.radius = 4.2 + (s % 2) * 1.6;
+      sh.yOffset = (s % 3 - 1) * 1.4;
+      sh.baseScale = 1.4 + (s % 2) * 0.5;
+      sh.mesh.position.set(
+        Math.cos(sh.angle) * sh.radius,
+        sh.yOffset,
+        Math.sin(sh.angle) * sh.radius,
+      );
+      sh.mesh.scale.set(sh.baseScale * 0.65, sh.baseScale * 2.1, sh.baseScale * 0.65);
+      sh.material.opacity = 0.95;
+      sh.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -4336,6 +5077,9 @@ export class VFXManager {
     for (const s of this.flagCaptures) if (s.active) count++;
     for (const s of this.augmentVfx) if (s.active) count++;
     if (this.tacticalPing.active) count++;
+    for (const kd of this.kineticDashes) if (kd.active) count++;
+    for (const gb of this.goldBursts) if (gb.active) count++;
+    for (const lr of this.lootIslandRifts) if (lr.active) count++;
     return count;
   }
 
@@ -4439,6 +5183,24 @@ export class VFXManager {
     return this.tacticalPing.active;
   }
 
+  public getActiveKineticDashCount(): number {
+    let count = 0;
+    for (const kd of this.kineticDashes) if (kd.active) count++;
+    return count;
+  }
+
+  public getActiveGoldBurstCount(): number {
+    let count = 0;
+    for (const gb of this.goldBursts) if (gb.active) count++;
+    return count;
+  }
+
+  public getActiveLootIslandVfxCount(): number {
+    let count = 0;
+    for (const lr of this.lootIslandRifts) if (lr.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -4529,6 +5291,18 @@ export class VFXManager {
     if (this.tacticalPing) {
       this.tacticalPing.active = false;
       this.tacticalPing.group.visible = false;
+    }
+    for (const kd of this.kineticDashes) {
+      kd.active = false;
+      kd.group.visible = false;
+    }
+    for (const gb of this.goldBursts) {
+      gb.active = false;
+      gb.group.visible = false;
+    }
+    for (const lr of this.lootIslandRifts) {
+      lr.active = false;
+      lr.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

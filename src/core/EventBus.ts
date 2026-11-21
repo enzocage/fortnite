@@ -134,6 +134,17 @@ export interface GameEventMap {
     kind: 'move' | 'danger' | 'loot';
     label: string;
   };
+  'vfx:kinetic_dash': {
+    from: Vec3Like;
+    to: Vec3Like;
+  };
+  'vfx:gold_burst': {
+    position: Vec3Like;
+    amount: number;
+  };
+  'vfx:loot_island_rift': {
+    position: Vec3Like;
+  };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

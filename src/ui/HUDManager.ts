@@ -34,17 +34,22 @@ import {
   getKillStreakCallout,
   getRarityMeta,
   normalizeBoostChargePct,
+  resolveCrosshairColor,
+  resolveCrosshairStyle,
   resolveKeybinds,
   selectVisibleVisualSoundCues,
   worldToMapNorm,
 } from './UIHelpers';
 import {
+  getAllyRoleSvg,
   getAugmentIconSvg,
   getBountyTargetSvg,
   getBuildIconSvg,
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getCrownSvg,
+  getGoldBarSvg,
+  getLootIslandIconSvg,
   getMaterialIconSvg,
   getOvershieldBoltSvg,
   getSkullSvg,
@@ -111,6 +116,14 @@ export class HUDManager {
   private bountyTargetEl: HTMLDivElement;
   private bountyDistEl: HTMLSpanElement;
   private bountyRewardEl: HTMLSpanElement;
+  private allyCardEl: HTMLDivElement;
+  private allyRoleIconEl: HTMLSpanElement;
+  private allyNameEl: HTMLSpanElement;
+  private allyRolePillEl: HTMLSpanElement;
+  private allyDistEl: HTMLSpanElement;
+  private allyShieldFillEl: HTMLDivElement;
+  private allyHpFillEl: HTMLDivElement;
+  private allyStatsEl: HTMLDivElement;
   private questsPanelEl: HTMLDivElement;
   private questsCountEl: HTMLSpanElement;
   private questsListEl: HTMLDivElement;
@@ -137,6 +150,8 @@ export class HUDManager {
   private bossHpFillEl: HTMLDivElement;
   private phaseHintEl: HTMLDivElement;
   private phaseHintTextEl: HTMLSpanElement;
+  private lootIslandChipEl: HTMLDivElement;
+  private lootIslandTextEl: HTMLSpanElement;
 
   // Minimap & telemetry
   private minimapCanvas: HTMLCanvasElement;
@@ -202,6 +217,8 @@ export class HUDManager {
   private specAliveEl: HTMLSpanElement;
 
   // Bottom right
+  private goldPillEl: HTMLDivElement;
+  private goldCountEl: HTMLSpanElement;
   private matEls = new Map<
     MaterialType,
     { root: HTMLDivElement; count: HTMLSpanElement }
@@ -213,6 +230,8 @@ export class HUDManager {
   private ammoResEl: HTMLDivElement;
   private grapplerBadgeEl: HTMLDivElement;
   private grapplerCountEl: HTMLSpanElement;
+  private kineticBadgeEl: HTMLDivElement;
+  private kineticPipEls: HTMLSpanElement[] = [];
   private slotEls: HTMLDivElement[] = [];
 
   // Center overlays
@@ -300,6 +319,10 @@ export class HUDManager {
   private celebratedCapturePois = new Set<string>();
   private lastTacticalPingVis: boolean | null = null;
   private lastTacticalPingKey = '';
+  private lastGoldBars = -1;
+  private lastKineticKey = '';
+  private lastAllyKey = '';
+  private lastLootIslandKey = '';
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -371,6 +394,41 @@ export class HUDManager {
     bountyMeta.append(this.bountyDistEl, this.bountyRewardEl);
     this.bountyCardEl.append(bountyHead, this.bountyTargetEl, bountyMeta);
 
+    this.allyCardEl = document.createElement('div');
+    this.allyCardEl.className = 'fdr-ally-card fdr-hidden';
+    const allyHead = document.createElement('div');
+    allyHead.className = 'fdr-ally-head';
+    this.allyRoleIconEl = document.createElement('span');
+    this.allyRoleIconEl.className = 'fdr-ally-role-icon';
+    this.allyNameEl = document.createElement('span');
+    this.allyNameEl.className = 'fdr-ally-name';
+    this.allyRolePillEl = document.createElement('span');
+    this.allyRolePillEl.className = 'fdr-ally-role-pill';
+    this.allyDistEl = document.createElement('span');
+    this.allyDistEl.className = 'fdr-ally-dist';
+    allyHead.append(
+      this.allyRoleIconEl,
+      this.allyNameEl,
+      this.allyRolePillEl,
+      this.allyDistEl,
+    );
+    const allyBars = document.createElement('div');
+    allyBars.className = 'fdr-ally-bars';
+    const allyShieldTrack = document.createElement('div');
+    allyShieldTrack.className = 'fdr-ally-track shield';
+    this.allyShieldFillEl = document.createElement('div');
+    this.allyShieldFillEl.className = 'fdr-ally-fill shield';
+    allyShieldTrack.appendChild(this.allyShieldFillEl);
+    const allyHpTrack = document.createElement('div');
+    allyHpTrack.className = 'fdr-ally-track hp';
+    this.allyHpFillEl = document.createElement('div');
+    this.allyHpFillEl.className = 'fdr-ally-fill hp';
+    allyHpTrack.appendChild(this.allyHpFillEl);
+    allyBars.append(allyShieldTrack, allyHpTrack);
+    this.allyStatsEl = document.createElement('div');
+    this.allyStatsEl.className = 'fdr-ally-stats';
+    this.allyCardEl.append(allyHead, allyBars, this.allyStatsEl);
+
     this.questsPanelEl = document.createElement('div');
     this.questsPanelEl.className = 'fdr-quests-panel fdr-hidden';
     const questsHead = document.createElement('div');
@@ -393,6 +451,7 @@ export class HUDManager {
       this.killStreakEl,
       this.vaultKeyBadgeEl,
       this.bountyCardEl,
+      this.allyCardEl,
       this.questsPanelEl,
       this.activeAugmentsEl,
     );
@@ -451,6 +510,25 @@ export class HUDManager {
     this.phaseHintEl.className = 'fdr-phase-hint fdr-hidden';
     this.phaseHintTextEl = document.createElement('span');
     this.phaseHintEl.appendChild(this.phaseHintTextEl);
+
+    // Loot Island Active Chip
+    this.lootIslandChipEl = document.createElement('div');
+    this.lootIslandChipEl.className = 'fdr-loot-island-chip fdr-hidden';
+    const lootIslandIcon = document.createElement('span');
+    lootIslandIcon.className = 'fdr-loot-island-icon';
+    lootIslandIcon.innerHTML = getLootIslandIconSvg();
+    this.lootIslandTextEl = document.createElement('span');
+    this.lootIslandTextEl.className = 'fdr-loot-island-text';
+    this.lootIslandTextEl.textContent = 'LOOT ISLAND • 0M';
+    this.lootIslandChipEl.append(lootIslandIcon, this.lootIslandTextEl);
+
+    const topCenterStack = document.createElement('div');
+    topCenterStack.className = 'fdr-top-center-stack';
+    topCenterStack.append(
+      this.phaseHintEl,
+      this.lootIslandChipEl,
+      this.bossBarEl,
+    );
 
     // Top-Right Minimap Cluster
     const minimapCluster = document.createElement('div');
@@ -845,6 +923,16 @@ export class HUDManager {
     const buildMatsBar = document.createElement('div');
     buildMatsBar.className = 'fdr-build-mats-bar';
 
+    this.goldPillEl = document.createElement('div');
+    this.goldPillEl.className = 'fdr-gold-pill';
+    const goldIcon = document.createElement('span');
+    goldIcon.className = 'fdr-gold-pill-icon';
+    goldIcon.innerHTML = getGoldBarSvg();
+    this.goldCountEl = document.createElement('span');
+    this.goldCountEl.className = 'fdr-gold-pill-val';
+    this.goldCountEl.textContent = '0';
+    this.goldPillEl.append(goldIcon, this.goldCountEl);
+
     const matsStrip = document.createElement('div');
     matsStrip.className = 'fdr-mats-strip';
     for (const mat of MATERIALS) {
@@ -877,7 +965,7 @@ export class HUDManager {
       this.buildKeyEls.set(bp.type, keySpan);
     }
 
-    buildMatsBar.append(matsStrip, buildTiles);
+    buildMatsBar.append(this.goldPillEl, matsStrip, buildTiles);
 
     const hotbarWrap = document.createElement('div');
     hotbarWrap.className = 'fdr-hotbar-wrap';
@@ -906,6 +994,28 @@ export class HUDManager {
     grapplerMeta.append(grapplerTitle, this.grapplerCountEl);
     this.grapplerBadgeEl.append(grapplerIcon, grapplerMeta);
 
+    this.kineticBadgeEl = document.createElement('div');
+    this.kineticBadgeEl.className = 'fdr-kinetic-badge fdr-hidden';
+    const kineticIcon = document.createElement('span');
+    kineticIcon.className = 'fdr-kinetic-icon';
+    kineticIcon.innerHTML = getWeaponSvg('kinetic_blade');
+    const kineticMeta = document.createElement('div');
+    kineticMeta.className = 'fdr-kinetic-meta';
+    const kineticTitle = document.createElement('span');
+    kineticTitle.className = 'fdr-kinetic-title';
+    kineticTitle.textContent = 'KINETIC DASH';
+    const kineticPipsWrap = document.createElement('div');
+    kineticPipsWrap.className = 'fdr-kinetic-pips';
+    for (let i = 0; i < 3; i++) {
+      const pip = document.createElement('span');
+      pip.className = 'fdr-kinetic-pip';
+      pip.textContent = '⚡';
+      this.kineticPipEls.push(pip);
+      kineticPipsWrap.appendChild(pip);
+    }
+    kineticMeta.append(kineticTitle, kineticPipsWrap);
+    this.kineticBadgeEl.append(kineticIcon, kineticMeta);
+
     const hotbarSlots = document.createElement('div');
     hotbarSlots.className = 'fdr-hotbar-slots';
     for (let i = 0; i < 6; i++) {
@@ -916,7 +1026,12 @@ export class HUDManager {
       this.slotEls.push(card);
     }
 
-    hotbarWrap.append(this.ammoWrapEl, this.grapplerBadgeEl, hotbarSlots);
+    hotbarWrap.append(
+      this.ammoWrapEl,
+      this.grapplerBadgeEl,
+      this.kineticBadgeEl,
+      hotbarSlots,
+    );
     bottomRight.append(buildMatsBar, hotbarWrap);
 
     // Center Tactical Overlays
@@ -1085,8 +1200,7 @@ export class HUDManager {
       this.stormVignetteEl,
       topLeftStack,
       compassWrap,
-      this.bossBarEl,
-      this.phaseHintEl,
+      topCenterStack,
       minimapCluster,
       this.augmentPickerEl,
       this.killFeedEl,
@@ -1108,6 +1222,7 @@ export class HUDManager {
 
     this.root.appendChild(this.containerEl);
     this.applySettingsKeybinds();
+    this.applyCrosshairSettings();
 
     if (typeof window !== 'undefined') {
       window.addEventListener('mouseup', this.pointerUpHandler);
@@ -1129,6 +1244,21 @@ export class HUDManager {
       this.visualAudioRingEl.innerHTML = '';
     }
     this.applySettingsKeybinds();
+    this.applyCrosshairSettings();
+  }
+
+  private applyCrosshairSettings(): void {
+    const color = resolveCrosshairColor(this.settings.crosshairColor);
+    const style = resolveCrosshairStyle(this.settings.crosshairStyle);
+    this.crosshairEl.style.setProperty('--ch-color', color);
+    this.crosshairEl.dataset.chStyle = style;
+    this.crosshairEl.classList.remove(
+      'style-dynamic',
+      'style-dot',
+      'style-classic',
+    );
+    this.crosshairEl.classList.add(`style-${style}`);
+    this.lastSpreadGap = -1;
   }
 
   private applySettingsKeybinds(): void {
@@ -1234,6 +1364,14 @@ export class HUDManager {
     this.tacticalPingEl.classList.add('fdr-hidden');
     this.lastTacticalPingVis = false;
     this.lastTacticalPingKey = '';
+    this.lastGoldBars = -1;
+    this.goldCountEl.textContent = '0';
+    this.kineticBadgeEl.classList.add('fdr-hidden');
+    this.lastKineticKey = '';
+    this.allyCardEl.classList.add('fdr-hidden');
+    this.lastAllyKey = '';
+    this.lootIslandChipEl.classList.add('fdr-hidden');
+    this.lastLootIslandKey = '';
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
     }
@@ -1446,6 +1584,7 @@ export class HUDManager {
     this.updateWave2HUD(state);
     this.updateWave3HUD(state);
     this.updateWave4HUD(state, now);
+    this.updateWave5HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2314,6 +2453,86 @@ export class HUDManager {
     }
   }
 
+  private updateWave5HUD(state: HUDState): void {
+    // 1. Gold Bars Counter Pill (bottom-right near mats)
+    const goldVal =
+      typeof state.goldBars === 'number' && Number.isFinite(state.goldBars)
+        ? Math.max(0, Math.round(state.goldBars))
+        : 0;
+    if (goldVal !== this.lastGoldBars) {
+      this.lastGoldBars = goldVal;
+      this.goldCountEl.textContent = String(goldVal);
+    }
+
+    // 2. Kinetic Blade Dash Charges (3 lightning pips)
+    const kineticVal =
+      !state.spectating &&
+      typeof state.kineticDashCharges === 'number' &&
+      Number.isFinite(state.kineticDashCharges)
+        ? Math.max(0, Math.min(3, Math.round(state.kineticDashCharges)))
+        : null;
+    const kineticKey = kineticVal === null ? '' : String(kineticVal);
+    if (kineticKey !== this.lastKineticKey) {
+      this.lastKineticKey = kineticKey;
+      this.kineticBadgeEl.classList.toggle('fdr-hidden', kineticVal === null);
+      if (kineticVal !== null) {
+        this.kineticBadgeEl.classList.toggle('empty', kineticVal === 0);
+        this.kineticPipEls.forEach((pip, idx) => {
+          pip.classList.toggle('active', idx < kineticVal);
+          pip.classList.toggle('spent', idx >= kineticVal);
+        });
+      }
+    }
+
+    // 3. Allied Specialist Mini Card (top-left stack)
+    const ally = !state.spectating ? state.hiredAlly ?? null : null;
+    const allyKey = ally
+      ? `${ally.name}:${ally.role}:${Math.round(ally.hp)}/${Math.round(ally.maxHp)}:${Math.round(ally.shield)}/${Math.round(ally.maxShield)}:${Math.round(ally.distance)}`
+      : '';
+    if (allyKey !== this.lastAllyKey) {
+      this.lastAllyKey = allyKey;
+      this.allyCardEl.classList.toggle('fdr-hidden', !ally);
+      if (ally) {
+        const hp = Math.max(0, Math.round(ally.hp));
+        const maxHp = Math.max(1, Math.round(ally.maxHp));
+        const shield = Math.max(0, Math.round(ally.shield));
+        const maxShield = Math.max(0, Math.round(ally.maxShield));
+        const dist = Math.max(0, Math.round(ally.distance));
+        this.allyCardEl.className = `fdr-ally-card role-${ally.role}`;
+        this.allyCardEl.dataset.allyRole = ally.role;
+        this.allyRoleIconEl.innerHTML = getAllyRoleSvg(ally.role);
+        this.allyNameEl.textContent = ally.name.toUpperCase();
+        this.allyRolePillEl.textContent = ally.role.toUpperCase();
+        this.allyDistEl.textContent = `${dist}M`;
+        this.allyShieldFillEl.style.width =
+          maxShield > 0
+            ? `${Math.min(100, (shield / maxShield) * 100).toFixed(1)}%`
+            : '0%';
+        this.allyHpFillEl.style.width = `${Math.min(100, (hp / maxHp) * 100).toFixed(1)}%`;
+        this.allyStatsEl.textContent = `HP ${hp}/${maxHp} • SHD ${shield}/${maxShield}`;
+      }
+    }
+
+    // 4. Loot Island Active Status Chip
+    const island = !state.spectating ? state.lootIsland ?? null : null;
+    const showIsland = Boolean(island && island.active && !island.captured);
+    const islandDist =
+      showIsland && island
+        ? Math.max(
+            0,
+            Math.round(Number.isFinite(island.distance) ? island.distance : 0),
+          )
+        : -1;
+    const islandKey = showIsland ? String(islandDist) : '';
+    if (islandKey !== this.lastLootIslandKey) {
+      this.lastLootIslandKey = islandKey;
+      this.lootIslandChipEl.classList.toggle('fdr-hidden', !showIsland);
+      if (showIsland) {
+        this.lootIslandTextEl.textContent = `LOOT ISLAND • ${islandDist}M`;
+      }
+    }
+  }
+
   private updateCenterCombat(state: HUDState, now: number): void {
     if (this.lastScoped !== state.isScoped) {
       this.lastScoped = state.isScoped;
@@ -2333,9 +2552,13 @@ export class HUDManager {
       this.crosshairEl.classList.toggle('build', state.isBuildMode);
     }
 
-    const rawGap = Math.round(
-      Math.max(5, Math.min(44, 6 + state.activeWeaponSpread * 380)),
-    );
+    const chStyle = resolveCrosshairStyle(this.settings.crosshairStyle);
+    const rawGap =
+      chStyle === 'classic'
+        ? 7
+        : Math.round(
+            Math.max(5, Math.min(44, 6 + state.activeWeaponSpread * 380)),
+          );
     if (rawGap !== this.lastSpreadGap) {
       this.lastSpreadGap = rawGap;
       this.crosshairEl.style.setProperty('--ch-gap', `${rawGap}px`);

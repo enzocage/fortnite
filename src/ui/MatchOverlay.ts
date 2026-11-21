@@ -453,6 +453,7 @@ export class MatchOverlay {
     const statsGrid = document.createElement('div');
     statsGrid.className = 'fdr-stats-grid';
     const poisCaptured = Math.max(0, Math.floor(summary.poisCaptured ?? 0));
+    const goldEarned = Math.max(0, Math.round(summary.goldEarned ?? 0));
     const statItems: Array<{
       k: string;
       v: string;
@@ -481,7 +482,11 @@ export class MatchOverlay {
         k: 'POIS CAPTURED',
         v: String(poisCaptured),
         highlight: poisCaptured > 0,
-        wide: true,
+      },
+      {
+        k: 'GOLD EARNED',
+        v: String(goldEarned),
+        highlight: goldEarned > 0,
       },
     ];
 

@@ -20,6 +20,7 @@ import type {
   AugmentId,
   BuildPieceType,
   CharacterRenderState,
+  CrosshairColor,
   DamageEvent,
   EmoteId,
   GameModeId,
@@ -32,6 +33,7 @@ import type {
   MaterialType,
   MatchSummary,
   MinimapBlip,
+  NpcSpecialistEntity,
   Vec3Like,
   VehicleKind,
   VisualSoundCue,
@@ -70,7 +72,12 @@ import {
   type BotWorldContext,
 } from '../ai';
 import { AudioEngine } from '../audio';
-import { loadCareerStats, recordMatchCareerStats, UIManager } from '../ui';
+import {
+  loadCareerStats,
+  recordMatchCareerStats,
+  UIManager,
+  updateGoldBars,
+} from '../ui';
 
 interface ActiveBotVisual {
   id: string;
@@ -105,6 +112,7 @@ export interface FortdropDebugAPI {
   spawnVehicleNearby(kind?: VehicleKind, distance?: number): boolean;
   setWeather(kind?: WeatherKind): WeatherKind;
   giveWave2Loadout(): void;
+  giveWave5Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -194,6 +202,8 @@ export class GameEngine {
   private prevChestsOpened = 0;
   private prevVehicleDistPos: Vec3Like | null = null;
   private vehicleDistAccum = 0;
+  private lootIslandSpawnTriggered = false;
+  private lastPersistedGold = -1;
   private recentVisualNoises: Array<{
     id: string;
     x: number;
@@ -310,6 +320,7 @@ export class GameEngine {
       ...this.worldBuildResult.colliders,
       ...this.worldInteractables.getVaultColliders(),
       ...this.worldInteractables.getUpgradeBenchColliders(),
+      ...this.worldInteractables.getVendingMachineColliders(),
     ]);
     this.scene.add(this.vehicleSystem.getGroup());
 
@@ -371,6 +382,11 @@ export class GameEngine {
       this.worldInteractables.getRifts(),
       this.worldInteractables.getCapturePoints(),
     );
+    this.uiManager.setWorldEconomy(
+      this.worldInteractables.getVendingMachines(),
+      this.worldInteractables.getNpcSpecialists(),
+      this.worldInteractables.getLootIslandState(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.gameMode = this.lobbyConfig.gameMode ?? 'solo';
@@ -398,6 +414,8 @@ export class GameEngine {
       ...this.worldInteractables.getUpgradeBenchColliders(),
       ...this.worldInteractables.getSlurpBarrelColliders(),
       ...this.worldInteractables.getExplosiveBarrelColliders(),
+      ...this.worldInteractables.getVendingMachineColliders(),
+      ...this.worldInteractables.getLootIslandColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -436,6 +454,7 @@ export class GameEngine {
     this.playerController.setVaultBridge(this.worldInteractables);
     this.playerController.setStationBridge(this.worldInteractables);
     this.playerController.setRiftCaptureBridge(this.worldInteractables);
+    this.playerController.setEconomyBridge(this.worldInteractables);
     this.playerController.setAugmentManager(this.augmentManager);
     this.playerController.setOnWeaponUpgraded(() => {
       this.questTracker.record('weapon_upgrade', 1);
@@ -446,9 +465,16 @@ export class GameEngine {
     this.playerController.setOnPoiCaptured((poiName, lootPos) => {
       this.handlePoiCaptured(poiName, lootPos);
     });
-    this.playerController.setVaultUnlockHandler((lootPos, _poiId) =>
-      this.spawnVaultLootBurst(lootPos),
-    );
+    this.playerController.setOnNpcHired((npc) => {
+      this.handleNpcHired(npc);
+    });
+    this.playerController.setOnLootIslandCaptured((lootPos) => {
+      this.handleLootIslandCaptured(lootPos);
+    });
+    this.playerController.setVaultUnlockHandler((lootPos, _poiId) => {
+      this.spawnVaultLootBurst(lootPos);
+      this.grantPlayerGold(250, lootPos);
+    });
 
     // 9. Player Character Rig
     this.playerRig = this.createCharacterRigFromConfig(this.lobbyConfig);
@@ -499,6 +525,12 @@ export class GameEngine {
           this.uiManager.setSettings(this.settings);
           this.playerController.setSettings(this.settings);
         }
+        const qaCrosshair = search.get('qaCrosshair') as CrosshairColor | null;
+        if (qaCrosshair) {
+          this.settings = { ...this.settings, crosshairColor: qaCrosshair };
+          this.uiManager.setSettings(this.settings);
+          this.playerController.setSettings(this.settings);
+        }
         const qaCfg: LobbyConfig = {
           ...this.uiManager.getLobbyConfig(),
           ...(qaMode ? { gameMode: qaMode } : {}),
@@ -507,7 +539,24 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (qaPoi === 'skyline_spire' || search.has('qaWave2')) {
+        if (search.has('qaWave5')) {
+          window.__GAME__?.giveWave5Loadout();
+          this.playerController.setGoldBars(600);
+          const scout = this.worldInteractables.getNpcSpecialists().find((n) => !n.hiredBy);
+          if (scout) {
+            const hired = this.worldInteractables.hireNpcSpecialist(scout.id, 'player');
+            if (hired) this.handleNpcHired(hired);
+          }
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const ix = p.x + Math.sin(yaw) * 24;
+          const iz = p.z + Math.cos(yaw) * 24;
+          this.worldInteractables.spawnLootIsland(ix, iz, 5);
+          this.lootIslandSpawnTriggered = true;
+          this.eventBus.emit('vfx:loot_island_rift', {
+            position: { x: ix, y: this.terrain.getHeightAt(ix, iz) + 24, z: iz },
+          });
+        } else if (qaPoi === 'skyline_spire' || search.has('qaWave2')) {
           window.__GAME__?.giveWave2Loadout();
         } else if (search.has('qaMythic')) {
           window.__GAME__?.giveMythicLoadout();
@@ -767,6 +816,7 @@ export class GameEngine {
             shield: bot.shield,
             alive: bot.alive,
             isPlayer: false,
+            isAlly: Boolean(bot.isAlly),
             radius: bot.radius,
             height: bot.height,
           });
@@ -894,6 +944,7 @@ export class GameEngine {
           if (ev.isElimination) {
             this.questTracker.record('elimination', 1);
             this.playerController.addKill();
+            this.grantPlayerGold(50, ev.hitPoint);
             const victim = this.botManager.getBotById(ev.targetId);
             this.eventBus.emit('ui:banner', {
               id: `elim_${Date.now()}`,
@@ -1200,6 +1251,7 @@ export class GameEngine {
     this.prevChestsOpened = 0;
     this.prevVehicleDistPos = null;
     this.vehicleDistAccum = 0;
+    this.lootIslandSpawnTriggered = false;
     this.recentVisualNoises = [];
     this.setWaypoint(null);
 
@@ -1264,6 +1316,7 @@ export class GameEngine {
     this.prevChestsOpened = 0;
     this.prevVehicleDistPos = null;
     this.vehicleDistAccum = 0;
+    this.lootIslandSpawnTriggered = false;
     this.recentVisualNoises = [];
     this.setWaypoint(null);
 
@@ -1284,6 +1337,11 @@ export class GameEngine {
       this.worldInteractables.getRifts(),
       this.worldInteractables.getCapturePoints(),
     );
+    this.uiManager.setWorldEconomy(
+      this.worldInteractables.getVendingMachines(),
+      this.worldInteractables.getNpcSpecialists(),
+      this.worldInteractables.getLootIslandState(),
+    );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
       this.worldBuildResult.floorLootSpots,
@@ -1296,6 +1354,8 @@ export class GameEngine {
       ...this.worldInteractables.getUpgradeBenchColliders(),
       ...this.worldInteractables.getSlurpBarrelColliders(),
       ...this.worldInteractables.getExplosiveBarrelColliders(),
+      ...this.worldInteractables.getVendingMachineColliders(),
+      ...this.worldInteractables.getLootIslandColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -1339,6 +1399,9 @@ export class GameEngine {
 
     // Reset player controller & augments
     this.playerController.resetForMatch(this.busStart, config.playerName, this.gameMode);
+    const savedGold = loadCareerStats().goldBars;
+    this.playerController.setGoldBars(savedGold);
+    this.lastPersistedGold = this.playerController.getGoldBars();
     this.augmentManager.reset(this.matchSeed, this.gameMode);
     this.playerController.setSelectedEmote(config.selectedEmote);
     this.phase = 'bus';
@@ -1468,6 +1531,8 @@ export class GameEngine {
       ...this.worldInteractables.getUpgradeBenchColliders(),
       ...this.worldInteractables.getSlurpBarrelColliders(),
       ...this.worldInteractables.getExplosiveBarrelColliders(),
+      ...this.worldInteractables.getVendingMachineColliders(),
+      ...this.worldInteractables.getLootIslandColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
     this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
@@ -1479,6 +1544,11 @@ export class GameEngine {
     this.uiManager.setWorldRiftsAndFlags(
       this.worldInteractables.getRifts(),
       this.worldInteractables.getCapturePoints(),
+    );
+    this.uiManager.setWorldEconomy(
+      this.worldInteractables.getVendingMachines(),
+      this.worldInteractables.getNpcSpecialists(),
+      this.worldInteractables.getLootIslandState(),
     );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
@@ -1573,11 +1643,50 @@ export class GameEngine {
     const fallSpeed = Math.abs(pRender.velocityY ?? 0);
     this.audioEngine.updateWindRush(windActive, fallSpeed);
 
-    // Track QuestTracker chest opening & hover vehicle travel distance + continuous engine audio
+    // Track QuestTracker chest opening & gold + hover vehicle travel distance + continuous engine audio
     const pStatsNow = this.playerController.getStats();
     if (pStatsNow.chestsOpened > this.prevChestsOpened) {
-      this.questTracker.record('chest_open', pStatsNow.chestsOpened - this.prevChestsOpened);
+      const deltaChests = pStatsNow.chestsOpened - this.prevChestsOpened;
+      this.questTracker.record('chest_open', deltaChests);
+      this.grantPlayerGold(deltaChests * 25, pRender.position);
       this.prevChestsOpened = pStatsNow.chestsOpened;
+    }
+    const currGold = this.playerController.getGoldBars();
+    if (
+      currGold !== this.lastPersistedGold &&
+      (typeof window === 'undefined' || !window.location.search.includes('qaWave5'))
+    ) {
+      this.lastPersistedGold = currGold;
+      updateGoldBars(currGold);
+    }
+
+    // Spawn mid-match Floating Loot Island Rift inside safe zone
+    const lootIslandAt = this.gameMode === 'blitz' ? 40 : 75;
+    if (
+      !this.lootIslandSpawnTriggered &&
+      currPlayerPhase === 'playing' &&
+      this.matchElapsed >= lootIslandAt
+    ) {
+      this.lootIslandSpawnTriggered = true;
+      const st = this.stormSystem.getState();
+      let lx = st.currentCenterX + 12;
+      let lz = st.currentCenterZ - 10;
+      if (this.terrain.isWater(lx, lz)) {
+        lx = st.currentCenterX;
+        lz = st.currentCenterZ;
+      }
+      const spawned = this.worldInteractables.spawnLootIsland(lx, lz, this.matchElapsed);
+      this.eventBus.emit('sound:play', { id: 'loot_island_spawn', volume: 0.9 });
+      this.eventBus.emit('vfx:loot_island_rift', {
+        position: { x: spawned.x, y: spawned.y, z: spawned.z },
+      });
+      this.eventBus.emit('ui:banner', {
+        id: `loot_island_${Date.now()}`,
+        title: 'FLOATING LOOT ISLAND RIFTS IN!',
+        subtitle: 'USE THE UPDRAFT GEYSER TO CLAIM MYTHIC LOOT & +350 GOLD',
+        tone: 'victory',
+        durationMs: 4200,
+      });
     }
     const pHudSnap = this.playerController.getHudSnapshot();
     const activeVeh = pHudSnap.vehicle;
@@ -1675,19 +1784,54 @@ export class GameEngine {
       this.eventBus.emit('music:set', { track: 'none' });
     }
 
-    // 5. AI Bots update + rigs + Dynamic Hunt Bounty
+    // 5. AI Bots update + Ally support + rigs + Dynamic Hunt Bounty
     this.botManager.update(dt, this.matchElapsed, this.busPos, pRender.position);
     this.botManager.applyStormDamage(dt);
     this.syncBotRigs(dt);
+
+    const allyEvents = this.botManager.consumeAllySupportEvents();
+    for (const ev of allyEvents) {
+      if (ev.kind === 'scout_ping') {
+        let spotted = 0;
+        for (const bot of this.botManager.getAliveBots()) {
+          if (bot.isAlly || bot.state === 'bus') continue;
+          if (dist2D(ev.position.x, ev.position.z, bot.position.x, bot.position.z) <= 55) {
+            this.audioBlips.push({
+              id: `ally_scout_${this.blipSeq++}`,
+              x: bot.position.x,
+              z: bot.position.z,
+              kind: 'bot',
+              age: 0,
+              maxAge: 6.5,
+            });
+            spotted += 1;
+          }
+        }
+        if (spotted > 0) {
+          this.eventBus.emit('ui:banner', {
+            id: `ally_scout_${Date.now()}`,
+            title: 'RECON NOVA PINGED HOSTILES',
+            subtitle: `${spotted} OPPONENT(S) REVEALED ON RADAR`,
+            tone: 'info',
+            durationMs: 2400,
+          });
+        }
+      } else if (ev.kind === 'medic_heal' && this.playerController.isAlive()) {
+        this.playerController.applySplashHeal(ev.amount ?? 25);
+        this.eventBus.emit('vfx:splash_heal', { position: { ...pRender.position }, radius: 4.5 });
+        this.eventBus.emit('sound:play', { id: 'splash_heal', position: pRender.position, spatial: true });
+      }
+    }
 
     const bountyRewards = this.botManager.consumeBountyRewards();
     for (const reward of bountyRewards) {
       if (this.playerController.isAlive()) {
         this.playerController.applySplashHeal(35);
+        this.grantPlayerGold(100, pRender.position);
         this.eventBus.emit('ui:banner', {
           id: `bounty_win_${Date.now()}`,
           title: 'BOUNTY CLAIMED!',
-          subtitle: `${reward.targetName} ELIMINATED • +35 SHIELD`,
+          subtitle: `${reward.targetName} ELIMINATED • +35 SHIELD • +100 GOLD`,
           tone: 'victory',
           durationMs: 3200,
         });
@@ -1871,6 +2015,7 @@ export class GameEngine {
       visual.rig.setVisible(true);
       visual.rig.equipWeapon(bs.weaponId, bs.isBuilding);
       visual.rig.setGliderOpen(bs.gliderOpen, bs.gliderFactor);
+      visual.rig.setAllyAura(Boolean(bs.isAlly), bs.allyRole, this.totalElapsed);
       this.characterAnimator.update(visual.rig, bs, dt);
     }
   }
@@ -2089,8 +2234,12 @@ export class GameEngine {
       bonusXp: this.questTracker.getCompletedBonusXp() + (stats.poisCaptured ?? 0) * 300,
       activeAugments: this.augmentManager.getActiveAugments(),
       poisCaptured: stats.poisCaptured ?? 0,
+      goldEarned: stats.goldEarned ?? 0,
     };
     this.lastMatchSummary = summary;
+    if (typeof window === 'undefined' || !window.location.search.includes('qaWave5')) {
+      updateGoldBars(this.playerController.getGoldBars());
+    }
     recordMatchCareerStats(summary);
     if (openOverlay) {
       this.spectatorSummaryOpen = true;
@@ -2122,7 +2271,86 @@ export class GameEngine {
     }
   }
 
+  private grantPlayerGold(amount: number, worldPos?: Vec3Like): void {
+    if (amount <= 0) return;
+    this.playerController.addGoldBars(amount, worldPos);
+    const curr = this.playerController.getGoldBars();
+    if (typeof window === 'undefined' || !window.location.search.includes('qaWave5')) {
+      this.lastPersistedGold = curr;
+      updateGoldBars(curr);
+    }
+  }
+
+  private handleNpcHired(npc: NpcSpecialistEntity): void {
+    // Remove any previously hired ally visual cleanly
+    for (const [id, entry] of this.botVisuals.entries()) {
+      if (id.startsWith('ally_') || id.includes('_ally_')) {
+        this.scene.remove(entry.rig.getGroup());
+        entry.rig.dispose();
+        this.botVisuals.delete(id);
+      }
+    }
+    const ally = this.botManager.spawnAlliedSpecialist(npc);
+    const skin = SKINS.find((s) => s.id === ally.skinId) ?? SKINS[0];
+    const pickaxe = PICKAXES.find((p) => p.id === ally.pickaxeId) ?? PICKAXES[0];
+    const glider = GLIDERS.find((g) => g.id === ally.gliderId) ?? GLIDERS[0];
+    const rig = new CharacterRig(skin, pickaxe, glider);
+    rig.setAllyAura(true, ally.allyRole ?? npc.role, this.totalElapsed);
+    rig.setVisible(true);
+    this.scene.add(rig.getGroup());
+    this.botVisuals.set(ally.id, {
+      id: ally.id,
+      rig,
+      skinId: ally.skinId,
+      pickaxeId: ally.pickaxeId,
+      gliderId: ally.gliderId,
+    });
+    this.eventBus.emit('ui:banner', {
+      id: `ally_hire_${Date.now()}`,
+      title: `${npc.name.toUpperCase()} RECRUITED!`,
+      subtitle: `${npc.role.toUpperCase()} SPECIALIST JOINED YOUR SQUAD`,
+      tone: 'victory',
+      durationMs: 3200,
+    });
+  }
+
+  private handleLootIslandCaptured(lootPos?: Vec3Like): void {
+    const pos = lootPos ?? this.playerController.getPosition();
+    this.grantPlayerGold(350, pos);
+    const rewards: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic'; stack: number }> = [
+      { id: 'kinetic_blade', rarity: 'mythic', stack: 1 },
+      { id: 'tactical_dmr', rarity: 'legendary', stack: 1 },
+      { id: 'mythic_blade_rifle', rarity: 'mythic', stack: 1 },
+      { id: 'chug_splash', rarity: 'epic' as never, stack: 4 },
+    ];
+    rewards.forEach((entry, idx) => {
+      const a = (idx / rewards.length) * Math.PI * 2;
+      const def = WEAPONS[entry.id];
+      this.propsAndLoot.spawnLootDrop(
+        { x: pos.x, y: pos.y + 0.6, z: pos.z },
+        {
+          item: {
+            uid: `island_drop_${Date.now()}_${idx}`,
+            weaponId: entry.id,
+            rarity: entry.id === 'chug_splash' ? 'rare' : entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          },
+        },
+        { x: Math.cos(a) * 2.2, y: 4.3, z: Math.sin(a) * 2.2 },
+      );
+    });
+    this.eventBus.emit('ui:banner', {
+      id: `island_cap_${Date.now()}`,
+      title: 'LOOT ISLAND SHRINE CLAIMED!',
+      subtitle: 'MYTHIC KINETIC BLADE, TACTICAL DMR & +350 GOLD UNLOCKED',
+      tone: 'victory',
+      durationMs: 4000,
+    });
+  }
+
   private handlePoiCaptured(poiName: string, lootPos?: Vec3Like): void {
+    this.grantPlayerGold(100, lootPos);
     this.eventBus.emit('ui:banner', {
       id: `poi_cap_${Date.now()}`,
       title: `${poiName.toUpperCase()} CAPTURED!`,
@@ -2366,6 +2594,32 @@ export class GameEngine {
       pendingAugmentChoices: snap.pendingAugmentChoices ?? this.augmentManager.getPendingChoices(),
       captureStatus: snap.captureStatus ?? null,
       tacticalPing: this.projectTacticalPing(snap.tacticalPing),
+      goldBars: snap.goldBars ?? this.playerController.getGoldBars(),
+      kineticDashCharges: snap.kineticDashCharges ?? null,
+      hiredAlly: (() => {
+        const ally = this.botManager.getHiredAlly();
+        if (!ally || !ally.alive) return null;
+        return {
+          name: ally.name,
+          role: ally.allyRole ?? 'scout',
+          hp: Math.ceil(ally.hp),
+          maxHp: ally.maxHp,
+          shield: Math.ceil(ally.shield),
+          maxShield: ally.maxShield,
+          distance: Math.round(dist3D(snap.playerPos, ally.position)),
+        };
+      })(),
+      lootIsland: (() => {
+        const li = this.worldInteractables.getLootIslandState();
+        if (!li.active) return null;
+        return {
+          active: true,
+          captured: li.captured,
+          x: li.x,
+          z: li.z,
+          distance: Math.round(dist2D(snap.playerPos.x, snap.playerPos.z, li.x, li.z)),
+        };
+      })(),
     };
 
     this.uiManager.updateHUD(hudState);
@@ -2736,6 +2990,9 @@ export class GameEngine {
           rifts: engine.worldInteractables.getRifts().length,
           capturePoints: engine.worldInteractables.getCapturePoints().length,
           explosiveBarrels: engine.worldInteractables.getExplosiveBarrels().length,
+          vendingMachines: engine.worldInteractables.getVendingMachines().length,
+          npcSpecialists: engine.worldInteractables.getNpcSpecialists().length,
+          lootIslandActive: engine.worldInteractables.getLootIslandState().active,
           vehicles: engine.vehicleSystem.getVehicles().length,
           vaults: engine.worldInteractables.getVaults().length,
           fps: Math.round(engine.fps),
@@ -2824,6 +3081,34 @@ export class GameEngine {
         });
         inv.addAmmo('medium', 240);
         inv.addAmmo('shells', 48);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
+      giveWave5Loadout() {
+        const inv = engine.playerController.getInventory();
+        const items: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic' | 'rare'; stack: number }> = [
+          { id: 'kinetic_blade', rarity: 'mythic', stack: 1 },
+          { id: 'tactical_dmr', rarity: 'legendary', stack: 1 },
+          { id: 'heavy_shotgun', rarity: 'legendary', stack: 1 },
+          { id: 'shield_bubble', rarity: 'epic', stack: 2 },
+          { id: 'chug_splash', rarity: 'rare', stack: 4 },
+        ];
+        inv.reset();
+        items.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w5_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('medium', 120);
+        inv.addAmmo('shells', 40);
         inv.addMaterial('wood', 500);
         inv.addMaterial('brick', 500);
         inv.addMaterial('metal', 500);

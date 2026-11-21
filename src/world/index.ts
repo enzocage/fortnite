@@ -23,9 +23,11 @@ export {
   WorldInteractables,
   type CapturePointAdvanceResult,
   type ExplosiveBarrelDamageResult,
+  type LootIslandCaptureResult,
   type RiftTriggerResult,
   type SlurpBarrelDamageResult,
   type UnlockVaultResult,
+  type VendingPurchaseResult,
 } from './WorldInteractables';
 export { EnvironmentDetail } from './EnvironmentDetail';
 export { VehicleSystem } from './VehicleSystem';

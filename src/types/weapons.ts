@@ -4,6 +4,7 @@ export type WeaponId =
   | 'pickaxe'
   | 'ar'
   | 'burst_ar'
+  | 'tactical_dmr'
   | 'pump_shotgun'
   | 'tac_shotgun'
   | 'heavy_shotgun'
@@ -12,6 +13,7 @@ export type WeaponId =
   | 'pistol'
   | 'rocket_launcher'
   | 'mythic_blade_rifle'
+  | 'kinetic_blade'
   | 'shockwave_grenade'
   | 'frag_grenade'
   | 'chug_splash'
@@ -79,6 +81,9 @@ export interface WeaponDef {
   splashHealAmount?: number;
   isGrappler?: boolean;
   isShieldBubble?: boolean;
+  isKineticBlade?: boolean;
+  dashCharges?: number;
+  dashCooldownSec?: number;
   allowedRarities: Rarity[];
 }
 

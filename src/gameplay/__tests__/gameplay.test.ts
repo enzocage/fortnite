@@ -13,8 +13,10 @@ import type {
   ItemInstance,
   LaunchPadEntity,
   LootDrop,
+  LootIslandState,
   LootLlamaEntity,
   MatchQuest,
+  NpcSpecialistEntity,
   POIDef,
   Rarity,
   RiftEntity,
@@ -26,6 +28,7 @@ import type {
   VaultEntity,
   Vec3Like,
   VehicleEntity,
+  VendingMachineEntity,
   ZiplineEntity,
 } from '../../types';
 import {
@@ -35,11 +38,13 @@ import {
   GLIDER_FORCE_HEIGHT,
   GRID_XZ,
   GRID_Y,
+  MAX_GOLD_BARS,
   MAX_MATS,
   PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   RARITY_MULTIPLIER,
+  STARTING_GOLD_BARS,
   UPGRADE_COSTS,
   WEAPONS,
   dist3D,
@@ -65,6 +70,7 @@ import {
   type PropsInteractionBridge,
   type VaultBridge,
   type VehicleBridge,
+  type WorldEconomyBridge,
   type WorldRiftCaptureBridge,
   type WorldStationBridge,
 } from '../index';
@@ -3534,5 +3540,543 @@ describe('Wave 4 Gameplay Systems', () => {
       player.update(0.05, 1.0 + i * 0.05);
     }
     expect(player.getHudSnapshot().tacticalPing).toBeNull();
+  });
+});
+
+describe('Wave 5 Gameplay Systems (Gold Economy, Kinetic Blade, Tactical DMR, Loot Island)', () => {
+  function setupWave5Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'Wave5Tester');
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockEconomyBridge(init?: {
+    vendingMachines?: VendingMachineEntity[];
+    npcs?: NpcSpecialistEntity[];
+    lootIsland?: Partial<LootIslandState>;
+  }): WorldEconomyBridge & {
+    vendingMachines: VendingMachineEntity[];
+    npcs: NpcSpecialistEntity[];
+    lootIsland: LootIslandState;
+    purchaseCalls: number;
+    hireCalls: number;
+  } {
+    const vendingMachines = init?.vendingMachines ?? [];
+    const npcs = init?.npcs ?? [];
+    const lootIsland: LootIslandState = {
+      active: false,
+      spawnedAtSec: 0,
+      x: 0,
+      y: 24,
+      z: 0,
+      radius: 14,
+      captured: false,
+      captureProgress: 0,
+      ...init?.lootIsland,
+    };
+    let itemSeq = 1;
+    const bridge = {
+      vendingMachines,
+      npcs,
+      lootIsland,
+      purchaseCalls: 0,
+      hireCalls: 0,
+      getVendingMachines: () => vendingMachines,
+      purchaseFromVendingMachine: (id: string) => {
+        bridge.purchaseCalls += 1;
+        const vm = vendingMachines.find((m) => m.id === id);
+        if (!vm || vm.stock <= 0) return null;
+        vm.stock -= 1;
+        const def = WEAPONS[vm.offerWeaponId];
+        return {
+          item: {
+            uid: `vm_item_${itemSeq++}`,
+            weaponId: vm.offerWeaponId,
+            rarity: vm.offerRarity,
+            magAmmo: def.magSize,
+            stackCount: 1,
+          },
+          priceGold: vm.priceGold,
+          position: { x: vm.x, y: vm.y + 1.0, z: vm.z },
+        };
+      },
+      getNpcSpecialists: () => npcs,
+      hireNpcSpecialist: (id: string, playerId: string) => {
+        bridge.hireCalls += 1;
+        const npc = npcs.find((n) => n.id === id);
+        if (!npc || npc.hiredBy) return null;
+        npc.hiredBy = playerId;
+        return { ...npc };
+      },
+      getLootIslandState: () => lootIsland,
+      advanceLootIslandCapture: (dt: number) => {
+        if (!lootIsland.active || lootIsland.captured) {
+          return { capturedNow: false };
+        }
+        lootIsland.captureProgress = Math.min(1, lootIsland.captureProgress + dt / 10);
+        if (lootIsland.captureProgress >= 1 - 1e-6) {
+          lootIsland.captureProgress = 1;
+          lootIsland.captured = true;
+          return {
+            capturedNow: true,
+            lootPos: { x: lootIsland.x, y: lootIsland.y + 0.8, z: lootIsland.z },
+          };
+        }
+        return { capturedNow: false };
+      },
+    };
+    return bridge;
+  }
+
+  it('tracks Gold Bars via setGoldBars/addGoldBars, clamping [0, MAX_GOLD_BARS] and stats.goldEarned', () => {
+    const { bus, player } = setupWave5Harness();
+    const sounds: SoundEventId[] = [];
+    const goldBursts: Array<{ position: Vec3Like; amount: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:gold_burst', (ev) => goldBursts.push(ev));
+
+    expect(player.getGoldBars()).toBe(STARTING_GOLD_BARS);
+    expect(player.getHudSnapshot().goldBars).toBe(STARTING_GOLD_BARS);
+    expect(player.getStats().goldEarned).toBe(0);
+
+    player.setGoldBars(100);
+    expect(player.getGoldBars()).toBe(100);
+    expect(player.getStats().goldEarned).toBe(0);
+
+    const afterAdd = player.addGoldBars(150, { x: 4, y: 1, z: -2 });
+    expect(afterAdd).toBe(250);
+    expect(player.getStats().goldEarned).toBe(150);
+    expect(sounds).toContain('gold_pickup');
+    expect(goldBursts.length).toBe(1);
+    expect(goldBursts[0]).toEqual({ position: { x: 4, y: 1, z: -2 }, amount: 150 });
+
+    // Negative delta reduces balance without subtracting goldEarned and clamps at 0
+    player.addGoldBars(-80);
+    expect(player.getGoldBars()).toBe(170);
+    expect(player.getStats().goldEarned).toBe(150);
+    player.addGoldBars(-9999);
+    expect(player.getGoldBars()).toBe(0);
+
+    // Positive overflow clamps at MAX_GOLD_BARS
+    player.setGoldBars(MAX_GOLD_BARS - 20);
+    expect(player.addGoldBars(500)).toBe(MAX_GOLD_BARS);
+    expect(player.getHudSnapshot().goldBars).toBe(MAX_GOLD_BARS);
+  });
+
+  it('handles Vending Machine prompt, purchase, insufficient Gold guard, and full-inventory LootDrop fallback', () => {
+    const { bus, propsBridge, player } = setupWave5Harness();
+    const sounds: SoundEventId[] = [];
+    const goldBursts: Array<{ position: Vec3Like; amount: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:gold_burst', (ev) => goldBursts.push(ev));
+
+    const economy = createMockEconomyBridge({
+      vendingMachines: [
+        {
+          id: 'vm_dmr',
+          poiId: 'metro_towers',
+          kind: 'weapon',
+          x: 0,
+          y: 0,
+          z: -2.5,
+          rotationY: 0,
+          offerWeaponId: 'tactical_dmr',
+          offerRarity: 'epic',
+          priceGold: 175,
+          stock: 2,
+        },
+      ],
+    });
+    player.setEconomyBridge(economy);
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.016, 0.016);
+
+    const prompt = player.getInteractPrompt();
+    expect(prompt?.label).toBe('BUY TACTICAL DMR (175 GOLD)');
+    expect(prompt?.rarity).toBe('epic');
+
+    // Insufficient Gold guard
+    player.setGoldBars(100);
+    player.pressKey('KeyE');
+    expect(economy.purchaseCalls).toBe(0);
+    expect(player.getGoldBars()).toBe(100);
+    expect(economy.vendingMachines[0].stock).toBe(2);
+    expect(sounds).toContain('dryfire');
+
+    // Successful purchase
+    player.setGoldBars(300);
+    player.pressKey('KeyE');
+    expect(economy.purchaseCalls).toBe(1);
+    expect(player.getGoldBars()).toBe(125);
+    expect(economy.vendingMachines[0].stock).toBe(1);
+    expect(player.getInventory().getSlot(1)?.weaponId).toBe('tactical_dmr');
+    expect(player.getInventory().getSlot(1)?.rarity).toBe('epic');
+    expect(sounds).toContain('vending_buy');
+    expect(goldBursts.length).toBe(1);
+
+    // Fill remaining slots 2..5 and select slot 0 (pickaxe) -> full inventory spawns LootDrop!
+    player.getInventory().addItem({ uid: 'f2', weaponId: 'ar', rarity: 'rare', magAmmo: 30, stackCount: 1 });
+    player.getInventory().addItem({ uid: 'f3', weaponId: 'smg', rarity: 'rare', magAmmo: 30, stackCount: 1 });
+    player.getInventory().addItem({ uid: 'f4', weaponId: 'pump_shotgun', rarity: 'rare', magAmmo: 5, stackCount: 1 });
+    player.getInventory().addItem({ uid: 'f5', weaponId: 'sniper', rarity: 'rare', magAmmo: 1, stackCount: 1 });
+    player.pressKey('Digit1'); // Hold pickaxe (slot 0)
+    player.setGoldBars(200);
+    player.update(0.016, 0.05);
+
+    player.pressKey('KeyE');
+    expect(player.getGoldBars()).toBe(25);
+    expect(economy.vendingMachines[0].stock).toBe(0);
+    expect(propsBridge.drops.some((d) => d.item?.weaponId === 'tactical_dmr')).toBe(true);
+
+    // Clear ground loot drop so we verify sold-out vending machine produces no prompt
+    propsBridge.drops.length = 0;
+    player.update(0.016, 0.1);
+    expect(player.getInteractPrompt()).toBeNull();
+  });
+
+  it('handles NPC Specialist hiring, insufficient Gold guard, and onNpcHired callback', () => {
+    const { bus, player } = setupWave5Harness();
+    const sounds: SoundEventId[] = [];
+    const goldBursts: Array<{ position: Vec3Like; amount: number }> = [];
+    const hiredList: NpcSpecialistEntity[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:gold_burst', (ev) => goldBursts.push(ev));
+
+    const economy = createMockEconomyBridge({
+      npcs: [
+        {
+          id: 'npc_scout',
+          name: 'Recon Nova',
+          role: 'scout',
+          poiId: 'whispering_pines',
+          skinId: 'neon_drift',
+          x: 0,
+          y: 0,
+          z: -3.2,
+          priceGold: 200,
+          hiredBy: null,
+        },
+      ],
+    });
+    player.setEconomyBridge(economy);
+    player.setOnNpcHired((npc) => hiredList.push(npc));
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.016, 0.016);
+
+    expect(player.getInteractPrompt()?.label).toBe('HIRE Recon Nova • SCOUT (200 GOLD)');
+
+    // Insufficient Gold guard
+    player.setGoldBars(150);
+    player.pressKey('KeyE');
+    expect(economy.hireCalls).toBe(0);
+    expect(economy.npcs[0].hiredBy).toBeNull();
+    expect(hiredList.length).toBe(0);
+    expect(sounds).toContain('dryfire');
+
+    // Hire with sufficient Gold
+    player.setGoldBars(260);
+    player.pressKey('KeyE');
+    expect(economy.hireCalls).toBe(1);
+    expect(player.getGoldBars()).toBe(60);
+    expect(economy.npcs[0].hiredBy).toBe('player');
+    expect(hiredList.length).toBe(1);
+    expect(hiredList[0].id).toBe('npc_scout');
+    expect(sounds).toContain('ally_hired');
+    expect(goldBursts.length).toBe(1);
+
+    player.update(0.016, 0.05);
+    expect(player.getInteractPrompt()).toBeNull();
+  });
+
+  it('supports Kinetic Blade LMB cleave, 3-charge RMB dash with path damage & fall immunity, and 9s recharge', () => {
+    const { bus, building, propsBridge, weapons, player } = setupWave5Harness();
+    const sounds: SoundEventId[] = [];
+    const dashVfx: Array<{ from: Vec3Like; to: Vec3Like }> = [];
+    const tracers: Array<{ from: Vec3Like; to: Vec3Like }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:kinetic_dash', (ev) => dashVfx.push(ev));
+    bus.on('vfx:tracer', (ev) => tracers.push(ev));
+
+    player.teleport({ x: 2, y: 0, z: 0 });
+    player.setLook(Math.PI, 0); // Looking along -Z
+    player.getInventory().addItem({
+      uid: 'kb_1',
+      weaponId: 'kinetic_blade',
+      rarity: 'epic',
+      magAmmo: 0,
+      stackCount: 1,
+    });
+    expect(player.getHudSnapshot().kineticDashCharges).toBeNull(); // still on pickaxe slot 0
+
+    player.pressKey('Digit2');
+    expect(player.getHudSnapshot().activeWeaponId).toBe('kinetic_blade');
+    expect(player.getHudSnapshot().kineticDashCharges).toBe(3);
+
+    const closeEnemy: CombatActor = {
+      id: 'bot_kb_1',
+      name: 'SlashTarget',
+      position: { x: 2, y: 0, z: -2.8 },
+      eyePos: { x: 2, y: 1.6, z: -2.8 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const dashEnemy: CombatActor = {
+      id: 'bot_kb_2',
+      name: 'DashTarget',
+      position: { x: 3.4, y: 0, z: -7.0 }, // ~1.4m offset (< 2.8m) along dash path
+      eyePos: { x: 3.4, y: 1.6, z: -7.0 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const farEnemy: CombatActor = {
+      id: 'bot_kb_far',
+      name: 'FarTarget',
+      position: { x: 8.5, y: 0, z: -6.0 },
+      eyePos: { x: 8.5, y: 1.6, z: -6.0 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [
+      player.getCombatActor(),
+      closeEnemy,
+      dashEnemy,
+      farEnemy,
+    ]);
+
+    // LMB cleave hits closeEnemy (45 dmg) and emits 'kinetic_slash' without tracer
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(closeEnemy.hp).toBe(55);
+    expect(farEnemy.hp).toBe(100);
+    expect(sounds).toContain('kinetic_slash');
+    expect(tracers.length).toBe(0);
+
+    // LMB cleave also deals 75 damage to props & builds within 3.8m at horizontal look
+    propsBridge.props.push({
+      id: 'crate_kb',
+      kind: 'crate',
+      material: 'wood',
+      x: 2,
+      y: 0,
+      z: 2.5, // turn around (+Z) to cleave crate
+      rotationY: 0,
+      scale: 1,
+      hp: 150,
+      maxHp: 150,
+      matYield: 20,
+      radius: 0.8,
+      height: 1.5,
+      destroyed: false,
+    });
+    player.setLook(0, 0); // Looking straight +Z
+    for (let i = 0; i < 12; i++) player.update(0.05, 0.05 * (i + 1)); // wait out fireCooldown
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(propsBridge.props[0].hp).toBe(75);
+
+    // Place a weak wood wall along -Z dash path (at z = -4, gx = 0, gz = -1)
+    const weakWall = building.placePieceForEntity('bot', 'wall', 'wood', 0, 0, -1, 'N', 0)!;
+    const wallHpBefore = weakWall.hp;
+
+    // RMB dash back along -Z
+    player.setLook(Math.PI, 0);
+    player.setMouseButton(2, true);
+    expect(player.getHudSnapshot().isAiming).toBe(false); // RMB does not ADS with kinetic blade
+    expect(player.getHudSnapshot().kineticDashCharges).toBe(2);
+    expect(player.isFallImmune()).toBe(true);
+    expect(player.getCharacterRenderState().grounded).toBe(false);
+    expect(player.getCharacterRenderState().velocityY).toBeGreaterThanOrEqual(7.5);
+    expect(sounds).toContain('kinetic_dash');
+    expect(dashVfx.length).toBe(1);
+    expect(dashEnemy.hp).toBe(50); // 50 dash path damage
+    expect(farEnemy.hp).toBe(100);
+    expect(wallHpBefore - weakWall.hp).toBe(50); // 50 dmg to structure in dash path
+    player.setMouseButton(2, false);
+
+    // Consume remaining 2 charges -> 0 charges, 4th RMB dryfires
+    player.setMouseButton(2, true);
+    player.setMouseButton(2, false);
+    player.setMouseButton(2, true);
+    player.setMouseButton(2, false);
+    expect(player.getHudSnapshot().kineticDashCharges).toBe(0);
+
+    const dashCountBefore = dashVfx.length;
+    player.setMouseButton(2, true);
+    expect(player.getHudSnapshot().kineticDashCharges).toBe(0);
+    expect(dashVfx.length).toBe(dashCountBefore);
+    expect(sounds).toContain('dryfire');
+    player.setMouseButton(2, false);
+
+    // Step 9 seconds (180 * 0.05s) -> recharges 1 charge
+    let t = 1.0;
+    for (let i = 0; i < 180; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().kineticDashCharges).toBe(1);
+
+    // Step another 18 seconds -> recharges to max 3 and caps at 3
+    for (let i = 0; i < 400; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().kineticDashCharges).toBe(3);
+
+    // Switching away returns null for kineticDashCharges
+    player.pressKey('Digit1');
+    expect(player.getHudSnapshot().kineticDashCharges).toBeNull();
+  });
+
+  it('fires Tactical DMR as hitscan rifle emitting shot_dmr with 1.85x headshot multiplier', () => {
+    const { bus, weapons, player } = setupWave5Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, 0);
+    player.getInventory().addItem({
+      uid: 'dmr_1',
+      weaponId: 'tactical_dmr',
+      rarity: 'epic',
+      magAmmo: 10,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+
+    const enemy: CombatActor = {
+      id: 'bot_dmr',
+      name: 'DmrTarget',
+      position: { x: 0, y: 0, z: -20 },
+      eyePos: { x: 0, y: 1.6, z: -20 },
+      hp: 200,
+      shield: 0,
+      maxHp: 200,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), enemy]);
+
+    // Body shot via PlayerController LMB (eye y=1.63 hits upper torso/head, check deterministic fireWeapon too)
+    const dmrItem = player.getInventory().getSlot(1)!;
+    const bodyRes = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: dmrItem,
+      origin: { x: 0, y: 1.0, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+      onAmmoConsumed: () => {
+        dmrItem.magAmmo -= 1;
+      },
+    });
+    expect(bodyRes.fired).toBe(true);
+    expect(bodyRes.shotsHit).toBe(1);
+    expect(bodyRes.headshots).toBe(0);
+    expect(bodyRes.damageDealt).toBe(computeWeaponDamage('tactical_dmr', 'epic', 20, false));
+    expect(dmrItem.magAmmo).toBe(9);
+    expect(sounds).toContain('shot_dmr');
+
+    // Headshot via PlayerController LMB at head height (y ~ 1.63 matches headCenterY = 1.69)
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(dmrItem.magAmmo).toBe(8);
+    expect(enemy.hp).toBeLessThan(200 - bodyRes.damageDealt);
+  });
+
+  it('launches player on Loot Island updraft and completes 10s capture atop the island', () => {
+    const { bus, collision, player } = setupWave5Harness();
+    const sounds: SoundEventId[] = [];
+    const flagVfx: Array<{ position: Vec3Like; poiName: string }> = [];
+    const capturedPositions: Array<Vec3Like | undefined> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:flag_captured', (ev) => flagVfx.push(ev));
+
+    const economy = createMockEconomyBridge({
+      lootIsland: {
+        active: true,
+        spawnedAtSec: 30,
+        x: 40,
+        y: 24,
+        z: 40,
+        radius: 14,
+        captured: false,
+        captureProgress: 0,
+      },
+    });
+    player.setEconomyBridge(economy);
+    player.setOnLootIslandCaptured((lootPos) => capturedPositions.push(lootPos));
+
+    // Provide island top deck collider at y = 24
+    collision.setStaticColliders([
+      {
+        id: 'loot_island_deck',
+        minX: 27.5,
+        minY: 23.4,
+        minZ: 27.5,
+        maxX: 52.5,
+        maxY: 24.0,
+        maxZ: 52.5,
+        material: 'brick',
+      },
+    ]);
+
+    // 1. Standing on ground beneath island (<= 4.5m, grounded) triggers updraft
+    player.teleport({ x: 41, y: 0, z: 40 });
+    player.update(0.05, 0.05);
+    expect(player.getCharacterRenderState().velocityY).toBeCloseTo(25, 1);
+    expect(player.isFallImmune()).toBe(true);
+    expect(player.getCharacterRenderState().grounded).toBe(false);
+    expect(sounds).toContain('launch_pad');
+
+    // 2. Standing atop island (<= radius * 0.75 = 10.5m, |dy| <= 3.5) captures over 10s
+    player.teleport({ x: 40, y: 24, z: 42 });
+    let t = 1.0;
+    for (let i = 0; i < 40; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const midSnap = player.getHudSnapshot();
+    expect(midSnap.captureStatus?.poiName).toBe('Loot Island');
+    expect(midSnap.captureStatus?.progress).toBeGreaterThan(0.18);
+    expect(midSnap.captureStatus?.captured).toBe(false);
+    expect(sounds).toContain('flag_tick');
+
+    for (let i = 0; i < 165; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(economy.lootIsland.captured).toBe(true);
+    expect(sounds).toContain('flag_captured');
+    expect(flagVfx.length).toBe(1);
+    expect(flagVfx[0].poiName).toBe('Loot Island');
+    expect(capturedPositions.length).toBe(1);
+    expect(capturedPositions[0]).toEqual({ x: 40, y: 24.8, z: 40 });
   });
 });

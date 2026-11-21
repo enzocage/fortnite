@@ -81,9 +81,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 21 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 23 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(21);
+    expect(allIds).toHaveLength(23);
 
     const seenNames = new Set<string>();
 
@@ -1212,6 +1212,7 @@ describe('Wave-3 Weapon Wraps, Ground Contact Shadow & Armor Rim Polish', () => 
     const gunIds: WeaponId[] = [
       'ar',
       'burst_ar',
+      'tactical_dmr',
       'pump_shotgun',
       'tac_shotgun',
       'heavy_shotgun',
@@ -1816,6 +1817,298 @@ describe('Wave-4 Skydiving Contrails & VFX Channels', () => {
     expect(vfx.getActiveFlagCaptureCount()).toBe(0);
     expect(vfx.getActiveAugmentVfxCount()).toBe(0);
     expect(vfx.hasActiveTacticalPing()).toBe(false);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-5 Tactical DMR, Kinetic Blade, Allied Aura & VFX Channels', () => {
+  it('builds bespoke Tactical DMR (thermal optic + wraps) and Kinetic Blade (wrapDisabled + cyan/violet plasma)', () => {
+    const dmr = createWeaponModel('tactical_dmr');
+    expect(dmr.name).toBe('weapon_tactical_dmr');
+    expect(countMeshes(dmr)).toBeGreaterThanOrEqual(16);
+    expect(hasMuzzleOffset('tactical_dmr')).toBe(true);
+    const dmrMuzzle = dmr.userData.muzzleOffset as THREE.Vector3;
+    expect(dmrMuzzle.z).toBeGreaterThan(0.75);
+
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    let hasCyanThermalLens = false;
+    let dmrWrapTargets = 0;
+    dmr.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) dmrWrapTargets++;
+      if (
+        child.material instanceof THREE.MeshStandardMaterial &&
+        child.material.emissive.getHex() === cyanHex
+      ) {
+        hasCyanThermalLens = true;
+      }
+    });
+    expect(hasCyanThermalLens).toBe(true);
+    expect(dmrWrapTargets).toBeGreaterThanOrEqual(3);
+
+    applyWeaponWrap(dmr, 'neon_pulse');
+    const neonMat = getWeaponWrapMaterial('neon_pulse');
+    let wrappedPanels = 0;
+    let preservedCyanLens = false;
+    dmr.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) {
+        expect(child.material).toBe(neonMat);
+        wrappedPanels++;
+      } else {
+        expect(child.material).not.toBe(neonMat);
+        if (
+          child.material instanceof THREE.MeshStandardMaterial &&
+          child.material.emissive.getHex() === cyanHex
+        ) {
+          preservedCyanLens = true;
+        }
+      }
+    });
+    expect(wrappedPanels).toBe(dmrWrapTargets);
+    expect(preservedCyanLens).toBe(true);
+    disposeObject3D(dmr);
+
+    const blade = createWeaponModel('kinetic_blade');
+    expect(blade.name).toBe('weapon_kinetic_blade');
+    expect(blade.userData.wrapDisabled).toBe(true);
+    expect(countMeshes(blade)).toBeGreaterThanOrEqual(14);
+    expect(hasMuzzleOffset('kinetic_blade')).toBe(false);
+
+    const violetHex = new THREE.Color('#a855f7').getHex();
+    let hasCyanPlasma = false;
+    let hasVioletPlasma = false;
+    blade.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        const em = child.material.emissive.getHex();
+        if (em === cyanHex) hasCyanPlasma = true;
+        if (em === violetHex) hasVioletPlasma = true;
+      }
+    });
+    expect(hasCyanPlasma).toBe(true);
+    expect(hasVioletPlasma).toBe(true);
+
+    // Kinetic Blade keeps its iconic plasma glow even when wraps are applied
+    applyWeaponWrap(blade, 'midas_gold');
+    const goldMat = getWeaponWrapMaterial('midas_gold');
+    blade.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        expect(child.material).not.toBe(goldMat);
+      }
+    });
+    expect(blade.userData.appliedWrapId).toBeUndefined();
+    disposeObject3D(blade);
+
+    // CharacterRig & CharacterAnimator cleanly equip and pose both Wave-5 weapons
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+    animator.update(
+      rig,
+      makeRenderState({ weaponId: 'tactical_dmr', animState: 'idle', isAiming: true }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('tactical_dmr');
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.4);
+
+    animator.update(
+      rig,
+      makeRenderState({ weaponId: 'kinetic_blade', animState: 'run', isFiring: false }),
+      0.05,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('kinetic_blade');
+    assertFiniteBox(rig.getGroup());
+    rig.dispose();
+  });
+
+  it('adds, colors by SpecialistRole, animates, hides for hostiles/bosses, and disposes CharacterRig Ally Aura', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    expect(rig.isAllyAuraEnabled()).toBe(false);
+    expect(rig.getGroup().getObjectByName('ally_tactical_aura')).toBeUndefined();
+
+    // Enabling Scout Ally Aura builds hovering cyan diamond chevron + cyan role ring above head
+    rig.setAllyAura(true, 'scout');
+    expect(rig.isAllyAuraEnabled()).toBe(true);
+    expect(rig.getAllyRole()).toBe('scout');
+    const aura = rig.getGroup().getObjectByName('ally_tactical_aura') as THREE.Group;
+    const chevron = rig.getGroup().getObjectByName('ally_tactical_chevron') as THREE.Group;
+    const roleRing = rig.getGroup().getObjectByName('ally_role_ring') as THREE.Mesh;
+    expect(aura).toBeInstanceOf(THREE.Group);
+    expect(chevron).toBeInstanceOf(THREE.Group);
+    expect(roleRing).toBeInstanceOf(THREE.Mesh);
+    expect(aura.visible).toBe(true);
+    expect(aura.position.y).toBeGreaterThan(1.85);
+    expect((roleRing.material as THREE.MeshStandardMaterial).color.getHex()).toBe(
+      new THREE.Color('#22d3ee').getHex(),
+    );
+
+    // Switching roles via updateFromState recolors role ring cleanly (medic -> green, heavy -> amber)
+    rig.updateFromState(makeRenderState({ isAlly: true, allyRole: 'medic' }));
+    expect(rig.isAllyAuraEnabled()).toBe(true);
+    expect(rig.getAllyRole()).toBe('medic');
+    expect((roleRing.material as THREE.MeshStandardMaterial).color.getHex()).toBe(
+      new THREE.Color('#22c55e').getHex(),
+    );
+
+    rig.updateFromState(makeRenderState({ isAlly: true, allyRole: 'heavy' }));
+    expect(rig.isAllyAuraEnabled()).toBe(true);
+    expect(rig.getAllyRole()).toBe('heavy');
+    expect((roleRing.material as THREE.MeshStandardMaterial).color.getHex()).toBe(
+      new THREE.Color('#fbbf24').getHex(),
+    );
+
+    // CharacterAnimator animates the hovering chevron smoothly over time
+    const rotStart = chevron.rotation.y;
+    for (let i = 0; i < 6; i++) {
+      animator.update(
+        rig,
+        makeRenderState({ animState: 'run', isAlly: true, allyRole: 'heavy' }),
+        0.05,
+      );
+    }
+    expect(chevron.rotation.y).toBeGreaterThan(rotStart);
+
+    // Hostile or Boss state hides Ally Aura cleanly
+    rig.updateFromState(makeRenderState({ isAlly: false }));
+    expect(rig.isAllyAuraEnabled()).toBe(false);
+    expect(aura.visible).toBe(false);
+
+    animator.update(
+      rig,
+      makeRenderState({ isBoss: true, isAlly: true, allyRole: 'scout' }),
+      0.05,
+    );
+    expect(rig.isBossAuraEnabled()).toBe(true);
+    expect(rig.isAllyAuraEnabled()).toBe(false);
+    expect(aura.visible).toBe(false);
+
+    // Clearing isBoss restores Ally Aura cleanly when isAlly is true
+    animator.update(
+      rig,
+      makeRenderState({ isBoss: false, isAlly: true, allyRole: 'medic' }),
+      0.05,
+    );
+    expect(rig.isBossAuraEnabled()).toBe(false);
+    expect(rig.isAllyAuraEnabled()).toBe(true);
+    expect(aura.visible).toBe(true);
+
+    rig.dispose();
+    expect(rig.getGroup().getObjectByName('ally_tactical_aura')).toBeUndefined();
+  });
+
+  it('spawns, updates, expires, guards NaN, clears, and disposes all 3 Wave-5 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:kinetic_dash
+    bus.emit('vfx:kinetic_dash', {
+      from: { x: 0, y: 1, z: 0 },
+      to: { x: 0, y: 2, z: 12 },
+    });
+    expect(vfx.getActiveKineticDashCount()).toBe(1);
+
+    // 2. vfx:gold_burst
+    bus.emit('vfx:gold_burst', {
+      position: { x: 8, y: 0.5, z: -4 },
+      amount: 120,
+    });
+    expect(vfx.getActiveGoldBurstCount()).toBe(1);
+
+    // 3. vfx:loot_island_rift
+    bus.emit('vfx:loot_island_rift', {
+      position: { x: -20, y: 28, z: 15 },
+    });
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(3);
+
+    // Step forward 0.3s -> all 3 remain active and transforms stay finite
+    for (let i = 0; i < 6; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveKineticDashCount()).toBe(1);
+    expect(vfx.getActiveGoldBurstCount()).toBe(1);
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(1);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Step forward another 0.4s (total 0.7s) -> kinetic_dash (0.55s) expires, gold & rift stay active
+    for (let i = 0; i < 8; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveKineticDashCount()).toBe(0);
+    expect(vfx.getActiveGoldBurstCount()).toBe(1);
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(1);
+
+    // Step forward another 0.5s (total 1.2s) -> gold_burst (1.05s) expires, loot_island_rift (2.4s) stays active
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveGoldBurstCount()).toBe(0);
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(1);
+
+    // Step past 2.4s -> loot_island_rift expires cleanly
+    for (let i = 0; i < 28; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Edge cases: NaN coordinates & zero-length dash never produce NaN transforms
+    bus.emit('vfx:kinetic_dash', {
+      from: { x: Number.NaN, y: 0, z: 0 },
+      to: { x: 0, y: 0, z: 5 },
+    });
+    bus.emit('vfx:gold_burst', {
+      position: { x: 0, y: Number.POSITIVE_INFINITY, z: 0 },
+      amount: 50,
+    });
+    bus.emit('vfx:loot_island_rift', {
+      position: { x: 0, y: 0, z: Number.NaN },
+    });
+    expect(vfx.getActiveKineticDashCount()).toBe(0);
+    expect(vfx.getActiveGoldBurstCount()).toBe(0);
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(0);
+
+    bus.emit('vfx:kinetic_dash', {
+      from: { x: 2, y: 1, z: 2 },
+      to: { x: 2, y: 1, z: 2 },
+    });
+    expect(vfx.getActiveKineticDashCount()).toBe(1);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 3 Wave-5 VFX immediately
+    bus.emit('vfx:gold_burst', { position: { x: 0, y: 1, z: 0 }, amount: 40 });
+    bus.emit('vfx:loot_island_rift', { position: { x: 0, y: 30, z: 0 } });
+    expect(vfx.getActiveEffectCount()).toBe(3);
+    vfx.clear();
+    expect(vfx.getActiveKineticDashCount()).toBe(0);
+    expect(vfx.getActiveGoldBurstCount()).toBe(0);
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all Wave-5 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:kinetic_dash', { from: { x: 0, y: 0, z: 0 }, to: { x: 0, y: 0, z: 8 } });
+    bus.emit('vfx:gold_burst', { position: { x: 0, y: 0, z: 0 }, amount: 50 });
+    bus.emit('vfx:loot_island_rift', { position: { x: 0, y: 20, z: 0 } });
+    expect(vfx.getActiveKineticDashCount()).toBe(0);
+    expect(vfx.getActiveGoldBurstCount()).toBe(0);
+    expect(vfx.getActiveLootIslandVfxCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

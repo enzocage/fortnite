@@ -12,12 +12,15 @@ import type {
   KillFeedEntry,
   LaunchPadEntity,
   LobbyConfig,
+  LootIslandState,
   MatchQuest,
   MatchSummary,
+  NpcSpecialistEntity,
   RiftEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
+  VendingMachineEntity,
   ZiplineEntity,
 } from '../types';
 import { type CareerStats, loadCareerStats } from './CareerProfile';
@@ -166,6 +169,14 @@ export class UIManager {
     capturePoints: CapturePointEntity[],
   ): void {
     this.fullMap.setWorldRiftsAndFlags(rifts, capturePoints);
+  }
+
+  setWorldEconomy(
+    vendingMachines: VendingMachineEntity[],
+    npcs: NpcSpecialistEntity[],
+    lootIsland: LootIslandState | null,
+  ): void {
+    this.fullMap.setWorldEconomy(vendingMachines, npcs, lootIsland);
   }
 
   setPhase(phase: GamePhase): void {

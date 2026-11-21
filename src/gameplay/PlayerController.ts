@@ -13,12 +13,15 @@ import type {
   GameSettings,
   ItemInstance,
   KeybindMap,
+  LootIslandState,
   MaterialType,
+  NpcSpecialistEntity,
   Rarity,
   RiftEntity,
   SoundEventId,
   TerrainQuery,
   Vec3Like,
+  VendingMachineEntity,
   WeaponId,
   ZiplineEntity,
 } from '../types';
@@ -29,10 +32,12 @@ import {
   GLIDER_FORCE_HEIGHT,
   GRID_XZ,
   GRID_Y,
+  MAX_GOLD_BARS,
   PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   RARITY_ORDER,
+  STARTING_GOLD_BARS,
   UPGRADE_COSTS,
   WATER_LEVEL,
   WEAPONS,
@@ -57,6 +62,7 @@ import type {
   PropsInteractionBridge,
   VaultBridge,
   VehicleBridge,
+  WorldEconomyBridge,
   WorldRiftCaptureBridge,
   WorldStationBridge,
   WorldTraversalBridge,
@@ -79,13 +85,22 @@ export class PlayerController {
   private vaultBridge: VaultBridge | null = null;
   private stationBridge: WorldStationBridge | null = null;
   private riftCaptureBridge: WorldRiftCaptureBridge | null = null;
+  private economyBridge: WorldEconomyBridge | null = null;
   private augmentManager: AugmentManager;
   private onVaultUnlocked: ((lootPos: Vec3Like, poiId: string) => void) | null = null;
   private onWeaponUpgraded: ((item: ItemInstance, cost: number) => void) | null = null;
   private onCampfireLit: ((campfireId: string) => void) | null = null;
   private onPoiCaptured: ((poiName: string, lootPos?: Vec3Like) => void) | null = null;
+  private onNpcHired: ((npc: NpcSpecialistEntity) => void) | null = null;
+  private onLootIslandCaptured: ((lootPos?: Vec3Like) => void) | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
+
+  private goldBars = STARTING_GOLD_BARS;
+  private kineticDashCharges = WEAPONS.kinetic_blade.dashCharges ?? 3;
+  private kineticDashRechargeTimer = 0;
+  private lootIslandTickTimer = 0;
+  private lootIslandUpdraftCooldown = 0;
 
   private gameMode: GameModeId = 'solo';
   private overshield = 0;
@@ -217,6 +232,7 @@ export class PlayerController {
     structuresBuilt: 0,
     chestsOpened: 0,
     poisCaptured: 0,
+    goldEarned: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -263,12 +279,15 @@ export class PlayerController {
       vaultBridge?: VaultBridge | null;
       stationBridge?: WorldStationBridge | null;
       riftCaptureBridge?: WorldRiftCaptureBridge | null;
+      economyBridge?: WorldEconomyBridge | null;
       augmentManager?: AugmentManager | null;
       gameMode?: GameModeId;
       onVaultUnlocked?: ((lootPos: Vec3Like, poiId: string) => void) | null;
       onWeaponUpgraded?: ((item: ItemInstance, cost: number) => void) | null;
       onCampfireLit?: ((campfireId: string) => void) | null;
       onPoiCaptured?: ((poiName: string, lootPos?: Vec3Like) => void) | null;
+      onNpcHired?: ((npc: NpcSpecialistEntity) => void) | null;
+      onLootIslandCaptured?: ((lootPos?: Vec3Like) => void) | null;
     },
   ) {
     this.camera = camera;
@@ -297,6 +316,9 @@ export class PlayerController {
     if (options?.riftCaptureBridge !== undefined) {
       this.setRiftCaptureBridge(options.riftCaptureBridge);
     }
+    if (options?.economyBridge !== undefined) {
+      this.setEconomyBridge(options.economyBridge);
+    }
     if (options?.gameMode !== undefined) {
       this.setGameMode(options.gameMode);
     }
@@ -312,6 +334,12 @@ export class PlayerController {
     if (options?.onPoiCaptured !== undefined) {
       this.setOnPoiCaptured(options.onPoiCaptured);
     }
+    if (options?.onNpcHired !== undefined) {
+      this.setOnNpcHired(options.onNpcHired);
+    }
+    if (options?.onLootIslandCaptured !== undefined) {
+      this.setOnLootIslandCaptured(options.onLootIslandCaptured);
+    }
 
     this.unsubHitmarker = this.eventBus.on('combat:hitmarker', (ev) => {
       if (ev.attackerId === 'player') {
@@ -325,16 +353,16 @@ export class PlayerController {
     });
 
     this.unsubDamage = this.eventBus.on('combat:damage', (ev) => {
-      if (
-        ev.attackerId === 'player' &&
-        ev.targetId !== 'player' &&
-        ev.isElimination &&
-        this.isAlive()
-      ) {
-        if (!this.eliminatedTargetIds.has(ev.targetId)) {
-          this.eliminatedTargetIds.add(ev.targetId);
-          this.pendingSiphonFromEvents += 1;
-          this.grantEliminationSiphon();
+      if (ev.attackerId === 'player' && ev.targetId !== 'player') {
+        if (ev.weaponId === 'kinetic_blade') {
+          this.stats.damageDealt += ev.damage;
+        }
+        if (ev.isElimination && this.isAlive()) {
+          if (!this.eliminatedTargetIds.has(ev.targetId)) {
+            this.eliminatedTargetIds.add(ev.targetId);
+            this.pendingSiphonFromEvents += 1;
+            this.grantEliminationSiphon();
+          }
         }
       }
     });
@@ -429,6 +457,47 @@ export class PlayerController {
     cb: ((poiName: string, lootPos?: Vec3Like) => void) | null,
   ): void {
     this.onPoiCaptured = cb;
+  }
+
+  setEconomyBridge(bridge: WorldEconomyBridge | null): void {
+    this.economyBridge = bridge;
+  }
+
+  setGoldBars(amount: number): void {
+    if (!Number.isFinite(amount)) return;
+    this.goldBars = clamp(Math.round(amount), 0, MAX_GOLD_BARS);
+  }
+
+  addGoldBars(delta: number, burstPos?: Vec3Like): number {
+    if (!Number.isFinite(delta)) return this.goldBars;
+    const intDelta = Math.round(delta);
+    this.goldBars = clamp(this.goldBars + intDelta, 0, MAX_GOLD_BARS);
+    if (intDelta > 0) {
+      this.stats.goldEarned = (this.stats.goldEarned ?? 0) + intDelta;
+      this.eventBus.emit('sound:play', {
+        id: 'gold_pickup',
+        ...(burstPos ? { position: { ...burstPos }, spatial: true } : {}),
+      });
+      if (burstPos) {
+        this.eventBus.emit('vfx:gold_burst', {
+          position: { ...burstPos },
+          amount: intDelta,
+        });
+      }
+    }
+    return this.goldBars;
+  }
+
+  getGoldBars(): number {
+    return this.goldBars;
+  }
+
+  setOnNpcHired(cb: ((npc: NpcSpecialistEntity) => void) | null): void {
+    this.onNpcHired = cb;
+  }
+
+  setOnLootIslandCaptured(cb: ((lootPos?: Vec3Like) => void) | null): void {
+    this.onLootIslandCaptured = cb;
   }
 
   placeTacticalPing(forcePos?: Vec3Like): {
@@ -724,6 +793,8 @@ export class PlayerController {
       this.captureStatus = null;
       this.captureCelebrationTimer = 0;
       this.flagTickTimer = 0;
+      this.lootIslandTickTimer = 0;
+      this.lootIslandUpdraftCooldown = 0;
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
       this.building.setPreviewVisible(false);
@@ -1011,6 +1082,11 @@ export class PlayerController {
     this.tacticalPing = null;
     this.tacticalPingTimer = 0;
     this.lastOverdriveApplied = null;
+    this.goldBars = STARTING_GOLD_BARS;
+    this.kineticDashCharges = WEAPONS.kinetic_blade.dashCharges ?? 3;
+    this.kineticDashRechargeTimer = 0;
+    this.lootIslandTickTimer = 0;
+    this.lootIslandUpdraftCooldown = 0;
     this.stats = {
       damageDealt: 0,
       shotsFired: 0,
@@ -1019,6 +1095,7 @@ export class PlayerController {
       structuresBuilt: 0,
       chestsOpened: 0,
       poisCaptured: 0,
+      goldEarned: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -1457,6 +1534,11 @@ export class PlayerController {
         this.building.resetEditTiles();
       } else if (this.isBuildMode) {
         this.cycleBuildMaterial();
+      } else if (
+        this.activeVehicleId === null &&
+        this.inventory.getActiveItem()?.weaponId === 'kinetic_blade'
+      ) {
+        this.tryKineticDash();
       }
     }
   }
@@ -1931,7 +2013,7 @@ export class PlayerController {
     const eye = this.getEyePosition();
     const aimDir = this.computeCrosshairParallaxAimDir(eye);
 
-    if (item.weaponId === 'pickaxe') {
+    if (item.weaponId === 'pickaxe' || def.isKineticBlade) {
       this.harvestSwingTimer = 0.35;
     }
 
@@ -1963,7 +2045,12 @@ export class PlayerController {
 
     if (res.fired) {
       this.fireCooldown = 1 / def.fireRate;
-      if (item.weaponId !== 'pickaxe' && !def.isGrappler && !def.isThrowable) {
+      if (
+        item.weaponId !== 'pickaxe' &&
+        !def.isKineticBlade &&
+        !def.isGrappler &&
+        !def.isThrowable
+      ) {
         this.stats.shotsFired += 1;
         if (res.shotsHit > 0) this.stats.shotsHit += 1;
         this.stats.headshots += res.headshots;
@@ -1979,6 +2066,110 @@ export class PlayerController {
         this.startReload();
       }
     }
+  }
+
+  /**
+   * Executes a Kinetic Blade RMB forward+up dash, consuming 1 dash charge and striking targets along the path.
+   */
+  private tryKineticDash(): boolean {
+    if (
+      this.phase !== 'playing' ||
+      !this.isAlive() ||
+      this.activeVehicleId !== null ||
+      this.isBuildMode ||
+      this.building.getEditState().active
+    ) {
+      return false;
+    }
+    const item = this.inventory.getActiveItem();
+    if (!item || item.weaponId !== 'kinetic_blade') return false;
+
+    this.isAiming = false;
+    this.isScoped = false;
+
+    if (this.kineticDashCharges <= 0) {
+      this.eventBus.emit('sound:play', {
+        id: 'dryfire',
+        position: { ...this.position },
+        spatial: true,
+      });
+      return false;
+    }
+
+    this.kineticDashCharges -= 1;
+    if (this.activeZipline) {
+      this.activeZipline = null;
+      this.ziplineCooldown = 0.5;
+    }
+    this.isMantling = false;
+    this.isSliding = false;
+    this.isCrouching = false;
+    this.isEmoting = false;
+    this.activeEmote = null;
+    this.healTimer = 0;
+    this.healLabel = null;
+    this.reloadTimer = 0;
+
+    const lookDir = this.getLookDirection();
+    const horizLen = Math.hypot(lookDir.x, lookDir.z);
+    const fwdX = horizLen > 1e-4 ? lookDir.x / horizLen : Math.sin(this.yaw);
+    const fwdZ = horizLen > 1e-4 ? lookDir.z / horizLen : Math.cos(this.yaw);
+
+    this.grounded = false;
+    this.wasAirborne = true;
+    this.fallPeakY = this.position.y;
+    this.fallImmune = true;
+    this.velocity.x = fwdX * 18;
+    this.velocity.z = fwdZ * 18;
+    this.velocity.y = Math.max(
+      this.velocity.y,
+      7.5 + Math.max(0, lookDir.y) * 5.0,
+    );
+    this.harvestSwingTimer = 0.35;
+
+    const from: Vec3Like = {
+      x: this.position.x,
+      y: this.position.y + 1.0,
+      z: this.position.z,
+    };
+    const rawDashDir = {
+      x: fwdX,
+      y: clamp(Math.max(0, lookDir.y) * 0.45 + 0.1, 0.05, 0.5),
+      z: fwdZ,
+    };
+    const dLen = Math.hypot(rawDashDir.x, rawDashDir.y, rawDashDir.z) || 1;
+    const dashDir = {
+      x: rawDashDir.x / dLen,
+      y: rawDashDir.y / dLen,
+      z: rawDashDir.z / dLen,
+    };
+    const dashLen = 11.5;
+    const terrainHit = this.collision.raycastWorld(from, dashDir, dashLen, {
+      checkBuilds: false,
+      checkProps: false,
+    });
+    const actualLen = terrainHit.hit ? Math.max(1.5, terrainHit.distance) : dashLen;
+    const to: Vec3Like = {
+      x: from.x + dashDir.x * actualLen,
+      y: from.y + dashDir.y * actualLen,
+      z: from.z + dashDir.z * actualLen,
+    };
+
+    this.weapons.executeKineticDash({
+      actor: this.getCombatActor(),
+      item,
+      from,
+      to,
+      radius: 2.8,
+      damage: 50,
+      isPlayer: true,
+      vehicleBridge: this.vehicleBridge,
+      stationBridge: this.stationBridge,
+      riftCaptureBridge: this.riftCaptureBridge,
+      hasDemolisher: this.augmentManager.hasAugment('demolisher'),
+    });
+
+    return true;
   }
 
   private computeCrosshairParallaxAimDir(fireOrigin: Vec3Like): Vec3Like {
@@ -2305,7 +2496,9 @@ export class PlayerController {
       | 'vehicle'
       | 'rift'
       | 'upgrade_bench'
-      | 'campfire';
+      | 'campfire'
+      | 'vending_machine'
+      | 'npc_specialist';
     id: string;
     prompt: PlayerInteractPrompt;
   } | null {
@@ -2321,7 +2514,9 @@ export class PlayerController {
         | 'vehicle'
         | 'rift'
         | 'upgrade_bench'
-        | 'campfire';
+        | 'campfire'
+        | 'vending_machine'
+        | 'npc_specialist';
       id: string;
       prompt: PlayerInteractPrompt;
     } | null = null;
@@ -2468,46 +2663,90 @@ export class PlayerController {
       }
     }
 
-    if (best === null && this.stationBridge) {
-      const upgradeSpec = this.getWeaponUpgradeSpec(
-        this.inventory.getActiveItem(),
-        this.inventory.getActiveSlotIndex(),
-      );
-      if (upgradeSpec) {
-        const benches = this.stationBridge.getUpgradeBenches();
-        for (let i = 0; i < benches.length; i++) {
-          const bench = benches[i];
-          const d = dist3D(this.position, { x: bench.x, y: bench.y, z: bench.z });
-          if (d <= 3.8 && d < bestDist) {
+    if (best === null) {
+      if (this.stationBridge) {
+        const upgradeSpec = this.getWeaponUpgradeSpec(
+          this.inventory.getActiveItem(),
+          this.inventory.getActiveSlotIndex(),
+        );
+        if (upgradeSpec) {
+          const benches = this.stationBridge.getUpgradeBenches();
+          for (let i = 0; i < benches.length; i++) {
+            const bench = benches[i];
+            const d = dist3D(this.position, { x: bench.x, y: bench.y, z: bench.z });
+            if (d <= 3.8 && d < bestDist) {
+              bestDist = d;
+              best = {
+                kind: 'upgrade_bench',
+                id: bench.id,
+                prompt: {
+                  label: `UPGRADE ${upgradeSpec.shortName} (${upgradeSpec.cost} MATS)`,
+                  key: interactKey,
+                  rarity: upgradeSpec.nextRarity,
+                },
+              };
+            }
+          }
+        }
+
+        const campfires = this.stationBridge.getCampfires();
+        for (let i = 0; i < campfires.length; i++) {
+          const cf = campfires[i];
+          if (cf.lit || cf.remainingSec <= 0) continue;
+          const d = dist3D(this.position, { x: cf.x, y: cf.y, z: cf.z });
+          if (d <= 3.6 && d < bestDist) {
             bestDist = d;
             best = {
-              kind: 'upgrade_bench',
-              id: bench.id,
+              kind: 'campfire',
+              id: cf.id,
               prompt: {
-                label: `UPGRADE ${upgradeSpec.shortName} (${upgradeSpec.cost} MATS)`,
+                label: 'STOKE CAMPFIRE',
                 key: interactKey,
-                rarity: upgradeSpec.nextRarity,
               },
             };
           }
         }
       }
 
-      const campfires = this.stationBridge.getCampfires();
-      for (let i = 0; i < campfires.length; i++) {
-        const cf = campfires[i];
-        if (cf.lit || cf.remainingSec <= 0) continue;
-        const d = dist3D(this.position, { x: cf.x, y: cf.y, z: cf.z });
-        if (d <= 3.6 && d < bestDist) {
-          bestDist = d;
-          best = {
-            kind: 'campfire',
-            id: cf.id,
-            prompt: {
-              label: 'STOKE CAMPFIRE',
-              key: interactKey,
-            },
-          };
+      if (this.economyBridge) {
+        const machines: VendingMachineEntity[] =
+          this.economyBridge.getVendingMachines();
+        for (let i = 0; i < machines.length; i++) {
+          const vm = machines[i];
+          if (vm.stock <= 0) continue;
+          const d = dist3D(this.position, { x: vm.x, y: vm.y, z: vm.z });
+          if (d <= 3.8 && d < bestDist) {
+            bestDist = d;
+            const shortName =
+              WEAPONS[vm.offerWeaponId]?.shortName ?? vm.offerWeaponId.toUpperCase();
+            best = {
+              kind: 'vending_machine',
+              id: vm.id,
+              prompt: {
+                label: `BUY ${shortName} (${vm.priceGold} GOLD)`,
+                key: interactKey,
+                rarity: vm.offerRarity,
+              },
+            };
+          }
+        }
+
+        const npcs: NpcSpecialistEntity[] = this.economyBridge.getNpcSpecialists();
+        for (let i = 0; i < npcs.length; i++) {
+          const npc = npcs[i];
+          if (npc.hiredBy) continue;
+          const d = dist3D(this.position, { x: npc.x, y: npc.y, z: npc.z });
+          if (d <= 4.0 && d < bestDist) {
+            bestDist = d;
+            best = {
+              kind: 'npc_specialist',
+              id: npc.id,
+              prompt: {
+                label: `HIRE ${npc.name} • ${npc.role.toUpperCase()} (${npc.priceGold} GOLD)`,
+                key: interactKey,
+              },
+            };
+          }
         }
       }
     }
@@ -2704,6 +2943,100 @@ export class PlayerController {
           this.onCampfireLit?.(candidate.id);
           this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
         }
+        return;
+      }
+
+      if (candidate.kind === 'vending_machine' && this.economyBridge) {
+        const vm = this.economyBridge
+          .getVendingMachines()
+          .find((m) => m.id === candidate.id);
+        if (!vm || vm.stock <= 0) return;
+        if (this.goldBars < vm.priceGold) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        const purchase = this.economyBridge.purchaseFromVendingMachine(vm.id);
+        if (!purchase) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        this.goldBars = clamp(this.goldBars - purchase.priceGold, 0, MAX_GOLD_BARS);
+        const addRes = this.inventory.addItem(purchase.item);
+        if (!addRes.added) {
+          this.propsBridge.spawnLootDrop(
+            { x: this.position.x, y: this.position.y + 0.8, z: this.position.z },
+            { item: purchase.item },
+            { x: 0, y: 3.5, z: 0 },
+          );
+        } else {
+          if (addRes.swappedOut) {
+            const fwd = this.getLookDirection();
+            this.propsBridge.spawnLootDrop(
+              { x: this.position.x, y: this.position.y + 1.0, z: this.position.z },
+              { item: addRes.swappedOut },
+              { x: fwd.x * 2.5, y: 3.5, z: fwd.z * 2.5 },
+            );
+          }
+          if (this.inventory.getActiveSlotIndex() === 0 && addRes.slotIndex >= 1) {
+            this.inventory.setActiveSlot(addRes.slotIndex);
+          }
+        }
+        this.eventBus.emit('sound:play', {
+          id: 'vending_buy',
+          position: { ...purchase.position },
+          spatial: true,
+        });
+        this.eventBus.emit('vfx:gold_burst', {
+          position: { ...purchase.position },
+          amount: purchase.priceGold,
+        });
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        return;
+      }
+
+      if (candidate.kind === 'npc_specialist' && this.economyBridge) {
+        const npc = this.economyBridge
+          .getNpcSpecialists()
+          .find((n) => n.id === candidate.id);
+        if (!npc || npc.hiredBy) return;
+        if (this.goldBars < npc.priceGold) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        const hired = this.economyBridge.hireNpcSpecialist(npc.id, 'player');
+        if (!hired) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        this.goldBars = clamp(this.goldBars - hired.priceGold, 0, MAX_GOLD_BARS);
+        const burstPos = { x: hired.x, y: hired.y + 1.0, z: hired.z };
+        this.eventBus.emit('sound:play', {
+          id: 'ally_hired',
+          position: { x: hired.x, y: hired.y, z: hired.z },
+          spatial: true,
+        });
+        this.eventBus.emit('vfx:gold_burst', {
+          position: burstPos,
+          amount: hired.priceGold,
+        });
+        this.onNpcHired?.(hired);
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
         return;
       }
     }
@@ -2980,6 +3313,92 @@ export class PlayerController {
     }
   }
 
+  private updateLootIsland(dt: number): void {
+    if (!this.economyBridge || !this.isAlive()) {
+      this.lootIslandTickTimer = 0;
+      return;
+    }
+    const li: LootIslandState = this.economyBridge.getLootIslandState();
+    if (!li.active) {
+      this.lootIslandTickTimer = 0;
+      return;
+    }
+
+    const horizDist = dist2D(this.position.x, this.position.z, li.x, li.z);
+
+    // 1. Updraft geyser beneath the floating island
+    if (
+      this.lootIslandUpdraftCooldown <= 0 &&
+      this.activeVehicleId === null &&
+      this.grounded &&
+      horizDist <= 4.5 &&
+      this.position.y < li.y - 6
+    ) {
+      this.lootIslandUpdraftCooldown = 0.6;
+      this.isCrouching = false;
+      this.isSliding = false;
+      this.isMantling = false;
+      this.isBuildMode = false;
+      this.building.setPreviewVisible(false);
+      this.activeZipline = null;
+      this.grounded = false;
+      this.wasAirborne = true;
+      this.fallImmune = true;
+      this.fallPeakY = this.position.y;
+      this.velocity.y = 25;
+      this.eventBus.emit('sound:play', {
+        id: 'launch_pad',
+        position: { ...this.position },
+        spatial: true,
+      });
+      return;
+    }
+
+    // 2. Capture shrine atop the floating island
+    const captureRadius = (li.radius > 0 ? li.radius : 14) * 0.75;
+    if (
+      !li.captured &&
+      horizDist <= captureRadius &&
+      Math.abs(this.position.y - li.y) <= 3.5
+    ) {
+      const res = this.economyBridge.advanceLootIslandCapture(dt);
+      const updated = this.economyBridge.getLootIslandState();
+      this.captureStatus = {
+        poiName: 'Loot Island',
+        progress: updated.captureProgress,
+        captured: res.capturedNow || updated.captured,
+        contested: false,
+      };
+      if (res.capturedNow) {
+        this.captureCelebrationTimer = 3.0;
+        this.lootIslandTickTimer = 0;
+        const flagPos = res.lootPos ?? { x: li.x, y: li.y, z: li.z };
+        this.eventBus.emit('sound:play', {
+          id: 'flag_captured',
+          position: flagPos,
+          spatial: true,
+        });
+        this.eventBus.emit('vfx:flag_captured', {
+          position: flagPos,
+          poiName: 'Loot Island',
+        });
+        this.onLootIslandCaptured?.(res.lootPos);
+      } else {
+        this.lootIslandTickTimer -= dt;
+        if (this.lootIslandTickTimer <= 0) {
+          this.lootIslandTickTimer = 1.2;
+          this.eventBus.emit('sound:play', {
+            id: 'flag_tick',
+            position: { x: li.x, y: li.y, z: li.z },
+            spatial: true,
+          });
+        }
+      }
+    } else {
+      this.lootIslandTickTimer = 0;
+    }
+  }
+
   update(
     dt: number,
     elapsed: number,
@@ -3001,6 +3420,12 @@ export class PlayerController {
     if (this.vehicleCooldown > 0) this.vehicleCooldown = Math.max(0, this.vehicleCooldown - safeDt);
     if (this.riftCooldown > 0) this.riftCooldown = Math.max(0, this.riftCooldown - safeDt);
     if (this.lavaCooldown > 0) this.lavaCooldown = Math.max(0, this.lavaCooldown - safeDt);
+    if (this.lootIslandUpdraftCooldown > 0) {
+      this.lootIslandUpdraftCooldown = Math.max(
+        0,
+        this.lootIslandUpdraftCooldown - safeDt,
+      );
+    }
     if (this.tacticalPing && this.tacticalPingTimer > 0) {
       this.tacticalPingTimer = Math.max(0, this.tacticalPingTimer - safeDt);
       if (this.tacticalPingTimer <= 0) {
@@ -3042,6 +3467,24 @@ export class PlayerController {
       if (this.isAlive()) {
         this.playingElapsedSec += safeDt;
         this.augmentManager.update(safeDt, this.playingElapsedSec);
+        const maxDashCharges = WEAPONS.kinetic_blade.dashCharges ?? 3;
+        const dashCooldownSec = WEAPONS.kinetic_blade.dashCooldownSec ?? 9;
+        if (this.kineticDashCharges < maxDashCharges) {
+          this.kineticDashRechargeTimer += safeDt;
+          while (
+            this.kineticDashRechargeTimer >= dashCooldownSec - 1e-6 &&
+            this.kineticDashCharges < maxDashCharges
+          ) {
+            this.kineticDashCharges += 1;
+            this.kineticDashRechargeTimer = Math.max(
+              0,
+              this.kineticDashRechargeTimer - dashCooldownSec,
+            );
+          }
+          if (this.kineticDashCharges >= maxDashCharges) {
+            this.kineticDashRechargeTimer = 0;
+          }
+        }
       }
       if (this.activeVehicleId !== null) {
         this.updateVehicleDriving(safeDt);
@@ -3058,6 +3501,7 @@ export class PlayerController {
       }
       this.checkVolcanicLavaHazard();
       this.updateCapturePoints(safeDt);
+      this.updateLootIsland(safeDt);
       this.updateCombatAndTimers(safeDt);
       this.updateAutoPickupAndPrompt();
       this.updateCamera(safeDt);
@@ -3405,7 +3849,8 @@ export class PlayerController {
       !this.isBuildMode &&
       !this.building.getEditState().active &&
       !activeDef.isConsumable &&
-      activeItem?.weaponId !== 'pickaxe';
+      activeItem?.weaponId !== 'pickaxe' &&
+      activeItem?.weaponId !== 'kinetic_blade';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
     if (this.isSliding) {
@@ -4384,6 +4829,9 @@ export class PlayerController {
             distance: Math.round(dist3D(this.position, this.tacticalPing)),
           }
         : null,
+      goldBars: this.goldBars,
+      kineticDashCharges:
+        activeItem?.weaponId === 'kinetic_blade' ? this.kineticDashCharges : null,
     };
   }
 }

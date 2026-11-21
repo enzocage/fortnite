@@ -13,7 +13,9 @@ import type {
   ChestEntity,
   LaunchPadEntity,
   LootDrop,
+  LootIslandState,
   LootLlamaEntity,
+  NpcSpecialistEntity,
   RiftEntity,
   SlurpBarrelEntity,
   SupplyDrop,
@@ -25,6 +27,7 @@ import type {
   Vec3Like,
   VehicleEntity,
   VehicleKind,
+  VendingMachineEntity,
   WeaponId,
   ZiplineEntity,
 } from '../types';
@@ -85,6 +88,19 @@ export interface WorldRiftCaptureBridge {
     blastRadius: number;
     blastDamage: number;
   } | null;
+}
+
+export interface WorldEconomyBridge {
+  getVendingMachines(): VendingMachineEntity[];
+  purchaseFromVendingMachine(
+    id: string,
+  ): { item: ItemInstance; priceGold: number; position: Vec3Like } | null;
+  getNpcSpecialists(): NpcSpecialistEntity[];
+  hireNpcSpecialist(id: string, playerId: string): NpcSpecialistEntity | null;
+  getLootIslandState(): LootIslandState;
+  advanceLootIslandCapture(
+    dt: number,
+  ): { capturedNow: boolean; lootPos?: Vec3Like };
 }
 
 export interface ShieldBubbleState {
@@ -230,6 +246,7 @@ export interface PlayerMatchStats {
   chestsOpened: number;
   questsCompleted?: number;
   poisCaptured?: number;
+  goldEarned?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -309,4 +326,6 @@ export interface PlayerHudSnapshot {
     kind: 'move' | 'danger' | 'loot';
     distance: number;
   } | null;
+  goldBars: number;
+  kineticDashCharges: number | null;
 }

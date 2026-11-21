@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 85 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 92 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -234,6 +234,20 @@ export class SoundSynthesizer {
         return this.playTacticalPing(t, targetNode, vol, pitch);
       case 'barrel_explode':
         return this.playBarrelExplode(t, targetNode, vol, pitch);
+      case 'shot_dmr':
+        return this.playShotDmr(t, targetNode, vol, pitch);
+      case 'kinetic_slash':
+        return this.playKineticSlash(t, targetNode, vol, pitch);
+      case 'kinetic_dash':
+        return this.playKineticDash(t, targetNode, vol, pitch);
+      case 'gold_pickup':
+        return this.playGoldPickup(t, targetNode, vol, pitch);
+      case 'vending_buy':
+        return this.playVendingBuy(t, targetNode, vol, pitch);
+      case 'ally_hired':
+        return this.playAllyHired(t, targetNode, vol, pitch);
+      case 'loot_island_spawn':
+        return this.playLootIslandSpawn(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
         return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':
@@ -3729,6 +3743,589 @@ export class SoundSynthesizer {
     return 1.04;
   }
 
+  // --- Wave 5 Bespoke SFX ---
+
+  private playShotDmr(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.025) * pitch;
+    // Crisp high-velocity sub-bass receiver punch
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 138 * jitter,
+      freqEnd: 36 * jitter,
+      duration: 0.11,
+      gain: 0.42 * vol,
+      wet: 0.14,
+    });
+    // Tight suppressed/thermal precision body thump
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 275 * jitter,
+      freqEnd: 64 * jitter,
+      duration: 0.095,
+      gain: 0.36 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1950,
+      filterFreqEnd: 420,
+      wet: 0.18,
+    });
+    // Suppressed mechanical receiver snap
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 960 * jitter,
+      freqEnd: 240 * jitter,
+      duration: 0.052,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2200 * jitter,
+      filterFreqEnd: 780 * jitter,
+      filterQ: 2.1,
+      wet: 0.16,
+    });
+    // Tight supersonic suppressed air crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.15,
+      gain: 0.38 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3400 * jitter,
+      filterFreqEnd: 920,
+      filterQ: 1.8,
+      distort: true,
+      wet: 0.24,
+    });
+    // High-velocity supersonic crack tail + precision bolt return click
+    this.noise(target, t + 0.02, {
+      buffer: 'white',
+      duration: 0.18,
+      gain: 0.19 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2600,
+      filterFreqEnd: 1100,
+      wet: 0.28,
+    });
+    this.tone(target, t + 0.085, {
+      type: 'sine',
+      freqStart: 1480 * pitch,
+      freqEnd: 1020 * pitch,
+      duration: 0.032,
+      gain: 0.085 * vol,
+    });
+    return 0.26;
+  }
+
+  private playKineticSlash(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.04) * pitch;
+    // Kinetic blade momentum swing body
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 170 * jitter,
+      freqEnd: 78 * jitter,
+      duration: 0.16,
+      attack: 0.012,
+      gain: 0.3 * vol,
+      wet: 0.18,
+    });
+    // Razor-sharp cyber blade arc sweep
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 440 * jitter,
+      freqEnd: 1960 * jitter,
+      duration: 0.18,
+      attack: 0.015,
+      gain: 0.19 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 880 * jitter,
+      filterFreqEnd: 3900 * jitter,
+      filterQ: 3.0,
+      wet: 0.28,
+    });
+
+    // FM resonant neon shimmer edge
+    const fmDur = 0.22;
+    const carrier = this.ctx.createOscillator();
+    carrier.type = 'sine';
+    const carrierStart = Math.max(20, 1520 * jitter);
+    const carrierEnd = Math.max(20, 2240 * jitter);
+    carrier.frequency.setValueAtTime(carrierStart, t + 0.02);
+    carrier.frequency.exponentialRampToValueAtTime(carrierEnd, t + 0.02 + fmDur);
+
+    const mod = this.ctx.createOscillator();
+    mod.type = 'sine';
+    const modStart = Math.max(20, 410 * jitter);
+    const modEnd = Math.max(20, 620 * jitter);
+    mod.frequency.setValueAtTime(modStart, t + 0.02);
+    mod.frequency.exponentialRampToValueAtTime(modEnd, t + 0.02 + fmDur);
+
+    const modGain = this.ctx.createGain();
+    modGain.gain.setValueAtTime(0.0001, t + 0.02);
+    modGain.gain.linearRampToValueAtTime(Math.max(0.5, 160 * pitch), t + 0.06);
+    modGain.gain.exponentialRampToValueAtTime(Math.max(0.0001, 18 * pitch), t + 0.02 + fmDur);
+
+    const fmEnv = this.ctx.createGain();
+    const peakFmGain = Math.max(0.0002, 0.16 * vol);
+    fmEnv.gain.setValueAtTime(0.0001, t + 0.02);
+    fmEnv.gain.linearRampToValueAtTime(peakFmGain, t + 0.055);
+    fmEnv.gain.exponentialRampToValueAtTime(0.0001, t + 0.02 + fmDur);
+
+    mod.connect(modGain);
+    try {
+      modGain.connect(carrier.frequency);
+    } catch {
+      // Ignore AudioParam connect errors on minimal mocks
+    }
+
+    const fmFilter = this.safeCreateFilter();
+    if (fmFilter) {
+      fmFilter.type = 'bandpass';
+      fmFilter.frequency?.setValueAtTime?.(Math.max(25, 2400 * jitter), t + 0.02);
+      fmFilter.frequency?.exponentialRampToValueAtTime?.(
+        Math.max(25, 4200 * jitter),
+        t + 0.02 + fmDur,
+      );
+      fmFilter.Q?.setValueAtTime?.(2.4, t + 0.02);
+      carrier.connect(fmFilter);
+      fmFilter.connect(fmEnv);
+    } else {
+      carrier.connect(fmEnv);
+    }
+
+    fmEnv.connect(target);
+    this.routeWet(fmEnv, t + 0.02, fmDur, 0.36);
+    mod.start(t + 0.02);
+    carrier.start(t + 0.02);
+    mod.stop(t + 0.02 + fmDur + 0.015);
+    carrier.stop(t + 0.02 + fmDur + 0.015);
+
+    // High resonant neon katana harmonic tail
+    this.tone(target, t + 0.035, {
+      type: 'sine',
+      freqStart: 2480 * jitter,
+      freqEnd: 2120 * jitter,
+      detune: 9,
+      duration: 0.22,
+      attack: 0.012,
+      gain: 0.12 * vol,
+      wet: 0.38,
+    });
+    // Air-cutting cyber katana whoosh + plasma air edge
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.22,
+      attack: 0.016,
+      gain: 0.36 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 750 * jitter,
+      filterFreqEnd: 4800 * jitter,
+      filterQ: 2.3,
+      distort: true,
+      wet: 0.28,
+    });
+    this.noise(target, t + 0.02, {
+      buffer: 'pink',
+      duration: 0.19,
+      attack: 0.014,
+      gain: 0.22 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2200 * jitter,
+      filterFreqEnd: 5200 * jitter,
+      wet: 0.3,
+    });
+    return 0.28;
+  }
+
+  private playKineticDash(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Energetic bass displacement thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 185 * pitch,
+      freqEnd: 28 * pitch,
+      duration: 0.32,
+      gain: 0.58 * vol,
+      wet: 0.26,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 360 * pitch,
+      freqEnd: 62 * pitch,
+      duration: 0.18,
+      gain: 0.32 * vol,
+      wet: 0.2,
+    });
+    // Ascending sci-fi kinetic warp sweep
+    this.tone(target, t + 0.015, {
+      type: 'sawtooth',
+      freqStart: 210 * pitch,
+      freqEnd: 1420 * pitch,
+      duration: 0.34,
+      attack: 0.015,
+      gain: 0.2 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 520 * pitch,
+      filterFreqEnd: 3800 * pitch,
+      filterQ: 2.5,
+      wet: 0.32,
+    });
+    this.tone(target, t + 0.025, {
+      type: 'sine',
+      freqStart: 315 * pitch,
+      freqEnd: 1860 * pitch,
+      duration: 0.35,
+      attack: 0.02,
+      gain: 0.18 * vol,
+      wet: 0.36,
+    });
+    // High neon slipstream shimmer tail
+    this.tone(target, t + 0.14, {
+      type: 'sine',
+      freqStart: 1480 * pitch,
+      freqEnd: 980 * pitch,
+      duration: 0.24,
+      attack: 0.02,
+      gain: 0.11 * vol,
+      wet: 0.4,
+    });
+    // Slipstream air displacement whoosh
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.38,
+      attack: 0.012,
+      gain: 0.38 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 320 * pitch,
+      filterFreqEnd: 3200 * pitch,
+      filterQ: 1.9,
+      distort: true,
+      wet: 0.3,
+    });
+    this.noise(target, t + 0.03, {
+      buffer: 'white',
+      duration: 0.34,
+      attack: 0.02,
+      gain: 0.22 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 1900 * pitch,
+      filterFreqEnd: 4600 * pitch,
+      wet: 0.34,
+    });
+    return 0.46;
+  }
+
+  private playGoldPickup(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.03) * pitch;
+    // First gold coin metallic clink (E6 + bright octave overtone)
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 1318.51 * jitter,
+      freqEnd: 1308 * jitter,
+      duration: 0.14,
+      attack: 0.002,
+      gain: 0.22 * vol,
+      wet: 0.22,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 2637.02 * jitter,
+      duration: 0.09,
+      attack: 0.002,
+      gain: 0.14 * vol,
+      wet: 0.24,
+    });
+    // Second twin-coin strike (A6 + crystalline harmonic)
+    this.tone(target, t + 0.065, {
+      type: 'sine',
+      freqStart: 1760.0 * jitter,
+      freqEnd: 1748 * jitter,
+      duration: 0.18,
+      attack: 0.002,
+      gain: 0.24 * vol,
+      wet: 0.28,
+    });
+    this.tone(target, t + 0.065, {
+      type: 'triangle',
+      freqStart: 3520.0 * jitter,
+      duration: 0.12,
+      attack: 0.002,
+      gain: 0.13 * vol,
+      wet: 0.28,
+    });
+    // Crystalline glint ping tail
+    this.tone(target, t + 0.11, {
+      type: 'sine',
+      freqStart: 2637.02 * jitter,
+      duration: 0.26,
+      attack: 0.005,
+      gain: 0.15 * vol,
+      wet: 0.4,
+    });
+    // Tactile metallic coin impact transients
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.025,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 4200 * jitter,
+      filterQ: 4.0,
+      wet: 0.18,
+    });
+    this.noise(target, t + 0.065, {
+      buffer: 'white',
+      duration: 0.03,
+      gain: 0.13 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 5000,
+      wet: 0.24,
+    });
+    return 0.4;
+  }
+
+  private playVendingBuy(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Cheerful electronic servo motor spin-up
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 180 * pitch,
+      freqEnd: 390 * pitch,
+      duration: 0.19,
+      attack: 0.015,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 480 * pitch,
+      filterFreqEnd: 1450 * pitch,
+      filterQ: 2.2,
+      wet: 0.16,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 360 * pitch,
+      freqEnd: 540 * pitch,
+      duration: 0.18,
+      attack: 0.015,
+      gain: 0.13 * vol,
+      wet: 0.18,
+    });
+    this.noise(target, t + 0.01, {
+      buffer: 'white',
+      duration: 0.16,
+      attack: 0.01,
+      gain: 0.12 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1200 * pitch,
+      filterFreqEnd: 2400 * pitch,
+      filterQ: 2.6,
+      wet: 0.16,
+    });
+    // Two-tone cheerful arcade purchase confirm chime (G5 -> C6)
+    this.tone(target, t + 0.14, {
+      type: 'sine',
+      freqStart: 783.99 * pitch,
+      duration: 0.14,
+      attack: 0.004,
+      gain: 0.21 * vol,
+      wet: 0.26,
+    });
+    this.tone(target, t + 0.24, {
+      type: 'sine',
+      freqStart: 1046.5 * pitch,
+      duration: 0.26,
+      attack: 0.004,
+      gain: 0.23 * vol,
+      wet: 0.32,
+    });
+    this.tone(target, t + 0.24, {
+      type: 'triangle',
+      freqStart: 1567.98 * pitch,
+      duration: 0.18,
+      attack: 0.006,
+      gain: 0.09 * vol,
+      wet: 0.3,
+    });
+    // Dispenser chute drop thud & mechanical hatch clack
+    this.tone(target, t + 0.31, {
+      type: 'sine',
+      freqStart: 160 * pitch,
+      freqEnd: 58 * pitch,
+      duration: 0.09,
+      attack: 0.002,
+      gain: 0.28 * vol,
+      wet: 0.16,
+    });
+    this.noise(target, t + 0.31, {
+      buffer: 'white',
+      duration: 0.045,
+      gain: 0.2 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2100 * pitch,
+      filterFreqEnd: 950 * pitch,
+      filterQ: 2.4,
+      wet: 0.18,
+    });
+    return 0.54;
+  }
+
+  private playAllyHired(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Tactical squad radio squelch & double chirp
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.055,
+      gain: 0.18 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2500 * pitch,
+      filterQ: 3.4,
+      wet: 0.15,
+    });
+    this.tone(target, t + 0.01, {
+      type: 'sine',
+      freqStart: 1380 * pitch,
+      freqEnd: 1760 * pitch,
+      duration: 0.045,
+      attack: 0.002,
+      gain: 0.16 * vol,
+      wet: 0.2,
+    });
+    this.tone(target, t + 0.065, {
+      type: 'sine',
+      freqStart: 1760 * pitch,
+      freqEnd: 2080 * pitch,
+      duration: 0.045,
+      attack: 0.002,
+      gain: 0.15 * vol,
+      wet: 0.2,
+    });
+    // Warm sub confirm thump
+    this.tone(target, t + 0.12, {
+      type: 'sine',
+      freqStart: 130.81 * pitch,
+      freqEnd: 65.41 * pitch,
+      duration: 0.18,
+      gain: 0.32 * vol,
+      wet: 0.2,
+    });
+    // Warm major-triad squad-up synth fanfare (C5 -> E5 -> G5 -> C6)
+    const fanfareNotes: Array<{ offset: number; freq: number; dur: number }> = [
+      { offset: 0.12, freq: 523.25, dur: 0.24 },
+      { offset: 0.19, freq: 659.25, dur: 0.26 },
+      { offset: 0.26, freq: 783.99, dur: 0.32 },
+      { offset: 0.33, freq: 1046.5, dur: 0.48 },
+    ];
+    for (const note of fanfareNotes) {
+      this.tone(target, t + note.offset, {
+        type: 'triangle',
+        freqStart: note.freq * pitch,
+        duration: note.dur,
+        attack: 0.014,
+        gain: 0.18 * vol,
+        wet: 0.32,
+      });
+      this.tone(target, t + note.offset, {
+        type: 'sawtooth',
+        freqStart: note.freq * 0.5 * pitch,
+        duration: note.dur * 0.9,
+        attack: 0.016,
+        gain: 0.1 * vol,
+        filterType: 'lowpass',
+        filterFreqStart: 2400,
+        filterFreqEnd: 1100,
+        wet: 0.34,
+      });
+    }
+    // Radio sign-off shimmer air tail
+    this.noise(target, t + 0.34, {
+      buffer: 'white',
+      duration: 0.26,
+      attack: 0.02,
+      gain: 0.1 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3800,
+      wet: 0.34,
+    });
+    return 0.85;
+  }
+
+  private playLootIslandSpawn(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Thunderous sky rift sub boom
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 105 * pitch,
+      freqEnd: 24 * pitch,
+      duration: 0.88,
+      gain: 0.72 * vol,
+      wet: 0.36,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 210 * pitch,
+      freqEnd: 44 * pitch,
+      duration: 0.54,
+      gain: 0.38 * vol,
+      wet: 0.3,
+    });
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.95,
+      attack: 0.015,
+      gain: 0.55 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2600 * pitch,
+      filterFreqEnd: 180,
+      distort: true,
+      wet: 0.4,
+    });
+    this.noise(target, t + 0.02, {
+      buffer: 'white',
+      duration: 0.42,
+      attack: 0.012,
+      gain: 0.28 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3200 * pitch,
+      filterFreqEnd: 780 * pitch,
+      filterQ: 1.6,
+      wet: 0.35,
+    });
+
+    // Ethereal rising harmonic spire swell (G4 - D5 - F#5 - B5 - D6)
+    this.tone(target, t + 0.14, {
+      type: 'sine',
+      freqStart: 196 * pitch,
+      freqEnd: 587.33 * pitch,
+      duration: 0.62,
+      attack: 0.06,
+      gain: 0.22 * vol,
+      wet: 0.42,
+    });
+    const spireChord = [392.0, 587.33, 739.99, 987.77, 1174.66];
+    for (let i = 0; i < spireChord.length; i++) {
+      this.tone(target, t + 0.22 + i * 0.055, {
+        type: 'sine',
+        freqStart: spireChord[i] * pitch,
+        duration: 0.72,
+        attack: 0.04,
+        gain: 0.14 * vol,
+        wet: 0.46,
+      });
+      this.tone(target, t + 0.22 + i * 0.055, {
+        type: 'triangle',
+        freqStart: spireChord[i] * pitch,
+        detune: i % 2 === 0 ? 6 : -6,
+        duration: 0.64,
+        attack: 0.05,
+        gain: 0.08 * vol,
+        filterType: 'lowpass',
+        filterFreqStart: 2800,
+        filterFreqEnd: 1400,
+        wet: 0.42,
+      });
+    }
+    this.noise(target, t + 0.32, {
+      buffer: 'white',
+      duration: 0.78,
+      attack: 0.08,
+      gain: 0.13 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3600,
+      wet: 0.45,
+    });
+    return 1.22;
+  }
+
   private playSurfaceFootstep(
     surface:
       | 'footstep_wood'
@@ -3928,7 +4525,7 @@ export class SoundSynthesizer {
       osc.frequency.exponentialRampToValueAtTime(freqEnd, startTime + dur);
     }
     if (opts.detune && osc.detune) {
-      osc.detune.setValueAtTime(opts.detune, startTime);
+      osc.detune.setValueAtTime?.(opts.detune, startTime);
     }
 
     const env = this.ctx.createGain();
@@ -3936,24 +4533,7 @@ export class SoundSynthesizer {
     env.gain.linearRampToValueAtTime(peakGain, startTime + attack);
     env.gain.exponentialRampToValueAtTime(0.0001, startTime + dur);
 
-    let tail: AudioNode = osc;
-    if (opts.filterType) {
-      const filter = this.safeCreateFilter();
-      if (filter) {
-        filter.type = opts.filterType;
-        const fStart = Math.max(25, opts.filterFreqStart ?? 1200);
-        const fEnd = opts.filterFreqEnd !== undefined ? Math.max(25, opts.filterFreqEnd) : fStart;
-        filter.frequency.setValueAtTime(fStart, startTime);
-        if (fEnd !== fStart) {
-          filter.frequency.exponentialRampToValueAtTime(fEnd, startTime + dur);
-        }
-        if (opts.filterQ !== undefined) {
-          filter.Q.setValueAtTime(opts.filterQ, startTime);
-        }
-        tail.connect(filter);
-        tail = filter;
-      }
-    }
+    const tail = this.attachFilter(osc, startTime, dur, opts, 1200);
 
     tail.connect(env);
     env.connect(target);
@@ -3974,7 +4554,7 @@ export class SoundSynthesizer {
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     if (opts.playbackRate && src.playbackRate) {
-      src.playbackRate.setValueAtTime(opts.playbackRate, startTime);
+      src.playbackRate.setValueAtTime?.(opts.playbackRate, startTime);
     }
 
     const env = this.ctx.createGain();
@@ -3982,24 +4562,7 @@ export class SoundSynthesizer {
     env.gain.linearRampToValueAtTime(peakGain, startTime + attack);
     env.gain.exponentialRampToValueAtTime(0.0001, startTime + dur);
 
-    let tail: AudioNode = src;
-    if (opts.filterType) {
-      const filter = this.safeCreateFilter();
-      if (filter) {
-        filter.type = opts.filterType;
-        const fStart = Math.max(25, opts.filterFreqStart ?? 1000);
-        const fEnd = opts.filterFreqEnd !== undefined ? Math.max(25, opts.filterFreqEnd) : fStart;
-        filter.frequency.setValueAtTime(fStart, startTime);
-        if (fEnd !== fStart) {
-          filter.frequency.exponentialRampToValueAtTime(fEnd, startTime + dur);
-        }
-        if (opts.filterQ !== undefined) {
-          filter.Q.setValueAtTime(opts.filterQ, startTime);
-        }
-        tail.connect(filter);
-        tail = filter;
-      }
-    }
+    let tail = this.attachFilter(src, startTime, dur, opts, 1000);
 
     if (opts.distort && this.softClipCurve && typeof this.ctx.createWaveShaper === 'function') {
       try {
@@ -4019,6 +4582,30 @@ export class SoundSynthesizer {
     const maxOffset = Math.max(0, buffer.duration - dur - 0.05);
     const offset = maxOffset > 0 ? this.rand() * maxOffset : 0;
     src.start(startTime, offset, dur + 0.015);
+  }
+
+  private attachFilter(
+    tail: AudioNode,
+    startTime: number,
+    dur: number,
+    opts: Pick<ToneOpts, 'filterType' | 'filterFreqStart' | 'filterFreqEnd' | 'filterQ'>,
+    defaultFreq: number,
+  ): AudioNode {
+    if (!opts.filterType) return tail;
+    const filter = this.safeCreateFilter();
+    if (!filter) return tail;
+    filter.type = opts.filterType;
+    const fStart = Math.max(25, opts.filterFreqStart ?? defaultFreq);
+    const fEnd = opts.filterFreqEnd !== undefined ? Math.max(25, opts.filterFreqEnd) : fStart;
+    filter.frequency?.setValueAtTime?.(fStart, startTime);
+    if (fEnd !== fStart) {
+      filter.frequency?.exponentialRampToValueAtTime?.(fEnd, startTime + dur);
+    }
+    if (opts.filterQ !== undefined) {
+      filter.Q?.setValueAtTime?.(opts.filterQ, startTime);
+    }
+    tail.connect(filter);
+    return filter;
   }
 
   private routeWet(node: AudioNode, _startTime: number, _dur: number, wet?: number): void {

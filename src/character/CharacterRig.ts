@@ -7,6 +7,7 @@ import type {
   GliderDef,
   PickaxeDef,
   SkinDef,
+  SpecialistRole,
   WeaponId,
 } from '../types';
 import { CONTRAILS, GLIDERS, PICKAXES, SKINS, WEAPON_WRAPS, clamp } from '../core';
@@ -17,6 +18,18 @@ import {
   disposeObject3D,
   getWeaponWrapDef,
 } from './WeaponModels';
+
+export function getAllyRoleColor(role?: SpecialistRole): string {
+  switch (role) {
+    case 'medic':
+      return '#22c55e';
+    case 'heavy':
+      return '#fbbf24';
+    case 'scout':
+    default:
+      return '#22d3ee';
+  }
+}
 
 export function getContrailDef(contrailId?: string): ContrailDef {
   if (contrailId) {
@@ -253,6 +266,15 @@ export class CharacterRig {
   private bossCoreBeamMat: THREE.MeshBasicMaterial | null = null;
   private bossAuraHaloMesh: THREE.Mesh | null = null;
   private bossAuraHaloMat: THREE.MeshBasicMaterial | null = null;
+  private allyAuraEnabled = false;
+  private allyAuraTime = 0;
+  private allyRole: SpecialistRole = 'scout';
+  private allyAuraGroup: THREE.Group | null = null;
+  private allyChevronGroup: THREE.Group | null = null;
+  private allyRoleRingMesh: THREE.Mesh | null = null;
+  private allyRoleRingMat: THREE.MeshStandardMaterial | null = null;
+  private allyRoleHaloMesh: THREE.Mesh | null = null;
+  private allyRoleHaloMat: THREE.MeshBasicMaterial | null = null;
   private contrailActive = false;
   private contrailTime = 0;
   private contrailPrimaryMat: THREE.MeshBasicMaterial | null = null;
@@ -1200,6 +1222,11 @@ export class CharacterRig {
     if (state.isBoss !== undefined) {
       this.setBossAura(Boolean(state.isBoss));
     }
+    if (state.isAlly !== undefined) {
+      this.setAllyAura(Boolean(state.isAlly), state.allyRole);
+    } else if (state.allyRole !== undefined && this.allyAuraEnabled) {
+      this.setAllyAura(true, state.allyRole);
+    }
   }
 
   public getMuzzleWorldPosition(out?: THREE.Vector3): THREE.Vector3 {
@@ -1370,6 +1397,9 @@ export class CharacterRig {
     }
 
     this.bossAuraEnabled = true;
+    if (this.allyAuraEnabled) {
+      this.setAllyAura(false);
+    }
     if (elapsed !== undefined && Number.isFinite(elapsed)) {
       this.bossAuraTime = elapsed;
     }
@@ -1400,6 +1430,140 @@ export class CharacterRig {
     if (this.bossAuraHaloMesh && this.bossAuraHaloMat) {
       this.bossAuraHaloMesh.scale.setScalar(1 + 0.16 * Math.sin(t * 3.5));
       this.bossAuraHaloMat.opacity = 0.52 + 0.22 * Math.sin(t * 3.5);
+    }
+  }
+
+  private buildAllyAuraGroup(): void {
+    const auraGroup = new THREE.Group();
+    auraGroup.name = 'ally_tactical_aura';
+
+    const chevronGroup = new THREE.Group();
+    chevronGroup.name = 'ally_tactical_chevron';
+
+    const cyanMat = makeMat('#22d3ee', 0.14, 0.25, '#22d3ee', 1.15);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xe0f2fe,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    // Hovering cyan diamond tactical core
+    const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(0.075, 0), cyanMat);
+    diamond.position.y = 0.11;
+    diamond.scale.set(0.9, 1.45, 0.9);
+    diamond.castShadow = false;
+    chevronGroup.add(diamond);
+
+    const innerDiamond = new THREE.Mesh(new THREE.OctahedronGeometry(0.042, 0), coreMat);
+    innerDiamond.position.y = 0.11;
+    innerDiamond.scale.set(0.85, 1.35, 0.85);
+    innerDiamond.castShadow = false;
+    chevronGroup.add(innerDiamond);
+
+    // Crisp cyan tactical chevron wings framing the diamond
+    const wingGeo = new THREE.BoxGeometry(0.11, 0.024, 0.026);
+    const leftWing = new THREE.Mesh(wingGeo, cyanMat);
+    leftWing.position.set(-0.048, 0.032, 0);
+    leftWing.rotation.z = -0.62;
+    leftWing.castShadow = false;
+    chevronGroup.add(leftWing);
+
+    const rightWing = new THREE.Mesh(wingGeo, cyanMat);
+    rightWing.position.set(0.048, 0.032, 0);
+    rightWing.rotation.z = 0.62;
+    rightWing.castShadow = false;
+    chevronGroup.add(rightWing);
+
+    auraGroup.add(chevronGroup);
+
+    const roleColor = getAllyRoleColor(this.allyRole);
+    const roleRingMat = makeMat(roleColor, 0.18, 0.45, roleColor, 0.95);
+    const roleRingMesh = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.018, 8, 24), roleRingMat);
+    roleRingMesh.name = 'ally_role_ring';
+    roleRingMesh.rotation.x = Math.PI / 2;
+    roleRingMesh.position.y = -0.02;
+    roleRingMesh.castShadow = false;
+    auraGroup.add(roleRingMesh);
+
+    const roleHaloMat = new THREE.MeshBasicMaterial({
+      color: roleColor,
+      transparent: true,
+      opacity: 0.52,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const roleHaloMesh = new THREE.Mesh(new THREE.RingGeometry(0.19, 0.29, 24), roleHaloMat);
+    roleHaloMesh.rotation.x = -Math.PI / 2;
+    roleHaloMesh.position.y = -0.02;
+    roleHaloMesh.castShadow = false;
+    auraGroup.add(roleHaloMesh);
+
+    this.joints.root.add(auraGroup);
+    this.allyAuraGroup = auraGroup;
+    this.allyChevronGroup = chevronGroup;
+    this.allyRoleRingMesh = roleRingMesh;
+    this.allyRoleRingMat = roleRingMat;
+    this.allyRoleHaloMesh = roleHaloMesh;
+    this.allyRoleHaloMat = roleHaloMat;
+  }
+
+  public setAllyAura(isAlly: boolean, role?: SpecialistRole, elapsed?: number): void {
+    if (this.disposed) return;
+
+    if (role !== undefined) {
+      this.allyRole = role;
+    }
+
+    const shouldEnable = Boolean(isAlly) && !this.bossAuraEnabled;
+    if (!shouldEnable) {
+      this.allyAuraEnabled = false;
+      if (this.allyAuraGroup) {
+        this.allyAuraGroup.visible = false;
+        this.allyAuraGroup.position.set(0, 1.0, 0);
+        this.allyAuraGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.allyAuraGroup) {
+      this.buildAllyAuraGroup();
+    }
+
+    this.allyAuraEnabled = true;
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.allyAuraTime = elapsed;
+    }
+
+    const roleColor = getAllyRoleColor(this.allyRole);
+    if (this.allyRoleRingMat) {
+      this.allyRoleRingMat.color.set(roleColor);
+      this.allyRoleRingMat.emissive.set(roleColor);
+    }
+    if (this.allyRoleHaloMat) {
+      this.allyRoleHaloMat.color.set(roleColor);
+    }
+
+    const t = this.allyAuraTime;
+    const aura = this.allyAuraGroup!;
+    const bob = Math.sin(t * 3.1) * 0.045;
+    const headTrackY = this.joints.hips.position.y + 1.24;
+
+    aura.visible = true;
+    aura.position.set(this.joints.hips.position.x, headTrackY + bob, this.joints.hips.position.z);
+    aura.scale.setScalar(1);
+
+    if (this.allyChevronGroup) {
+      this.allyChevronGroup.rotation.y = t * 1.8;
+    }
+    if (this.allyRoleRingMesh) {
+      this.allyRoleRingMesh.scale.setScalar(1 + 0.06 * Math.sin(t * 3.8));
+    }
+    if (this.allyRoleHaloMesh && this.allyRoleHaloMat) {
+      this.allyRoleHaloMesh.scale.setScalar(1 + 0.14 * Math.sin(t * 3.6));
+      this.allyRoleHaloMat.opacity = 0.46 + 0.2 * Math.sin(t * 3.6);
     }
   }
 
@@ -1718,6 +1882,14 @@ export class CharacterRig {
     return this.bossAuraEnabled;
   }
 
+  public isAllyAuraEnabled(): boolean {
+    return this.allyAuraEnabled;
+  }
+
+  public getAllyRole(): SpecialistRole {
+    return this.allyRole;
+  }
+
   public setVisible(visible: boolean): void {
     this.joints.root.visible = visible;
   }
@@ -1787,6 +1959,18 @@ export class CharacterRig {
       this.bossCoreBeamMat = null;
       this.bossAuraHaloMesh = null;
       this.bossAuraHaloMat = null;
+    }
+
+    if (this.allyAuraGroup) {
+      disposeObject3D(this.allyAuraGroup);
+      this.allyAuraGroup.parent?.remove(this.allyAuraGroup);
+      this.allyAuraGroup = null;
+      this.allyChevronGroup = null;
+      this.allyRoleRingMesh = null;
+      this.allyRoleRingMat = null;
+      this.allyRoleHaloMesh = null;
+      this.allyRoleHaloMat = null;
+      this.allyAuraEnabled = false;
     }
 
     disposeObject3D(this.joints.root);

@@ -140,6 +140,7 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
   return (
     weaponId === 'ar' ||
     weaponId === 'burst_ar' ||
+    weaponId === 'tactical_dmr' ||
     weaponId === 'pump_shotgun' ||
     weaponId === 'tac_shotgun' ||
     weaponId === 'heavy_shotgun' ||
@@ -148,6 +149,10 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
     weaponId === 'rocket_launcher' ||
     weaponId === 'mythic_blade_rifle'
   );
+}
+
+function isMeleeWeapon(weaponId: WeaponId): boolean {
+  return weaponId === 'pickaxe' || weaponId === 'kinetic_blade';
 }
 
 function isThrowable(weaponId: WeaponId): boolean {
@@ -395,6 +400,13 @@ export class CharacterAnimator {
       rig.setBossAura(Boolean(state.isBoss), data.time);
     } else if (rig.isBossAuraEnabled()) {
       rig.setBossAura(true, data.time);
+    }
+
+    // 7. Sync Allied Specialist Tactical Aura state & animation if provided or active
+    if (state.isAlly !== undefined) {
+      rig.setAllyAura(Boolean(state.isAlly), state.allyRole, data.time);
+    } else if (rig.isAllyAuraEnabled()) {
+      rig.setAllyAura(true, state.allyRole, data.time);
     }
   }
 
@@ -876,7 +888,7 @@ export class CharacterAnimator {
         p.lShRy = -0.68;
         p.lShRz = 0.1;
         p.lElRx = -0.98;
-      } else if (weapon === 'pickaxe') {
+      } else if (isMeleeWeapon(weapon)) {
         p.rShRx = -0.35 + Math.sin(t * 11) * 0.35;
         p.rElRx = -1.05;
       }
@@ -890,7 +902,7 @@ export class CharacterAnimator {
     const torsoPitch = p.hipsRx + p.spineRx + p.chestRx;
     const keepLeftGripOnZipline = anim === 'zipline';
 
-    if (weapon === 'pickaxe') {
+    if (isMeleeWeapon(weapon)) {
       if (state.isAiming || state.isFiring) {
         p.rElRx = -0.55;
         p.rShRx = -Math.PI / 2 - torsoPitch - aimPitch - p.rElRx;

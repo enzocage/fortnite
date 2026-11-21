@@ -1,6 +1,7 @@
 import type {
   DamageEvent,
   ExplosiveBarrelEntity,
+  ItemInstance,
   LootLlamaEntity,
   MaterialType,
   ProjectileState,
@@ -38,6 +39,7 @@ const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   pickaxe: 'pickaxe_swing',
   ar: 'shot_ar',
   burst_ar: 'shot_burst_ar',
+  tactical_dmr: 'shot_dmr',
   pump_shotgun: 'shot_pump',
   tac_shotgun: 'shot_tac',
   heavy_shotgun: 'shot_heavy_shotgun',
@@ -46,6 +48,7 @@ const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   pistol: 'shot_pistol',
   rocket_launcher: 'shot_rocket',
   mythic_blade_rifle: 'shot_mythic_rifle',
+  kinetic_blade: 'kinetic_slash',
   shockwave_grenade: 'pickaxe_swing',
   frag_grenade: 'pickaxe_swing',
   chug_splash: 'pickaxe_swing',
@@ -85,6 +88,31 @@ function normalizeVec(v: Vec3Like): Vec3Like {
   const len = Math.hypot(v.x, v.y, v.z);
   if (len < 1e-8) return { x: 0, y: 0, z: -1 };
   return { x: v.x / len, y: v.y / len, z: v.z / len };
+}
+
+function distPointToSegment(
+  p: Vec3Like,
+  a: Vec3Like,
+  b: Vec3Like,
+): { dist: number; t: number; closest: Vec3Like } {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const lenSq = abx * abx + aby * aby + abz * abz;
+  const t =
+    lenSq > 1e-8
+      ? clamp(((p.x - a.x) * abx + (p.y - a.y) * aby + (p.z - a.z) * abz) / lenSq, 0, 1)
+      : 0;
+  const closest = {
+    x: a.x + abx * t,
+    y: a.y + aby * t,
+    z: a.z + abz * t,
+  };
+  return {
+    dist: Math.hypot(p.x - closest.x, p.y - closest.y, p.z - closest.z),
+    t,
+    closest,
+  };
 }
 
 function applySpreadToDir(dir: Vec3Like, spreadRad: number): Vec3Like {
@@ -423,6 +451,10 @@ export class WeaponSystem {
 
     if (params.item.weaponId === 'pickaxe') {
       return this.executePickaxeSwing(params, aimDir);
+    }
+
+    if (def.isKineticBlade || params.item.weaponId === 'kinetic_blade') {
+      return this.executeKineticBladeCleave(params, aimDir);
     }
 
     if (def.isGrappler || params.item.weaponId === 'grappler') {
@@ -1250,6 +1282,507 @@ export class WeaponSystem {
     }
 
     return { fired: true, shotsHit: 0, headshots: 0, damageDealt: 0 };
+  }
+
+  /**
+   * Executes a wide frontal 3.8m katana melee cleave (`45` enemy dmg / `75` build & prop dmg).
+   */
+  private executeKineticBladeCleave(
+    params: FireWeaponParams,
+    aimDir: Vec3Like,
+  ): FireWeaponResult {
+    const def = WEAPONS.kinetic_blade;
+    const range = def.range > 0 ? def.range : 3.8;
+    const actorDmg = def.baseDamage > 0 ? def.baseDamage : 45;
+    const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
+    const structDmg = Math.round(
+      (def.structureDamage > 0 ? def.structureDamage : 75) * (hasDemolisher ? 1.3 : 1),
+    );
+
+    this.eventBus.emit('sound:play', {
+      id: 'kinetic_slash',
+      position: params.origin,
+      spatial: true,
+    });
+
+    const vBridge = params.vehicleBridge ?? this.vehicleBridge;
+    const sBridge = params.stationBridge ?? this.stationBridge;
+    const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
+    const props = this.propsBridge.getProps();
+
+    const hitActorIds = new Set<string>();
+    const hitStructKeys = new Set<string>();
+    let shotsHit = 0;
+    let actorDamageDealt = 0;
+    let structDamageDealt = 0;
+
+    const cleaveAngles = [0, -0.28, 0.28, -0.55, 0.55];
+    const cleaveRays: Array<{ origin: Vec3Like; dir: Vec3Like }> = [];
+    for (let i = 0; i < cleaveAngles.length; i++) {
+      const ang = cleaveAngles[i];
+      const cosA = Math.cos(ang);
+      const sinA = Math.sin(ang);
+      const rayDir =
+        ang === 0
+          ? aimDir
+          : normalizeVec({
+              x: aimDir.x * cosA - aimDir.z * sinA,
+              y: aimDir.y,
+              z: aimDir.x * sinA + aimDir.z * cosA,
+            });
+      cleaveRays.push({ origin: params.origin, dir: rayDir });
+    }
+    if (Math.abs(aimDir.y) < 0.45 && params.origin.y > 0.7) {
+      cleaveRays.push({
+        origin: {
+          x: params.origin.x,
+          y: Math.max(0.25, params.origin.y - 0.5),
+          z: params.origin.z,
+        },
+        dir: aimDir,
+      });
+    }
+
+    for (let i = 0; i < cleaveRays.length; i++) {
+      const rayOrigin = cleaveRays[i].origin;
+      const rayDir = cleaveRays[i].dir;
+
+      const worldHit = this.collision.raycastWorld(rayOrigin, rayDir, range, {
+        checkBuilds: true,
+        checkProps: true,
+        props,
+      });
+      const entityMax = worldHit.hit ? worldHit.distance : range;
+      const barrelMax =
+        worldHit.hit && worldHit.targetType === 'static'
+          ? Math.min(range, worldHit.distance + 0.06)
+          : entityMax;
+
+      const actorHit = this.raycastActors(
+        rayOrigin,
+        rayDir,
+        entityMax,
+        params.actor.id,
+      );
+      if (actorHit && !hitActorIds.has(actorHit.actor.id)) {
+        hitActorIds.add(actorHit.actor.id);
+        const ev = this.applyActorDamage(
+          params.actor,
+          actorHit.actor,
+          'kinetic_blade',
+          params.item.rarity,
+          actorDmg,
+          false,
+          actorHit.point,
+          actorHit.distance,
+          params.isPlayer,
+        );
+        shotsHit += 1;
+        actorDamageDealt += ev.damage;
+      }
+
+      const expBarrelHit = this.raycastExplosiveBarrels(
+        rayOrigin,
+        rayDir,
+        barrelMax,
+        rcBridge,
+      );
+      const barrelHit = this.raycastSlurpBarrels(
+        rayOrigin,
+        rayDir,
+        barrelMax,
+        sBridge,
+      );
+      const llamaHit = this.raycastLlamas(rayOrigin, rayDir, entityMax);
+      const vehicleHit = this.raycastVehicles(
+        rayOrigin,
+        rayDir,
+        entityMax,
+        vBridge,
+        params.actor.id,
+      );
+
+      let chosen:
+        | 'exp_barrel'
+        | 'barrel'
+        | 'llama'
+        | 'vehicle'
+        | 'world'
+        | 'none' = worldHit.hit ? 'world' : 'none';
+      let chosenDist = worldHit.hit ? worldHit.distance : range;
+
+      if (
+        expBarrelHit &&
+        rcBridge &&
+        expBarrelHit.distance <=
+          chosenDist + (chosen === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+      ) {
+        chosen = 'exp_barrel';
+        chosenDist = expBarrelHit.distance;
+      }
+      if (
+        barrelHit &&
+        sBridge &&
+        barrelHit.distance <=
+          chosenDist + (chosen === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+      ) {
+        chosen = 'barrel';
+        chosenDist = barrelHit.distance;
+      }
+      if (llamaHit && llamaHit.distance <= chosenDist) {
+        chosen = 'llama';
+        chosenDist = llamaHit.distance;
+      }
+      if (vehicleHit && vehicleHit.distance <= chosenDist) {
+        chosen = 'vehicle';
+        chosenDist = vehicleHit.distance;
+      }
+
+      if (chosen === 'exp_barrel' && expBarrelHit && rcBridge) {
+        const key = `exp:${expBarrelHit.barrel.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.applyExplosiveBarrelHit(
+            rcBridge,
+            expBarrelHit.barrel.id,
+            structDmg,
+            expBarrelHit.point,
+            expBarrelHit.normal,
+            params.actor,
+            params.isPlayer,
+          );
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      } else if (chosen === 'barrel' && barrelHit && sBridge) {
+        const key = `slurp:${barrelHit.barrel.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.applySlurpBarrelHit(
+            sBridge,
+            barrelHit.barrel.id,
+            structDmg,
+            barrelHit.point,
+            barrelHit.normal,
+            params.actor,
+          );
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      } else if (chosen === 'llama' && llamaHit) {
+        const key = `llama:${llamaHit.llama.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.propsBridge.damageLlama?.(
+            llamaHit.llama.id,
+            structDmg,
+            llamaHit.point,
+          );
+          this.eventBus.emit('vfx:impact', {
+            position: llamaHit.point,
+            normal: llamaHit.normal,
+            material: 'wood',
+          });
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      } else if (chosen === 'vehicle' && vehicleHit) {
+        const key = `veh:${vehicleHit.vehicle.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          vBridge?.damageVehicle(
+            vehicleHit.vehicle.id,
+            structDmg,
+            vehicleHit.point,
+          );
+          this.eventBus.emit('vfx:impact', {
+            position: vehicleHit.point,
+            normal: vehicleHit.normal,
+            material: 'metal',
+          });
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      } else if (chosen === 'world' && worldHit.hit) {
+        if (
+          (worldHit.targetType === 'build' || worldHit.targetType === 'prop') &&
+          worldHit.targetId
+        ) {
+          const key = `${worldHit.targetType}:${worldHit.targetId}`;
+          if (!hitStructKeys.has(key)) {
+            hitStructKeys.add(key);
+            this.applyWorldHitDamage(worldHit, structDmg);
+            shotsHit += 1;
+            structDamageDealt += structDmg;
+          }
+        } else {
+          this.applyWorldHitDamage(worldHit, structDmg);
+        }
+      }
+    }
+
+    // Arc proximity sweep for enemies inside the frontal cleave cone
+    const actors = this.actorsProvider ? this.actorsProvider() : [];
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (!actor.alive || actor.id === params.actor.id || hitActorIds.has(actor.id)) {
+        continue;
+      }
+      const center = {
+        x: actor.position.x,
+        y: actor.position.y + actor.height * 0.5,
+        z: actor.position.z,
+      };
+      const dx = center.x - params.origin.x;
+      const dy = center.y - params.origin.y;
+      const dz = center.z - params.origin.z;
+      const dist = Math.hypot(dx, dy, dz);
+      if (dist > range + actor.radius * 0.5) continue;
+
+      const dirToActor =
+        dist > 1e-5 ? { x: dx / dist, y: dy / dist, z: dz / dist } : aimDir;
+      const dot =
+        dirToActor.x * aimDir.x + dirToActor.y * aimDir.y + dirToActor.z * aimDir.z;
+      if (dot < 0.35) continue;
+
+      const blocked = this.collision.raycastWorld(
+        params.origin,
+        dirToActor,
+        Math.max(0.1, dist - actor.radius),
+        { checkBuilds: true, checkProps: false },
+      );
+      if (blocked.hit) continue;
+
+      hitActorIds.add(actor.id);
+      const ev = this.applyActorDamage(
+        params.actor,
+        actor,
+        'kinetic_blade',
+        params.item.rarity,
+        actorDmg,
+        false,
+        center,
+        dist,
+        params.isPlayer,
+      );
+      shotsHit += 1;
+      actorDamageDealt += ev.damage;
+    }
+
+    return {
+      fired: true,
+      shotsHit,
+      headshots: 0,
+      damageDealt: actorDamageDealt > 0 ? actorDamageDealt : structDamageDealt,
+    };
+  }
+
+  /**
+   * Executes a Kinetic Blade RMB dash strike along `[from, to]`, damaging enemies and structures within `radius` (default `2.8m`).
+   */
+  executeKineticDash(params: {
+    actor: CombatActor;
+    item: ItemInstance;
+    from: Vec3Like;
+    to: Vec3Like;
+    radius?: number;
+    damage?: number;
+    isPlayer: boolean;
+    vehicleBridge?: VehicleBridge | null;
+    stationBridge?: WorldStationBridge | null;
+    riftCaptureBridge?: WorldRiftCaptureBridge | null;
+    hasDemolisher?: boolean;
+  }): FireWeaponResult {
+    const dashRadius = params.radius ?? 2.8;
+    const actorDmg = params.damage ?? 50;
+    const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
+    const structDmg = Math.round(actorDmg * (hasDemolisher ? 1.3 : 1));
+    const vBridge = params.vehicleBridge ?? this.vehicleBridge;
+    const sBridge = params.stationBridge ?? this.stationBridge;
+    const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
+
+    this.eventBus.emit('sound:play', {
+      id: 'kinetic_dash',
+      position: { ...params.from },
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:kinetic_dash', {
+      from: { ...params.from },
+      to: { ...params.to },
+    });
+
+    let shotsHit = 0;
+    let actorDamageDealt = 0;
+    let structDamageDealt = 0;
+
+    // 1. Damage enemy actors within 2.8m along dash path
+    const actors = this.actorsProvider ? this.actorsProvider() : [];
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (!actor.alive || actor.id === params.actor.id) continue;
+      const center = {
+        x: actor.position.x,
+        y: actor.position.y + actor.height * 0.5,
+        z: actor.position.z,
+      };
+      const seg = distPointToSegment(center, params.from, params.to);
+      if (seg.dist <= dashRadius) {
+        const travelDist = dist3D(params.from, center);
+        const ev = this.applyActorDamage(
+          params.actor,
+          actor,
+          'kinetic_blade',
+          params.item.rarity,
+          actorDmg,
+          false,
+          center,
+          travelDist,
+          params.isPlayer,
+        );
+        shotsHit += 1;
+        actorDamageDealt += ev.damage;
+      }
+    }
+
+    // 2. Damage weak structures (builds) within 2.8m along dash path
+    const pieces = [...this.building.getPieces()];
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i];
+      if (p.hp <= 0) continue;
+      const pieceCenter: Vec3Like =
+        p.type === 'wall'
+          ? p.dir === 'N'
+            ? {
+                x: (p.gx + 0.5) * GRID_XZ,
+                y: (p.gy + 0.5) * GRID_Y,
+                z: p.gz * GRID_XZ,
+              }
+            : {
+                x: p.gx * GRID_XZ,
+                y: (p.gy + 0.5) * GRID_Y,
+                z: (p.gz + 0.5) * GRID_XZ,
+              }
+          : p.type === 'floor'
+            ? {
+                x: (p.gx + 0.5) * GRID_XZ,
+                y: p.gy * GRID_Y,
+                z: (p.gz + 0.5) * GRID_XZ,
+              }
+            : {
+                x: (p.gx + 0.5) * GRID_XZ,
+                y: (p.gy + 0.5) * GRID_Y,
+                z: (p.gz + 0.5) * GRID_XZ,
+              };
+      const seg = distPointToSegment(pieceCenter, params.from, params.to);
+      // Do not break the floor tile directly beneath starting feet
+      if (p.type === 'floor' && seg.t <= 0.08 && pieceCenter.y <= params.from.y - 0.5) {
+        continue;
+      }
+      if (seg.dist <= dashRadius) {
+        this.building.damagePiece(p.id, structDmg);
+        this.eventBus.emit('vfx:impact', {
+          position: pieceCenter,
+          normal: { x: 0, y: 1, z: 0 },
+          material: p.material,
+        });
+        shotsHit += 1;
+        structDamageDealt += structDmg;
+      }
+    }
+
+    // 3. Damage harvestable props along dash path
+    const props = this.propsBridge.getProps();
+    for (let i = 0; i < props.length; i++) {
+      const prop = props[i];
+      if (prop.destroyed) continue;
+      const center = { x: prop.x, y: prop.y + prop.height * 0.5, z: prop.z };
+      const seg = distPointToSegment(center, params.from, params.to);
+      if (seg.dist <= dashRadius + prop.radius) {
+        this.propsBridge.damageProp(prop.id, structDmg, center, false);
+        this.eventBus.emit('vfx:impact', {
+          position: center,
+          normal: { x: 0, y: 1, z: 0 },
+          material: prop.material,
+        });
+        shotsHit += 1;
+        structDamageDealt += structDmg;
+      }
+    }
+
+    // 4. Damage Slurp Barrels, Explosive Barrels, Llamas, and Vehicles along dash path
+    if (sBridge) {
+      const slurps = sBridge.getSlurpBarrels();
+      for (let i = 0; i < slurps.length; i++) {
+        const sb = slurps[i];
+        if (sb.destroyed || sb.hp <= 0) continue;
+        const center = { x: sb.x, y: sb.y + 0.625, z: sb.z };
+        if (distPointToSegment(center, params.from, params.to).dist <= dashRadius) {
+          this.applySlurpBarrelHit(
+            sBridge,
+            sb.id,
+            structDmg,
+            center,
+            { x: 0, y: 1, z: 0 },
+            params.actor,
+          );
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      }
+    }
+
+    if (rcBridge) {
+      const expBarrels = rcBridge.getExplosiveBarrels();
+      for (let i = 0; i < expBarrels.length; i++) {
+        const eb = expBarrels[i];
+        if (eb.exploded || eb.hp <= 0 || this.explodingBarrelIds.has(eb.id)) continue;
+        const center = { x: eb.x, y: eb.y + 0.625, z: eb.z };
+        if (distPointToSegment(center, params.from, params.to).dist <= dashRadius) {
+          this.applyExplosiveBarrelHit(
+            rcBridge,
+            eb.id,
+            structDmg,
+            center,
+            { x: 0, y: 1, z: 0 },
+            params.actor,
+            params.isPlayer,
+          );
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      }
+    }
+
+    const llamas = this.propsBridge.getLlamas?.() ?? [];
+    for (let i = 0; i < llamas.length; i++) {
+      const l = llamas[i];
+      if (l.opened) continue;
+      const center = { x: l.x, y: l.y + 0.8, z: l.z };
+      if (distPointToSegment(center, params.from, params.to).dist <= dashRadius) {
+        this.propsBridge.damageLlama?.(l.id, structDmg, center);
+        shotsHit += 1;
+        structDamageDealt += structDmg;
+      }
+    }
+
+    const vehicles = vBridge?.getVehicles() ?? [];
+    for (let i = 0; i < vehicles.length; i++) {
+      const veh = vehicles[i];
+      if (veh.destroyed || veh.hp <= 0 || veh.driverId === params.actor.id) continue;
+      const center = { x: veh.x, y: veh.y + 0.65, z: veh.z };
+      if (distPointToSegment(center, params.from, params.to).dist <= dashRadius) {
+        vBridge?.damageVehicle(veh.id, structDmg, center);
+        shotsHit += 1;
+        structDamageDealt += structDmg;
+      }
+    }
+
+    return {
+      fired: true,
+      shotsHit,
+      headshots: 0,
+      damageDealt: actorDamageDealt > 0 ? actorDamageDealt : structDamageDealt,
+    };
   }
 
   private executeGrapplerShot(

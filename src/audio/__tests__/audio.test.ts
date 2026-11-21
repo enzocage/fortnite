@@ -102,6 +102,13 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   flag_captured: true,
   tactical_ping: true,
   barrel_explode: true,
+  shot_dmr: true,
+  kinetic_slash: true,
+  kinetic_dash: true,
+  gold_pickup: true,
+  vending_buy: true,
+  ally_hired: true,
+  loot_island_spawn: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -432,14 +439,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 85 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 92 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(85);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(92);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -686,6 +693,145 @@ describe('SoundSynthesizer', () => {
     synth.dispose();
   });
 
+  it('creates bespoke multi-layered Wave 5 SFX with strictly positive ramps across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave5Ids: SoundEventId[] = [
+      'shot_dmr',
+      'kinetic_slash',
+      'kinetic_dash',
+      'gold_pickup',
+      'vending_buy',
+      'ally_hired',
+      'loot_island_spawn',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave5Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (id === 'kinetic_slash') {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.shot_dmr).toBeGreaterThan(0.18);
+    expect(durations.shot_dmr).toBeLessThan(0.4);
+    expect(durations.kinetic_slash).toBeGreaterThan(0.2);
+    expect(durations.kinetic_dash).toBeGreaterThan(0.38);
+    expect(durations.gold_pickup).toBeGreaterThan(0.32);
+    expect(durations.vending_buy).toBeGreaterThan(0.45);
+    expect(durations.ally_hired).toBeGreaterThan(0.75);
+    expect(durations.loot_island_spawn).toBeGreaterThan(1.1);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThan(0);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThan(0);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave5Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          // omit optional detune
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          // omit optional frequency / Q setters
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave5Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
   it('layers gunfire sub-thump & bolt tails cleanly across pitch/volume bounds', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
@@ -698,6 +844,7 @@ describe('SoundSynthesizer', () => {
       'shot_pump',
       'shot_tac',
       'shot_sniper',
+      'shot_dmr',
       'shot_heavy_shotgun',
       'shot_mythic_rifle',
     ];
@@ -1740,5 +1887,61 @@ describe('AudioEngine', () => {
     expect(minSources[0].stopped).toBe(true);
     expect(windMasterGain.value).toBeCloseTo(0.0001, 4);
     fallbackEngine.dispose();
+  });
+
+  it('assigns explicit Wave-5 priorities, max hear distances, and spatial culling', async () => {
+    expect(getSoundPriority('loot_island_spawn')).toBe(3);
+    expect(getSoundPriority('ally_hired')).toBe(3);
+    expect(getSoundPriority('kinetic_dash')).toBe(3);
+    expect(getSoundPriority('shot_dmr')).toBe(2);
+    expect(getSoundPriority('kinetic_slash')).toBe(2);
+    expect(getSoundPriority('vending_buy')).toBe(2);
+    expect(getSoundPriority('gold_pickup')).toBe(1);
+
+    expect(getMaxHearDistance('gold_pickup')).toBe(75);
+    expect(getMaxHearDistance('vending_buy')).toBe(90);
+    expect(getMaxHearDistance('kinetic_slash')).toBe(100);
+    expect(getMaxHearDistance('ally_hired')).toBe(120);
+    expect(getMaxHearDistance('kinetic_dash')).toBe(160);
+    expect(getMaxHearDistance('shot_dmr')).toBe(200);
+    expect(getMaxHearDistance('loot_island_spawn')).toBe(350);
+
+    const bus = new EventBus();
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'gold_pickup', position: { x: 70, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'vending_buy', position: { x: 85, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'kinetic_slash', position: { x: 95, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'ally_hired', position: { x: 115, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'kinetic_dash', position: { x: 150, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'shot_dmr', position: { x: 190, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(
+      engine.playSound({ id: 'loot_island_spawn', position: { x: 310, y: 0, z: 0 }, spatial: true }),
+    ).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'gold_pickup', position: { x: 85, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'vending_buy', position: { x: 100, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'kinetic_slash', position: { x: 110, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'ally_hired', position: { x: 135, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'kinetic_dash', position: { x: 170, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'shot_dmr', position: { x: 215, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(
+      engine.playSound({ id: 'loot_island_spawn', position: { x: 365, y: 0, z: 0 }, spatial: true }),
+    ).toBe(false);
+
+    // Polyphony stays bounded even under rapid Wave-5 bursts
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'kinetic_dash' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+
+    engine.dispose();
   });
 });

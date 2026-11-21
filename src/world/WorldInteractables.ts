@@ -1,17 +1,24 @@
 import * as THREE from 'three';
-import { EventBus, POIS } from '../core';
+import { EventBus, POIS, WEAPONS } from '../core';
 import type {
   CampfireEntity,
   CapturePointEntity,
   ColliderBox,
   ExplosiveBarrelEntity,
+  ItemInstance,
   LaunchPadEntity,
+  LootIslandState,
+  NpcSpecialistEntity,
+  Rarity,
   RiftEntity,
   SlurpBarrelEntity,
+  SpecialistRole,
   TerrainQuery,
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
+  VendingMachineEntity,
+  WeaponId,
   ZiplineEntity,
 } from '../types';
 
@@ -68,6 +75,41 @@ export interface ExplosiveBarrelDamageResult {
   position: Vec3Like;
   blastRadius: number;
   blastDamage: number;
+}
+
+export interface VendingPurchaseResult {
+  item: ItemInstance;
+  priceGold: number;
+  position: Vec3Like;
+}
+
+export interface LootIslandCaptureResult {
+  capturedNow: boolean;
+  lootPos?: Vec3Like;
+}
+
+interface VendingMachineVisual {
+  data: VendingMachineEntity;
+  group: THREE.Group;
+  screenMat: THREE.MeshStandardMaterial;
+  haloMat: THREE.MeshStandardMaterial;
+  emblemMat: THREE.MeshStandardMaterial;
+  haloGroup: THREE.Group;
+  emblemMesh: THREE.Object3D;
+  stockPips: THREE.Mesh[];
+  activeColorHex: string;
+  activeEmissiveHex: string;
+  baseHaloY: number;
+  collider: ColliderBox;
+}
+
+interface NpcSpecialistVisual {
+  data: NpcSpecialistEntity;
+  group: THREE.Group;
+  beaconGroup: THREE.Group;
+  emblemGroup: THREE.Group;
+  ringMesh: THREE.Mesh;
+  baseEmblemY: number;
 }
 
 interface UpgradeBenchVisual {
@@ -146,9 +188,17 @@ const CAPTURE_RADIUS = 6.5;
 const EXPLOSIVE_BARREL_HP = 35;
 const EXPLOSIVE_BARREL_BLAST_RADIUS = 6.8;
 const EXPLOSIVE_BARREL_BLAST_DAMAGE = 85;
+const VENDING_DEFAULT_STOCK = 3;
+const NPC_SPECIALIST_PRICE_GOLD = 200;
+const LOOT_ISLAND_HEIGHT_OFFSET = 24;
+const LOOT_ISLAND_RADIUS = 14;
+const LOOT_ISLAND_DECK_HALF_EXTENT = 12.5;
+const LOOT_ISLAND_DECK_THICKNESS = 0.6;
+const LOOT_ISLAND_CAPTURE_DURATION_SEC = 10;
 
 export class WorldInteractables {
   private group = new THREE.Group();
+  private terrain: TerrainQuery;
   private eventBus?: EventBus;
   private launchPads: LaunchPadEntity[] = [];
   private ziplines: ZiplineEntity[] = [];
@@ -166,6 +216,39 @@ export class WorldInteractables {
   private capturePointsMap = new Map<string, CapturePointVisual>();
   private explosiveBarrels: ExplosiveBarrelEntity[] = [];
   private explosiveBarrelsMap = new Map<string, ExplosiveBarrelVisual>();
+  private vendingMachines: VendingMachineEntity[] = [];
+  private vendingMachinesMap = new Map<string, VendingMachineVisual>();
+  private vendingItemCounter = 0;
+  private npcSpecialists: NpcSpecialistEntity[] = [];
+  private npcSpecialistsMap = new Map<string, NpcSpecialistVisual>();
+  private lootIslandState: LootIslandState = {
+    active: false,
+    spawnedAtSec: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+    radius: LOOT_ISLAND_RADIUS,
+    captured: false,
+    captureProgress: 0,
+  };
+  private lootIslandGroup!: THREE.Group;
+  private lootIslandFlagGroup!: THREE.Group;
+  private lootIslandBannerMesh!: THREE.Mesh;
+  private lootIslandTrimMesh!: THREE.Mesh;
+  private lootIslandFinialMesh!: THREE.Mesh;
+  private lootIslandOuterRing!: THREE.Mesh;
+  private lootIslandInnerRing!: THREE.Mesh;
+  private lootIslandUncapturedFlagMat!: THREE.Material;
+  private lootIslandCapturedFlagMat!: THREE.Material;
+  private lootIslandUncapturedTrimMat!: THREE.Material;
+  private lootIslandCapturedTrimMat!: THREE.Material;
+  private lootIslandUncapturedRingMat!: THREE.Material;
+  private lootIslandCapturedRingMat!: THREE.Material;
+  private lootIslandFlagMinY = 1.2;
+  private lootIslandFlagMaxY = 5.8;
+  private lootIslandGeyserGroup!: THREE.Group;
+  private lootIslandGeyserCore!: THREE.Group;
+  private lootIslandGeyserRings: THREE.Mesh[] = [];
   private padVisuals: PadVisual[] = [];
   private ziplineOrbs: ZiplineOrb[] = [];
   private geometries: THREE.BufferGeometry[] = [];
@@ -173,6 +256,7 @@ export class WorldInteractables {
 
   constructor(terrain: TerrainQuery, eventBus?: EventBus) {
     this.group.name = 'WorldInteractables';
+    this.terrain = terrain;
     this.eventBus = eventBus;
     this.buildLaunchPads(terrain);
     this.buildZiplines(terrain);
@@ -183,6 +267,9 @@ export class WorldInteractables {
     this.buildRifts(terrain);
     this.buildCapturePoints(terrain);
     this.buildExplosiveBarrels(terrain);
+    this.buildVendingMachines(terrain);
+    this.buildNpcSpecialists(terrain);
+    this.buildLootIsland();
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -1673,6 +1760,790 @@ export class WorldInteractables {
     }
   }
 
+  private buildVendingMachines(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      kind: 'mending' | 'weapon';
+      dx: number;
+      dz: number;
+      rotationY: number;
+      offerWeaponId: WeaponId;
+      offerRarity: Rarity;
+      priceGold: number;
+    }> = [
+      {
+        id: 'vm_metro_towers',
+        poiId: 'metro_towers',
+        kind: 'mending',
+        dx: 12,
+        dz: 0,
+        rotationY: -Math.PI * 0.5,
+        offerWeaponId: 'medkit',
+        offerRarity: 'uncommon',
+        priceGold: 75,
+      },
+      {
+        id: 'vm_sunny_suburbs',
+        poiId: 'sunny_suburbs',
+        kind: 'mending',
+        dx: 0,
+        dz: 22,
+        rotationY: Math.PI,
+        offerWeaponId: 'shield_potion',
+        offerRarity: 'rare',
+        priceGold: 90,
+      },
+      {
+        id: 'vm_crater_depot',
+        poiId: 'crater_depot',
+        kind: 'mending',
+        dx: 12,
+        dz: -10,
+        rotationY: 0,
+        offerWeaponId: 'chug_splash',
+        offerRarity: 'rare',
+        priceGold: 100,
+      },
+      {
+        id: 'vm_market_row',
+        poiId: 'market_row',
+        kind: 'weapon',
+        dx: 6,
+        dz: -2,
+        rotationY: 0,
+        offerWeaponId: 'tactical_dmr',
+        offerRarity: 'epic',
+        priceGold: 175,
+      },
+      {
+        id: 'vm_skyline_spire',
+        poiId: 'skyline_spire',
+        kind: 'weapon',
+        dx: 18,
+        dz: 0,
+        rotationY: -Math.PI * 0.5,
+        offerWeaponId: 'kinetic_blade',
+        offerRarity: 'epic',
+        priceGold: 225,
+      },
+      {
+        id: 'vm_frostpeak_citadel',
+        poiId: 'frostpeak_citadel',
+        kind: 'weapon',
+        dx: 12,
+        dz: -4,
+        rotationY: -Math.PI * 0.5,
+        offerWeaponId: 'heavy_shotgun',
+        offerRarity: 'legendary',
+        priceGold: 250,
+      },
+    ];
+
+    const baseDarkMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.45, metalness: 0.78 }),
+    );
+    const mendingBodyMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#0e3a4c', roughness: 0.36, metalness: 0.62 }),
+    );
+    const weaponBodyMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.36, metalness: 0.72 }),
+    );
+    const screenBackingMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#020617', roughness: 0.2, metalness: 0.5 }),
+    );
+    const chuteMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.4, metalness: 0.8 }),
+    );
+
+    const baseGeo = this.addGeo(new THREE.BoxGeometry(1.56, 0.16, 1.06));
+    const chassisGeo = this.addGeo(new THREE.BoxGeometry(1.44, 2.38, 0.92));
+    const marqueeGeo = this.addGeo(new THREE.BoxGeometry(1.54, 0.32, 1.06));
+    const railGeo = this.addGeo(new THREE.BoxGeometry(0.08, 2.26, 0.12));
+    const frameGeo = this.addGeo(new THREE.BoxGeometry(1.14, 1.24, 0.06));
+    const screenGeo = this.addGeo(new THREE.BoxGeometry(0.98, 1.06, 0.04));
+    const chuteGeo = this.addGeo(new THREE.BoxGeometry(0.92, 0.36, 0.12));
+    const pipGeo = this.addGeo(new THREE.BoxGeometry(0.16, 0.08, 0.06));
+    const haloRingGeo = this.addGeo(new THREE.TorusGeometry(0.42, 0.045, 8, 24));
+    haloRingGeo.rotateX(Math.PI * 0.42);
+    const haloCoreGeo = this.addGeo(new THREE.OctahedronGeometry(0.2, 0));
+    const frontEmblemCrossGeo = this.addGeo(new THREE.BoxGeometry(0.42, 0.14, 0.06));
+    const frontEmblemWeaponGeo = this.addGeo(new THREE.OctahedronGeometry(0.22, 0));
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+
+      const x = poi.x + spec.dx;
+      const z = poi.z + spec.dz;
+      const y = terrain.getHeightAt(x, z);
+
+      const data: VendingMachineEntity = {
+        id: spec.id,
+        poiId: spec.poiId,
+        kind: spec.kind,
+        x,
+        y,
+        z,
+        rotationY: spec.rotationY,
+        offerWeaponId: spec.offerWeaponId,
+        offerRarity: spec.offerRarity,
+        priceGold: spec.priceGold,
+        stock: VENDING_DEFAULT_STOCK,
+      };
+      this.vendingMachines.push(data);
+
+      const isMending = spec.kind === 'mending';
+      const activeColorHex = isMending ? '#22d3ee' : '#facc15';
+      const activeEmissiveHex = isMending ? '#06b6d4' : '#f59e0b';
+
+      const screenMat = this.addMat(
+        new THREE.MeshStandardMaterial({
+          color: activeColorHex,
+          emissive: activeEmissiveHex,
+          emissiveIntensity: 1.35,
+          roughness: 0.16,
+          metalness: 0.25,
+          transparent: true,
+          opacity: 0.9,
+        }),
+      );
+      const haloMat = this.addMat(
+        new THREE.MeshStandardMaterial({
+          color: activeColorHex,
+          emissive: activeEmissiveHex,
+          emissiveIntensity: 1.65,
+          roughness: 0.15,
+          metalness: 0.35,
+        }),
+      );
+      const emblemMat = this.addMat(
+        new THREE.MeshStandardMaterial({
+          color: isMending ? '#ecfeff' : '#fef08a',
+          emissive: activeColorHex,
+          emissiveIntensity: 1.45,
+          roughness: 0.18,
+          metalness: 0.3,
+        }),
+      );
+
+      const vmGroup = new THREE.Group();
+      vmGroup.name = `VendingMachine_${spec.id}`;
+      vmGroup.position.set(x, y, z);
+      vmGroup.rotation.y = spec.rotationY;
+
+      const base = new THREE.Mesh(baseGeo, baseDarkMat);
+      base.position.y = 0.08;
+      base.castShadow = true;
+      base.receiveShadow = true;
+      vmGroup.add(base);
+
+      const chassis = new THREE.Mesh(chassisGeo, isMending ? mendingBodyMat : weaponBodyMat);
+      chassis.position.y = 1.35;
+      chassis.castShadow = true;
+      chassis.receiveShadow = true;
+      vmGroup.add(chassis);
+
+      const marquee = new THREE.Mesh(marqueeGeo, baseDarkMat);
+      marquee.position.set(0, 2.66, 0.05);
+      marquee.rotation.x = 0.12;
+      marquee.castShadow = true;
+      vmGroup.add(marquee);
+
+      for (const rx of [-0.74, 0.74]) {
+        const rail = new THREE.Mesh(railGeo, haloMat);
+        rail.position.set(rx, 1.36, 0.44);
+        vmGroup.add(rail);
+      }
+
+      const frame = new THREE.Mesh(frameGeo, screenBackingMat);
+      frame.position.set(0, 1.72, 0.45);
+      vmGroup.add(frame);
+
+      const screen = new THREE.Mesh(screenGeo, screenMat);
+      screen.position.set(0, 1.72, 0.48);
+      vmGroup.add(screen);
+
+      let emblemMesh: THREE.Object3D;
+      if (isMending) {
+        const crossGroup = new THREE.Group();
+        const barH = new THREE.Mesh(frontEmblemCrossGeo, emblemMat);
+        const barV = new THREE.Mesh(frontEmblemCrossGeo, emblemMat);
+        barV.rotation.z = Math.PI * 0.5;
+        crossGroup.add(barH, barV);
+        crossGroup.position.set(0, 1.74, 0.56);
+        emblemMesh = crossGroup;
+      } else {
+        const diamond = new THREE.Mesh(frontEmblemWeaponGeo, emblemMat);
+        diamond.position.set(0, 1.74, 0.56);
+        emblemMesh = diamond;
+      }
+      vmGroup.add(emblemMesh);
+
+      const chute = new THREE.Mesh(chuteGeo, chuteMat);
+      chute.position.set(0, 0.52, 0.45);
+      vmGroup.add(chute);
+
+      const stockPips: THREE.Mesh[] = [];
+      for (let p = 0; p < VENDING_DEFAULT_STOCK; p++) {
+        const pip = new THREE.Mesh(pipGeo, haloMat);
+        pip.position.set((p - 1) * 0.24, 1.0, 0.48);
+        vmGroup.add(pip);
+        stockPips.push(pip);
+      }
+
+      const baseHaloY = 3.22;
+      const haloGroup = new THREE.Group();
+      haloGroup.position.set(0, baseHaloY, 0);
+      const haloRing = new THREE.Mesh(haloRingGeo, haloMat);
+      const haloCore = new THREE.Mesh(haloCoreGeo, emblemMat);
+      haloGroup.add(haloRing, haloCore);
+      vmGroup.add(haloGroup);
+
+      this.group.add(vmGroup);
+
+      const cosR = Math.abs(Math.cos(spec.rotationY));
+      const sinR = Math.abs(Math.sin(spec.rotationY));
+      const halfX = 0.78 * cosR + 0.55 * sinR;
+      const halfZ = 0.78 * sinR + 0.55 * cosR;
+      const collider: ColliderBox = {
+        id: `${spec.id}_col`,
+        minX: x - halfX,
+        minY: y,
+        minZ: z - halfZ,
+        maxX: x + halfX,
+        maxY: y + 2.8,
+        maxZ: z + halfZ,
+        material: 'metal',
+        tag: `vending_machine:${spec.id}`,
+      };
+
+      const visual: VendingMachineVisual = {
+        data,
+        group: vmGroup,
+        screenMat,
+        haloMat,
+        emblemMat,
+        haloGroup,
+        emblemMesh,
+        stockPips,
+        activeColorHex,
+        activeEmissiveHex,
+        baseHaloY,
+        collider,
+      };
+      this.syncVendingMachineVisual(visual);
+      this.vendingMachinesMap.set(spec.id, visual);
+    }
+  }
+
+  private buildNpcSpecialists(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      name: string;
+      role: SpecialistRole;
+      poiId: string;
+      skinId: string;
+      dx: number;
+      dz: number;
+    }> = [
+      {
+        id: 'npc_recon_nova',
+        name: 'Recon Nova',
+        role: 'scout',
+        poiId: 'whispering_pines',
+        skinId: 'neon_drift',
+        dx: -2,
+        dz: 8,
+      },
+      {
+        id: 'npc_doc_remedy',
+        name: 'Doc Remedy',
+        role: 'medic',
+        poiId: 'sunken_oasis',
+        skinId: 'emerald_scout',
+        dx: -2,
+        dz: 6,
+      },
+      {
+        id: 'npc_tank_bastion',
+        name: 'Tank Bastion',
+        role: 'heavy',
+        poiId: 'frostpeak_citadel',
+        skinId: 'arctic_apex',
+        dx: -5,
+        dz: 13,
+      },
+    ];
+
+    const roleColors: Record<SpecialistRole, { color: string; emissive: string }> = {
+      scout: { color: '#22d3ee', emissive: '#06b6d4' },
+      medic: { color: '#34d399', emissive: '#10b981' },
+      heavy: { color: '#fbbf24', emissive: '#f59e0b' },
+    };
+
+    const padSteelMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.4, metalness: 0.8 }),
+    );
+    const kioskMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.35, metalness: 0.78 }),
+    );
+
+    const padGeo = this.addGeo(new THREE.CylinderGeometry(0.92, 1.08, 0.18, 8));
+    const consolePostGeo = this.addGeo(new THREE.BoxGeometry(0.46, 1.15, 0.34));
+    const consoleScreenGeo = this.addGeo(new THREE.BoxGeometry(0.36, 0.28, 0.05));
+    const ringGeo = this.addGeo(new THREE.RingGeometry(0.92, 1.24, 24));
+    ringGeo.rotateX(-Math.PI * 0.5);
+    const beamGeo = this.addGeo(new THREE.CylinderGeometry(0.42, 0.72, 2.7, 14, 1, true));
+    const torsoGeo = this.addGeo(new THREE.OctahedronGeometry(0.26, 0));
+    const headGeo = this.addGeo(new THREE.SphereGeometry(0.15, 10, 8));
+    const chevronRingGeo = this.addGeo(new THREE.TorusGeometry(0.44, 0.04, 8, 24));
+    chevronRingGeo.rotateX(Math.PI * 0.38);
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+
+      const x = poi.x + spec.dx;
+      const z = poi.z + spec.dz;
+      const y = terrain.getHeightAt(x, z);
+
+      const data: NpcSpecialistEntity = {
+        id: spec.id,
+        name: spec.name,
+        role: spec.role,
+        poiId: spec.poiId,
+        skinId: spec.skinId,
+        x,
+        y,
+        z,
+        priceGold: NPC_SPECIALIST_PRICE_GOLD,
+        hiredBy: null,
+      };
+      this.npcSpecialists.push(data);
+
+      const palette = roleColors[spec.role];
+      const accentMat = this.addMat(
+        new THREE.MeshStandardMaterial({
+          color: palette.color,
+          emissive: palette.emissive,
+          emissiveIntensity: 1.55,
+          roughness: 0.18,
+          metalness: 0.3,
+        }),
+      );
+      const beamMat = this.addMat(
+        new THREE.MeshBasicMaterial({
+          color: palette.color,
+          transparent: true,
+          opacity: 0.28,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      const ringMat = this.addMat(
+        new THREE.MeshBasicMaterial({
+          color: palette.color,
+          transparent: true,
+          opacity: 0.75,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+
+      const npcGroup = new THREE.Group();
+      npcGroup.name = `NpcSpecialist_${spec.id}`;
+      npcGroup.position.set(x, y, z);
+
+      const pad = new THREE.Mesh(padGeo, padSteelMat);
+      pad.position.y = 0.09;
+      pad.castShadow = true;
+      pad.receiveShadow = true;
+      npcGroup.add(pad);
+
+      const post = new THREE.Mesh(consolePostGeo, kioskMat);
+      post.position.set(0, 0.58, -0.62);
+      post.castShadow = true;
+      npcGroup.add(post);
+
+      const postScreen = new THREE.Mesh(consoleScreenGeo, accentMat);
+      postScreen.position.set(0, 0.96, -0.43);
+      postScreen.rotation.x = -0.35;
+      npcGroup.add(postScreen);
+
+      const beaconGroup = new THREE.Group();
+      beaconGroup.name = `NpcBeacon_${spec.id}`;
+
+      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+      ringMesh.position.y = 0.05;
+      beaconGroup.add(ringMesh);
+
+      const beam = new THREE.Mesh(beamGeo, beamMat);
+      beam.position.y = 1.52;
+      beaconGroup.add(beam);
+
+      const baseEmblemY = 1.68;
+      const emblemGroup = new THREE.Group();
+      emblemGroup.position.set(0, baseEmblemY, 0);
+
+      const torso = new THREE.Mesh(torsoGeo, accentMat);
+      torso.scale.set(0.95, 1.35, 0.75);
+      const head = new THREE.Mesh(headGeo, accentMat);
+      head.position.y = 0.48;
+      const chevronRing = new THREE.Mesh(chevronRingGeo, accentMat);
+      emblemGroup.add(torso, head, chevronRing);
+
+      beaconGroup.add(emblemGroup);
+      npcGroup.add(beaconGroup);
+      this.group.add(npcGroup);
+
+      this.npcSpecialistsMap.set(spec.id, {
+        data,
+        group: npcGroup,
+        beaconGroup,
+        emblemGroup,
+        ringMesh,
+        baseEmblemY,
+      });
+    }
+  }
+
+  private buildLootIsland(): void {
+    const rockMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.88, metalness: 0.1 }),
+    );
+    const grassDeckMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#22c55e', roughness: 0.78, metalness: 0.05 }),
+    );
+    const stoneTrimMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.6, metalness: 0.45 }),
+    );
+    const crystalCyanMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.55,
+        roughness: 0.16,
+        metalness: 0.3,
+      }),
+    );
+    const crystalPurpleMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#c084fc',
+        emissive: '#9333ea',
+        emissiveIntensity: 1.5,
+        roughness: 0.18,
+        metalness: 0.3,
+      }),
+    );
+    const poleMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.3, metalness: 0.86 }),
+    );
+
+    this.lootIslandUncapturedFlagMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#38bdf8',
+        emissive: '#7c3aed',
+        emissiveIntensity: 1.15,
+        transparent: true,
+        opacity: 0.88,
+        roughness: 0.2,
+      }),
+    );
+    this.lootIslandCapturedFlagMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#f59e0b',
+        emissiveIntensity: 1.6,
+        transparent: true,
+        opacity: 0.95,
+        roughness: 0.18,
+      }),
+    );
+    this.lootIslandUncapturedTrimMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#c084fc',
+        emissive: '#9333ea',
+        emissiveIntensity: 1.4,
+        roughness: 0.2,
+      }),
+    );
+    this.lootIslandCapturedTrimMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#fde047',
+        emissive: '#f59e0b',
+        emissiveIntensity: 1.75,
+        roughness: 0.16,
+      }),
+    );
+    this.lootIslandUncapturedRingMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.65,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    this.lootIslandCapturedRingMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#facc15',
+        transparent: true,
+        opacity: 0.88,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    // 1. Floating Rock-and-Crystal Island Group (centered at (x, y, z) where y = terrainHeight + 24)
+    this.lootIslandGroup = new THREE.Group();
+    this.lootIslandGroup.name = 'LootIsland';
+    this.lootIslandGroup.visible = false;
+
+    const deckSlabGeo = this.addGeo(
+      new THREE.CylinderGeometry(
+        LOOT_ISLAND_RADIUS - 0.3,
+        LOOT_ISLAND_RADIUS - 0.9,
+        LOOT_ISLAND_DECK_THICKNESS,
+        16,
+      ),
+    );
+    const grassTopGeo = this.addGeo(
+      new THREE.CylinderGeometry(LOOT_ISLAND_RADIUS - 0.8, LOOT_ISLAND_RADIUS - 0.8, 0.08, 16),
+    );
+    const underSpireGeo = this.addGeo(new THREE.ConeGeometry(LOOT_ISLAND_RADIUS - 0.6, 8.6, 10));
+    underSpireGeo.rotateX(Math.PI);
+    const sideSpireGeo = this.addGeo(new THREE.ConeGeometry(4.2, 5.4, 7));
+    sideSpireGeo.rotateX(Math.PI);
+    const crystalSpireGeo = this.addGeo(new THREE.OctahedronGeometry(1.15, 0));
+    const obeliskGeo = this.addGeo(new THREE.BoxGeometry(0.95, 2.4, 0.95));
+
+    // Flat walkable top deck slab spanning [y - 0.6 .. y]
+    const deckSlab = new THREE.Mesh(deckSlabGeo, rockMat);
+    deckSlab.position.y = -LOOT_ISLAND_DECK_THICKNESS * 0.5;
+    deckSlab.receiveShadow = true;
+    deckSlab.castShadow = true;
+    this.lootIslandGroup.add(deckSlab);
+
+    const grassTop = new THREE.Mesh(grassTopGeo, grassDeckMat);
+    grassTop.position.y = -0.02;
+    grassTop.receiveShadow = true;
+    this.lootIslandGroup.add(grassTop);
+
+    const mainUnderSpire = new THREE.Mesh(underSpireGeo, rockMat);
+    mainUnderSpire.position.y = -4.9;
+    mainUnderSpire.castShadow = true;
+    this.lootIslandGroup.add(mainUnderSpire);
+
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 0.4;
+      const sideSpire = new THREE.Mesh(sideSpireGeo, rockMat);
+      sideSpire.position.set(Math.cos(a) * 6.8, -3.2, Math.sin(a) * 6.8);
+      this.lootIslandGroup.add(sideSpire);
+    }
+
+    // Glowing crystals jutting from underside and outer rim
+    const bottomCrystal = new THREE.Mesh(crystalSpireGeo, crystalCyanMat);
+    bottomCrystal.position.y = -9.6;
+    bottomCrystal.scale.set(1.2, 1.9, 1.2);
+    this.lootIslandGroup.add(bottomCrystal);
+
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const crystal = new THREE.Mesh(
+        crystalSpireGeo,
+        i % 2 === 0 ? crystalCyanMat : crystalPurpleMat,
+      );
+      crystal.position.set(Math.cos(a) * 11.8, -1.35, Math.sin(a) * 11.8);
+      crystal.rotation.set(Math.sin(a) * 0.4, a, Math.cos(a) * 0.4);
+      crystal.scale.set(0.68, 1.45, 0.68);
+      this.lootIslandGroup.add(crystal);
+    }
+
+    for (const [ox, oz] of [
+      [-8.5, -8.5],
+      [8.5, -8.5],
+      [-8.5, 8.5],
+      [8.5, 8.5],
+    ]) {
+      const obelisk = new THREE.Mesh(obeliskGeo, stoneTrimMat);
+      obelisk.position.set(ox, 1.2, oz);
+      obelisk.castShadow = true;
+      this.lootIslandGroup.add(obelisk);
+      const cap = new THREE.Mesh(crystalSpireGeo, crystalPurpleMat);
+      cap.position.set(ox, 2.7, oz);
+      cap.scale.set(0.45, 0.72, 0.45);
+      this.lootIslandGroup.add(cap);
+    }
+
+    // Center Shrine Capture Pylon & Flag on top
+    const shrinePedestalGeo = this.addGeo(new THREE.CylinderGeometry(1.15, 1.45, 0.28, 12));
+    const shrineCollarGeo = this.addGeo(new THREE.CylinderGeometry(0.32, 0.44, 0.26, 12));
+    const poleGeo = this.addGeo(new THREE.CylinderGeometry(0.09, 0.12, 6.8, 10));
+    const finialGeo = this.addGeo(new THREE.OctahedronGeometry(0.28, 0));
+    const crossbarGeo = this.addGeo(new THREE.BoxGeometry(1.9, 0.08, 0.08));
+    const bannerGeo = this.addGeo(new THREE.BoxGeometry(1.85, 1.05, 0.05));
+    const trimGeo = this.addGeo(new THREE.BoxGeometry(1.88, 0.14, 0.07));
+    const outerRingGeo = this.addGeo(new THREE.RingGeometry(8.6, 9.1, 48));
+    outerRingGeo.rotateX(-Math.PI * 0.5);
+    const innerRingGeo = this.addGeo(new THREE.RingGeometry(1.3, 1.65, 32));
+    innerRingGeo.rotateX(-Math.PI * 0.5);
+
+    const pedestal = new THREE.Mesh(shrinePedestalGeo, stoneTrimMat);
+    pedestal.position.y = 0.14;
+    const collar = new THREE.Mesh(shrineCollarGeo, poleMat);
+    collar.position.y = 0.4;
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.y = 3.6;
+    this.lootIslandFinialMesh = new THREE.Mesh(finialGeo, this.lootIslandUncapturedTrimMat);
+    this.lootIslandFinialMesh.position.y = 7.15;
+    this.lootIslandOuterRing = new THREE.Mesh(outerRingGeo, this.lootIslandUncapturedRingMat);
+    this.lootIslandOuterRing.position.y = 0.05;
+    this.lootIslandInnerRing = new THREE.Mesh(innerRingGeo, this.lootIslandUncapturedTrimMat);
+    this.lootIslandInnerRing.position.y = 0.06;
+
+    this.lootIslandFlagGroup = new THREE.Group();
+    this.lootIslandFlagGroup.position.set(0, this.lootIslandFlagMinY, 0);
+    const crossbar = new THREE.Mesh(crossbarGeo, poleMat);
+    crossbar.position.set(0.95, 0, 0);
+    this.lootIslandBannerMesh = new THREE.Mesh(bannerGeo, this.lootIslandUncapturedFlagMat);
+    this.lootIslandBannerMesh.position.set(0.95, -0.52, 0);
+    this.lootIslandTrimMesh = new THREE.Mesh(trimGeo, this.lootIslandUncapturedTrimMat);
+    this.lootIslandTrimMesh.position.set(0.95, -0.98, 0);
+    this.lootIslandFlagGroup.add(crossbar, this.lootIslandBannerMesh, this.lootIslandTrimMesh);
+
+    this.lootIslandGroup.add(
+      pedestal,
+      collar,
+      pole,
+      this.lootIslandFinialMesh,
+      this.lootIslandOuterRing,
+      this.lootIslandInnerRing,
+      this.lootIslandFlagGroup,
+    );
+    this.group.add(this.lootIslandGroup);
+
+    // 2. Ground Updraft Sky Rift Geyser directly beneath the island
+    this.lootIslandGeyserGroup = new THREE.Group();
+    this.lootIslandGeyserGroup.name = 'LootIslandRiftGeyser';
+    this.lootIslandGeyserGroup.visible = false;
+
+    const geyserRimGeo = this.addGeo(new THREE.CylinderGeometry(2.7, 3.6, 0.55, 14));
+    const geyserDiscGeo = this.addGeo(new THREE.CircleGeometry(2.45, 24));
+    geyserDiscGeo.rotateX(-Math.PI * 0.5);
+    const geyserVortexGeo = this.addGeo(new THREE.CylinderGeometry(1.8, 3.1, 18.0, 16, 1, true));
+    const geyserPulseRingGeo = this.addGeo(new THREE.TorusGeometry(2.3, 0.12, 8, 28));
+    geyserPulseRingGeo.rotateX(Math.PI * 0.5);
+
+    const geyserVortexMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#a855f7',
+        transparent: true,
+        opacity: 0.28,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const geyserDiscMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#22d3ee',
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const geyserRim = new THREE.Mesh(geyserRimGeo, rockMat);
+    geyserRim.position.y = 0.26;
+    this.lootIslandGeyserGroup.add(geyserRim);
+
+    const geyserDisc = new THREE.Mesh(geyserDiscGeo, geyserDiscMat);
+    geyserDisc.position.y = 0.35;
+    this.lootIslandGeyserGroup.add(geyserDisc);
+
+    this.lootIslandGeyserCore = new THREE.Group();
+    const vortex = new THREE.Mesh(geyserVortexGeo, geyserVortexMat);
+    vortex.position.y = 9.2;
+    this.lootIslandGeyserCore.add(vortex);
+
+    for (let c = 0; c < 6; c++) {
+      const ang = (c / 6) * Math.PI * 2;
+      const shard = new THREE.Mesh(
+        crystalSpireGeo,
+        c % 2 === 0 ? crystalCyanMat : crystalPurpleMat,
+      );
+      shard.position.set(Math.cos(ang) * 2.9, 0.75, Math.sin(ang) * 2.9);
+      shard.scale.set(0.4, 0.9, 0.4);
+      shard.rotation.y = ang;
+      this.lootIslandGeyserCore.add(shard);
+    }
+    this.lootIslandGeyserGroup.add(this.lootIslandGeyserCore);
+
+    this.lootIslandGeyserRings = [];
+    for (let r = 0; r < 3; r++) {
+      const ring = new THREE.Mesh(
+        geyserPulseRingGeo,
+        r % 2 === 0 ? crystalCyanMat : crystalPurpleMat,
+      );
+      ring.position.y = 1.0 + r * 5.0;
+      this.lootIslandGeyserGroup.add(ring);
+      this.lootIslandGeyserRings.push(ring);
+    }
+
+    this.group.add(this.lootIslandGeyserGroup);
+  }
+
+  private syncVendingMachineVisual(vm: VendingMachineVisual): void {
+    const soldOut = vm.data.stock <= 0;
+    if (soldOut) {
+      vm.screenMat.color.set('#334155');
+      vm.screenMat.emissive.set('#0f172a');
+      vm.screenMat.emissiveIntensity = 0.12;
+      vm.haloMat.color.set('#475569');
+      vm.haloMat.emissive.set('#1e293b');
+      vm.haloMat.emissiveIntensity = 0.1;
+      vm.emblemMat.emissiveIntensity = 0.14;
+      vm.haloGroup.scale.setScalar(0.7);
+    } else {
+      vm.screenMat.color.set(vm.activeColorHex);
+      vm.screenMat.emissive.set(vm.activeEmissiveHex);
+      vm.screenMat.emissiveIntensity = 1.35;
+      vm.haloMat.color.set(vm.activeColorHex);
+      vm.haloMat.emissive.set(vm.activeEmissiveHex);
+      vm.haloMat.emissiveIntensity = 1.65;
+      vm.emblemMat.emissiveIntensity = 1.45;
+      vm.haloGroup.scale.setScalar(1);
+    }
+    for (let i = 0; i < vm.stockPips.length; i++) {
+      vm.stockPips[i].visible = i < vm.data.stock;
+    }
+  }
+
+  private syncLootIslandVisual(): void {
+    const t = Math.max(0, Math.min(1, this.lootIslandState.captureProgress));
+    this.lootIslandFlagGroup.position.y =
+      this.lootIslandFlagMinY + (this.lootIslandFlagMaxY - this.lootIslandFlagMinY) * t;
+    const isCaptured = this.lootIslandState.captured;
+    this.lootIslandBannerMesh.material = isCaptured
+      ? this.lootIslandCapturedFlagMat
+      : this.lootIslandUncapturedFlagMat;
+    this.lootIslandTrimMesh.material = isCaptured
+      ? this.lootIslandCapturedTrimMat
+      : this.lootIslandUncapturedTrimMat;
+    this.lootIslandFinialMesh.material = isCaptured
+      ? this.lootIslandCapturedTrimMat
+      : this.lootIslandUncapturedTrimMat;
+    this.lootIslandInnerRing.material = isCaptured
+      ? this.lootIslandCapturedTrimMat
+      : this.lootIslandUncapturedTrimMat;
+    this.lootIslandOuterRing.material = isCaptured
+      ? this.lootIslandCapturedRingMat
+      : this.lootIslandUncapturedRingMat;
+  }
+
   getGroup(): THREE.Group {
     return this.group;
   }
@@ -1930,6 +2801,132 @@ export class WorldInteractables {
     return out;
   }
 
+  getVendingMachines(): VendingMachineEntity[] {
+    return this.vendingMachines;
+  }
+
+  purchaseFromVendingMachine(id: string): VendingPurchaseResult | null {
+    const entry = this.vendingMachinesMap.get(id);
+    if (!entry || entry.data.stock <= 0) {
+      return null;
+    }
+
+    entry.data.stock -= 1;
+    this.syncVendingMachineVisual(entry);
+
+    const def = WEAPONS[entry.data.offerWeaponId];
+    const item: ItemInstance = {
+      uid: `vm_item_${++this.vendingItemCounter}_${entry.data.offerWeaponId}`,
+      weaponId: entry.data.offerWeaponId,
+      rarity: entry.data.offerRarity,
+      magAmmo: def.magSize,
+      stackCount: 1,
+    };
+
+    return {
+      item,
+      priceGold: entry.data.priceGold,
+      position: { x: entry.data.x, y: entry.data.y, z: entry.data.z },
+    };
+  }
+
+  getVendingMachineColliders(): ColliderBox[] {
+    return Array.from(this.vendingMachinesMap.values(), (v) => v.collider);
+  }
+
+  getNpcSpecialists(): NpcSpecialistEntity[] {
+    return this.npcSpecialists;
+  }
+
+  hireNpcSpecialist(id: string, playerId: string): NpcSpecialistEntity | null {
+    if (!playerId) return null;
+    const entry = this.npcSpecialistsMap.get(id);
+    if (!entry || entry.data.hiredBy !== null) {
+      return null;
+    }
+
+    entry.data.hiredBy = playerId;
+    entry.beaconGroup.visible = false;
+    entry.group.visible = false;
+    return { ...entry.data };
+  }
+
+  spawnLootIsland(centerX: number, centerZ: number, elapsedSec: number): LootIslandState {
+    const groundY = this.terrain.getHeightAt(centerX, centerZ);
+    const islandY = groundY + LOOT_ISLAND_HEIGHT_OFFSET;
+
+    this.lootIslandState = {
+      active: true,
+      spawnedAtSec: elapsedSec,
+      x: centerX,
+      y: islandY,
+      z: centerZ,
+      radius: LOOT_ISLAND_RADIUS,
+      captured: false,
+      captureProgress: 0,
+    };
+
+    this.lootIslandGroup.position.set(centerX, islandY, centerZ);
+    this.lootIslandGroup.visible = true;
+    this.lootIslandGeyserGroup.position.set(centerX, groundY, centerZ);
+    this.lootIslandGeyserGroup.visible = true;
+    this.syncLootIslandVisual();
+
+    return { ...this.lootIslandState };
+  }
+
+  getLootIslandState(): LootIslandState {
+    return { ...this.lootIslandState };
+  }
+
+  advanceLootIslandCapture(dt: number): LootIslandCaptureResult {
+    if (!this.lootIslandState.active || this.lootIslandState.captured) {
+      return { capturedNow: false };
+    }
+
+    const safeDt = Math.max(0, dt);
+    this.lootIslandState.captureProgress = Math.min(
+      1,
+      this.lootIslandState.captureProgress + safeDt / LOOT_ISLAND_CAPTURE_DURATION_SEC,
+    );
+
+    if (this.lootIslandState.captureProgress >= 1 - 1e-7) {
+      this.lootIslandState.captureProgress = 1;
+      this.lootIslandState.captured = true;
+      this.syncLootIslandVisual();
+      return {
+        capturedNow: true,
+        lootPos: {
+          x: this.lootIslandState.x,
+          y: this.lootIslandState.y + 0.5,
+          z: this.lootIslandState.z,
+        },
+      };
+    }
+
+    this.syncLootIslandVisual();
+    return { capturedNow: false };
+  }
+
+  getLootIslandColliders(): ColliderBox[] {
+    if (!this.lootIslandState.active) {
+      return [];
+    }
+    return [
+      {
+        id: 'loot_island_deck',
+        minX: this.lootIslandState.x - LOOT_ISLAND_DECK_HALF_EXTENT,
+        minY: this.lootIslandState.y - LOOT_ISLAND_DECK_THICKNESS,
+        minZ: this.lootIslandState.z - LOOT_ISLAND_DECK_HALF_EXTENT,
+        maxX: this.lootIslandState.x + LOOT_ISLAND_DECK_HALF_EXTENT,
+        maxY: this.lootIslandState.y,
+        maxZ: this.lootIslandState.z + LOOT_ISLAND_DECK_HALF_EXTENT,
+        material: 'brick',
+        tag: 'loot_island_deck',
+      },
+    ];
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -1943,6 +2940,8 @@ export class WorldInteractables {
       ...this.getUpgradeBenchColliders(),
       ...this.getSlurpBarrelColliders(),
       ...this.getExplosiveBarrelColliders(),
+      ...this.getVendingMachineColliders(),
+      ...this.getLootIslandColliders(),
     ];
   }
 
@@ -2009,6 +3008,37 @@ export class WorldInteractables {
       eb.bodyGroup.rotation.set(0, 0, 0);
       eb.hitAnim = 0;
     }
+
+    for (const vm of this.vendingMachinesMap.values()) {
+      vm.data.stock = VENDING_DEFAULT_STOCK;
+      vm.haloGroup.position.y = vm.baseHaloY;
+      vm.haloGroup.rotation.set(0, 0, 0);
+      this.syncVendingMachineVisual(vm);
+    }
+
+    for (const npc of this.npcSpecialistsMap.values()) {
+      npc.data.hiredBy = null;
+      npc.beaconGroup.visible = true;
+      npc.group.visible = true;
+      npc.emblemGroup.position.y = npc.baseEmblemY;
+      npc.emblemGroup.rotation.set(0, 0, 0);
+    }
+
+    this.lootIslandState = {
+      active: false,
+      spawnedAtSec: 0,
+      x: 0,
+      y: 0,
+      z: 0,
+      radius: LOOT_ISLAND_RADIUS,
+      captured: false,
+      captureProgress: 0,
+    };
+    this.lootIslandGroup.visible = false;
+    this.lootIslandGeyserGroup.visible = false;
+    this.lootIslandFlagGroup.rotation.set(0, 0, 0);
+    this.lootIslandInnerRing.scale.set(1, 1, 1);
+    this.syncLootIslandVisual();
   }
 
   unlockVault(vaultId: string): UnlockVaultResult {
@@ -2211,6 +3241,48 @@ export class WorldInteractables {
     for (const eb of this.explosiveBarrelsMap.values()) {
       this.stepBarrelHitWobble(eb, safeDt);
     }
+
+    // Animate 6 Glowing Vending Machine halos & display emblems
+    let vmIdx = 0;
+    for (const vm of this.vendingMachinesMap.values()) {
+      if (vm.data.stock > 0) {
+        const t = elapsed + vmIdx * 0.7;
+        vm.haloGroup.rotation.y = t * 1.9;
+        vm.haloGroup.position.y = vm.baseHaloY + Math.sin(t * 2.5) * 0.08;
+        vm.emblemMesh.rotation.y = t * 1.3;
+      }
+      vmIdx++;
+    }
+
+    // Animate unhired NPC Specialist holographic beacons
+    let npcIdx = 0;
+    for (const npc of this.npcSpecialistsMap.values()) {
+      if (npc.data.hiredBy === null) {
+        const t = elapsed + npcIdx * 1.1;
+        npc.emblemGroup.rotation.y = t * 1.5;
+        npc.emblemGroup.position.y = npc.baseEmblemY + Math.sin(t * 2.4) * 0.1;
+        const ringPulse = 1.0 + Math.sin(t * 3.1) * 0.07;
+        npc.ringMesh.scale.set(ringPulse, ringPulse, ringPulse);
+      }
+      npcIdx++;
+    }
+
+    // Animate Mid-Match Floating Loot Island shrine & Updraft Sky Rift Geyser
+    if (this.lootIslandState.active) {
+      this.lootIslandFlagGroup.rotation.y = Math.sin(elapsed * 2.8) * 0.22;
+      this.lootIslandFinialMesh.rotation.y = elapsed * 1.8;
+      const ringPulse = 1.0 + Math.sin(elapsed * 3.2) * 0.09;
+      this.lootIslandInnerRing.scale.set(ringPulse, ringPulse, ringPulse);
+
+      this.lootIslandGeyserCore.rotation.y = elapsed * 2.4;
+      for (let i = 0; i < this.lootIslandGeyserRings.length; i++) {
+        const ring = this.lootIslandGeyserRings[i];
+        const phase = (elapsed * 0.75 + i / this.lootIslandGeyserRings.length) % 1;
+        ring.position.y = 0.6 + phase * 17.5;
+        const s = 1.1 - phase * 0.35;
+        ring.scale.set(s, s, s);
+      }
+    }
   }
 
   dispose(): void {
@@ -2237,5 +3309,20 @@ export class WorldInteractables {
     this.capturePointsMap.clear();
     this.explosiveBarrels = [];
     this.explosiveBarrelsMap.clear();
+    this.vendingMachines = [];
+    this.vendingMachinesMap.clear();
+    this.npcSpecialists = [];
+    this.npcSpecialistsMap.clear();
+    this.lootIslandGeyserRings = [];
+    this.lootIslandState = {
+      active: false,
+      spawnedAtSec: 0,
+      x: 0,
+      y: 0,
+      z: 0,
+      radius: LOOT_ISLAND_RADIUS,
+      captured: false,
+      captureProgress: 0,
+    };
   }
 }

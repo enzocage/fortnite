@@ -2,16 +2,20 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   AUGMENTS,
   CONTRAILS,
+  CROSSHAIR_COLORS,
+  CROSSHAIR_STYLES,
   DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   EMOTES,
   EventBus,
   GAME_MODES,
   GLIDERS,
+  MAX_GOLD_BARS,
   PICKAXES,
   POIS,
   RARITY_ORDER,
   SKINS,
+  STARTING_GOLD_BARS,
   WEAPON_WRAPS,
   WEAPONS,
   WORLD_HALF,
@@ -24,13 +28,17 @@ import type {
   CampfireEntity,
   CapturePointEntity,
   HUDState,
+  LootIslandState,
   MaterialType,
   MatchQuest,
   MatchSummary,
+  NpcSpecialistEntity,
   RiftEntity,
+  SpecialistRole,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
+  VendingMachineEntity,
   VisualSoundCue,
   WeaponId,
   WeatherKind,
@@ -41,6 +49,7 @@ import {
   cloneSettings,
   computeCaptureProgressPct,
   computeCareerLevelProgress,
+  computeCareerRank,
   computeFallbackStormDistance,
   computeLevelFromXp,
   computeMatchXpBreakdown,
@@ -58,6 +67,7 @@ import {
   formatVehicleKindLabel,
   formatWeatherLabel,
   FullMapOverlay,
+  getAllyRoleSvg,
   getAmmoIconSvg,
   getAugmentIconSvg,
   getAugmentMeta,
@@ -70,8 +80,10 @@ import {
   getContrailMeta,
   getCrownSvg,
   getGameModeMeta,
+  getGoldBarSvg,
   getHeadingFromYaw,
   getKillStreakCallout,
+  getLootIslandIconSvg,
   getMaterialIconSvg,
   getOvershieldBoltSvg,
   getRarityMeta,
@@ -85,6 +97,7 @@ import {
   getVaultKeySvg,
   getVaultLockSvg,
   getVehicleIconSvg,
+  getVendingIconSvg,
   getVisualAudioIconSvg,
   getWeaponSvg,
   getWeatherIconSvg,
@@ -102,8 +115,10 @@ import {
   resetCareerStats,
   resolveKeybinds,
   saveStoredLobbyConfig,
+  saveStoredSettings,
   selectVisibleVisualSoundCues,
   UIManager,
+  updateGoldBars,
   worldToMapNorm,
   xpForLevelStep,
 } from '../index';
@@ -365,9 +380,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 21 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 23 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(21);
+    expect(weaponIds.length).toBe(23);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -379,7 +394,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all 5 Wave-1 + 2 Wave-2 icons have rich multi-element custom artwork
+    // Verify all 5 Wave-1 + 2 Wave-2 + 2 Wave-5 icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -388,6 +403,8 @@ describe('WeaponIcons & SVG assets', () => {
       'chug_splash',
       'grappler',
       'shield_bubble',
+      'tactical_dmr',
+      'kinetic_blade',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -443,10 +460,19 @@ describe('WeaponIcons & SVG assets', () => {
       getCampfireIconSvg(true),
       getCampfireIconSvg(false),
       getOvershieldBoltSvg(),
+      getGoldBarSvg(),
+      getVendingIconSvg(),
+      getAllyRoleSvg('scout'),
+      getAllyRoleSvg('medic'),
+      getAllyRoleSvg('heavy'),
+      getLootIslandIconSvg(),
     ]) {
       expect(emblem.trim().startsWith('<svg')).toBe(true);
       expect(emblem.includes('</svg>')).toBe(true);
     }
+
+    const roles: SpecialistRole[] = ['scout', 'medic', 'heavy'];
+    expect(new Set(roles.map((r) => getAllyRoleSvg(r))).size).toBe(3);
   });
 });
 
@@ -939,7 +965,14 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
 
     // Switch to Locker tab and verify all skins (>= 10), 6 pickaxes, 6 gliders, 6 emotes render
     const navTabs = root.findAllByClass('fdr-nav-tab');
-    expect(navTabs.length).toBe(4);
+    expect(navTabs.length).toBe(5);
+    expect(navTabs.map((t) => t.textContent)).toEqual([
+      'PLAY',
+      'LOCKER',
+      'CAREER',
+      'CONTROLS',
+      'SETTINGS',
+    ]);
     navTabs[1].click(); // LOCKER
 
     const cosmeticCards = root.findAllByClass('fdr-cosmetic-card');
@@ -1339,7 +1372,7 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
 
       // Switch to SETTINGS tab
       const navTabs = root.findAllByClass('fdr-nav-tab');
-      navTabs[3].click();
+      navTabs[4].click();
 
       const keybindBtns = root.findAllByClass('fdr-keybind-btn');
       expect(keybindBtns.length).toBe(KEYBIND_ACTION_DEFS.length);
@@ -1579,7 +1612,7 @@ describe('Wave 3 UI: Game Modes, Weapon Wraps, Overshield, Visual Audio, Match Q
     );
 
     // 3. SETTINGS tab Visual Sound Effects toggle bound to settings.visualAudio -> forwarded to HUD
-    navTabs[3].click(); // SETTINGS
+    navTabs[4].click(); // SETTINGS
     const vaRow = root
       .findAllByClass('fdr-setting-row')
       .find((r) => r.dataset.settingKey === 'visualAudio');
@@ -2414,6 +2447,476 @@ describe('Wave 4 UI: Skydiving Contrails, Reality Augments, Capture Bar, Tactica
     expect(firstPoiLabelIdx).toBeGreaterThan(cp1Idx);
     expect(firstPoiLabelIdx).toBeGreaterThan(cp2Idx);
     expect(firstPoiLabelIdx).toBeGreaterThan(vaultOffsetIdx);
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 5 UI: Career Tab & Rank, Crosshair Studio, Gold Bars, Kinetic Dash, Allied Specialist, Loot Island & Economy Map', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('persists CareerStats.goldBars clamped to [0, MAX_GOLD_BARS], supports updateGoldBars, and computes all 6 CareerRank tiers', () => {
+    expect(loadCareerStats().goldBars).toBe(STARTING_GOLD_BARS);
+
+    const updated = updateGoldBars(1450);
+    expect(updated.goldBars).toBe(1450);
+    expect(loadCareerStats().goldBars).toBe(1450);
+
+    expect(updateGoldBars(-120).goldBars).toBe(0);
+    expect(updateGoldBars(MAX_GOLD_BARS + 9999).goldBars).toBe(MAX_GOLD_BARS);
+
+    // localStorage clamping & legacy fallback without goldBars
+    const store = new Map<string, string>();
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      writable: true,
+      value: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+    });
+
+    store.set(
+      'fortdrop_career_v1',
+      JSON.stringify({ xp: 600, level: 2, wins: 1, elims: 4, matchesPlayed: 2, damageDealt: 500, bestPlacement: 1 }),
+    );
+    expect(loadCareerStats().goldBars).toBe(STARTING_GOLD_BARS);
+
+    const saved = updateGoldBars(880);
+    expect(saved.goldBars).toBe(880);
+    expect(loadCareerStats().goldBars).toBe(880);
+
+    // recordMatchCareerStats preserves goldBars vault balance
+    const afterMatch = recordMatchCareerStats({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 3,
+      damageDealt: 450,
+      shotsFired: 40,
+      shotsHit: 20,
+      accuracy: 50,
+      headshots: 1,
+      structuresBuilt: 5,
+      chestsOpened: 3,
+      survivalTimeSec: 150,
+    });
+    expect(afterMatch.goldBars).toBe(880);
+
+    // All 6 competitive rank tiers
+    const bronze = computeCareerRank(1, 0);
+    const silver = computeCareerRank(5, 1);
+    const gold = computeCareerRank(10, 3);
+    const platinum = computeCareerRank(20, 5);
+    const diamond = computeCareerRank(30, 8);
+    const unreal = computeCareerRank(50, 15);
+
+    expect(bronze.tier).toBe('BRONZE');
+    expect(silver.tier).toBe('SILVER');
+    expect(gold.tier).toBe('GOLD');
+    expect(platinum.tier).toBe('PLATINUM');
+    expect(diamond.tier).toBe('DIAMOND');
+    expect(unreal.tier).toBe('UNREAL');
+    for (const r of [bronze, silver, gold, platinum, diamond, unreal]) {
+      expect(r.color).toMatch(/^#/);
+      expect(r.badge.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('renders CAREER tab stats + rank + gold vault and Crosshair Studio in SETTINGS tab persisting to HUD reticle', () => {
+    const store = new Map<string, string>();
+    (globalThis as Record<string, unknown>).window = {
+      innerWidth: 1280,
+      innerHeight: 720,
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    recordMatchCareerStats({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 8,
+      damageDealt: 1640,
+      shotsFired: 100,
+      shotsHit: 55,
+      accuracy: 55,
+      headshots: 3,
+      structuresBuilt: 10,
+      chestsOpened: 4,
+      survivalTimeSec: 220,
+    });
+    recordMatchCareerStats({
+      victory: false,
+      placement: 4,
+      totalPlayers: 30,
+      kills: 2,
+      damageDealt: 360,
+      shotsFired: 30,
+      shotsHit: 12,
+      accuracy: 40,
+      headshots: 0,
+      structuresBuilt: 4,
+      chestsOpened: 2,
+      survivalTimeSec: 120,
+    });
+    updateGoldBars(1375);
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. CAREER tab (index 2 of 5)
+    const navTabs = root.findAllByClass('fdr-nav-tab');
+    expect(navTabs.length).toBe(5);
+    expect(navTabs[2].textContent).toBe('CAREER');
+    navTabs[2].click();
+
+    const careerPanel = root.findByClass('fdr-career-panel');
+    expect(careerPanel).not.toBeNull();
+    const expectedStats = loadCareerStats();
+    const expectedRank = computeCareerRank(expectedStats.level, expectedStats.wins);
+    expect(careerPanel?.textContent).toContain(expectedRank.tier);
+    expect(careerPanel?.textContent).toContain(`LEVEL ${expectedStats.level}`);
+    expect(careerPanel?.textContent).toContain('TOTAL WINS');
+    expect(careerPanel?.textContent).toContain('1');
+    expect(careerPanel?.textContent).toContain('ELIMINATIONS');
+    expect(careerPanel?.textContent).toContain('10');
+    expect(careerPanel?.textContent).toContain('WIN RATE %');
+    expect(careerPanel?.textContent).toContain('50%');
+    expect(careerPanel?.textContent).toContain('MATCHES PLAYED');
+    expect(careerPanel?.textContent).toContain('2');
+    expect(careerPanel?.textContent).toContain('BEST PLACEMENT');
+    expect(careerPanel?.textContent).toContain('#1');
+    expect(careerPanel?.textContent).toContain('TOTAL DAMAGE');
+    expect(careerPanel?.textContent).toContain('2000');
+    expect(careerPanel?.textContent).toContain('GOLD BARS VAULT');
+    expect(careerPanel?.textContent).toContain('1375');
+    expect(careerPanel?.findByClass('fdr-career-xp-fill')?.style.width).toMatch(/^\d+%$/);
+
+    // 2. SETTINGS tab -> Crosshair Studio (5 colors + 3 styles)
+    navTabs[4].click();
+    const swatches = root.findAllByClass('fdr-ch-swatch');
+    const stylePills = root.findAllByClass('fdr-ch-style-pill');
+    expect(swatches.length).toBe(CROSSHAIR_COLORS.length);
+    expect(swatches.length).toBe(5);
+    expect(stylePills.length).toBe(CROSSHAIR_STYLES.length);
+    expect(stylePills.map((p) => p.textContent)).toEqual(['DYNAMIC', 'DOT', 'CLASSIC']);
+
+    // Pick Cyber Cyan (#22d3ee) and DOT style
+    const cyanSwatch = swatches.find((s) => s.dataset.crosshairColor === '#22d3ee');
+    cyanSwatch?.click();
+    const dotPill = root
+      .findAllByClass('fdr-ch-style-pill')
+      .find((p) => p.dataset.crosshairStyle === 'dot');
+    dotPill?.click();
+
+    expect(ui.getSettings().crosshairColor).toBe('#22d3ee');
+    expect(ui.getSettings().crosshairStyle).toBe('dot');
+    expect(loadStoredSettings().crosshairColor).toBe('#22d3ee');
+    expect(loadStoredSettings().crosshairStyle).toBe('dot');
+
+    // Invalid stored crosshair values fall back cleanly
+    saveStoredSettings({
+      ...DEFAULT_SETTINGS,
+      crosshairColor: '#deadbe' as never,
+      crosshairStyle: 'broken_style' as never,
+    });
+    expect(loadStoredSettings().crosshairColor).toBe(DEFAULT_SETTINGS.crosshairColor);
+    expect(loadStoredSettings().crosshairStyle).toBe(DEFAULT_SETTINGS.crosshairStyle);
+
+    // Apply Mythic Gold + CLASSIC to HUD reticle
+    ui.setSettings({
+      ...DEFAULT_SETTINGS,
+      crosshairColor: '#ffd000',
+      crosshairStyle: 'classic',
+    });
+    ui.setPhase('playing');
+    ui.updateHUD(makeBaseHUDState({ activeWeaponSpread: 0.08 }));
+    const crosshair = root.findByClass('fdr-crosshair');
+    expect(crosshair?.style['--ch-color']).toBe('#ffd000');
+    expect(crosshair?.classList.contains('style-classic')).toBe(true);
+    expect(crosshair?.style['--ch-gap']).toBe('7px');
+
+    ui.setSettings({
+      ...DEFAULT_SETTINGS,
+      crosshairColor: '#34eb5e',
+      crosshairStyle: 'dynamic',
+    });
+    ui.updateHUD(makeBaseHUDState({ activeWeaponSpread: 0.08 }));
+    expect(crosshair?.style['--ch-color']).toBe('#34eb5e');
+    expect(crosshair?.classList.contains('style-dynamic')).toBe(true);
+    expect(Number.parseInt(crosshair?.style['--ch-gap'] ?? '0', 10)).toBeGreaterThan(7);
+
+    ui.dispose();
+  });
+
+  it('renders Gold Bars Pill, Kinetic Dash Charges (⚡ x3), Allied Specialist Mini Card & Loot Island Chip on HUD', () => {
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+    ui.setPhase('playing');
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        goldBars: 640,
+        kineticDashCharges: 2,
+        hiredAlly: {
+          name: 'Apex Medic',
+          role: 'medic',
+          hp: 150,
+          maxHp: 200,
+          shield: 50,
+          maxShield: 100,
+          distance: 12.4,
+        },
+        lootIsland: {
+          active: true,
+          captured: false,
+          x: 20,
+          z: -30,
+          distance: 42.3,
+        },
+      }),
+    );
+
+    const goldPill = root.findByClass('fdr-gold-pill');
+    expect(goldPill?.textContent).toContain('640');
+    expect(goldPill?.innerHTML).toContain('<svg');
+
+    const kineticBadge = root.findByClass('fdr-kinetic-badge');
+    expect(kineticBadge?.classList.contains('fdr-hidden')).toBe(false);
+    const pips = kineticBadge?.findAllByClass('fdr-kinetic-pip') ?? [];
+    expect(pips.length).toBe(3);
+    expect(pips.every((p) => p.textContent === '⚡')).toBe(true);
+    expect(pips[0].classList.contains('active')).toBe(true);
+    expect(pips[1].classList.contains('active')).toBe(true);
+    expect(pips[2].classList.contains('active')).toBe(false);
+
+    const topLeftStack = root.findByClass('fdr-top-left-stack');
+    const allyCard = topLeftStack?.findByClass('fdr-ally-card');
+    expect(allyCard).not.toBeNull();
+    expect(allyCard?.classList.contains('fdr-hidden')).toBe(false);
+    expect(allyCard?.dataset.allyRole).toBe('medic');
+    expect(allyCard?.textContent).toContain('APEX MEDIC');
+    expect(allyCard?.textContent).toContain('MEDIC');
+    expect(allyCard?.textContent).toContain('12M');
+    const allyFills = allyCard?.findAllByClass('fdr-ally-fill') ?? [];
+    expect(allyFills[0]?.style.width).toBe('50.0%');
+    expect(allyFills[1]?.style.width).toBe('75.0%');
+
+    const islandChip = root.findByClass('fdr-loot-island-chip');
+    expect(islandChip?.classList.contains('fdr-hidden')).toBe(false);
+    expect(islandChip?.textContent).toBe('LOOT ISLAND • 42M');
+
+    // Hides cleanly when null / captured
+    ui.updateHUD(
+      makeBaseHUDState({
+        goldBars: 110,
+        kineticDashCharges: null,
+        hiredAlly: null,
+        lootIsland: {
+          active: true,
+          captured: true,
+          x: 20,
+          z: -30,
+          distance: 5,
+        },
+      }),
+    );
+    expect(goldPill?.textContent).toContain('110');
+    expect(kineticBadge?.classList.contains('fdr-hidden')).toBe(true);
+    expect(allyCard?.classList.contains('fdr-hidden')).toBe(true);
+    expect(islandChip?.classList.contains('fdr-hidden')).toBe(true);
+
+    ui.dispose();
+  });
+
+  it('draws Vending Machines, Specialist NPCs & Loot Island via UIManager.setWorldEconomy before POI labels, adds 3 legend rows, and shows GOLD EARNED on MatchOverlay', () => {
+    const drawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const mockCtx = {
+      clearRect: (...args: unknown[]) => drawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => drawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => drawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => drawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => drawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      arc: (...args: unknown[]) => drawCalls.push({ op: 'arc', args }),
+      fill: () => drawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => drawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => drawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => drawCalls.push({ op: 'rotate', args }),
+      setLineDash: () => {},
+      fillText: (...args: unknown[]) => drawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => drawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => mockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // MatchOverlay GOLD EARNED stat
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 5,
+      damageDealt: 1100,
+      shotsFired: 65,
+      shotsHit: 35,
+      accuracy: 54,
+      headshots: 2,
+      structuresBuilt: 8,
+      chestsOpened: 4,
+      survivalTimeSec: 195,
+      goldEarned: 340,
+    });
+    const statsGrid = root.findByClass('fdr-stats-grid');
+    expect(statsGrid?.textContent).toContain('GOLD EARNED');
+    expect(statsGrid?.textContent).toContain('340');
+
+    // FullMap legend rows
+    const legend = root.findByClass('fdr-map-legend');
+    expect(legend?.textContent).toContain('VENDING MACHINE');
+    expect(legend?.textContent).toContain('SPECIALIST NPC');
+    expect(legend?.textContent).toContain('LOOT ISLAND');
+
+    // FullMapOverlay.setWorldEconomy forwarded via UIManager
+    const vendingMachines: VendingMachineEntity[] = [
+      {
+        id: 'vm-1',
+        poiId: 'metro_towers',
+        kind: 'weapon',
+        x: -60,
+        y: 12,
+        z: -25,
+        rotationY: 0,
+        offerWeaponId: 'tactical_dmr',
+        offerRarity: 'epic',
+        priceGold: 200,
+        stock: 3,
+      },
+    ];
+    const npcs: NpcSpecialistEntity[] = [
+      {
+        id: 'npc-1',
+        name: 'Recon Scout',
+        role: 'scout',
+        poiId: 'market_row',
+        skinId: 'sky_striker',
+        x: 160,
+        y: 13,
+        z: 20,
+        priceGold: 150,
+        hiredBy: null,
+      },
+    ];
+    const lootIsland: LootIslandState = {
+      active: true,
+      spawnedAtSec: 90,
+      x: 15,
+      y: 42,
+      z: -15,
+      radius: 26,
+      captured: false,
+      captureProgress: 0.35,
+    };
+
+    ui.setPhase('playing');
+    ui.setWorldEconomy(vendingMachines, npcs, lootIsland);
+    ui.toggleFullMap(true);
+    drawCalls.length = 0;
+    ui.updateHUD(makeBaseHUDState());
+
+    const vmNorm = worldToMapNorm(-60, -25);
+    const npcNorm = worldToMapNorm(160, 20);
+    const liNorm = worldToMapNorm(15, -15);
+
+    const findTranslateIdx = (px: number, py: number) =>
+      drawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+
+    const vmIdx = findTranslateIdx(vmNorm.nx * 640, vmNorm.nz * 640);
+    const npcIdx = findTranslateIdx(npcNorm.nx * 640, npcNorm.nz * 640);
+    const liIdx = findTranslateIdx(liNorm.nx * 640, liNorm.nz * 640);
+    const firstPoiLabelIdx = drawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+
+    expect(vmIdx).toBeGreaterThanOrEqual(0);
+    expect(npcIdx).toBeGreaterThanOrEqual(0);
+    expect(liIdx).toBeGreaterThanOrEqual(0);
+    expect(firstPoiLabelIdx).toBeGreaterThan(vmIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(npcIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(liIdx);
 
     ui.dispose();
   });

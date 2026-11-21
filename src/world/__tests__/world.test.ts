@@ -1105,7 +1105,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(barrels).toHaveLength(24);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
     expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
 
     for (const sb of barrels) {
       expect(sb.hp).toBe(40);
@@ -1151,7 +1151,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(sb0.destroyed).toBe(true);
     expect(sbGroup.visible).toBe(false);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6);
     expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
     expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1177,7 +1177,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     ).toBe(true);
     expect(sbGroup.visible).toBe(true);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
 
     interactables.dispose();
     builder.dispose();
@@ -1635,7 +1635,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     const expBarrels = interactables.getExplosiveBarrels();
     expect(expBarrels).toHaveLength(18);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
 
     for (const eb of expBarrels) {
       expect(eb.hp).toBe(35);
@@ -1707,7 +1707,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     expect(eb0.exploded).toBe(true);
     expect(ebGroup.visible).toBe(false);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(17);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6);
     expect(interactables.damageExplosiveBarrel(eb0.id, 10)).toBeNull();
     expect(interactables.damageExplosiveBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1746,10 +1746,334 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     ).toBe(true);
     expect(ebGroup.visible).toBe(true);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
 
     vehicles.dispose();
     interactables.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating Loot Island', () => {
+  it('constructs 6 vending machines and 3 hireable NPC posts clear of water/buildings/props with full lifecycle and reset', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 0.8) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 2.6 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    const isClearOfProps = (x: number, z: number, pad = 1.0) =>
+      !pal.getProps().some((p) => Math.hypot(x - p.x, z - p.z) < p.radius + pad);
+
+    // 1. 6 Glowing Vending Machines
+    const machines = interactables.getVendingMachines();
+    expect(machines).toHaveLength(6);
+    expect(interactables.getVendingMachineColliders()).toHaveLength(6);
+    expect(new Set(machines.map((m) => m.poiId))).toEqual(
+      new Set([
+        'metro_towers',
+        'market_row',
+        'sunny_suburbs',
+        'crater_depot',
+        'skyline_spire',
+        'frostpeak_citadel',
+      ]),
+    );
+
+    const mendingOffers = machines
+      .filter((m) => m.kind === 'mending')
+      .map((m) => [m.offerWeaponId, m.priceGold]);
+    expect(mendingOffers).toHaveLength(3);
+    expect(new Set(mendingOffers.map(([id]) => id))).toEqual(
+      new Set(['medkit', 'shield_potion', 'chug_splash']),
+    );
+    expect(machines.find((m) => m.offerWeaponId === 'medkit')?.priceGold).toBe(75);
+    expect(machines.find((m) => m.offerWeaponId === 'shield_potion')?.priceGold).toBe(90);
+    expect(machines.find((m) => m.offerWeaponId === 'chug_splash')?.priceGold).toBe(100);
+
+    const weaponOffers = machines.filter((m) => m.kind === 'weapon');
+    expect(weaponOffers).toHaveLength(3);
+    const dmrVm = weaponOffers.find((m) => m.offerWeaponId === 'tactical_dmr');
+    const bladeVm = weaponOffers.find((m) => m.offerWeaponId === 'kinetic_blade');
+    const heavyVm = weaponOffers.find((m) => m.offerWeaponId === 'heavy_shotgun');
+    expect(dmrVm).toMatchObject({ offerRarity: 'epic', priceGold: 175, stock: 3 });
+    expect(bladeVm).toMatchObject({ offerRarity: 'epic', priceGold: 225, stock: 3 });
+    expect(heavyVm).toMatchObject({ offerRarity: 'legendary', priceGold: 250, stock: 3 });
+
+    for (const vm of machines) {
+      expect(vm.stock).toBe(3);
+      expect(terrain.isWater(vm.x, vm.z)).toBe(false);
+      expect(vm.y).toBeCloseTo(terrain.getHeightAt(vm.x, vm.z), 4);
+      expect(terrain.getNormalAt(vm.x, vm.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(vm.x, vm.y, vm.z, 0.9)).toBe(true);
+      expect(isClearOfProps(vm.x, vm.z, 1.0)).toBe(true);
+      for (const v of interactables.getVaults()) {
+        expect(Math.hypot(vm.x - v.x, vm.z - v.z)).toBeGreaterThan(3.5);
+      }
+      for (const b of interactables.getUpgradeBenches()) {
+        expect(Math.hypot(vm.x - b.x, vm.z - b.z)).toBeGreaterThan(3.0);
+      }
+      for (const cp of interactables.getCapturePoints()) {
+        expect(Math.hypot(vm.x - cp.x, vm.z - cp.z)).toBeGreaterThan(3.0);
+      }
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(vm.x - veh.x, vm.z - veh.z)).toBeGreaterThan(3.0);
+      }
+      const vmGroup = interactables.getGroup().getObjectByName(`VendingMachine_${vm.id}`) as THREE.Group;
+      expect(vmGroup).toBeDefined();
+      expect(vmGroup.children.length).toBeGreaterThanOrEqual(8);
+    }
+
+    // Purchase stock decrement, halo/screen dimming when sold out & sold-out guard
+    expect(interactables.purchaseFromVendingMachine('nonexistent_vm')).toBeNull();
+    const targetVm = dmrVm!;
+    const vmGroup = interactables.getGroup().getObjectByName(`VendingMachine_${targetVm.id}`) as THREE.Group;
+    const haloGroup = vmGroup.children[vmGroup.children.length - 1] as THREE.Group;
+    const haloRingMesh = haloGroup.children[0] as THREE.Mesh;
+    const haloMat = haloRingMesh.material as THREE.MeshStandardMaterial;
+    const initialEmissiveIntensity = haloMat.emissiveIntensity;
+    expect(initialEmissiveIntensity).toBeGreaterThan(1.0);
+    expect(haloGroup.scale.x).toBeCloseTo(1, 4);
+
+    // Verify update() animates stocked vending halos
+    interactables.update(0.25, 1.5);
+    const stockedHaloAfter = haloGroup.rotation.y;
+    expect(stockedHaloAfter).not.toBe(0);
+
+    const uids = new Set<string>();
+    for (let i = 2; i >= 0; i--) {
+      const purchase = interactables.purchaseFromVendingMachine(targetVm.id);
+      expect(purchase).not.toBeNull();
+      expect(targetVm.stock).toBe(i);
+      expect(purchase!.priceGold).toBe(175);
+      expect(purchase!.position).toEqual({ x: targetVm.x, y: targetVm.y, z: targetVm.z });
+      expect(purchase!.item.weaponId).toBe('tactical_dmr');
+      expect(purchase!.item.rarity).toBe('epic');
+      expect(purchase!.item.magAmmo).toBe(WEAPONS.tactical_dmr.magSize);
+      expect(purchase!.item.stackCount).toBe(1);
+      expect(purchase!.item.uid.length).toBeGreaterThan(3);
+      uids.add(purchase!.item.uid);
+    }
+    expect(uids.size).toBe(3);
+    expect(haloMat.emissiveIntensity).toBeLessThan(0.5);
+    expect(haloGroup.scale.x).toBeLessThan(1);
+    expect(interactables.purchaseFromVendingMachine(targetVm.id)).toBeNull();
+    expect(targetVm.stock).toBe(0);
+
+    // 2. 3 Hireable NPC Specialist Posts
+    const npcs = interactables.getNpcSpecialists();
+    expect(npcs).toHaveLength(3);
+
+    const nova = npcs.find((n) => n.poiId === 'whispering_pines');
+    const remedy = npcs.find((n) => n.poiId === 'sunken_oasis');
+    const bastion = npcs.find((n) => n.poiId === 'frostpeak_citadel');
+    expect(nova).toMatchObject({ name: 'Recon Nova', role: 'scout', skinId: 'neon_drift', priceGold: 200, hiredBy: null });
+    expect(remedy).toMatchObject({ name: 'Doc Remedy', role: 'medic', skinId: 'emerald_scout', priceGold: 200, hiredBy: null });
+    expect(bastion).toMatchObject({ name: 'Tank Bastion', role: 'heavy', skinId: 'arctic_apex', priceGold: 200, hiredBy: null });
+    const remedyBeacon = interactables.getGroup().getObjectByName(`NpcBeacon_${remedy!.id}`) as THREE.Group;
+    const remedyEmblem = remedyBeacon.children[2] as THREE.Group;
+    expect(remedyEmblem.rotation.y).not.toBe(0);
+
+    for (const npc of npcs) {
+      expect(terrain.isWater(npc.x, npc.z)).toBe(false);
+      expect(npc.y).toBeCloseTo(terrain.getHeightAt(npc.x, npc.z), 4);
+      expect(terrain.getNormalAt(npc.x, npc.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(npc.x, npc.y, npc.z, 0.9)).toBe(true);
+      expect(isClearOfProps(npc.x, npc.z, 1.0)).toBe(true);
+      for (const vm of machines) {
+        expect(Math.hypot(npc.x - vm.x, npc.z - vm.z)).toBeGreaterThan(4.0);
+      }
+      for (const b of interactables.getUpgradeBenches()) {
+        expect(Math.hypot(npc.x - b.x, npc.z - b.z)).toBeGreaterThan(3.0);
+      }
+      const npcGroup = interactables.getGroup().getObjectByName(`NpcSpecialist_${npc.id}`) as THREE.Group;
+      const beacon = interactables.getGroup().getObjectByName(`NpcBeacon_${npc.id}`) as THREE.Group;
+      expect(npcGroup).toBeDefined();
+      expect(beacon).toBeDefined();
+      expect(npcGroup.visible).toBe(true);
+      expect(beacon.visible).toBe(true);
+    }
+
+    expect(interactables.hireNpcSpecialist('nonexistent_npc', 'player')).toBeNull();
+    expect(interactables.hireNpcSpecialist(nova!.id, '')).toBeNull();
+
+    const hiredCopy = interactables.hireNpcSpecialist(nova!.id, 'player');
+    expect(hiredCopy).not.toBeNull();
+    expect(hiredCopy!.hiredBy).toBe('player');
+    expect(nova!.hiredBy).toBe('player');
+    // Mutating returned copy must not mutate internal state
+    hiredCopy!.hiredBy = 'other';
+    expect(nova!.hiredBy).toBe('player');
+
+    const novaGroup = interactables.getGroup().getObjectByName(`NpcSpecialist_${nova!.id}`) as THREE.Group;
+    const novaBeacon = interactables.getGroup().getObjectByName(`NpcBeacon_${nova!.id}`) as THREE.Group;
+    expect(novaGroup.visible).toBe(false);
+    expect(novaBeacon.visible).toBe(false);
+    expect(interactables.hireNpcSpecialist(nova!.id, 'bot_1')).toBeNull();
+
+    // 3. Mid-Match Floating Loot Island
+    const initIsland = interactables.getLootIslandState();
+    expect(initIsland.active).toBe(false);
+    expect(initIsland.captured).toBe(false);
+    expect(initIsland.captureProgress).toBe(0);
+    expect(interactables.getLootIslandColliders()).toHaveLength(0);
+    expect(interactables.advanceLootIslandCapture(2.0)).toEqual({ capturedNow: false });
+
+    const islandMesh = interactables.getGroup().getObjectByName('LootIsland') as THREE.Group;
+    const geyserMesh = interactables.getGroup().getObjectByName('LootIslandRiftGeyser') as THREE.Group;
+    expect(islandMesh).toBeDefined();
+    expect(geyserMesh).toBeDefined();
+    expect(islandMesh.visible).toBe(false);
+    expect(geyserMesh.visible).toBe(false);
+
+    const cx = 15;
+    const cz = 20;
+    const groundY = terrain.getHeightAt(cx, cz);
+    const spawnedIsland = interactables.spawnLootIsland(cx, cz, 95);
+    expect(spawnedIsland).toEqual({
+      active: true,
+      spawnedAtSec: 95,
+      x: cx,
+      y: groundY + 24,
+      z: cz,
+      radius: 14,
+      captured: false,
+      captureProgress: 0,
+    });
+    expect(islandMesh.visible).toBe(true);
+    expect(geyserMesh.visible).toBe(true);
+    expect(islandMesh.position.y).toBeCloseTo(groundY + 24, 4);
+    expect(geyserMesh.position.x).toBe(cx);
+    expect(geyserMesh.position.y).toBeCloseTo(groundY, 4);
+    expect(geyserMesh.position.z).toBe(cz);
+
+    const islandCols = interactables.getLootIslandColliders();
+    expect(islandCols).toHaveLength(1);
+    expect(islandCols[0].minX).toBeCloseTo(cx - 12.5, 4);
+    expect(islandCols[0].maxX).toBeCloseTo(cx + 12.5, 4);
+    expect(islandCols[0].minY).toBeCloseTo(groundY + 24 - 0.6, 4);
+    expect(islandCols[0].maxY).toBeCloseTo(groundY + 24, 4);
+    expect(islandCols[0].minZ).toBeCloseTo(cz - 12.5, 4);
+    expect(islandCols[0].maxZ).toBeCloseTo(cz + 12.5, 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 1);
+
+    // 10s capture duration
+    const islandFlagGroup = islandMesh.children[islandMesh.children.length - 1] as THREE.Group;
+    const islandBannerMesh = islandFlagGroup.children[1] as THREE.Mesh;
+    const islandFlagStartY = islandFlagGroup.position.y;
+    expect(interactables.advanceLootIslandCapture(4.0)).toEqual({ capturedNow: false });
+    expect(interactables.getLootIslandState().captureProgress).toBeCloseTo(0.4, 5);
+    expect(islandFlagGroup.position.y).toBeGreaterThan(islandFlagStartY);
+    interactables.update(0.1, 99.1);
+    expect(interactables.getLootIslandState().captureProgress).toBeCloseTo(0.4, 5);
+
+    const capComplete = interactables.advanceLootIslandCapture(6.0);
+    expect(capComplete.capturedNow).toBe(true);
+    expect(capComplete.lootPos).toBeDefined();
+    expect(capComplete.lootPos!.x).toBe(cx);
+    expect(capComplete.lootPos!.y).toBeCloseTo(groundY + 24.5, 3);
+    expect(capComplete.lootPos!.z).toBe(cz);
+    expect(interactables.getLootIslandState().captured).toBe(true);
+    expect(interactables.getLootIslandState().captureProgress).toBe(1);
+    expect((islandBannerMesh.material as THREE.MeshStandardMaterial).color.getHexString()).toBe('facc15');
+
+    // Subsequent advance does not re-trigger
+    expect(interactables.advanceLootIslandCapture(2.0)).toEqual({ capturedNow: false });
+
+    // 4. reset() restores vending machines, NPCs, and hides/resets Loot Island
+    interactables.reset();
+
+    expect(interactables.getVendingMachines().every((m) => m.stock === 3)).toBe(true);
+    expect(haloMat.emissiveIntensity).toBeGreaterThan(1.0);
+    expect(haloGroup.scale.x).toBeCloseTo(1, 4);
+    expect(interactables.purchaseFromVendingMachine(targetVm.id)).not.toBeNull();
+    expect(interactables.getNpcSpecialists().every((n) => n.hiredBy === null)).toBe(true);
+    expect(novaGroup.visible).toBe(true);
+    expect(novaBeacon.visible).toBe(true);
+    expect(interactables.hireNpcSpecialist(nova!.id, 'player2')?.hiredBy).toBe('player2');
+
+    const resetIsland = interactables.getLootIslandState();
+    expect(resetIsland.active).toBe(false);
+    expect(resetIsland.captured).toBe(false);
+    expect(resetIsland.captureProgress).toBe(0);
+    expect(islandMesh.visible).toBe(false);
+    expect(geyserMesh.visible).toBe(false);
+    expect(interactables.getLootIslandColliders()).toHaveLength(0);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
+
+    vehicles.dispose();
+    interactables.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('spawns tactical_dmr and kinetic_blade across PropsAndLoot floor, chest, and supply-drop pools', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 240; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('tactical_dmr')).toBe(true);
+    expect(floorIds.has('kinetic_blade')).toBe(true);
+    expect(chestIds.has('tactical_dmr')).toBe(true);
+    expect(chestIds.has('kinetic_blade')).toBe(true);
+
+    const supplyIds = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    for (const drop of pal.getLootDrops()) {
+      if (drop.item) {
+        expect(WEAPONS[drop.item.weaponId].allowedRarities).toContain(drop.item.rarity);
+        supplyIds.add(drop.item.weaponId);
+      }
+    }
+    expect(supplyIds.has('tactical_dmr')).toBe(true);
+    expect(supplyIds.has('kinetic_blade')).toBe(true);
+
+    // Custom spawnLootDrop for kinetic_blade & tactical_dmr builds valid drops
+    const bladeDrop = pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'blade_test', weaponId: 'kinetic_blade', rarity: 'epic', magAmmo: 0, stackCount: 1 } },
+    );
+    expect(bladeDrop.item?.weaponId).toBe('kinetic_blade');
+
+    pal.dispose();
     builder.dispose();
     terrain.dispose();
   });

@@ -1,7 +1,10 @@
 import {
   AUGMENTS,
   CONTRAILS,
+  CROSSHAIR_COLORS,
+  CROSSHAIR_STYLES,
   DEFAULT_KEYBINDS,
+  DEFAULT_SETTINGS,
   GAME_MODES,
   RARITY_COLORS,
   WORLD_HALF,
@@ -12,6 +15,8 @@ import type {
   AugmentId,
   BiomeType,
   ContrailDef,
+  CrosshairColor,
+  CrosshairStyle,
   GameModeId,
   GameSettings,
   HUDState,
@@ -438,13 +443,27 @@ export function resolveKeybinds(keybinds?: Partial<KeybindMap>): KeybindMap {
   return merged;
 }
 
+export function resolveCrosshairColor(color?: string): CrosshairColor {
+  return CROSSHAIR_COLORS.some((c) => c.id === color)
+    ? (color as CrosshairColor)
+    : (DEFAULT_SETTINGS.crosshairColor ?? '#ffffff');
+}
+
+export function resolveCrosshairStyle(style?: string): CrosshairStyle {
+  return CROSSHAIR_STYLES.some((s) => s.id === style)
+    ? (style as CrosshairStyle)
+    : (DEFAULT_SETTINGS.crosshairStyle ?? 'dynamic');
+}
+
 /**
- * Deep-clones GameSettings including nested keybinds.
+ * Deep-clones GameSettings including nested keybinds and crosshair settings.
  */
 export function cloneSettings(settings: GameSettings): GameSettings {
   return {
     ...settings,
     visualAudio: settings.visualAudio !== false,
+    crosshairColor: resolveCrosshairColor(settings.crosshairColor),
+    crosshairStyle: resolveCrosshairStyle(settings.crosshairStyle),
     keybinds: resolveKeybinds(settings.keybinds),
   };
 }

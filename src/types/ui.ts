@@ -7,6 +7,7 @@ import type {
   GamePhase,
   MaterialType,
   Rarity,
+  SpecialistRole,
   Vec3Like,
 } from './common';
 import type { BuildPieceType, EditModeState } from './building';
@@ -154,6 +155,24 @@ export interface HUDState {
     screenY?: number;
     visible?: boolean;
   } | null;
+  goldBars?: number;
+  kineticDashCharges?: number | null;
+  hiredAlly?: {
+    name: string;
+    role: SpecialistRole;
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    distance: number;
+  } | null;
+  lootIsland?: {
+    active: boolean;
+    captured: boolean;
+    x: number;
+    z: number;
+    distance: number;
+  } | null;
 }
 
 export interface MatchQuest {
@@ -216,6 +235,7 @@ export interface MatchSummary {
   bonusXp?: number;
   activeAugments?: AugmentId[];
   poisCaptured?: number;
+  goldEarned?: number;
 }
 
 export interface BannerMessage {

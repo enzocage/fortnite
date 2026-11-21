@@ -4,6 +4,7 @@ import type {
   Difficulty,
   GameModeId,
   KillFeedEntry,
+  NpcSpecialistEntity,
   POIDef,
   Rarity,
   Vec3Like,
@@ -28,6 +29,7 @@ import {
 } from './BotBrain';
 import { pickBotLoadoutCosmetics } from './BotNames';
 import type {
+  AllySupportEvent,
   BossEliminationRecord,
   BotEntity,
   BotRenderState,
@@ -127,6 +129,8 @@ export class BotManager {
   private pendingVaultKeyBosses: BossEliminationRecord[] = [];
   private onBossEliminatedCallback: ((record: BossEliminationRecord) => void) | null = null;
   private unsubNoise: (() => void) | null = null;
+  private allySeq = 0;
+  private pendingAllySupportEvents: AllySupportEvent[] = [];
 
   constructor(
     ctx: BotWorldContext,
@@ -146,6 +150,7 @@ export class BotManager {
     this.unsubNoise = this.ctx.eventBus.on('audio:noise', (payload) => {
       for (const bot of this.bots) {
         if (!bot.alive || bot.id === payload.sourceId) continue;
+        if (bot.isAlly && payload.sourceId === 'player') continue;
         if (
           bot.state === 'bus' ||
           bot.state === 'skydiving' ||
@@ -184,6 +189,7 @@ export class BotManager {
     this.bots = [];
     this.botMap.clear();
     this.lastElapsed = 0;
+    this.pendingAllySupportEvents = [];
     this.matchCounter += 1;
     this.resetBountyAndBossState();
     this.busTotalDuration = busTotalDuration;
@@ -569,6 +575,278 @@ export class BotManager {
     }
   }
 
+  /**
+   * Spawns a friendly hired NPC specialist companion near `(npc.x, npc.z)`,
+   * replacing any previously hired ally so at most 1 ally is active.
+   */
+  spawnAlliedSpecialist(npc: NpcSpecialistEntity): BotEntity {
+    for (let i = this.bots.length - 1; i >= 0; i--) {
+      const existing = this.bots[i];
+      if (existing.isAlly) {
+        existing.alive = false;
+        existing.state = 'eliminated';
+        this.botMap.delete(existing.id);
+        this.bots.splice(i, 1);
+      }
+    }
+
+    const allySeq = ++this.allySeq;
+    const id = `ally_${npc.id}_${allySeq}`;
+
+    let spawnX = npc.x + 1.8;
+    let spawnZ = npc.z + 1.4;
+    if (isInVolcanoLavaHazard(spawnX, spawnZ, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
+      const safe = clampOutsideVolcanoLava(
+        spawnX,
+        spawnZ,
+        VOLCANO_LAVA_SAFE_RADIUS + 2.5,
+      );
+      spawnX = safe.x;
+      spawnZ = safe.z;
+    }
+    if (this.ctx.terrain.isWater(spawnX, spawnZ)) {
+      spawnX = npc.x;
+      spawnZ = npc.z;
+    }
+    const terrainY = this.ctx.terrain.getHeightAt(spawnX, spawnZ);
+    const spawnY = Math.abs(npc.y - terrainY) <= 4 ? Math.max(terrainY, npc.y) : terrainY;
+
+    const shieldAmount = npc.role === 'heavy' ? 125 : 100;
+    const personality =
+      npc.role === 'scout'
+        ? 'sniper'
+        : npc.role === 'heavy'
+          ? 'rusher'
+          : 'looter';
+    const pickaxeId =
+      npc.role === 'scout'
+        ? 'neon_edge'
+        : npc.role === 'medic'
+          ? 'emerald_reaper'
+          : 'storm_breaker';
+    const gliderId =
+      npc.role === 'scout'
+        ? 'cyber_hover'
+        : npc.role === 'medic'
+          ? 'victory_brolly'
+          : 'crimson_jet';
+
+    const items: BotEntity['inventory']['items'] = [
+      {
+        uid: `${id}_pickaxe`,
+        weaponId: 'pickaxe',
+        rarity: 'common',
+        magAmmo: 0,
+        stackCount: 1,
+      },
+      null,
+      null,
+      null,
+      null,
+      null,
+    ];
+    let ammo: BotEntity['inventory']['ammo'];
+
+    if (npc.role === 'scout') {
+      items[1] = {
+        uid: `${id}_ar`,
+        weaponId: 'ar',
+        rarity: 'rare',
+        magAmmo: WEAPONS.ar.magSize,
+        stackCount: 1,
+      };
+      items[2] = {
+        uid: `${id}_dmr`,
+        weaponId: 'tactical_dmr',
+        rarity: 'rare',
+        magAmmo: WEAPONS.tactical_dmr.magSize,
+        stackCount: 1,
+      };
+      items[3] = {
+        uid: `${id}_sniper`,
+        weaponId: 'sniper',
+        rarity: 'rare',
+        magAmmo: WEAPONS.sniper.magSize,
+        stackCount: 1,
+      };
+      ammo = { light: 90, medium: 210, shells: 0, heavy: 24, rockets: 0 };
+    } else if (npc.role === 'medic') {
+      items[1] = {
+        uid: `${id}_smg`,
+        weaponId: 'smg',
+        rarity: 'rare',
+        magAmmo: WEAPONS.smg.magSize,
+        stackCount: 1,
+      };
+      items[2] = {
+        uid: `${id}_ar`,
+        weaponId: 'ar',
+        rarity: 'rare',
+        magAmmo: WEAPONS.ar.magSize,
+        stackCount: 1,
+      };
+      items[3] = {
+        uid: `${id}_chug_splash`,
+        weaponId: 'chug_splash',
+        rarity: 'rare',
+        magAmmo: 0,
+        stackCount: 4,
+      };
+      ammo = { light: 210, medium: 180, shells: 0, heavy: 0, rockets: 0 };
+    } else {
+      items[1] = {
+        uid: `${id}_heavy_sg`,
+        weaponId: 'heavy_shotgun',
+        rarity: 'epic',
+        magAmmo: WEAPONS.heavy_shotgun.magSize,
+        stackCount: 1,
+      };
+      items[2] = {
+        uid: `${id}_ar`,
+        weaponId: 'ar',
+        rarity: 'rare',
+        magAmmo: WEAPONS.ar.magSize,
+        stackCount: 1,
+      };
+      ammo = { light: 0, medium: 180, shells: 42, heavy: 0, rockets: 0 };
+    }
+
+    const ally: BotEntity = {
+      id,
+      name: npc.name,
+      skinId: npc.skinId || 'sky_striker',
+      pickaxeId,
+      gliderId,
+      personality,
+      state: 'rotating',
+
+      position: { x: spawnX, y: spawnY, z: spawnZ },
+      velocity: { x: 0, y: 0, z: 0 },
+      yaw: 0,
+      pitch: 0,
+      grounded: true,
+      isCrouching: false,
+      isSprinting: false,
+      moveSpeed: 0,
+      radius: PLAYER_RADIUS,
+      height: PLAYER_HEIGHT,
+
+      hp: 160,
+      maxHp: 160,
+      shield: shieldAmount,
+      maxShield: shieldAmount,
+      overshield: 0,
+      maxOvershield: 0,
+      alive: true,
+      kills: 0,
+      damageDealt: 0,
+
+      animState: 'idle',
+      isAiming: false,
+      isFiring: false,
+      isBuilding: false,
+      emoteId: null,
+      recoilKick: 0,
+      harvestSwingTimer: 0,
+      gliderOpen: false,
+      gliderFactor: 0,
+
+      inventory: {
+        items,
+        activeSlot: 1,
+        ammo,
+        materials: {
+          wood: 0,
+          brick: 0,
+          metal: 0,
+        },
+      },
+
+      targetPoiId: npc.poiId,
+      dropJumpTime: 0,
+      dropTarget: { x: spawnX, y: spawnY, z: spawnZ },
+      moveTarget: { x: spawnX, y: spawnY, z: spawnZ },
+      patrolAngle: ((allySeq * 1.9) % (Math.PI * 2)),
+
+      targetEnemyId: null,
+      lastKnownEnemyPos: null,
+      enemyLostTimer: 0,
+      lastHeardNoisePos: null,
+      lastHeardNoiseTime: -999,
+      lastDamageTime: -999,
+      lastDamagerId: null,
+      lastAttackerName: null,
+      lastDamageWeaponId: null,
+      lastDamageRarity: null,
+      lastDamageHeadshot: false,
+      reactionTimer: 0,
+
+      fireCooldown: 0,
+      burstQueue: 0,
+      burstTimer: 0,
+      reloadTimer: 0,
+      reloadSlot: 0,
+      healTimer: 0,
+      healSlot: 0,
+      buildCooldown: 0,
+      buildAnimTimer: 0,
+      harvestCooldown: 0,
+
+      strafeDir: 1,
+      strafeTimer: 0.75,
+      jumpCooldown: 0,
+      crouchToggleTimer: 0.9,
+      stateTimer: 0,
+      thinkCooldown: 0,
+      scanCooldown: 0,
+
+      harvestTargetId: null,
+      lootTargetId: null,
+      chestTargetId: null,
+      ignoredTargetId: null,
+      ignoredTargetUntil: 0,
+      stuckTimer: 0,
+      lastStuckCheckPos: { x: spawnX, y: spawnY, z: spawnZ },
+
+      rngState: ((this.baseSeed ^ (allySeq * 2654435761)) >>> 0) || 1,
+      isBoss: false,
+      throwCooldown: 0,
+      retreatTimer: 0,
+      launchPadCooldown: 0,
+      launchPadTargetId: null,
+      shieldBubbleCooldown: 0,
+      recentDamageTaken: 0,
+      recentDamageWindowStart: -999,
+      eliminatedByPlayer: false,
+      riftCooldown: 0,
+      riftTargetId: null,
+      captureTargetId: null,
+      isAlly: true,
+      allyRole: npc.role,
+      allyAbilityCooldown: 0,
+    };
+
+    this.bots.push(ally);
+    this.botMap.set(ally.id, ally);
+    return ally;
+  }
+
+  getHiredAlly(): BotEntity | null {
+    for (const bot of this.bots) {
+      if (bot.isAlly && bot.alive && bot.state !== 'eliminated') {
+        return bot;
+      }
+    }
+    return null;
+  }
+
+  consumeAllySupportEvents(): AllySupportEvent[] {
+    if (this.pendingAllySupportEvents.length === 0) return [];
+    const copy = [...this.pendingAllySupportEvents];
+    this.pendingAllySupportEvents.length = 0;
+    return copy;
+  }
+
   update(
     dt: number,
     elapsed: number,
@@ -577,10 +855,14 @@ export class BotManager {
   ): void {
     this.lastElapsed = elapsed;
     const safeOvershieldDt = Math.max(0, dt);
+    const emitAllySupport = (ev: AllySupportEvent): void => {
+      this.pendingAllySupportEvents.push(ev);
+      this.ctx.onAllySupportEvent?.(ev);
+    };
     for (const bot of this.bots) {
       if (!bot.alive || bot.state === 'eliminated') continue;
       const distToPlayer = dist3D(bot.position, playerPos);
-      const isFarLOD = distToPlayer > 180;
+      const isFarLOD = !bot.isAlly && distToPlayer > 180;
       updateBot(
         bot,
         this.ctx,
@@ -590,9 +872,12 @@ export class BotManager {
         dt,
         isFarLOD,
         this.gameMode,
+        playerPos,
+        emitAllySupport,
       );
       if (
         this.gameMode === 'zero_build' &&
+        !bot.isAlly &&
         bot.alive &&
         bot.hp > 0 &&
         bot.state !== 'bus' &&
@@ -632,6 +917,7 @@ export class BotManager {
       const hasGroundedBot = this.bots.some(
         (b) =>
           b.alive &&
+          !b.isAlly &&
           b.state !== 'eliminated' &&
           b.state !== 'bus' &&
           b.state !== 'skydiving' &&
@@ -691,7 +977,7 @@ export class BotManager {
     }
 
     const aliveBots = this.bots.filter(
-      (b) => b.alive && b.state !== 'eliminated',
+      (b) => b.alive && !b.isAlly && b.state !== 'eliminated',
     );
     if (aliveBots.length === 0) return null;
 
@@ -817,6 +1103,13 @@ export class BotManager {
   ): boolean {
     const bot = this.botMap.get(botId);
     if (!bot || !bot.alive || bot.state === 'eliminated') {
+      return false;
+    }
+
+    if (
+      bot.isAlly &&
+      (damageEvent.attackerId === 'player' || damageEvent.attackerId === bot.id)
+    ) {
       return false;
     }
 
@@ -952,8 +1245,9 @@ export class BotManager {
     const killedByPlayer = !meta.isStorm && meta.killerId === 'player';
     bot.eliminatedByPlayer = killedByPlayer;
 
+    let killerBot: BotEntity | undefined;
     if (!meta.isStorm && meta.killerId && meta.killerId !== bot.id) {
-      const killerBot = this.botMap.get(meta.killerId);
+      killerBot = this.botMap.get(meta.killerId);
       if (killerBot) {
         killerBot.kills += 1;
       }
@@ -1040,7 +1334,10 @@ export class BotManager {
       distance: Math.round(meta.distance),
       timestamp: meta.timestamp,
       involvesPlayer:
-        meta.killerId === 'player' || bot.id === 'player',
+        meta.killerId === 'player' ||
+        bot.id === 'player' ||
+        Boolean(bot.isAlly) ||
+        Boolean(killerBot?.isAlly),
     };
     this.ctx.eventBus.emit('combat:killfeed', entry);
     return bountyReward;
@@ -1094,7 +1391,7 @@ export class BotManager {
   getAliveCount(): number {
     let count = 0;
     for (const bot of this.bots) {
-      if (bot.alive) count++;
+      if (bot.alive && !bot.isAlly) count++;
     }
     return count;
   }
@@ -1140,6 +1437,8 @@ export class BotManager {
         harvestSwingTimer: bot.harvestSwingTimer,
         isBoss: Boolean(bot.isBoss),
         bossPoiId: bot.bossPoiId,
+        isAlly: Boolean(bot.isAlly),
+        allyRole: bot.allyRole,
       };
     });
   }
@@ -1174,7 +1473,7 @@ export class BotManager {
     this.gameMode = mode;
     if (!changed) return;
     for (const bot of this.bots) {
-      if (!bot.alive || bot.state === 'eliminated') continue;
+      if (!bot.alive || bot.state === 'eliminated' || bot.isAlly) continue;
       if (mode === 'zero_build') {
         bot.maxOvershield = 50;
         bot.overshield = 50;
@@ -1193,6 +1492,7 @@ export class BotManager {
     this.bots = [];
     this.botMap.clear();
     this.lastElapsed = 0;
+    this.pendingAllySupportEvents = [];
     this.resetBountyAndBossState();
   }
 

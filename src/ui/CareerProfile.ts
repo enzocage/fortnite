@@ -1,7 +1,14 @@
+import { MAX_GOLD_BARS, STARTING_GOLD_BARS } from '../core';
 import type { MatchSummary } from '../types';
 
 export const MAX_CAREER_LEVEL = 100;
 const CAREER_STORAGE_KEY = 'fortdrop_career_v1';
+
+export interface CareerRankInfo {
+  tier: 'BRONZE' | 'SILVER' | 'GOLD' | 'PLATINUM' | 'DIAMOND' | 'UNREAL';
+  color: string;
+  badge: string;
+}
 
 export interface CareerLevelProgress {
   level: number;
@@ -33,10 +40,18 @@ export interface CareerStats {
   matchesPlayed: number;
   damageDealt: number;
   bestPlacement: number | null;
+  goldBars: number;
   lastMatchXp?: MatchXpBreakdown;
 }
 
 let memoryFallbackCareer: CareerStats | null = null;
+
+function clampGoldBars(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return STARTING_GOLD_BARS;
+  }
+  return Math.max(0, Math.min(MAX_GOLD_BARS, Math.round(value)));
+}
 
 function createDefaultCareerStats(): CareerStats {
   return {
@@ -47,6 +62,7 @@ function createDefaultCareerStats(): CareerStats {
     matchesPlayed: 0,
     damageDealt: 0,
     bestPlacement: null,
+    goldBars: STARTING_GOLD_BARS,
   };
 }
 
@@ -218,6 +234,7 @@ function sanitizeCareerStats(raw: Partial<CareerStats> | null | undefined): Care
     typeof raw.bestPlacement === 'number' && Number.isFinite(raw.bestPlacement) && raw.bestPlacement >= 1
       ? Math.floor(raw.bestPlacement)
       : null;
+  const goldBars = clampGoldBars(raw.goldBars);
 
   return {
     xp,
@@ -227,6 +244,7 @@ function sanitizeCareerStats(raw: Partial<CareerStats> | null | undefined): Care
     matchesPlayed,
     damageDealt,
     bestPlacement,
+    goldBars,
     lastMatchXp: raw.lastMatchXp,
   };
 }
@@ -290,6 +308,7 @@ export function recordMatchCareerStats(summary: MatchSummary): CareerStats {
         : prev.bestPlacement === null
           ? safePlacement
           : Math.min(prev.bestPlacement, safePlacement),
+    goldBars: clampGoldBars(prev.goldBars),
     lastMatchXp: {
       ...breakdown,
       newLevel: nextLevel,
@@ -299,6 +318,48 @@ export function recordMatchCareerStats(summary: MatchSummary): CareerStats {
 
   saveCareerStats(updated);
   return updated;
+}
+
+/**
+ * Updates persisted Gold Bars vault balance clamped to [0, MAX_GOLD_BARS].
+ */
+export function updateGoldBars(nextGold: number): CareerStats {
+  const prev = loadCareerStats();
+  const clamped = Number.isFinite(nextGold)
+    ? Math.max(0, Math.min(MAX_GOLD_BARS, Math.round(nextGold)))
+    : clampGoldBars(prev.goldBars);
+  const updated: CareerStats = {
+    ...prev,
+    goldBars: clamped,
+  };
+  saveCareerStats(updated);
+  return updated;
+}
+
+/**
+ * Computes competitive career rank tier from career level and total Victory Royales.
+ */
+export function computeCareerRank(level: number, wins: number): CareerRankInfo {
+  const safeLevel = Number.isFinite(level) ? Math.max(1, Math.floor(level)) : 1;
+  const safeWins = Number.isFinite(wins) ? Math.max(0, Math.floor(wins)) : 0;
+  const score = safeLevel + safeWins * 4;
+
+  if (score >= 70) {
+    return { tier: 'UNREAL', color: '#f43f5e', badge: 'UNR' };
+  }
+  if (score >= 45) {
+    return { tier: 'DIAMOND', color: '#60a5fa', badge: 'DIA' };
+  }
+  if (score >= 28) {
+    return { tier: 'PLATINUM', color: '#22d3ee', badge: 'PLT' };
+  }
+  if (score >= 15) {
+    return { tier: 'GOLD', color: '#ffd000', badge: 'GLD' };
+  }
+  if (score >= 6) {
+    return { tier: 'SILVER', color: '#cbd5e1', badge: 'SLV' };
+  }
+  return { tier: 'BRONZE', color: '#cd7f32', badge: 'BRZ' };
 }
 
 /**

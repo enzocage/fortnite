@@ -85,7 +85,14 @@ export type SoundEventId =
   | 'flag_tick'
   | 'flag_captured'
   | 'tactical_ping'
-  | 'barrel_explode';
+  | 'barrel_explode'
+  | 'shot_dmr'
+  | 'kinetic_slash'
+  | 'kinetic_dash'
+  | 'gold_pickup'
+  | 'vending_buy'
+  | 'ally_hired'
+  | 'loot_island_spawn';
 
 export type MusicTrackId =
   | 'none'

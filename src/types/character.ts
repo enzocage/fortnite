@@ -1,4 +1,4 @@
-import type { Rarity, Vec3Like } from './common';
+import type { Rarity, SpecialistRole, Vec3Like } from './common';
 import type { MusicTrackId } from './audio';
 import type { WeaponId } from './weapons';
 
@@ -133,4 +133,6 @@ export interface CharacterRenderState {
   bossName?: string;
   bossMaxHp?: number;
   bossMaxShield?: number;
+  isAlly?: boolean;
+  allyRole?: SpecialistRole;
 }

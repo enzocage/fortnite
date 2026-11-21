@@ -335,6 +335,9 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'augment_ready':
     case 'flag_captured':
     case 'barrel_explode':
+    case 'kinetic_dash':
+    case 'ally_hired':
+    case 'loot_island_spawn':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -360,9 +363,13 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'grappler_reel':
     case 'campfire_heal':
     case 'flag_tick':
+    case 'gold_pickup':
       return 1;
     case 'augment_select':
     case 'tactical_ping':
+    case 'shot_dmr':
+    case 'kinetic_slash':
+    case 'vending_buy':
     default:
       return 2;
   }
@@ -388,6 +395,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 60;
     case 'overshield_recharge':
       return 65;
+    case 'gold_pickup':
+      return 75;
     case 'augment_ready':
     case 'augment_select':
       return 80;
@@ -405,21 +414,29 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 85;
     case 'upgrade_weapon':
     case 'campfire_ignite':
+    case 'vending_buy':
       return 90;
     case 'slurp_barrel_break':
+    case 'kinetic_slash':
       return 100;
     case 'grappler_reel':
       return 110;
+    case 'ally_hired':
+      return 120;
     case 'grappler_fire':
       return 130;
     case 'shield_bubble_deploy':
       return 140;
     case 'tactical_ping':
       return 150;
+    case 'kinetic_dash':
+      return 160;
     case 'vehicle_horn':
       return 180;
     case 'vehicle_boost':
       return 190;
+    case 'shot_dmr':
+      return 200;
     case 'vehicle_crash':
     case 'vault_unlock':
     case 'flag_captured':
@@ -434,6 +451,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'barrel_explode':
       return 240;
     case 'weather_thunder':
+    case 'loot_island_spawn':
       return 350;
     default:
       return 175;

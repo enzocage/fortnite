@@ -5,10 +5,13 @@ import type {
   GameSettings,
   HUDState,
   LaunchPadEntity,
+  LootIslandState,
+  NpcSpecialistEntity,
   RiftEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
+  VendingMachineEntity,
   ZiplineEntity,
 } from '../types';
 import {
@@ -19,13 +22,16 @@ import {
   worldToMapNorm,
 } from './UIHelpers';
 import {
+  getAllyRoleSvg,
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getCrownSvg,
+  getLootIslandIconSvg,
   getSkyRiftIconSvg,
   getUpgradeBenchIconSvg,
   getVaultLockSvg,
   getVehicleIconSvg,
+  getVendingIconSvg,
 } from './WeaponIcons';
 
 export interface FullMapCallbacks {
@@ -53,6 +59,9 @@ export class FullMapOverlay {
   private campfires: CampfireEntity[] = [];
   private rifts: RiftEntity[] = [];
   private capturePoints: CapturePointEntity[] = [];
+  private vendingMachines: VendingMachineEntity[] = [];
+  private npcSpecialists: NpcSpecialistEntity[] = [];
+  private lootIsland: LootIslandState | null = null;
 
   private open = false;
   private lastState: HUDState | null = null;
@@ -180,6 +189,18 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch flag">${getCaptureFlagIconSvg(true)}</span>
         <span>CAPTURE FLAG</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch vending">${getVendingIconSvg()}</span>
+        <span>VENDING MACHINE</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch npc">${getAllyRoleSvg('scout')}</span>
+        <span>SPECIALIST NPC</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch island">${getLootIslandIconSvg()}</span>
+        <span>LOOT ISLAND</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -244,6 +265,19 @@ export class FullMapOverlay {
   ): void {
     this.rifts = rifts;
     this.capturePoints = capturePoints;
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldEconomy(
+    vendingMachines: VendingMachineEntity[],
+    npcs: NpcSpecialistEntity[],
+    lootIsland: LootIslandState | null,
+  ): void {
+    this.vendingMachines = vendingMachines;
+    this.npcSpecialists = npcs;
+    this.lootIsland = lootIsland;
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -773,6 +807,150 @@ export class FullMapOverlay {
 
         ctx.restore();
       }
+      ctx.restore();
+    }
+
+    // Vending Machines (kiosk badge)
+    if (this.vendingMachines.length > 0) {
+      ctx.save();
+      for (const vm of this.vendingMachines) {
+        const vp = toPx(vm.x, vm.z);
+        const inStock = vm.stock > 0;
+        const strokeCol = !inStock
+          ? '#64748b'
+          : vm.kind === 'mending'
+            ? '#34eb5e'
+            : '#38bdf8';
+        ctx.save();
+        ctx.translate(vp.x, vp.y);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+        ctx.fillStyle = inStock
+          ? 'rgba(8, 24, 52, 0.92)'
+          : 'rgba(15, 23, 42, 0.78)';
+        ctx.fill();
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        ctx.fillStyle = strokeCol;
+        ctx.fillRect(-3.8, -4.4, 7.6, 8.8);
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(-2.6, -3.2, 5.2, 3.6);
+        ctx.fillStyle = inStock ? '#ffd000' : '#64748b';
+        ctx.fillRect(-2.6, 1.4, 5.2, 1.6);
+
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // Specialist NPCs (hireable ally markers)
+    if (this.npcSpecialists.length > 0) {
+      ctx.save();
+      for (const npc of this.npcSpecialists) {
+        const np = toPx(npc.x, npc.z);
+        const hired = npc.hiredBy !== null;
+        const roleColor =
+          npc.role === 'medic'
+            ? '#34eb5e'
+            : npc.role === 'heavy'
+              ? '#fb923c'
+              : '#22d3ee';
+        ctx.save();
+        ctx.translate(np.x, np.y);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+        ctx.fillStyle = hired
+          ? 'rgba(120, 53, 15, 0.92)'
+          : 'rgba(10, 22, 46, 0.92)';
+        ctx.fill();
+        ctx.strokeStyle = hired ? '#ffd000' : roleColor;
+        ctx.lineWidth = 1.7;
+        ctx.stroke();
+
+        ctx.fillStyle = roleColor;
+        ctx.beginPath();
+        ctx.arc(0, -2.0, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(0, 4.2, 3.8, Math.PI, 0);
+        ctx.fill();
+
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // Floating Loot Island Ring + Shrine Icon
+    if (this.lootIsland && this.lootIsland.active) {
+      const lip = toPx(this.lootIsland.x, this.lootIsland.z);
+      const islandRadPx = Math.max(14, this.lootIsland.radius * pxPerMeter);
+      const captured = this.lootIsland.captured;
+      ctx.save();
+      ctx.translate(lip.x, lip.y);
+
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.arc(0, 0, islandRadPx, 0, Math.PI * 2);
+      ctx.fillStyle = captured
+        ? 'rgba(255, 208, 0, 0.14)'
+        : 'rgba(34, 211, 238, 0.14)';
+      ctx.fill();
+      ctx.strokeStyle = captured ? '#ffd000' : '#22d3ee';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+
+      if (!captured && this.lootIsland.captureProgress > 0) {
+        const prog = Math.max(0, Math.min(1, this.lootIsland.captureProgress));
+        ctx.beginPath();
+        ctx.arc(
+          0,
+          0,
+          islandRadPx,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * prog,
+        );
+        ctx.strokeStyle = '#ffd000';
+        ctx.lineWidth = 2.6;
+        ctx.stroke();
+      }
+
+      const glow = ctx.createRadialGradient(0, 0, 1, 0, 0, 12);
+      glow.addColorStop(
+        0,
+        captured ? 'rgba(255, 208, 0, 0.78)' : 'rgba(34, 211, 238, 0.78)',
+      );
+      glow.addColorStop(1, 'rgba(34, 211, 238, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0, 0, 12, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 7.6, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(8, 22, 48, 0.94)';
+      ctx.fill();
+      ctx.strokeStyle = captured ? '#ffd000' : '#67e8f9';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(0, -5.2);
+      ctx.lineTo(4.4, 0);
+      ctx.lineTo(0, 5.2);
+      ctx.lineTo(-4.4, 0);
+      ctx.closePath();
+      ctx.fillStyle = captured ? '#ffd000' : '#22d3ee';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.1;
+      ctx.fill();
+      ctx.stroke();
+
       ctx.restore();
     }
 

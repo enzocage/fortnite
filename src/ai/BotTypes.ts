@@ -19,6 +19,7 @@ import type {
   Rarity,
   RiftEntity,
   SlurpBarrelEntity,
+  SpecialistRole,
   StormState,
   TerrainQuery,
   Vec3Like,
@@ -45,11 +46,18 @@ export interface BotCombatTarget {
   shield: number;
   alive: boolean;
   isPlayer?: boolean;
+  isAlly?: boolean;
   radius?: number;
   height?: number;
   velocity?: Vec3Like;
   inVehicle?: boolean;
 }
+
+export type AllySupportEvent = {
+  kind: 'scout_ping' | 'medic_heal';
+  position: Vec3Like;
+  amount?: number;
+};
 
 export interface ShieldBubbleZone {
   position: Vec3Like;
@@ -95,6 +103,8 @@ export interface BotRenderState extends CharacterRenderState {
   isHiddenInBus: boolean;
   isBoss?: boolean;
   bossPoiId?: string;
+  isAlly?: boolean;
+  allyRole?: SpecialistRole;
 }
 
 export interface NamedBossSpec {
@@ -223,6 +233,9 @@ export interface BotEntity {
   riftCooldown?: number;
   riftTargetId?: string | null;
   captureTargetId?: string | null;
+  isAlly?: boolean;
+  allyRole?: SpecialistRole;
+  allyAbilityCooldown?: number;
 }
 
 export interface BotWorldContext {
@@ -305,6 +318,7 @@ export interface BotWorldContext {
     id: string,
     dmg: number,
   ) => { exploded: boolean; position: Vec3Like; blastRadius: number; blastDamage: number } | null;
+  onAllySupportEvent?: (event: AllySupportEvent) => void;
   dropBotLoot(bot: BotEntity): void;
   eventBus: EventBus;
 }

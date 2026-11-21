@@ -1,6 +1,8 @@
 import type {
   AugmentDef,
   ContrailDef,
+  CrosshairColor,
+  CrosshairStyle,
   EmoteDef,
   GameModeId,
   GameSettings,
@@ -197,6 +199,77 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     burstInterval: 0.075,
     maxStack: 1,
     allowedRarities: ['common', 'uncommon', 'rare', 'epic', 'legendary'],
+  },
+  tactical_dmr: {
+    id: 'tactical_dmr',
+    name: 'Thermal Tactical DMR',
+    shortName: 'TACTICAL DMR',
+    category: 'rifle',
+    ammoType: 'medium',
+    isConsumable: false,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 0,
+    baseDamage: 48,
+    structureDamage: 44,
+    headshotMultiplier: 1.85,
+    fireRate: 2.9,
+    pellets: 1,
+    magSize: 10,
+    reloadTime: 2.3,
+    baseSpread: 0.014,
+    adsSpread: 0.004,
+    crouchSpreadMult: 0.65,
+    moveSpreadAdd: 0.01,
+    bloomPerShot: 0.004,
+    bloomMax: 0.032,
+    bloomRecovery: 0.06,
+    range: 240,
+    falloffStart: 85,
+    falloffEnd: 210,
+    minFalloffMult: 0.78,
+    recoilPitch: 0.018,
+    recoilYaw: 0.004,
+    maxStack: 1,
+    allowedRarities: ['rare', 'epic', 'legendary'],
+  },
+  kinetic_blade: {
+    id: 'kinetic_blade',
+    name: 'Kinetic Dash Blade',
+    shortName: 'KINETIC BLADE',
+    category: 'pickaxe',
+    ammoType: null,
+    isConsumable: false,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 0,
+    baseDamage: 45,
+    structureDamage: 75,
+    headshotMultiplier: 1.0,
+    fireRate: 2.1,
+    pellets: 1,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0,
+    adsSpread: 0,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 3.8,
+    falloffStart: 3.8,
+    falloffEnd: 3.8,
+    minFalloffMult: 1,
+    recoilPitch: 0,
+    recoilYaw: 0,
+    maxStack: 1,
+    isKineticBlade: true,
+    dashCharges: 3,
+    dashCooldownSec: 9,
+    allowedRarities: ['epic', 'legendary', 'mythic'],
   },
   pump_shotgun: {
     id: 'pump_shotgun',
@@ -1477,6 +1550,29 @@ export const CONTRAILS: readonly ContrailDef[] = [
   },
 ];
 
+export const MAX_GOLD_BARS = 5000;
+export const STARTING_GOLD_BARS = 250;
+
+export const CROSSHAIR_COLORS: ReadonlyArray<{
+  id: CrosshairColor;
+  name: string;
+}> = [
+  { id: '#ffffff', name: 'White' },
+  { id: '#22d3ee', name: 'Cyber Cyan' },
+  { id: '#34eb5e', name: 'Neon Lime' },
+  { id: '#f472b6', name: 'Rift Rose' },
+  { id: '#ffd000', name: 'Mythic Gold' },
+];
+
+export const CROSSHAIR_STYLES: ReadonlyArray<{
+  id: CrosshairStyle;
+  name: string;
+}> = [
+  { id: 'dynamic', name: 'Dynamic' },
+  { id: 'dot', name: 'Precision Dot' },
+  { id: 'classic', name: 'Classic Plus' },
+];
+
 export const DEFAULT_KEYBINDS: KeybindMap = {
   buildWall: 'KeyZ',
   buildFloor: 'KeyX',
@@ -1501,5 +1597,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   showFps: false,
   invertY: false,
   visualAudio: true,
+  crosshairColor: '#ffffff',
+  crosshairStyle: 'dynamic',
   keybinds: { ...DEFAULT_KEYBINDS },
 };

@@ -1,5 +1,12 @@
-import type { AmmoType, BiomeType, MaterialType, Vec3Like } from './common';
-import type { ItemInstance } from './weapons';
+import type {
+  AmmoType,
+  BiomeType,
+  MaterialType,
+  Rarity,
+  SpecialistRole,
+  Vec3Like,
+} from './common';
+import type { ItemInstance, WeaponId } from './weapons';
 
 export interface POIDef {
   id: string;
@@ -210,6 +217,44 @@ export interface ExplosiveBarrelEntity {
   blastRadius: number;
   blastDamage: number;
   exploded: boolean;
+}
+
+export interface VendingMachineEntity {
+  id: string;
+  poiId: string;
+  kind: 'mending' | 'weapon';
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  offerWeaponId: WeaponId;
+  offerRarity: Rarity;
+  priceGold: number;
+  stock: number;
+}
+
+export interface NpcSpecialistEntity {
+  id: string;
+  name: string;
+  role: SpecialistRole;
+  poiId: string;
+  skinId: string;
+  x: number;
+  y: number;
+  z: number;
+  priceGold: number;
+  hiredBy: string | null;
+}
+
+export interface LootIslandState {
+  active: boolean;
+  spawnedAtSec: number;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  captured: boolean;
+  captureProgress: number;
 }
 
 export interface SupplyDrop {

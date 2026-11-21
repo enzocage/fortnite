@@ -5,6 +5,7 @@ import { PICKAXES, WEAPON_WRAPS, mulberry32 } from '../core';
 const RANGED_WEAPONS = new Set<WeaponId>([
   'ar',
   'burst_ar',
+  'tactical_dmr',
   'pump_shotgun',
   'tac_shotgun',
   'heavy_shotgun',
@@ -970,6 +971,108 @@ function buildMythicBladeRifle(): THREE.Group {
   return group;
 }
 
+function buildTacticalDMR(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_tactical_dmr';
+
+  const chassis = makeStandardMat('#1e293b', 0.42, 0.5);
+  const receiverPanel = makeStandardMat('#334155', 0.4, 0.38);
+  const barrelMat = makeStandardMat('#0f172a', 0.28, 0.78);
+  const steel = makeStandardMat('#94a3b8', 0.24, 0.82);
+  const thermalHousing = makeStandardMat('#0f172a', 0.34, 0.62);
+  const thermalLens = makeStandardMat('#22d3ee', 0.1, 0.18, '#22d3ee', 0.92);
+
+  // Ergonomic pistol grip & trigger guard
+  addBox(group, 0.038, 0.115, 0.048, chassis, 0, -0.022, -0.015, 0.25, 0, 0);
+  addBox(group, 0.016, 0.032, 0.056, chassis, 0, 0.018, 0.048);
+
+  // Angled cheek-rest precision stock + buffer tube + rubber buttpad
+  addCylinder(group, 0.018, 0.018, 0.22, barrelMat, 0, 0.072, -0.15, Math.PI / 2, 0, 0, 10);
+  tagWrapTarget(addBox(group, 0.048, 0.056, 0.20, receiverPanel, 0, 0.092, -0.17, 0.08, 0, 0));
+  addBox(group, 0.042, 0.082, 0.14, chassis, 0, 0.042, -0.19, 0.05, 0, 0);
+  addBox(group, 0.048, 0.115, 0.026, barrelMat, 0, 0.052, -0.27);
+
+  // Sleek precision receiver + vented DMR handguard shroud + full Picatinny top rail
+  tagWrapTarget(addBox(group, 0.058, 0.082, 0.32, receiverPanel, 0, 0.068, 0.09));
+  tagWrapTarget(addBox(group, 0.052, 0.066, 0.24, receiverPanel, 0, 0.074, 0.34));
+  addBox(group, 0.030, 0.014, 0.44, chassis, 0, 0.114, 0.20);
+
+  // Slim angled 20-round DMR magazine + side charging handle
+  addBox(group, 0.032, 0.125, 0.064, chassis, 0, -0.026, 0.13, -0.16, 0, 0);
+  addCylinder(group, 0.008, 0.008, 0.045, steel, -0.042, 0.086, 0.03, 0, 0, Math.PI / 2, 8);
+
+  // Elongated fluted barrel + longitudinal fluting ribs + gas block
+  addCylinder(group, 0.014, 0.016, 0.26, barrelMat, 0, 0.082, 0.56, Math.PI / 2, 0, 0, 10);
+  addBox(group, 0.006, 0.032, 0.22, steel, 0, 0.082, 0.55);
+  addBox(group, 0.032, 0.006, 0.22, steel, 0, 0.082, 0.55);
+  addBox(group, 0.032, 0.038, 0.042, chassis, 0, 0.086, 0.48);
+
+  // Integrated suppressor & vented compensator muzzle
+  addCylinder(group, 0.025, 0.025, 0.16, barrelMat, 0, 0.082, 0.72, Math.PI / 2, 0, 0, 12);
+  addCylinder(group, 0.028, 0.028, 0.026, steel, 0, 0.082, 0.65, Math.PI / 2, 0, 0, 12);
+  addCylinder(group, 0.027, 0.023, 0.038, chassis, 0, 0.082, 0.80, Math.PI / 2, 0, 0, 12);
+
+  // Thermal optic housing + dual rail risers + side sensor pod + glowing cyan #22d3ee lenses
+  addBox(group, 0.032, 0.026, 0.036, chassis, 0, 0.128, 0.05);
+  addBox(group, 0.032, 0.026, 0.036, chassis, 0, 0.128, 0.17);
+  addBox(group, 0.056, 0.054, 0.21, thermalHousing, 0, 0.162, 0.11);
+  addBox(group, 0.022, 0.036, 0.13, receiverPanel, 0.036, 0.160, 0.12);
+  addBox(group, 0.018, 0.008, 0.10, thermalLens, 0.044, 0.172, 0.12);
+  // Front thermal objective lens & rear glowing cyan eyepiece
+  addCylinder(group, 0.024, 0.024, 0.014, thermalLens, 0, 0.162, 0.216, Math.PI / 2, 0, 0, 12);
+  addCylinder(group, 0.019, 0.019, 0.014, thermalLens, 0, 0.162, 0.004, Math.PI / 2, 0, 0, 12);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.082, 0.825);
+  return group;
+}
+
+function buildKineticBlade(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_kinetic_blade';
+  // Keep katana plasma cutting edge and metallic spline glow intact regardless of equipped wrap
+  group.userData.wrapDisabled = true;
+
+  const gripCore = makeStandardMat('#0f172a', 0.62, 0.24);
+  const gripWrap = makeStandardMat('#312e81', 0.54, 0.3);
+  const metalSpline = makeStandardMat('#64748b', 0.22, 0.88);
+  const tsubaMetal = makeStandardMat('#1e293b', 0.28, 0.78);
+  const cyanPlasma = makeStandardMat('#22d3ee', 0.12, 0.15, '#22d3ee', 0.96);
+  const violetPlasma = makeStandardMat('#a855f7', 0.15, 0.18, '#a855f7', 0.88);
+
+  // Wrapped katana tsuka handle grip + diamond ito bands + glowing pommel cap
+  addCylinder(group, 0.021, 0.024, 0.34, gripCore, 0, 0.04, 0, 0, 0, 0, 10);
+  for (let i = 0; i < 5; i++) {
+    addBox(group, 0.046, 0.018, 0.052, gripWrap, 0, -0.085 + i * 0.062, 0, 0, 0.42, 0);
+  }
+  addCylinder(group, 0.029, 0.024, 0.036, tsubaMetal, 0, -0.145, 0, 0, 0, 0, 8);
+  addCylinder(group, 0.026, 0.026, 0.012, violetPlasma, 0, -0.132, 0, 0, 0, 0, 8);
+
+  // Angular sculpted tsuba handguard + habaki blade collar
+  addBox(group, 0.135, 0.018, 0.068, tsubaMetal, 0, 0.22, 0, 0, Math.PI / 4, 0);
+  addBox(group, 0.095, 0.022, 0.115, tsubaMetal, 0, 0.22, 0.008);
+  addBox(group, 0.105, 0.012, 0.032, cyanPlasma, 0, 0.222, 0.048);
+  addBox(group, 0.036, 0.042, 0.058, metalSpline, 0, 0.252, 0.006);
+
+  // Curved cyber-katana blade: brushed metallic spline core + neon cyan/violet kinetic plasma edge
+  // Lower spline & plasma edge
+  addBox(group, 0.018, 0.33, 0.036, metalSpline, 0, 0.43, 0.012, 0.05, 0, 0);
+  addBox(group, 0.012, 0.33, 0.018, violetPlasma, 0, 0.43, 0.028, 0.05, 0, 0);
+  addBox(group, 0.009, 0.335, 0.024, cyanPlasma, 0, 0.43, 0.042, 0.05, 0, 0);
+
+  // Mid curved spline & plasma edge
+  addBox(group, 0.016, 0.30, 0.034, metalSpline, 0, 0.72, 0.044, 0.15, 0, 0);
+  addBox(group, 0.011, 0.30, 0.016, violetPlasma, 0, 0.72, 0.060, 0.15, 0, 0);
+  addBox(group, 0.008, 0.305, 0.024, cyanPlasma, 0, 0.72, 0.074, 0.15, 0, 0);
+
+  // Upper swept kissaki tip & glowing emitter conduit nodes
+  addBox(group, 0.014, 0.16, 0.028, metalSpline, 0, 0.92, 0.088, 0.30, 0, 0);
+  addBox(group, 0.008, 0.17, 0.026, cyanPlasma, 0, 0.94, 0.108, 0.36, 0, 0);
+  addBox(group, 0.022, 0.038, 0.026, violetPlasma, 0, 0.56, 0.024, 0.09, 0, 0);
+  addBox(group, 0.020, 0.038, 0.024, cyanPlasma, 0, 0.77, 0.056, 0.18, 0, 0);
+
+  return group;
+}
+
 function buildShockwaveGrenade(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_shockwave_grenade';
@@ -1304,6 +1407,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildAssaultRifle();
     case 'burst_ar':
       return buildBurstAR();
+    case 'tactical_dmr':
+      return buildTacticalDMR();
+    case 'kinetic_blade':
+      return buildKineticBlade();
     case 'pump_shotgun':
       return buildPumpShotgun();
     case 'tac_shotgun':

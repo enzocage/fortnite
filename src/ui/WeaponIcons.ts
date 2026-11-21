@@ -3,6 +3,7 @@ import type {
   AugmentId,
   BuildPieceType,
   MaterialType,
+  SpecialistRole,
   VehicleKind,
   VisualSoundCue,
   WeaponId,
@@ -204,6 +205,28 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <rect x="21" y="47" width="22" height="8" rx="2.5" fill="#334155" stroke="#0f172a" stroke-width="2"/>
     <rect x="26" y="49" width="12" height="3.5" rx="1" fill="#22d3ee"/>
     <path d="M21 18C18 21 16.5 25 16.5 28" stroke="#e0f2fe" stroke-width="2.2" stroke-linecap="round"/>
+  </svg>`,
+
+  tactical_dmr: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M5 35L14 31H44V37H34L36 48H29L27 37H20L17 45H12L14 37L6 41L5 35Z" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="44" y="31.8" width="14" height="3.2" rx="1" fill="#94a3b8" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="56" y="31" width="4" height="4.8" rx="1" fill="#38bdf8" stroke="#0f172a" stroke-width="1.2"/>
+    <path d="M19 21H37L40 26L37 29H19L17 25L19 21Z" fill="#0ea5e9" stroke="#0f172a" stroke-width="1.7" stroke-linejoin="round"/>
+    <circle cx="33" cy="25" r="2.6" fill="#ffd000" stroke="#0f172a" stroke-width="1"/>
+    <path d="M22 29V31.5M33 29V31.5" stroke="#f8fafc" stroke-width="2" stroke-linecap="round"/>
+    <rect x="36" y="33.5" width="14" height="2.4" rx="1" fill="#22d3ee"/>
+    <rect x="21" y="33" width="10" height="2.4" rx="1" fill="#334155"/>
+  </svg>`,
+
+  kinetic_blade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M22 40L52 10L55 17L27 45L22 40Z" fill="#22d3ee" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M25 41L53 12" stroke="#ecfeff" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M8 54L21 41L24 44L11 57L8 54Z" fill="#312e81" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="17" y="38" width="12" height="4.5" rx="1.6" transform="rotate(45 23 40.25)" fill="#a855f7" stroke="#0f172a" stroke-width="1.6"/>
+    <circle cx="23" cy="40.5" r="2.2" fill="#ffd000"/>
+    <circle cx="51" cy="13" r="3" fill="#e879f9"/>
+    <path d="M35 13C43 14 50 21 51 29" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M31 19C36 20 40 24 41 29" stroke="#e879f9" stroke-width="1.8" stroke-linecap="round"/>
   </svg>`,
 };
 
@@ -537,5 +560,58 @@ export function getCaptureFlagIconSvg(captured = false): string {
     <circle cx="16" cy="16" r="12" fill="${bg}" stroke="${border}" stroke-width="2.2"/>
     <path d="M10 24V8" stroke="${pole}" stroke-width="2.4" stroke-linecap="round"/>
     <path d="M11 8.5L24 13.5L11 18.5V8.5Z" fill="${pennant}" stroke="#0f172a" stroke-width="1.3" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+export function getGoldBarSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M4 22L8 14H22L18 22H4Z" fill="#f59e0b" stroke="#78350f" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M9 17L13 9H27L23 17H9Z" fill="#ffd000" stroke="#78350f" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M14 11.5H23.5L21 15H11.5L14 11.5Z" fill="#fef08a"/>
+    <path d="M26 5L27 7.5L29.5 8.5L27 9.5L26 12L25 9.5L22.5 8.5L25 7.5L26 5Z" fill="#ffffff"/>
+  </svg>`;
+}
+
+export function getVendingIconSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <rect x="6" y="4" width="20" height="24" rx="3" fill="#0284c7" stroke="#0f172a" stroke-width="1.8"/>
+    <rect x="9" y="7" width="14" height="11" rx="1.8" fill="#0f172a" stroke="#38bdf8" stroke-width="1.3"/>
+    <path d="M12 12.5H20M16 9.5V15.5" stroke="#ffd000" stroke-width="2" stroke-linecap="round"/>
+    <rect x="9" y="21" width="14" height="4" rx="1" fill="#0f172a" stroke="#7dd3fc" stroke-width="1.2"/>
+    <circle cx="22.5" cy="19.5" r="1.4" fill="#ffd000"/>
+  </svg>`;
+}
+
+export function getAllyRoleSvg(role: SpecialistRole): string {
+  switch (role) {
+    case 'medic':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4L26 8.5V16C26 22 21.6 26.4 16 28C10.4 26.4 6 22 6 16V8.5L16 4Z" fill="#15803d" stroke="#86efac" stroke-width="1.8" stroke-linejoin="round"/>
+        <rect x="14" y="10" width="4" height="12" rx="1" fill="#ecfdf5"/>
+        <rect x="10" y="14" width="12" height="4" rx="1" fill="#ecfdf5"/>
+      </svg>`;
+    case 'heavy':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4L27 10V18.5C27 23.5 22 27 16 28.5C10 27 5 23.5 5 18.5V10L16 4Z" fill="#9a3412" stroke="#fdba74" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M10 15L16 11L22 15V19L16 15L10 19V15Z" fill="#ffd000"/>
+        <path d="M10 20.5L16 16.5L22 20.5" stroke="#fed7aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>`;
+    case 'scout':
+    default:
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="11" fill="#0c4a6e" stroke="#22d3ee" stroke-width="1.8"/>
+        <circle cx="16" cy="16" r="6" stroke="#7dd3fc" stroke-width="1.5"/>
+        <circle cx="16" cy="16" r="2.5" fill="#ffd000"/>
+        <path d="M16 3V8M16 24V29M3 16H8M24 16H29" stroke="#22d3ee" stroke-width="2" stroke-linecap="round"/>
+      </svg>`;
+  }
+}
+
+export function getLootIslandIconSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="16" r="12" stroke="#22d3ee" stroke-width="1.8" stroke-dasharray="3.5 2.5" fill="rgba(8, 24, 52, 0.85)"/>
+    <path d="M7 16H25L20 25L16 27L12 25L7 16Z" fill="#475569" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M7 16C7 14 11 12.5 16 12.5C21 12.5 25 14 25 16H7Z" fill="#22d3ee" stroke="#e0f2fe" stroke-width="1.2"/>
+    <path d="M16 4L19.5 10L16 14L12.5 10L16 4Z" fill="#ffd000" stroke="#78350f" stroke-width="1.2" stroke-linejoin="round"/>
   </svg>`;
 }

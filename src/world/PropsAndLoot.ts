@@ -82,6 +82,7 @@ interface LlamaEntry {
 const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'ar',
   'burst_ar',
+  'tactical_dmr',
   'pump_shotgun',
   'tac_shotgun',
   'heavy_shotgun',
@@ -89,11 +90,13 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'pistol',
   'sniper',
   'grappler',
+  'kinetic_blade',
 ];
 
 const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'ar',
   'burst_ar',
+  'tactical_dmr',
   'pump_shotgun',
   'tac_shotgun',
   'heavy_shotgun',
@@ -102,16 +105,19 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'rocket_launcher',
   'pistol',
   'grappler',
+  'kinetic_blade',
 ];
 
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'ar',
+  'tactical_dmr',
   'pump_shotgun',
   'heavy_shotgun',
   'sniper',
   'rocket_launcher',
   'burst_ar',
   'grappler',
+  'kinetic_blade',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
@@ -1713,6 +1719,25 @@ export class PropsAndLoot {
         claw.position.z = 0.36;
         grapGroup.add(body, claw);
         itemMesh = grapGroup;
+      } else if (def.isKineticBlade) {
+        const bladeGroup = new THREE.Group();
+        const edge = new THREE.Mesh(
+          this.getGeo('loot_blade_edge', () => new THREE.BoxGeometry(0.06, 0.1, 0.92)),
+          itemMat,
+        );
+        edge.position.z = 0.08;
+        const guard = new THREE.Mesh(
+          this.getGeo('loot_blade_guard', () => new THREE.BoxGeometry(0.24, 0.16, 0.06)),
+          itemMat,
+        );
+        guard.position.z = -0.34;
+        const hilt = new THREE.Mesh(
+          this.getGeo('loot_blade_hilt', () => new THREE.BoxGeometry(0.08, 0.09, 0.24)),
+          itemMat,
+        );
+        hilt.position.z = -0.48;
+        bladeGroup.add(edge, guard, hilt);
+        itemMesh = bladeGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),
