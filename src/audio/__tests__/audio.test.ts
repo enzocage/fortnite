@@ -169,6 +169,15 @@ class MockAudioParam {
     return this;
   }
 
+  setTargetAtTime(target: number, startTime: number, _timeConstant: number): this {
+    if (target <= 0) {
+      throw new Error('setTargetAtTime target must be positive');
+    }
+    this.value = target;
+    this.events.push({ kind: 'target', value: target, time: startTime });
+    return this;
+  }
+
   cancelScheduledValues(_time: number): this {
     return this;
   }
@@ -496,6 +505,95 @@ describe('SoundSynthesizer', () => {
       }
     }
 
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 3 SFX with strictly positive ramps across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave3Ids: SoundEventId[] = [
+      'upgrade_weapon',
+      'campfire_ignite',
+      'campfire_heal',
+      'slurp_barrel_break',
+      'quest_complete',
+      'overshield_recharge',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave3Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(3);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(5);
+      expect(gainsCreated).toBeGreaterThanOrEqual(4);
+
+      if (id === 'overshield_recharge') {
+        // Verify FM modulator gain connects directly into carrier oscillator frequency AudioParam
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.quest_complete).toBeGreaterThan(0.75);
+    expect(durations.upgrade_weapon).toBeGreaterThan(0.55);
+    expect(durations.campfire_ignite).toBeGreaterThan(0.45);
+    expect(durations.overshield_recharge).toBeGreaterThan(0.45);
+    expect(durations.slurp_barrel_break).toBeGreaterThan(0.4);
+    expect(durations.campfire_heal).toBeGreaterThan(0.35);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly > 0
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThan(0);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThan(0);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThan(0);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave3Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
     synth.dispose();
   });
 
@@ -1078,5 +1176,232 @@ describe('AudioEngine', () => {
     expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
 
     engine.dispose();
+  });
+
+  it('starts, modulates across speed/boost/kind, and cleanly stops vehicle engine loop on inactive, pause, mute, and dispose', async () => {
+    const bus = new EventBus();
+
+    // 1. Headless safety (no AudioContext)
+    const headless = new AudioEngine(bus);
+    expect(() => headless.updateVehicleEngine(true, 80, false, 'hover_atv')).not.toThrow();
+    expect(() => headless.updateVehicleEngine(true, Number.NaN, true, 'cyber_bike')).not.toThrow();
+    expect(() => headless.setPaused(true)).not.toThrow();
+    expect(headless.getVehicleEngineState().active).toBe(false);
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    // 2. Suspended or muted contexts do not spawn vehicle loop oscillators
+    const suspendedCtx = new MockAudioContext();
+    suspendedCtx.state = 'suspended';
+    const suspendedEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => suspendedCtx as unknown as AudioContext,
+    });
+    suspendedEngine.updateVehicleEngine(true, 90, true, 'cyber_bike');
+    expect(suspendedCtx.oscillators.length).toBe(0);
+    expect(suspendedEngine.getVehicleEngineState().active).toBe(false);
+    suspendedEngine.dispose();
+
+    const mutedCtx = new MockAudioContext();
+    const mutedEngine = new AudioEngine(
+      bus,
+      { ...DEFAULT_SETTINGS, sfxVolume: 0 },
+      { contextFactory: () => mutedCtx as unknown as AudioContext },
+    );
+    await mutedEngine.unlock();
+    mutedEngine.updateVehicleEngine(true, 90, true, 'hover_atv');
+    expect(mutedCtx.oscillators.length).toBe(0);
+    expect(mutedEngine.getVehicleEngineState().active).toBe(false);
+    mutedEngine.dispose();
+
+    // 3. Active AudioContext: lazy start, zero-leak reuse, speed/boost/kind modulation, clean stop
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+
+    // Inactive before first active=true call
+    engine.updateVehicleEngine(false, 0, false);
+    expect(mockCtx.oscillators.length).toBe(0);
+    expect(engine.getVehicleEngineState().active).toBe(false);
+
+    // Lazy start on active=true: dual hover oscs + boost sub-osc + bandpass filter
+    const gainsBefore = mockCtx.gains.length;
+    engine.updateVehicleEngine(true, 0, false, 'hover_atv');
+    expect(engine.getVehicleEngineState()).toEqual({
+      active: true,
+      speedKmh: 0,
+      isBoosting: false,
+      kind: 'hover_atv',
+    });
+    expect(engine.getActiveVoiceCount()).toBe(1);
+    expect(mockCtx.oscillators.length).toBe(3);
+    expect(mockCtx.filters.length).toBe(1);
+    expect(mockCtx.filters[0].type).toBe('bandpass');
+    expect(mockCtx.oscillators.every((o) => o.started && !o.stopped)).toBe(true);
+
+    const oscA = mockCtx.oscillators[0];
+    const oscB = mockCtx.oscillators[1];
+    const boostOsc = mockCtx.oscillators[2];
+    const humFilter = mockCtx.filters[0];
+    // Vehicle rig gains created in order: master(0), hum(1), whine(2), boost(3)
+    const vehMasterGain = mockCtx.gains[gainsBefore];
+    const vehWhineGain = mockCtx.gains[gainsBefore + 2];
+    const vehBoostGain = mockCtx.gains[gainsBefore + 3];
+
+    const idleFreqA = oscA.frequency.value;
+    const idleFreqB = oscB.frequency.value;
+    const idleFilterFreq = humFilter.frequency.value;
+    expect(idleFreqA).toBeGreaterThanOrEqual(75);
+    expect(idleFreqA).toBeLessThanOrEqual(90);
+    expect(vehBoostGain.gain.value).toBeCloseTo(0.0001, 4);
+
+    // Calling repeatedly with identical params allocates zero extra nodes
+    for (let i = 0; i < 60; i++) {
+      engine.updateVehicleEngine(true, 0, false, 'hover_atv');
+    }
+    expect(mockCtx.oscillators.length).toBe(3);
+
+    // Speed modulation (0 -> 80 -> 135 km/h) increases frequency and filter cutoff smoothly
+    engine.updateVehicleEngine(true, 80, false, 'hover_atv');
+    const midFreqA = oscA.frequency.value;
+    const midFreqB = oscB.frequency.value;
+    const midFilterFreq = humFilter.frequency.value;
+    expect(midFreqA).toBeGreaterThan(idleFreqA);
+    expect(midFreqB).toBeGreaterThan(idleFreqB);
+    expect(midFilterFreq).toBeGreaterThan(idleFilterFreq);
+    expect(mockCtx.oscillators.length).toBe(3);
+
+    engine.updateVehicleEngine(true, 135, false, 'hover_atv');
+    const highFreqA = oscA.frequency.value;
+    expect(highFreqA).toBeGreaterThan(midFreqA);
+    expect(highFreqA).toBeLessThanOrEqual(210);
+
+    // Boost modulation kicks pitch up and engages boost sub-layer gain
+    const preBoostMaster = vehMasterGain.gain.value;
+    engine.updateVehicleEngine(true, 80, true, 'hover_atv');
+    expect(oscA.frequency.value).toBeGreaterThan(midFreqA);
+    expect(boostOsc.frequency.value).toBeGreaterThan(20);
+    expect(vehBoostGain.gain.value).toBeGreaterThan(0.05);
+    expect(vehMasterGain.gain.value).toBeGreaterThan(preBoostMaster);
+
+    // VehicleKind modulation: cyber_bike produces higher cyber-whine harmonic & filter frequency than hover_atv
+    engine.updateVehicleEngine(true, 80, false, 'hover_atv');
+    const atvHarmonicFreq = oscB.frequency.value;
+    const atvWhineGain = vehWhineGain.gain.value;
+    const atvFilterFreq = humFilter.frequency.value;
+
+    engine.updateVehicleEngine(true, 80, false, 'cyber_bike');
+    expect(oscB.frequency.value).toBeGreaterThan(atvHarmonicFreq * 1.5);
+    expect(vehWhineGain.gain.value).toBeGreaterThan(atvWhineGain);
+    expect(humFilter.frequency.value).toBeGreaterThan(atvFilterFreq);
+    expect(mockCtx.oscillators.length).toBe(3);
+
+    // Clean stop on active=false
+    engine.updateVehicleEngine(false, 0, false, 'cyber_bike');
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.every((o) => o.stopped)).toBe(true);
+    expect(vehMasterGain.gain.value).toBeCloseTo(0.0001, 4);
+
+    // Restarting after active=false works cleanly and setPaused(true) stops loop
+    engine.updateVehicleEngine(true, 95, true, 'cyber_bike');
+    expect(engine.getVehicleEngineState().active).toBe(true);
+    expect(mockCtx.oscillators.length).toBe(6);
+    const secondWaveOscs = mockCtx.oscillators.slice(3);
+    expect(secondWaveOscs.every((o) => o.started && !o.stopped)).toBe(true);
+
+    engine.setPaused(true);
+    expect(engine.isPaused()).toBe(true);
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(secondWaveOscs.every((o) => o.stopped)).toBe(true);
+
+    // Remains silent while paused, then resumes cleanly when unpaused
+    engine.updateVehicleEngine(true, 100, false, 'hover_atv');
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(mockCtx.oscillators.length).toBe(6);
+
+    engine.setPaused(false);
+    engine.updateVehicleEngine(true, 100, false, 'hover_atv');
+    expect(engine.getVehicleEngineState().active).toBe(true);
+    expect(mockCtx.oscillators.length).toBe(9);
+    const thirdWaveOscs = mockCtx.oscillators.slice(6);
+
+    // Muting SFX or Master tears down active vehicle engine loop cleanly
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0 });
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(thirdWaveOscs.every((o) => o.stopped)).toBe(true);
+
+    // Unmute, restart, and verify dispose() stops everything with zero zombie loops
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0.85 });
+    engine.updateVehicleEngine(true, 110, true, 'cyber_bike');
+    expect(engine.getVehicleEngineState().active).toBe(true);
+    const fourthWaveOscs = mockCtx.oscillators.slice(9);
+    expect(fourthWaveOscs.every((o) => o.started && !o.stopped)).toBe(true);
+
+    engine.dispose();
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.every((o) => o.stopped)).toBe(true);
+
+    // Post-dispose calls are no-ops
+    const countAfterDispose = mockCtx.oscillators.length;
+    engine.updateVehicleEngine(true, 120, true, 'cyber_bike');
+    expect(mockCtx.oscillators.length).toBe(countAfterDispose);
+
+    // 4. Minimal AudioParam fallback without setTargetAtTime or createBiquadFilter
+    class MinimalLinearParam {
+      value = 0;
+      setValueAtTime(v: number): this {
+        this.value = v;
+        return this;
+      }
+      linearRampToValueAtTime(v: number): this {
+        this.value = v;
+        return this;
+      }
+      cancelScheduledValues(): this {
+        return this;
+      }
+    }
+    const minOscs: Array<{ frequency: MinimalLinearParam; started: boolean; stopped: boolean; start: () => void; stop: () => void; connect: () => void; disconnect: () => void }> = [];
+    const minCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => ({ gain: new MinimalLinearParam(), connect: () => {}, disconnect: () => {} }),
+      createOscillator: () => {
+        const o = {
+          type: 'sine',
+          frequency: new MinimalLinearParam(),
+          started: false,
+          stopped: false,
+          start() {
+            this.started = true;
+          },
+          stop() {
+            this.stopped = true;
+          },
+          connect() {},
+          disconnect() {},
+        };
+        minOscs.push(o);
+        return o;
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const fallbackEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => minCtx,
+    });
+    await fallbackEngine.unlock();
+    expect(() => fallbackEngine.updateVehicleEngine(true, 75, true, 'cyber_bike')).not.toThrow();
+    expect(fallbackEngine.getVehicleEngineState().active).toBe(true);
+    expect(minOscs.length).toBe(3);
+    expect(minOscs[0].frequency.value).toBeGreaterThan(78);
+    expect(() => fallbackEngine.updateVehicleEngine(false, 0, false)).not.toThrow();
+    expect(minOscs.every((o) => o.stopped)).toBe(true);
+    fallbackEngine.dispose();
   });
 });

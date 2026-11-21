@@ -8,15 +8,20 @@ import type {
   HitmarkerFeedback,
   ItemInstance,
   KillFeedEntry,
+  MatchQuest,
   MaterialType,
 } from '../types';
 import {
+  angleRadToDeg,
   cloneSettings,
   computeFallbackStormDistance,
+  computeOvershieldPct,
+  computeQuestProgressPct,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
   formatKeyCodeLabel,
+  formatModeBadgeLabel,
   formatSafeZoneDistance,
   formatVehicleKindLabel,
   formatWeatherLabel,
@@ -26,17 +31,21 @@ import {
   getRarityMeta,
   normalizeBoostChargePct,
   resolveKeybinds,
+  selectVisibleVisualSoundCues,
   worldToMapNorm,
 } from './UIHelpers';
 import {
   getBountyTargetSvg,
   getBuildIconSvg,
+  getCampfireIconSvg,
   getCrownSvg,
   getMaterialIconSvg,
+  getOvershieldBoltSvg,
   getSkullSvg,
   getStormEyeSvg,
   getVaultKeySvg,
   getVehicleIconSvg,
+  getVisualAudioIconSvg,
   getWeaponSvg,
   getWeatherIconSvg,
 } from './WeaponIcons';
@@ -92,6 +101,11 @@ export class HUDManager {
   private bountyTargetEl: HTMLDivElement;
   private bountyDistEl: HTMLSpanElement;
   private bountyRewardEl: HTMLSpanElement;
+  private questsPanelEl: HTMLDivElement;
+  private questsCountEl: HTMLSpanElement;
+  private questsListEl: HTMLDivElement;
+  private questToastLayerEl: HTMLDivElement;
+  private activeQuestToastTimers = new Set<ReturnType<typeof setTimeout>>();
 
   // Compass & Boss Bar
   private compassTapeEl: HTMLDivElement;
@@ -113,6 +127,7 @@ export class HUDManager {
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
   private stormDistEl: HTMLDivElement;
+  private modeChipEl: HTMLDivElement;
   private locationChipEl: HTMLDivElement;
   private weatherPillEl: HTMLDivElement;
   private weatherIconEl: HTMLSpanElement;
@@ -142,9 +157,13 @@ export class HUDManager {
   private vehicleBoostFillEl: HTMLDivElement;
   private vehicleHpFillEl: HTMLDivElement;
   private vehicleHintEl: HTMLDivElement;
+  private campfirePillEl: HTMLDivElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
+  private overshieldBarEl: HTMLDivElement;
+  private overshieldFillEl: HTMLDivElement;
+  private overshieldTextEl: HTMLSpanElement;
   private shieldFillEl: HTMLDivElement;
   private shieldTextEl: HTMLSpanElement;
   private healthFillEl: HTMLDivElement;
@@ -173,6 +192,7 @@ export class HUDManager {
   private slotEls: HTMLDivElement[] = [];
 
   // Center overlays
+  private visualAudioRingEl: HTMLDivElement;
   private crosshairEl: HTMLDivElement;
   private scopeEl: HTMLDivElement;
   private hitmarkerEl: HTMLDivElement;
@@ -203,6 +223,8 @@ export class HUDManager {
   private lastKills = -1;
   private lastShield = -1;
   private lastMaxShield = -1;
+  private lastOvershield = -1;
+  private lastMaxOvershield = -1;
   private lastHealth = -1;
   private lastMaxHealth = -1;
   private lastStamina = -1;
@@ -238,6 +260,10 @@ export class HUDManager {
   private lastWeatherKey = '';
   private lastGrapplerKey = '';
   private lastSpectatingKey = '';
+  private lastModeChipKey = '';
+  private lastNearCampfire = false;
+  private lastQuestsKey = '';
+  private lastVisualAudioKey = '';
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -309,11 +335,26 @@ export class HUDManager {
     bountyMeta.append(this.bountyDistEl, this.bountyRewardEl);
     this.bountyCardEl.append(bountyHead, this.bountyTargetEl, bountyMeta);
 
+    this.questsPanelEl = document.createElement('div');
+    this.questsPanelEl.className = 'fdr-quests-panel fdr-hidden';
+    const questsHead = document.createElement('div');
+    questsHead.className = 'fdr-quests-head';
+    const questsTitle = document.createElement('span');
+    questsTitle.textContent = 'MATCH QUESTS';
+    this.questsCountEl = document.createElement('span');
+    this.questsCountEl.className = 'fdr-quests-count';
+    this.questsCountEl.textContent = '0 / 3';
+    questsHead.append(questsTitle, this.questsCountEl);
+    this.questsListEl = document.createElement('div');
+    this.questsListEl.className = 'fdr-quests-list';
+    this.questsPanelEl.append(questsHead, this.questsListEl);
+
     topLeftStack.append(
       this.fpsBadgeEl,
       this.killStreakEl,
       this.vaultKeyBadgeEl,
       this.bountyCardEl,
+      this.questsPanelEl,
     );
 
     // Compass
@@ -419,6 +460,9 @@ export class HUDManager {
     const zoneMetaRow = document.createElement('div');
     zoneMetaRow.className = 'fdr-zone-meta-row';
 
+    this.modeChipEl = document.createElement('div');
+    this.modeChipEl.className = 'fdr-zone-pill mode fdr-hidden';
+
     this.stormDistEl = document.createElement('div');
     this.stormDistEl.className = 'fdr-zone-pill safe-dist';
     this.stormDistEl.textContent = 'IN SAFE';
@@ -433,7 +477,12 @@ export class HUDManager {
     this.weatherTextEl = document.createElement('span');
     this.weatherPillEl.append(this.weatherIconEl, this.weatherTextEl);
 
-    zoneMetaRow.append(this.stormDistEl, this.locationChipEl, this.weatherPillEl);
+    zoneMetaRow.append(
+      this.modeChipEl,
+      this.stormDistEl,
+      this.locationChipEl,
+      this.weatherPillEl,
+    );
     minimapCluster.append(minimapFrame, teleRow, zoneMetaRow);
 
     // Bottom-Left Kill Feed
@@ -529,6 +578,15 @@ export class HUDManager {
     this.vehicleHintEl.textContent = '[E] EXIT • [SHIFT] BOOST • [H] HORN';
     this.vehicleDashEl.append(vehHead, vehBars, this.vehicleHintEl);
 
+    this.campfirePillEl = document.createElement('div');
+    this.campfirePillEl.className = 'fdr-campfire-pill fdr-hidden';
+    const campfireIcon = document.createElement('span');
+    campfireIcon.className = 'fdr-campfire-pill-icon';
+    campfireIcon.innerHTML = getCampfireIconSvg(true);
+    const campfireLabel = document.createElement('span');
+    campfireLabel.textContent = '+3 HP/S CAMPFIRE';
+    this.campfirePillEl.append(campfireIcon, campfireLabel);
+
     this.vitalsStackEl = document.createElement('div');
     this.vitalsStackEl.className = 'fdr-vitals-stack';
 
@@ -537,6 +595,25 @@ export class HUDManager {
     this.staminaFillEl = document.createElement('div');
     this.staminaFillEl.className = 'fdr-stamina-fill';
     this.staminaWrapEl.appendChild(this.staminaFillEl);
+
+    this.overshieldBarEl = document.createElement('div');
+    this.overshieldBarEl.className = 'fdr-vital-bar overshield fdr-hidden';
+    this.overshieldFillEl = document.createElement('div');
+    this.overshieldFillEl.className = 'fdr-vital-fill overshield';
+    const osTxt = document.createElement('div');
+    osTxt.className = 'fdr-vital-text';
+    const osTagWrap = document.createElement('span');
+    osTagWrap.className = 'fdr-os-tag';
+    const osIcon = document.createElement('span');
+    osIcon.className = 'fdr-os-icon';
+    osIcon.innerHTML = getOvershieldBoltSvg();
+    const osLabel = document.createElement('span');
+    osLabel.textContent = 'OVERSHIELD';
+    osTagWrap.append(osIcon, osLabel);
+    this.overshieldTextEl = document.createElement('span');
+    this.overshieldTextEl.textContent = '50 / 50';
+    osTxt.append(osTagWrap, this.overshieldTextEl);
+    this.overshieldBarEl.append(this.overshieldFillEl, osTxt);
 
     const shieldBar = document.createElement('div');
     shieldBar.className = 'fdr-vital-bar';
@@ -564,13 +641,19 @@ export class HUDManager {
     healthTxt.append(healthTag, this.healthTextEl);
     healthBar.append(this.healthFillEl, healthTxt);
 
-    this.vitalsStackEl.append(this.staminaWrapEl, shieldBar, healthBar);
+    this.vitalsStackEl.append(
+      this.staminaWrapEl,
+      this.overshieldBarEl,
+      shieldBar,
+      healthBar,
+    );
     bottomCenter.append(
       this.contextHintsEl,
       this.siphonBadgeEl,
       this.interactEl,
       this.channelEl,
       this.vehicleDashEl,
+      this.campfirePillEl,
       this.vitalsStackEl,
     );
 
@@ -725,6 +808,12 @@ export class HUDManager {
     bottomRight.append(buildMatsBar, hotbarWrap);
 
     // Center Tactical Overlays
+    this.visualAudioRingEl = document.createElement('div');
+    this.visualAudioRingEl.className = 'fdr-visual-audio-ring fdr-hidden';
+
+    this.questToastLayerEl = document.createElement('div');
+    this.questToastLayerEl.className = 'fdr-quest-toast-layer';
+
     this.crosshairEl = document.createElement('div');
     this.crosshairEl.className = 'fdr-crosshair';
     this.crosshairEl.innerHTML = `
@@ -876,10 +965,12 @@ export class HUDManager {
       this.spectatorBarEl,
       bottomRight,
       this.crosshairEl,
+      this.visualAudioRingEl,
       this.scopeEl,
       this.hitmarkerEl,
       this.damageArcWrapEl,
       this.damageNumsEl,
+      this.questToastLayerEl,
       this.editOverlayEl,
       this.emoteBackdropEl,
       this.pointerPromptEl,
@@ -901,6 +992,11 @@ export class HUDManager {
     this.settings = cloneSettings(settings);
     if (!this.settings.showFps) {
       this.fpsBadgeEl.classList.add('fdr-hidden');
+    }
+    this.lastVisualAudioKey = '__dirty__';
+    if (this.settings.visualAudio === false) {
+      this.visualAudioRingEl.classList.add('fdr-hidden');
+      this.visualAudioRingEl.innerHTML = '';
     }
     this.applySettingsKeybinds();
   }
@@ -981,6 +1077,64 @@ export class HUDManager {
     this.spectatorBarEl.classList.add('fdr-hidden');
     this.vitalsStackEl.classList.remove('fdr-hidden');
     this.lastSpectatingKey = '';
+    this.overshieldBarEl.classList.add('fdr-hidden');
+    this.lastOvershield = -1;
+    this.lastMaxOvershield = -1;
+    this.modeChipEl.classList.add('fdr-hidden');
+    this.lastModeChipKey = '';
+    this.campfirePillEl.classList.add('fdr-hidden');
+    this.lastNearCampfire = false;
+    this.questsPanelEl.classList.add('fdr-hidden');
+    this.questsListEl.innerHTML = '';
+    this.lastQuestsKey = '';
+    this.visualAudioRingEl.classList.add('fdr-hidden');
+    this.visualAudioRingEl.innerHTML = '';
+    this.lastVisualAudioKey = '';
+    for (const timer of this.activeQuestToastTimers) {
+      clearTimeout(timer);
+    }
+    this.activeQuestToastTimers.clear();
+    this.questToastLayerEl.innerHTML = '';
+  }
+
+  showQuestCompleteToast(quest: MatchQuest): void {
+    const toast = document.createElement('div');
+    toast.className = 'fdr-quest-toast';
+    toast.dataset.questId = quest.id;
+
+    const badge = document.createElement('span');
+    badge.className = 'fdr-quest-toast-badge';
+    badge.textContent = '✓';
+
+    const textCol = document.createElement('div');
+    textCol.className = 'fdr-quest-toast-text';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'fdr-quest-toast-eyebrow';
+    eyebrow.textContent = 'QUEST COMPLETE';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'fdr-quest-toast-title';
+    titleEl.textContent = quest.title;
+
+    textCol.append(eyebrow, titleEl);
+
+    const xpBadge = document.createElement('div');
+    xpBadge.className = 'fdr-quest-toast-xp';
+    xpBadge.textContent = `+${Math.max(0, Math.round(quest.xpReward))} XP`;
+
+    toast.append(badge, textCol, xpBadge);
+    this.questToastLayerEl.appendChild(toast);
+
+    while (this.questToastLayerEl.children.length > 2) {
+      this.questToastLayerEl.firstElementChild?.remove();
+    }
+
+    const timer = setTimeout(() => {
+      this.activeQuestToastTimers.delete(timer);
+      toast.remove();
+    }, 3400);
+    this.activeQuestToastTimers.add(timer);
   }
 
   triggerSiphonFlash(
@@ -1021,6 +1175,10 @@ export class HUDManager {
   setEmoteWheelOpen(open: boolean): boolean {
     this.emoteWheelOpen = open;
     this.emoteBackdropEl.classList.toggle('fdr-hidden', !open);
+    this.lastVisualAudioKey = '__dirty__';
+    if (open) {
+      this.visualAudioRingEl.classList.add('fdr-hidden');
+    }
     return this.emoteWheelOpen;
   }
 
@@ -1142,6 +1300,7 @@ export class HUDManager {
     this.updateMaterialsAndBuilds(state);
     this.updateHotbar(state);
     this.updateWave2HUD(state);
+    this.updateWave3HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -1402,6 +1561,26 @@ export class HUDManager {
   }
 
   private updateVitals(state: HUDState): void {
+    const maxOs =
+      typeof state.maxOvershield === 'number' &&
+      Number.isFinite(state.maxOvershield) &&
+      state.maxOvershield > 0
+        ? Math.round(state.maxOvershield)
+        : 0;
+    const os =
+      maxOs > 0
+        ? Math.max(0, Math.min(maxOs, Math.round(state.overshield ?? 0)))
+        : 0;
+    if (os !== this.lastOvershield || maxOs !== this.lastMaxOvershield) {
+      this.lastOvershield = os;
+      this.lastMaxOvershield = maxOs;
+      this.overshieldBarEl.classList.toggle('fdr-hidden', maxOs <= 0);
+      if (maxOs > 0) {
+        this.overshieldFillEl.style.width = `${computeOvershieldPct(os, maxOs).toFixed(1)}%`;
+        this.overshieldTextEl.textContent = `${os} / ${maxOs}`;
+      }
+    }
+
     const shield = Math.max(0, Math.round(state.shield));
     const maxShield = Math.max(1, Math.round(state.maxShield));
     if (shield !== this.lastShield || maxShield !== this.lastMaxShield) {
@@ -1691,6 +1870,139 @@ export class HUDManager {
     }
   }
 
+  private updateWave3HUD(state: HUDState): void {
+    // 1. Game Mode Chip (shown when not 'solo')
+    const modeLabel = formatModeBadgeLabel(state.gameMode);
+    const modeKey = `${state.gameMode ?? ''}:${modeLabel}`;
+    if (modeKey !== this.lastModeChipKey) {
+      this.lastModeChipKey = modeKey;
+      this.modeChipEl.classList.toggle('fdr-hidden', !modeLabel);
+      if (modeLabel) {
+        this.modeChipEl.className = `fdr-zone-pill mode mode-${state.gameMode}`;
+        this.modeChipEl.textContent = modeLabel;
+      }
+    }
+
+    // 2. Cozy Campfire Healing Pill
+    const nearCampfire = Boolean(state.nearCampfireHealing) && !state.spectating;
+    if (nearCampfire !== this.lastNearCampfire) {
+      this.lastNearCampfire = nearCampfire;
+      this.campfirePillEl.classList.toggle('fdr-hidden', !nearCampfire);
+    }
+
+    // 3. Live Match Quests Tracker (upper-left stack below Bounty Card)
+    const quests = Array.isArray(state.activeQuests)
+      ? state.activeQuests.slice(0, 3)
+      : [];
+    const questsKey = quests
+      .map(
+        (q) =>
+          `${q.id}:${q.title}:${Math.floor(q.progress)}/${q.target}:${q.completed ? 1 : 0}:${q.xpReward}`,
+      )
+      .join('|');
+    if (questsKey !== this.lastQuestsKey) {
+      this.lastQuestsKey = questsKey;
+      this.questsPanelEl.classList.toggle('fdr-hidden', quests.length === 0);
+      this.questsListEl.innerHTML = '';
+      if (quests.length > 0) {
+        const doneCount = quests.filter((q) => q.completed).length;
+        this.questsCountEl.textContent = `${doneCount} / ${quests.length}`;
+        for (const q of quests) {
+          const pct = computeQuestProgressPct(q);
+          const target = Math.max(1, Math.floor(q.target));
+          const prog = Math.min(target, Math.max(0, Math.floor(q.progress)));
+
+          const row = document.createElement('div');
+          row.className = `fdr-quest-row${q.completed ? ' completed' : ''}`;
+          row.dataset.questId = q.id;
+
+          const top = document.createElement('div');
+          top.className = 'fdr-quest-top';
+
+          const check = document.createElement('span');
+          check.className = 'fdr-quest-check';
+          check.textContent = q.completed ? '✓' : '○';
+
+          const title = document.createElement('span');
+          title.className = 'fdr-quest-title';
+          title.textContent = q.title;
+
+          const progEl = document.createElement('span');
+          progEl.className = 'fdr-quest-prog';
+          progEl.textContent = q.completed
+            ? `+${Math.max(0, Math.round(q.xpReward))} XP`
+            : `${prog}/${target}`;
+
+          top.append(check, title, progEl);
+
+          const track = document.createElement('div');
+          track.className = 'fdr-quest-track';
+          const fill = document.createElement('div');
+          fill.className = 'fdr-quest-fill';
+          fill.style.width = `${pct.toFixed(1)}%`;
+          track.appendChild(fill);
+
+          row.append(top, track);
+          this.questsListEl.appendChild(row);
+        }
+      }
+    }
+
+    // 4. 360° Visual Sound Effects Radial Ring (210px around center reticle)
+    const visualAudioEnabled = this.settings.visualAudio !== false;
+    const hideForContext =
+      !visualAudioEnabled ||
+      state.isScoped ||
+      state.editMode.active ||
+      state.phase === 'bus' ||
+      Boolean(state.spectating) ||
+      this.emoteWheelOpen;
+    const visibleCues = hideForContext
+      ? []
+      : selectVisibleVisualSoundCues(state.visualSoundCues, 8);
+    const cueKey = visibleCues
+      .map(
+        (c) =>
+          `${c.id}:${c.kind}:${Math.round(angleRadToDeg(c.angleRad) * 2)}:${Math.round((c.intensity ?? 0) * 100)}`,
+      )
+      .join('|');
+    if (cueKey !== this.lastVisualAudioKey) {
+      this.lastVisualAudioKey = cueKey;
+      this.visualAudioRingEl.classList.toggle(
+        'fdr-hidden',
+        visibleCues.length === 0,
+      );
+      this.visualAudioRingEl.innerHTML = '';
+      for (const cue of visibleCues) {
+        const deg = angleRadToDeg(cue.angleRad);
+        const intensity = Math.max(
+          0.15,
+          Math.min(1, Number.isFinite(cue.intensity) ? cue.intensity : 0.7),
+        );
+        const opacity = (0.45 + intensity * 0.55).toFixed(2);
+        const scale = (0.86 + intensity * 0.24).toFixed(2);
+
+        const cueEl = document.createElement('div');
+        cueEl.className = `fdr-vs-cue kind-${cue.kind}`;
+        cueEl.dataset.cueKind = cue.kind;
+        cueEl.dataset.cueId = cue.id;
+        cueEl.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+        cueEl.style.opacity = opacity;
+
+        const arcEl = document.createElement('div');
+        arcEl.className = 'fdr-vs-cue-arc';
+
+        const badgeEl = document.createElement('div');
+        badgeEl.className = 'fdr-vs-cue-badge';
+        badgeEl.style.transform = `translate(-50%, -50%) rotate(${(-deg).toFixed(1)}deg) scale(${scale})`;
+        badgeEl.innerHTML = getVisualAudioIconSvg(cue.kind);
+
+        cueEl.append(arcEl, badgeEl);
+        this.visualAudioRingEl.appendChild(cueEl);
+      }
+    }
+  }
+
   private updateCenterCombat(state: HUDState, now: number): void {
     if (this.lastScoped !== state.isScoped) {
       this.lastScoped = state.isScoped;
@@ -1974,6 +2286,10 @@ export class HUDManager {
   }
 
   dispose(): void {
+    for (const timer of this.activeQuestToastTimers) {
+      clearTimeout(timer);
+    }
+    this.activeQuestToastTimers.clear();
     if (typeof window !== 'undefined') {
       window.removeEventListener('mouseup', this.pointerUpHandler);
     }

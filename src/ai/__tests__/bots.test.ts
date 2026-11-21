@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   BuildPiece,
+  CampfireEntity,
   ChestEntity,
   DamageEvent,
   HarvestableProp,
   ItemInstance,
   LaunchPadEntity,
   LootDrop,
+  SlurpBarrelEntity,
   StormState,
   TerrainQuery,
   Vec3Like,
@@ -21,6 +23,7 @@ import {
   PICKAXES,
   POIS,
   SKINS,
+  dist2D,
 } from '../../core';
 import {
   BOT_NAMES,
@@ -1931,5 +1934,424 @@ describe('Wave 2 Shield Bubble & Vehicle Combat Awareness', () => {
     expect(leadCtx.firedCalls).toHaveLength(1);
     expect(leadCtx.firedCalls[0].weaponId).toBe('sniper');
     expect(leadCtx.firedCalls[0].aimDir.x).toBeGreaterThan(0.08);
+  });
+});
+
+describe('Wave 3 Game Modes (Zero Build & Blitz), Slurp Barrels, Campfires & Edge Traversal', () => {
+  it('enforces zero_build: 0 build placements and 50 Overshield absorption + 12/s regen after 6.5s', () => {
+    const brain = new BotBrain();
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 22 },
+      eyePos: { x: 0, y: 11.6, z: 22 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const ctx = makeMockContext({
+      getCombatTargets: () => [enemy],
+    });
+
+    // 1. shouldBotBuildDefense & updateBot block all building in 'zero_build'
+    const zbBot = makeBotEntity({
+      state: 'combat',
+      personality: 'builder',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      lastDamageTime: 9.8,
+      lastDamagerId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+      buildCooldown: 0,
+      isBuilding: true,
+      buildAnimTimer: 0.3,
+    });
+    zbBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    zbBot.inventory.ammo.medium = 60;
+    zbBot.inventory.materials.wood = 100;
+
+    expect(shouldBotBuildDefense(zbBot, 'sweaty', 10.0, 22, undefined, 'solo')).toBe(true);
+    expect(brain.shouldBotBuildDefense(zbBot, 'sweaty', 10.0, 22, undefined, 'zero_build')).toBe(
+      false,
+    );
+
+    brain.update(zbBot, ctx, 'sweaty', { x: 0, y: 175, z: 0 }, 10.0, 0.05, false, 'zero_build');
+    expect(ctx.placedBuilds).toHaveLength(0);
+    expect(zbBot.isBuilding).toBe(false);
+    expect(zbBot.inventory.materials.wood).toBe(100);
+    expect(ctx.firedCalls.length).toBe(1);
+
+    // 2. BotManager in 'zero_build': 50 Overshield, absorbs first, storm bypasses, 12/s regen after 6.5s
+    const manager = new BotManager(ctx, 'sweaty', 3030);
+    expect(manager.getGameMode()).toBe('solo');
+    manager.setGameMode('zero_build');
+    expect(manager.getGameMode()).toBe('zero_build');
+    manager.spawnBots(12, 22);
+
+    for (const b of manager.getBots()) {
+      expect(b.maxOvershield).toBe(50);
+      expect(b.overshield).toBe(50);
+    }
+
+    const bot = manager.getBotById('bot_1')!;
+    bot.state = 'combat';
+    bot.personality = 'builder';
+    bot.position = { x: 0, y: 10, z: 0 };
+    bot.grounded = true;
+    bot.shield = 50;
+    bot.hp = 100;
+    bot.inventory.materials.wood = 120;
+
+    // 30 damage -> absorbed solely by overshield (50 -> 20)
+    manager.onBotDamaged(
+      bot.id,
+      {
+        targetId: bot.id,
+        attackerId: 'player',
+        attackerName: 'Player',
+        weaponId: 'ar',
+        rarity: 'rare',
+        damage: 30,
+        hpDamage: 0,
+        shieldDamage: 30,
+        isHeadshot: false,
+        isElimination: false,
+        hitPoint: { ...bot.position },
+        distance: 22,
+      },
+      10.0,
+    );
+    expect(bot.overshield).toBe(20);
+    expect(bot.shield).toBe(50);
+    expect(bot.hp).toBe(100);
+
+    // 45 damage -> depletes remaining 20 overshield, then 25 shield
+    manager.onBotDamaged(
+      bot.id,
+      {
+        targetId: bot.id,
+        attackerId: 'player',
+        attackerName: 'Player',
+        weaponId: 'ar',
+        rarity: 'rare',
+        damage: 45,
+        hpDamage: 0,
+        shieldDamage: 45,
+        isHeadshot: false,
+        isElimination: false,
+        hitPoint: { ...bot.position },
+        distance: 22,
+      },
+      11.0,
+    );
+    expect(bot.overshield).toBe(0);
+    expect(bot.shield).toBe(25);
+    expect(bot.hp).toBe(100);
+
+    // Manager update also enforces 0 build placements in 'zero_build'
+    const buildsBefore = ctx.placedBuilds.length;
+    manager.update(0.05, 11.05, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 22 });
+    expect(ctx.placedBuilds.length).toBe(buildsBefore);
+    expect(bot.isBuilding).toBe(false);
+
+    // Before 6.5s cooldown (11.0 + 6.4 = 17.4): overshield stays 0
+    manager.update(0.1, 17.4, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 22 });
+    expect(bot.overshield).toBe(0);
+
+    // After 6.5s without damage (elapsed >= 17.5): regens at 12/s -> 2.0s gives 24 overshield, then caps at 50
+    for (let i = 0; i < 20; i++) {
+      manager.update(0.1, 17.5 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 22 });
+    }
+    expect(bot.overshield).toBeCloseTo(24, 1);
+
+    for (let i = 0; i < 30; i++) {
+      manager.update(0.1, 19.5 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 22 });
+    }
+    expect(bot.overshield).toBe(50);
+
+    // Storm damage bypasses overshield & shield directly to HP
+    bot.position = { x: 350, y: 10, z: 0 };
+    manager.applyStormDamage(2.0); // dps=2 -> 4 dmg
+    expect(bot.overshield).toBe(50);
+    expect(bot.shield).toBe(25);
+    expect(bot.hp).toBe(96);
+
+    manager.dispose();
+  });
+
+  it('spawns blitz bots with earlier bus jump delays, wood=100, and uncommon AR/SMG starter weapons', () => {
+    const soloCtx = makeMockContext();
+    const soloMgr = new BotManager(soloCtx, 'standard', 5050);
+    soloMgr.spawnBots(12, 22);
+    const soloRegular = soloMgr.getBots().filter((b) => !b.isBoss);
+
+    const blitzCtx = makeMockContext();
+    const blitzMgr = new BotManager(blitzCtx, 'standard', 5050);
+    blitzMgr.setGameMode('blitz');
+    expect(blitzMgr.getGameMode()).toBe('blitz');
+    blitzMgr.spawnBots(12, 22);
+    const blitzRegular = blitzMgr.getBots().filter((b) => !b.isBoss);
+
+    const avgJump = (bots: BotEntity[]) =>
+      bots.reduce((sum, b) => sum + b.dropJumpTime, 0) / bots.length;
+    const maxJump = (bots: BotEntity[]) =>
+      Math.max(...bots.map((b) => b.dropJumpTime));
+
+    expect(avgJump(blitzRegular)).toBeLessThan(avgJump(soloRegular) * 0.65);
+    expect(maxJump(blitzRegular)).toBeLessThan(maxJump(soloRegular));
+
+    const starterWeapons = new Set<string>();
+    for (const bot of blitzRegular) {
+      expect(bot.maxOvershield).toBe(0);
+      expect(bot.overshield).toBe(0);
+      expect(bot.inventory.materials.wood).toBe(100);
+      const starter = bot.inventory.items[1];
+      expect(starter).not.toBeNull();
+      expect(starter!.rarity).toBe('uncommon');
+      expect(['ar', 'smg']).toContain(starter!.weaponId);
+      expect(starter!.magAmmo).toBe(30);
+      expect(bot.inventory.activeSlot).toBe(1);
+      starterWeapons.add(starter!.weaponId);
+    }
+    expect(starterWeapons.has('ar')).toBe(true);
+    expect(starterWeapons.has('smg')).toBe(true);
+
+    soloMgr.dispose();
+    blitzMgr.dispose();
+  });
+
+  it('targets and breaks Slurp Barrels within 14m when shield < 75, while ignoring in close-range panic', () => {
+    const barrels: SlurpBarrelEntity[] = [
+      { id: 'barrel_near', x: 0, y: 10, z: 10, hp: 40, maxHp: 40, shieldAmount: 15, destroyed: false },
+      { id: 'barrel_far', x: 0, y: 10, z: 24, hp: 40, maxHp: 40, shieldAmount: 15, destroyed: false },
+    ];
+    const slurpSounds: string[] = [];
+    const damageSlurpBarrel = vi.fn((id: string, dmg: number) => {
+      const b = barrels.find((entry) => entry.id === id && !entry.destroyed);
+      if (!b) return null;
+      b.hp = Math.max(0, b.hp - dmg);
+      if (b.hp <= 0) b.destroyed = true;
+      return {
+        destroyed: b.destroyed,
+        shieldAmount: b.shieldAmount,
+        position: { x: b.x, y: b.y, z: b.z },
+      };
+    });
+
+    const ctx = makeMockContext({
+      getSlurpBarrels: () => barrels,
+      damageSlurpBarrel,
+    });
+    ctx.eventBus.on('sound:play', (s) => slurpSounds.push(s.id));
+
+    const bot = makeBotEntity({
+      state: 'looting',
+      hp: 100,
+      shield: 30,
+      maxShield: 100,
+      position: { x: 0, y: 10, z: 0 },
+      yaw: Math.PI, // starts facing away; must turn & aim toward +Z barrel
+      grounded: true,
+      fireCooldown: 0,
+    });
+    bot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    bot.inventory.ammo.medium = 60;
+
+    for (let i = 0; i < 20; i++) {
+      updateBot(bot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.1, 0.1, false);
+    }
+
+    expect(damageSlurpBarrel).toHaveBeenCalled();
+    expect(damageSlurpBarrel.mock.calls.every(([id]) => id === 'barrel_near')).toBe(true);
+    expect(barrels[0].destroyed).toBe(true);
+    expect(barrels[1].destroyed).toBe(false);
+    expect(bot.shield).toBe(45);
+    expect(slurpSounds).toContain('slurp_barrel_break');
+
+    // Close-range combat panic ignores nearby slurp barrel and fights enemy instead
+    const panicBarrels: SlurpBarrelEntity[] = [
+      { id: 'barrel_panic', x: 5, y: 10, z: 0, hp: 40, maxHp: 40, shieldAmount: 15, destroyed: false },
+    ];
+    const closeEnemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 9 },
+      eyePos: { x: 0, y: 11.6, z: 9 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const panicDamageSpy = vi.fn(() => null);
+    const panicCtx = makeMockContext({
+      getCombatTargets: () => [closeEnemy],
+      getSlurpBarrels: () => panicBarrels,
+      damageSlurpBarrel: panicDamageSpy,
+    });
+    const panicBot = makeBotEntity({
+      state: 'combat',
+      hp: 80,
+      shield: 20,
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    panicBot.inventory.items[1] = makeItem('pump_shotgun', 'rare', 5);
+    panicBot.inventory.ammo.shells = 10;
+
+    updateBot(panicBot, panicCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(panicDamageSpy).not.toHaveBeenCalled();
+    expect(panicCtx.firedCalls.length).toBe(1);
+
+    // Shield >= 75 skips slurp barrel; out-of-ammo bot with shield < 75 uses pickaxe up close
+    const pickaxeBarrels: SlurpBarrelEntity[] = [
+      { id: 'barrel_melee', x: 0, y: 10, z: 6, hp: 40, maxHp: 40, shieldAmount: 15, destroyed: false },
+    ];
+    const meleeDamage = vi.fn((id: string, dmg: number) => {
+      const b = pickaxeBarrels.find((entry) => entry.id === id && !entry.destroyed);
+      if (!b) return null;
+      b.hp = Math.max(0, b.hp - dmg);
+      if (b.hp <= 0) b.destroyed = true;
+      return { destroyed: b.destroyed, shieldAmount: b.shieldAmount, position: { x: b.x, y: b.y, z: b.z } };
+    });
+    const meleeCtx = makeMockContext({
+      getSlurpBarrels: () => pickaxeBarrels,
+      damageSlurpBarrel: meleeDamage,
+    });
+    const fullShieldBot = makeBotEntity({
+      state: 'looting',
+      shield: 75,
+      maxShield: 100,
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    updateBot(fullShieldBot, meleeCtx, 'standard', { x: 0, y: 175, z: 0 }, 10, 0.1, false);
+    expect(meleeDamage).not.toHaveBeenCalled();
+
+    const unarmedBot = makeBotEntity({
+      state: 'looting',
+      shield: 50,
+      maxShield: 100,
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    for (let i = 0; i < 20 && !pickaxeBarrels[0].destroyed; i++) {
+      updateBot(unarmedBot, meleeCtx, 'standard', { x: 0, y: 175, z: 0 }, 12 + i * 0.1, 0.1, false);
+    }
+    expect(pickaxeBarrels[0].destroyed).toBe(true);
+    expect(unarmedBot.shield).toBe(65);
+  });
+
+  it('moves toward unlit Campfires within 16m when hp < 65, ignites them, and heals at 3 HP/s inside 5.5m', () => {
+    const campfires: CampfireEntity[] = [
+      {
+        id: 'cf_1',
+        poiId: 'whispering_pines',
+        x: 0,
+        y: 10,
+        z: 11,
+        lit: false,
+        remainingSec: 25,
+        maxDurationSec: 25,
+        healPerSec: 3,
+        radius: 5.5,
+      },
+    ];
+    const igniteCampfire = vi.fn((id: string) => {
+      const cf = campfires.find((c) => c.id === id);
+      if (!cf || cf.lit || cf.remainingSec <= 0) return false;
+      cf.lit = true;
+      return true;
+    });
+    const ctx = makeMockContext({
+      getCampfires: () => campfires,
+      igniteCampfire,
+    });
+
+    // Healthy bot (hp = 80 >= 65) does not ignite campfire
+    const healthyBot = makeBotEntity({
+      state: 'looting',
+      hp: 80,
+      position: { x: 0, y: 10, z: 9 },
+      grounded: true,
+    });
+    updateBot(healthyBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10, 0.1, false);
+    expect(igniteCampfire).not.toHaveBeenCalled();
+    expect(campfires[0].lit).toBe(false);
+
+    // Injured out-of-combat bot (hp = 45 < 65) 11m away walks up, ignites, and heals at 3 HP/s
+    const hurtBot = makeBotEntity({
+      state: 'rotating',
+      hp: 45,
+      maxHp: 100,
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+
+    for (let i = 0; i < 60; i++) {
+      const dt = 0.1;
+      updateBot(hurtBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 12 + i * dt, dt, false);
+      if (campfires[0].lit) {
+        campfires[0].remainingSec = Math.max(0, campfires[0].remainingSec - dt);
+      }
+    }
+
+    expect(igniteCampfire).toHaveBeenCalledWith('cf_1');
+    expect(campfires[0].lit).toBe(true);
+    expect(dist2D(hurtBot.position.x, hurtBot.position.z, 0, 11)).toBeLessThanOrEqual(5.5);
+    expect(hurtBot.hp).toBeGreaterThan(55);
+  });
+
+  it('steers toward nearby Launch Pads within 28m when far from safe center (> 92% storm radius)', () => {
+    const pads: LaunchPadEntity[] = [
+      {
+        id: 'pad_edge_28',
+        kind: 'launch_pad',
+        x: 76,
+        y: 10,
+        z: 10,
+        radius: 2.2,
+        boostVy: 30,
+        boostForward: 20,
+      },
+    ];
+    const ctx = makeMockContext({
+      storm: makeDefaultStorm({
+        currentCenterX: 0,
+        currentCenterZ: 0,
+        currentRadius: 100,
+        nextCenterX: 0,
+        nextCenterZ: 0,
+        nextRadius: 60,
+        isShrinking: false,
+      }),
+      getLaunchPads: () => pads,
+    });
+
+    // At x=95 (dist 95 > 92 = 100*0.92), even before storm edge arrives and while isShrinking=false
+    const edgeBot = makeBotEntity({
+      state: 'looting',
+      position: { x: 95, y: 10, z: 0 },
+      grounded: true,
+    });
+    edgeBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    let launched = false;
+    for (let i = 0; i < 60; i++) {
+      updateBot(edgeBot, ctx, 'standard', { x: 0, y: 175, z: 0 }, 20 + i * 0.1, 0.1, false);
+      if (edgeBot.state === 'gliding' && edgeBot.gliderOpen) {
+        launched = true;
+      }
+    }
+
+    expect(launched).toBe(true);
+    expect(edgeBot.position.x).toBeLessThan(76);
   });
 });

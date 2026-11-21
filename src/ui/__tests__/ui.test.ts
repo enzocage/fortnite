@@ -4,11 +4,13 @@ import {
   DEFAULT_SETTINGS,
   EMOTES,
   EventBus,
+  GAME_MODES,
   GLIDERS,
   PICKAXES,
   POIS,
   RARITY_ORDER,
   SKINS,
+  WEAPON_WRAPS,
   WEAPONS,
   WORLD_HALF,
 } from '../../core';
@@ -16,25 +18,34 @@ import type {
   AmmoType,
   BiomeType,
   BuildPieceType,
+  CampfireEntity,
   HUDState,
   MaterialType,
+  MatchQuest,
   MatchSummary,
+  UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
+  VisualSoundCue,
   WeaponId,
   WeatherKind,
 } from '../../types';
 import {
+  angleRadToDeg,
   BOSS_POI_LABELS,
   cloneSettings,
   computeCareerLevelProgress,
   computeFallbackStormDistance,
   computeLevelFromXp,
   computeMatchXpBreakdown,
+  computeOvershieldPct,
+  computeQuestProgressPct,
+  DEFAULT_LOBBY_CONFIG,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
   formatKeyCodeLabel,
+  formatModeBadgeLabel,
   formatSafeZoneDistance,
   formatSurvivalTime,
   formatVehicleKindLabel,
@@ -44,21 +55,27 @@ import {
   getBearingDeg,
   getBountyTargetSvg,
   getBuildIconSvg,
+  getCampfireIconSvg,
   getContextualHudHints,
   getCrownSvg,
+  getGameModeMeta,
   getHeadingFromYaw,
   getKillStreakCallout,
   getMaterialIconSvg,
+  getOvershieldBoltSvg,
   getRarityMeta,
   getShortestAngleDiffDeg,
   getSkullSvg,
   getStormEyeSvg,
   getTotalXpForLevel,
+  getUpgradeBenchIconSvg,
   getVaultKeySvg,
   getVaultLockSvg,
   getVehicleIconSvg,
+  getVisualAudioIconSvg,
   getWeaponSvg,
   getWeatherIconSvg,
+  HUDManager,
   KEYBIND_ACTION_DEFS,
   loadCareerStats,
   loadStoredLobbyConfig,
@@ -70,6 +87,8 @@ import {
   recordMatchCareerStats,
   resetCareerStats,
   resolveKeybinds,
+  saveStoredLobbyConfig,
+  selectVisibleVisualSoundCues,
   UIManager,
   worldToMapNorm,
   xpForLevelStep,
@@ -292,6 +311,42 @@ describe('UIHelpers', () => {
     expect(normalizeBoostChargePct(1)).toBeCloseTo(100, 5);
     expect(normalizeBoostChargePct(82)).toBeCloseTo(82, 5);
     expect(normalizeBoostChargePct(-0.5)).toBe(0);
+
+    // Wave-3 helpers: game modes, overshield, quests, visual sound cues
+    expect(GAME_MODES.map((m) => m.id)).toEqual(['solo', 'zero_build', 'blitz']);
+    expect(WEAPON_WRAPS.length).toBe(6);
+    expect(DEFAULT_SETTINGS.visualAudio).toBe(true);
+    expect(getGameModeMeta('zero_build').name).toBe('ZERO BUILD');
+    expect(getGameModeMeta(undefined).id).toBe('solo');
+    expect(formatModeBadgeLabel('solo')).toBe('');
+    expect(formatModeBadgeLabel('zero_build')).toBe('ZERO BUILD');
+    expect(formatModeBadgeLabel('blitz')).toBe('BLITZ');
+
+    expect(computeOvershieldPct(50, 50)).toBe(100);
+    expect(computeOvershieldPct(25, 50)).toBe(50);
+    expect(computeOvershieldPct(0, 0)).toBe(0);
+    expect(computeOvershieldPct(-10, 50)).toBe(0);
+
+    expect(
+      computeQuestProgressPct({ progress: 1, target: 4, completed: false }),
+    ).toBe(25);
+    expect(
+      computeQuestProgressPct({ progress: 2, target: 4, completed: true }),
+    ).toBe(100);
+
+    const manyCues: VisualSoundCue[] = Array.from({ length: 12 }, (_, idx) => ({
+      id: `cue-${idx}`,
+      angleRad: idx * 0.3,
+      kind: (['footstep', 'gunfire', 'chest', 'vehicle', 'glider'] as const)[idx % 5],
+      intensity: (idx + 1) / 12,
+    }));
+    const selectedCues = selectVisibleVisualSoundCues(manyCues, 8);
+    expect(selectedCues.length).toBe(8);
+    expect(selectedCues[0].id).toBe('cue-11');
+    expect(selectedCues[7].id).toBe('cue-4');
+    expect(angleRadToDeg(Math.PI / 2)).toBeCloseTo(90, 5);
+    expect(angleRadToDeg(-Math.PI / 2)).toBeCloseTo(-90, 5);
+    expect(angleRadToDeg(Math.PI)).toBeCloseTo(180, 5);
   });
 });
 
@@ -365,6 +420,15 @@ describe('WeaponIcons & SVG assets', () => {
       getWeatherIconSvg('overcast'),
       getWeatherIconSvg('rain'),
       getWeatherIconSvg('storm_front'),
+      getVisualAudioIconSvg('footstep'),
+      getVisualAudioIconSvg('gunfire'),
+      getVisualAudioIconSvg('chest'),
+      getVisualAudioIconSvg('vehicle'),
+      getVisualAudioIconSvg('glider'),
+      getUpgradeBenchIconSvg(),
+      getCampfireIconSvg(true),
+      getCampfireIconSvg(false),
+      getOvershieldBoltSvg(),
     ]) {
       expect(emblem.trim().startsWith('<svg')).toBe(true);
       expect(emblem.includes('</svg>')).toBe(true);
@@ -866,12 +930,17 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
 
     const cosmeticCards = root.findAllByClass('fdr-cosmetic-card');
     expect(cosmeticCards.length).toBe(
-      SKINS.length + PICKAXES.length + GLIDERS.length + EMOTES.length,
+      SKINS.length +
+        PICKAXES.length +
+        GLIDERS.length +
+        EMOTES.length +
+        WEAPON_WRAPS.length,
     );
     expect(SKINS.length).toBeGreaterThanOrEqual(10);
     expect(PICKAXES.length).toBe(6);
     expect(GLIDERS.length).toBe(6);
     expect(EMOTES.length).toBe(6);
+    expect(WEAPON_WRAPS.length).toBe(6);
 
     // Complete a match -> MatchOverlay renders Match XP Breakdown & updates Career
     ui.setPhase('victory');
@@ -914,6 +983,8 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
     expect(legend?.textContent).toContain('NAMED POI BOSS ZONE');
     expect(legend?.textContent).toContain('VEHICLE');
     expect(legend?.textContent).toContain('BOSS VAULT');
+    expect(legend?.textContent).toContain('UPGRADE BENCH');
+    expect(legend?.textContent).toContain('CAMPFIRE');
 
     fullMap.dispose();
     ui.dispose();
@@ -1357,5 +1428,460 @@ describe('UI DOM integration (Wave 1 HUD, Lobby, MatchOverlay, FullMap)', () => 
         (globalThis as Record<string, unknown>).window = prevWindow;
       }
     }
+  });
+});
+
+describe('Wave 3 UI: Game Modes, Weapon Wraps, Overshield, Visual Audio, Match Quests, Campfire & Map Stations', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('persists LobbyConfig with gameMode and weaponWrapId and falls back cleanly on invalid values', () => {
+    expect(DEFAULT_LOBBY_CONFIG.gameMode).toBe('solo');
+    expect(DEFAULT_LOBBY_CONFIG.weaponWrapId).toBe(
+      WEAPON_WRAPS[0]?.id ?? 'factory_matte',
+    );
+    expect(loadStoredLobbyConfig().gameMode).toBe('solo');
+    expect(loadStoredLobbyConfig().weaponWrapId).toBe('factory_matte');
+
+    const store = new Map<string, string>();
+    (globalThis as Record<string, unknown>).window = {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+    };
+
+    saveStoredLobbyConfig({
+      ...DEFAULT_LOBBY_CONFIG,
+      gameMode: 'zero_build',
+      weaponWrapId: 'midas_gold',
+    });
+    const reloaded = loadStoredLobbyConfig();
+    expect(reloaded.gameMode).toBe('zero_build');
+    expect(reloaded.weaponWrapId).toBe('midas_gold');
+
+    store.set(
+      'fortdrop_lobby_v1',
+      JSON.stringify({ gameMode: 'invalid_mode', weaponWrapId: 'missing_wrap' }),
+    );
+    const sanitized = loadStoredLobbyConfig();
+    expect(sanitized.gameMode).toBe('solo');
+    expect(sanitized.weaponWrapId).toBe('factory_matte');
+  });
+
+  it('renders Lobby PLAY mode cards, LOCKER weapon wraps, SETTINGS visualAudio toggle & forwards visualAudio to HUD', () => {
+    const store = new Map<string, string>();
+    (globalThis as Record<string, unknown>).window = {
+      innerWidth: 1280,
+      innerHeight: 720,
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const cosmeticChanges: Array<{ weaponWrapId?: string }> = [];
+    const ui = new UIManager(root as unknown as HTMLElement, bus, {
+      onCosmeticChange: (c) => cosmeticChanges.push(c),
+    });
+
+    // 1. PLAY tab game mode selector cards
+    const modeCards = root.findAllByClass('fdr-mode-select-card');
+    expect(modeCards.length).toBe(3);
+    expect(modeCards.map((c) => c.dataset.gameMode)).toEqual([
+      'solo',
+      'zero_build',
+      'blitz',
+    ]);
+    modeCards[1].click(); // ZERO BUILD
+    expect(ui.getLobbyConfig().gameMode).toBe('zero_build');
+    expect(root.findByClass('fdr-mode-card')?.textContent).toContain(
+      'ZERO BUILD',
+    );
+    expect(loadStoredLobbyConfig().gameMode).toBe('zero_build');
+
+    const modeCardsAfter = root.findAllByClass('fdr-mode-select-card');
+    modeCardsAfter[2].click(); // BLITZ
+    expect(ui.getLobbyConfig().gameMode).toBe('blitz');
+
+    // 2. LOCKER tab Weapon Wraps (all 6 wraps)
+    const navTabs = root.findAllByClass('fdr-nav-tab');
+    navTabs[1].click(); // LOCKER
+    const wrapCards = root.findAllByClass('fdr-wrap-card');
+    expect(wrapCards.length).toBe(6);
+    for (const wrap of WEAPON_WRAPS) {
+      const card = wrapCards.find((c) => c.dataset.wrapId === wrap.id);
+      expect(card).toBeDefined();
+      expect(card?.classList.contains(`rarity-${wrap.rarity}`)).toBe(true);
+      expect(card?.textContent).toContain(wrap.name);
+      expect(card?.findByClass('fdr-wrap-swatch')?.style.background).toContain(
+        'linear-gradient',
+      );
+    }
+    wrapCards[3].click(); // magma_rift
+    expect(ui.getLobbyConfig().weaponWrapId).toBe(WEAPON_WRAPS[3].id);
+    expect(cosmeticChanges[cosmeticChanges.length - 1]?.weaponWrapId).toBe(
+      WEAPON_WRAPS[3].id,
+    );
+
+    // 3. SETTINGS tab Visual Sound Effects toggle bound to settings.visualAudio -> forwarded to HUD
+    navTabs[3].click(); // SETTINGS
+    const vaRow = root
+      .findAllByClass('fdr-setting-row')
+      .find((r) => r.dataset.settingKey === 'visualAudio');
+    expect(vaRow).toBeDefined();
+    expect(vaRow?.textContent).toContain('VISUAL SOUND EFFECTS (360° RADAR)');
+    expect(ui.getSettings().visualAudio).toBe(true);
+
+    // Enter match with visualAudio=true -> ring shows cues
+    ui.setPhase('playing');
+    const cues: VisualSoundCue[] = [
+      { id: 'c1', angleRad: 0, kind: 'footstep', intensity: 0.9 },
+      { id: 'c2', angleRad: Math.PI / 2, kind: 'gunfire', intensity: 1.0 },
+    ];
+    ui.updateHUD(makeBaseHUDState({ visualSoundCues: cues }));
+    const ring = root.findByClass('fdr-visual-audio-ring');
+    expect(ring?.classList.contains('fdr-hidden')).toBe(false);
+    expect(ring?.findAllByClass('fdr-vs-cue').length).toBe(2);
+
+    // Switch back to lobby settings, toggle OFF, return to match -> ring hidden!
+    ui.setPhase('lobby');
+    const offBtn = root
+      .findAllByClass('fdr-setting-row')
+      .find((r) => r.dataset.settingKey === 'visualAudio')
+      ?.findAllByClass('fdr-pill')
+      .find((p) => p.dataset.toggleValue === 'off');
+    expect(offBtn).toBeDefined();
+    offBtn?.click();
+    expect(ui.getSettings().visualAudio).toBe(false);
+    expect(loadStoredSettings().visualAudio).toBe(false);
+
+    ui.setPhase('playing');
+    ui.updateHUD(makeBaseHUDState({ visualSoundCues: cues }));
+    expect(ring?.classList.contains('fdr-hidden')).toBe(true);
+
+    ui.dispose();
+  });
+
+  it('renders Overshield, 360° Visual Sound Ring (max 8 ticks & rotations), Live Quests + Toast, Mode Badge & Campfire Pill', () => {
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+    ui.setPhase('playing');
+
+    const quests: MatchQuest[] = [
+      {
+        id: 'q1',
+        title: 'Deal 300 Damage',
+        progress: 300,
+        target: 300,
+        completed: true,
+        xpReward: 150,
+      },
+      {
+        id: 'q2',
+        title: 'Open 4 Chests',
+        progress: 2,
+        target: 4,
+        completed: false,
+        xpReward: 100,
+      },
+      {
+        id: 'q3',
+        title: 'Eliminate 2 Opponents',
+        progress: 1,
+        target: 2,
+        completed: false,
+        xpReward: 200,
+      },
+    ];
+
+    const cues10: VisualSoundCue[] = [
+      { id: 'front', angleRad: 0, kind: 'footstep', intensity: 0.95 },
+      { id: 'right', angleRad: Math.PI / 2, kind: 'gunfire', intensity: 0.9 },
+      { id: 'left', angleRad: -Math.PI / 2, kind: 'chest', intensity: 0.85 },
+      { id: 'back', angleRad: Math.PI, kind: 'vehicle', intensity: 0.8 },
+      { id: 'glider', angleRad: Math.PI / 4, kind: 'glider', intensity: 0.75 },
+      { id: 'c6', angleRad: -Math.PI / 4, kind: 'footstep', intensity: 0.7 },
+      { id: 'c7', angleRad: (3 * Math.PI) / 4, kind: 'gunfire', intensity: 0.65 },
+      { id: 'c8', angleRad: (-3 * Math.PI) / 4, kind: 'chest', intensity: 0.6 },
+      { id: 'drop1', angleRad: 0.2, kind: 'footstep', intensity: 0.2 },
+      { id: 'drop2', angleRad: 0.4, kind: 'footstep', intensity: 0.1 },
+    ];
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        gameMode: 'zero_build',
+        overshield: 35,
+        maxOvershield: 50,
+        nearCampfireHealing: true,
+        interactPrompt: { label: 'UPGRADE WEAPON', key: 'E', rarity: 'epic' },
+        activeQuests: quests,
+        visualSoundCues: cues10,
+      }),
+    );
+
+    // Overshield bar inside vitals stack, above shield/health, separate from [E] interact
+    const vitalsStack = root.findByClass('fdr-vitals-stack');
+    const osBar = vitalsStack?.findByClass('overshield');
+    expect(osBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(osBar?.textContent).toContain('OVERSHIELD');
+    expect(osBar?.textContent).toContain('35 / 50');
+    const osFill = osBar?.findByClass('fdr-vital-fill');
+    expect(osFill?.style.width).toBe('70.0%');
+    expect(root.findByClass('fdr-interact-prompt')?.classList.contains('fdr-hidden')).toBe(
+      false,
+    );
+
+    // Mode chip & Campfire healing pill
+    const modeChip = root.findByClass('mode');
+    expect(modeChip?.classList.contains('fdr-hidden')).toBe(false);
+    expect(modeChip?.textContent).toBe('ZERO BUILD');
+
+    const campfirePill = root.findByClass('fdr-campfire-pill');
+    expect(campfirePill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(campfirePill?.textContent).toBe('+3 HP/S CAMPFIRE');
+
+    // Quests panel (3 quests, 1 completed with checkmark + XP, others with progress)
+    const questsPanel = root.findByClass('fdr-quests-panel');
+    expect(questsPanel?.classList.contains('fdr-hidden')).toBe(false);
+    expect(questsPanel?.textContent).toContain('1 / 3');
+    const questRows = root.findAllByClass('fdr-quest-row');
+    expect(questRows.length).toBe(3);
+    expect(questRows[0].classList.contains('completed')).toBe(true);
+    expect(questRows[0].textContent).toContain('✓');
+    expect(questRows[0].textContent).toContain('+150 XP');
+    expect(questRows[1].textContent).toContain('2/4');
+    expect(questRows[1].findByClass('fdr-quest-fill')?.style.width).toBe('50.0%');
+
+    // Quest complete toast via EventBus + direct HUDManager helper
+    bus.emit('ui:quest_complete', { quest: quests[0] });
+    const toast = root.findByClass('fdr-quest-toast');
+    expect(toast?.textContent).toContain('QUEST COMPLETE');
+    expect(toast?.textContent).toContain('Deal 300 Damage');
+    expect(toast?.textContent).toContain('+150 XP');
+
+    // Direct HUDManager helper also renders toast
+    const hudRoot = new MockElement('div');
+    const hudOnly = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hudOnly.showQuestCompleteToast(quests[2]);
+    expect(hudRoot.findByClass('fdr-quest-toast')?.textContent).toContain(
+      'Eliminate 2 Opponents',
+    );
+    hudOnly.dispose();
+
+    // 360° Visual Sound Ring: capped at 8, rotated properly
+    const cueEls = root.findAllByClass('fdr-vs-cue');
+    expect(cueEls.length).toBe(8);
+    expect(cueEls[0].style.transform).toContain('rotate(0.0deg)');
+    expect(cueEls[1].style.transform).toContain('rotate(90.0deg)');
+    expect(cueEls[2].style.transform).toContain('rotate(-90.0deg)');
+    expect(cueEls[3].style.transform).toContain('rotate(180.0deg)');
+    expect(cueEls[4].dataset.cueKind).toBe('glider');
+
+    // Solo mode + no overshield + not near campfire + empty cues hides all cleanly
+    ui.updateHUD(
+      makeBaseHUDState({
+        gameMode: 'solo',
+        maxOvershield: 0,
+        overshield: 0,
+        nearCampfireHealing: false,
+        visualSoundCues: [],
+        activeQuests: [],
+      }),
+    );
+    expect(osBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(modeChip?.classList.contains('fdr-hidden')).toBe(true);
+    expect(campfirePill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(questsPanel?.classList.contains('fdr-hidden')).toBe(true);
+    expect(root.findByClass('fdr-visual-audio-ring')?.classList.contains('fdr-hidden')).toBe(
+      true,
+    );
+
+    ui.dispose();
+  });
+
+  it('displays Mode badge, Quests Completed + Bonus XP on MatchOverlay, and draws Upgrade Benches & Campfires on FullMapOverlay', () => {
+    const drawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const mockCtx = {
+      clearRect: (...args: unknown[]) => drawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => drawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => drawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => drawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => drawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      arc: (...args: unknown[]) => drawCalls.push({ op: 'arc', args }),
+      fill: () => drawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => drawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => drawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => drawCalls.push({ op: 'rotate', args }),
+      setLineDash: () => {},
+      fillText: (...args: unknown[]) => drawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => drawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => mockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // MatchOverlay summary with gameMode, questsCompleted, bonusXp
+    const summary: MatchSummary = {
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 4,
+      damageDealt: 800,
+      shotsFired: 50,
+      shotsHit: 25,
+      accuracy: 50,
+      headshots: 2,
+      structuresBuilt: 0,
+      chestsOpened: 5,
+      survivalTimeSec: 160,
+      gameMode: 'zero_build',
+      questsCompleted: 2,
+      bonusXp: 300,
+    };
+    const xpWithBonus = computeMatchXpBreakdown(summary, 0);
+    const xpWithoutBonus = computeMatchXpBreakdown(
+      { ...summary, bonusXp: 0 },
+      0,
+    );
+    expect(xpWithBonus.bonusXp).toBe(300);
+    expect(xpWithBonus.totalXp).toBe(xpWithoutBonus.totalXp + 300);
+
+    ui.setPhase('victory');
+    ui.showMatchSummary(summary);
+    const modeBadge = root.findByClass('fdr-summary-mode-badge');
+    expect(modeBadge?.textContent).toContain('ZERO BUILD');
+    const questRow = root.findByClass('fdr-summary-quest-row');
+    expect(questRow?.textContent).toContain('QUESTS COMPLETED: 2 / 3');
+    expect(questRow?.textContent).toContain('BONUS XP: +300 XP');
+
+    // FullMapOverlay stations
+    const benches: UpgradeBenchEntity[] = [
+      { id: 'ub-1', poiId: 'metro_towers', x: -75, y: 12, z: -40, rotationY: 0 },
+    ];
+    const campfires: CampfireEntity[] = [
+      {
+        id: 'cf-1',
+        poiId: 'whispering_pines',
+        x: 165,
+        y: 18,
+        z: -165,
+        lit: true,
+        remainingSec: 25,
+        maxDurationSec: 25,
+        healPerSec: 3,
+        radius: 4.5,
+      },
+      {
+        id: 'cf-2',
+        poiId: 'crater_depot',
+        x: 40,
+        y: 10,
+        z: 125,
+        lit: false,
+        remainingSec: 0,
+        maxDurationSec: 25,
+        healPerSec: 3,
+        radius: 4.5,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldStations(benches, campfires);
+    ui.toggleFullMap(true);
+    drawCalls.length = 0;
+    ui.updateHUD(makeBaseHUDState());
+
+    const ubNorm = worldToMapNorm(-75, -40);
+    const cf1Norm = worldToMapNorm(165, -165);
+    const cf2Norm = worldToMapNorm(40, 125);
+
+    const hasTranslate = (nx: number, nz: number) =>
+      drawCalls.some(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - nx * 640) < 0.5 &&
+          Math.abs((c.args[1] as number) - nz * 640) < 0.5,
+      );
+
+    expect(hasTranslate(ubNorm.nx, ubNorm.nz)).toBe(true);
+    expect(hasTranslate(cf1Norm.nx, cf1Norm.nz)).toBe(true);
+    expect(hasTranslate(cf2Norm.nx, cf2Norm.nz)).toBe(true);
+
+    ui.dispose();
   });
 });

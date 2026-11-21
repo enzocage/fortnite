@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type {
   BiomeType,
+  CampfireEntity,
   ChestEntity,
   DamageEvent,
   HarvestableProp,
@@ -9,10 +10,14 @@ import type {
   LaunchPadEntity,
   LootDrop,
   LootLlamaEntity,
+  MatchQuest,
   POIDef,
+  Rarity,
+  SlurpBarrelEntity,
   SoundEventId,
   SupplyDrop,
   TerrainQuery,
+  UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
   VehicleEntity,
@@ -29,6 +34,7 @@ import {
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   RARITY_MULTIPLIER,
+  UPGRADE_COSTS,
   WEAPONS,
   dist3D,
 } from '../../core';
@@ -38,6 +44,7 @@ import {
   CollisionSystem,
   InventorySystem,
   PlayerController,
+  QuestTracker,
   ROOF_HEIGHT,
   WeaponSystem,
   classifyEditMask,
@@ -48,6 +55,7 @@ import {
   type PropsInteractionBridge,
   type VaultBridge,
   type VehicleBridge,
+  type WorldStationBridge,
 } from '../index';
 
 function createFlatTerrain(
@@ -2097,5 +2105,556 @@ describe('Wave 2 Gameplay Mechanics', () => {
     player.pressKey('KeyB');
     expect(vaults[1].unlocked).toBe(true);
     expect(player.getVaultKeys()).toBe(0);
+  });
+});
+
+describe('Wave 3 Gameplay Systems', () => {
+  function setupWave3Harness() {
+    const terrain = createFlatTerrain(() => 0);
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'Wave3Tester');
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockStationBridge(init?: {
+    benches?: UpgradeBenchEntity[];
+    campfires?: CampfireEntity[];
+    barrels?: SlurpBarrelEntity[];
+  }): WorldStationBridge & {
+    benches: UpgradeBenchEntity[];
+    campfires: CampfireEntity[];
+    barrels: SlurpBarrelEntity[];
+  } {
+    const benches = init?.benches ?? [];
+    const campfires = init?.campfires ?? [];
+    const barrels = init?.barrels ?? [];
+    return {
+      benches,
+      campfires,
+      barrels,
+      getUpgradeBenches: () => benches,
+      getCampfires: () => campfires,
+      igniteCampfire: (id) => {
+        const cf = campfires.find((c) => c.id === id);
+        if (!cf || cf.lit || cf.remainingSec <= 0) return false;
+        cf.lit = true;
+        return true;
+      },
+      getActiveCampfireHealAt: (x, y, z) => {
+        for (const cf of campfires) {
+          if (!cf.lit || cf.remainingSec <= 0) continue;
+          const d = dist3D({ x, y, z }, { x: cf.x, y: cf.y, z: cf.z });
+          if (d <= cf.radius) return cf.healPerSec;
+        }
+        return 0;
+      },
+      getSlurpBarrels: () => barrels,
+      damageSlurpBarrel: (id, dmg) => {
+        const b = barrels.find((item) => item.id === id);
+        if (!b || b.destroyed || b.hp <= 0) return null;
+        b.hp = Math.max(0, b.hp - dmg);
+        if (b.hp <= 0) b.destroyed = true;
+        return {
+          destroyed: b.destroyed,
+          shieldAmount: b.shieldAmount,
+          position: { x: b.x, y: b.y, z: b.z },
+        };
+      },
+    };
+  }
+
+  it('enforces Zero Build mode: blocks building/editing and absorbs & recharges 50 Overshield after 6.5s', () => {
+    const { bus, building, weapons, player } = setupWave3Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    player.setGameMode('zero_build');
+    expect(player.getGameMode()).toBe('zero_build');
+    expect(player.getMaxOvershield()).toBe(50);
+    expect(player.getOvershield()).toBe(50);
+    expect(player.getHudSnapshot().gameMode).toBe('zero_build');
+    expect(player.getHudSnapshot().overshield).toBe(50);
+    expect(player.getHudSnapshot().maxOvershield).toBe(50);
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.getInventory().addMaterial('wood', 200);
+
+    // Building & editing blocked in Zero Build
+    player.toggleBuildMode(true);
+    expect(player.getHudSnapshot().isBuildMode).toBe(false);
+    player.selectBuildPiece('wall');
+    expect(player.getHudSnapshot().isBuildMode).toBe(false);
+    player.pressKey('KeyQ');
+    player.pressKey('KeyZ');
+    expect(player.getHudSnapshot().isBuildMode).toBe(false);
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+    expect(building.getPieces().length).toBe(0);
+    expect(player.enterEditMode()).toBe(false);
+
+    // Give shield and test damage order: Overshield -> Shield -> HP
+    player.applySplashHeal(30); // health=100, shield=30
+    expect(player.getShield()).toBe(30);
+
+    // 30 damage absorbed completely by overshield (50 -> 20)
+    player.update(0.05, 1.0);
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Bot',
+      weaponId: 'ar',
+      rarity: 'common',
+      damage: 30,
+      hpDamage: 30,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1, z: -5 },
+      distance: 5,
+    });
+    expect(player.getOvershield()).toBe(20);
+    expect(player.getShield()).toBe(30);
+    expect(player.getHealth()).toBe(100);
+
+    // 40 damage via WeaponSystem absorbs remaining 20 overshield + 20 shield (shield -> 10)
+    const attacker: CombatActor = {
+      id: 'bot_2',
+      name: 'Bot2',
+      position: { x: 0, y: 0, z: -10 },
+      eyePos: { x: 0, y: 1.2, z: -10 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), attacker]);
+    weapons.fireWeapon({
+      actor: attacker,
+      item: { uid: 'ar_z', weaponId: 'ar', rarity: 'rare', magAmmo: 30, stackCount: 1 },
+      origin: { x: 0, y: 1.2, z: -10 },
+      aimDir: { x: 0, y: 0, z: 1 },
+      spreadRad: 0,
+      isPlayer: false,
+    }); // rare AR = round(30 * 1.14) = 34 dmg -> 20 overshield + 14 shield
+    expect(player.getOvershield()).toBe(0);
+    expect(player.getShield()).toBe(16);
+    expect(player.getHealth()).toBe(100);
+
+    // Recharge does not start before 6.5s
+    let t = 1.0;
+    for (let i = 0; i < 120; i++) {
+      t += 0.05;
+      player.update(0.05, t); // up to t = 7.0 (6.0s since damage)
+    }
+    expect(player.getOvershield()).toBe(0);
+    expect(sounds).not.toContain('overshield_recharge');
+
+    // Cross 6.5s threshold -> emits 'overshield_recharge' once & recharges at 12/s
+    for (let i = 0; i < 30; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.5s more (1.0s past 6.5s -> ~12 overshield)
+    }
+    const rechargeSignals = sounds.filter((s) => s === 'overshield_recharge');
+    expect(rechargeSignals.length).toBe(1);
+    expect(player.getOvershield()).toBeGreaterThan(10);
+    expect(player.getOvershield()).toBeLessThan(50);
+
+    // Finish recharging to full 50
+    for (let i = 0; i < 80; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getOvershield()).toBe(50);
+
+    // Storm damage bypasses overshield & shield directly to HP
+    player.applyStormDamage(15);
+    expect(player.getOvershield()).toBe(50);
+    expect(player.getShield()).toBe(16);
+    expect(player.getHealth()).toBe(85);
+
+    (player as unknown as { applyDamage: (ev: DamageEvent & { isStorm?: boolean }) => void }).applyDamage({
+      targetId: 'player',
+      attackerId: 'storm',
+      attackerName: 'Storm',
+      weaponId: 'pickaxe',
+      rarity: 'common',
+      damage: 10,
+      hpDamage: 10,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1, z: 0 },
+      distance: 0,
+      isStorm: true,
+    });
+    expect(player.getOvershield()).toBe(50);
+    expect(player.getHealth()).toBe(75);
+  });
+
+  it('initializes Blitz mode starter mats (150/100/100) and zero Overshield', () => {
+    const { player } = setupWave3Harness();
+
+    // Default solo starts with 0 mats & 0 overshield
+    expect(player.getGameMode()).toBe('solo');
+    expect(player.getOvershield()).toBe(0);
+    expect(player.getMaxOvershield()).toBe(0);
+    expect(player.getInventory().getMaterials()).toEqual({
+      wood: 0,
+      brick: 0,
+      metal: 0,
+    });
+
+    // Blitz starter mats & 0 overshield
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'BlitzTester', 'blitz');
+    expect(player.getGameMode()).toBe('blitz');
+    expect(player.getOvershield()).toBe(0);
+    expect(player.getMaxOvershield()).toBe(0);
+    expect(player.getInventory().getMaterials()).toEqual({
+      wood: 150,
+      brick: 100,
+      metal: 100,
+    });
+  });
+
+  it('supports Upgrade Bench rarity upgrades, proportional mat deduction, mag refill, and chest priority', () => {
+    const { bus, propsBridge, player } = setupWave3Harness();
+    const sounds: SoundEventId[] = [];
+    const upgradeVfx: Array<{ position: Vec3Like; rarity: Rarity }> = [];
+    const upgradedLog: Array<{ rarity: Rarity; cost: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:weapon_upgrade', (ev) => upgradeVfx.push(ev));
+
+    const stationBridge = createMockStationBridge({
+      benches: [
+        { id: 'bench_1', poiId: 'metro_towers', x: 0, y: 0, z: -3.0, rotationY: 0 },
+      ],
+    });
+    player.setStationBridge(stationBridge);
+    player.setOnWeaponUpgraded((item, cost) => {
+      upgradedLog.push({ rarity: item.rarity, cost });
+    });
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.getInventory().addItem({
+      uid: 'ar_upg',
+      weaponId: 'ar',
+      rarity: 'common',
+      magAmmo: 7,
+      stackCount: 1,
+    });
+    player.getInventory().addItem({
+      uid: 'mini_upg',
+      weaponId: 'mini_shield',
+      rarity: 'uncommon',
+      magAmmo: 0,
+      stackCount: 3,
+    });
+
+    // Pickaxe slot 0 -> no bench prompt
+    player.getInventory().setActiveSlot(0);
+    player.update(0.016, 0.016);
+    expect(player.getInteractPrompt()).toBeNull();
+
+    // Consumable slot 2 -> no bench prompt
+    player.getInventory().setActiveSlot(2);
+    player.update(0.016, 0.032);
+    expect(player.getInteractPrompt()).toBeNull();
+
+    // Active common AR -> prompt shows cost & next rarity tint
+    player.getInventory().setActiveSlot(1);
+    player.update(0.016, 0.048);
+    expect(player.getInteractPrompt()?.label).toBe('UPGRADE ASSAULT RIFLE (50 MATS)');
+    expect(player.getInteractPrompt()?.rarity).toBe('uncommon');
+
+    // Insufficient mats -> dryfire, no upgrade
+    player.getInventory().addMaterial('wood', 20);
+    player.pressKey('KeyE');
+    expect(player.getInventory().getSlot(1)?.rarity).toBe('common');
+    expect(sounds).toContain('dryfire');
+
+    // Add brick + metal (total 20 + 40 + 40 = 100 >= 50) -> proportional deduction of 50
+    player.getInventory().addMaterial('brick', 40);
+    player.getInventory().addMaterial('metal', 40);
+    player.pressKey('KeyE');
+    const itemAfter = player.getInventory().getSlot(1)!;
+    expect(itemAfter.rarity).toBe('uncommon');
+    expect(itemAfter.magAmmo).toBe(WEAPONS.ar.magSize);
+    expect(player.getInventory().getTotalMaterials()).toBe(50);
+    // Proportional shares of 50 across 20:40:40 -> 10 wood, 20 brick, 20 metal
+    expect(player.getInventory().getMaterials()).toEqual({
+      wood: 10,
+      brick: 20,
+      metal: 20,
+    });
+    expect(sounds).toContain('upgrade_weapon');
+    expect(upgradeVfx.length).toBe(1);
+    expect(upgradeVfx[0].rarity).toBe('uncommon');
+    expect(upgradedLog).toEqual([{ rarity: 'uncommon', cost: UPGRADE_COSTS.common }]);
+
+    // Next tier prompt updates immediately to rare (100 MATS)
+    expect(player.getInteractPrompt()?.label).toBe('UPGRADE ASSAULT RIFLE (100 MATS)');
+    expect(player.getInteractPrompt()?.rarity).toBe('rare');
+
+    // Chest closer/in range prioritizes Chest over Upgrade Bench
+    propsBridge.chests.push({
+      id: 'chest_prio',
+      x: 1.8,
+      y: 0,
+      z: 0,
+      rotationY: 0,
+      opened: false,
+      openProgress: 0,
+    });
+    player.update(0.016, 0.064);
+    expect(player.getInteractPrompt()?.label).toBe('Open Chest');
+
+    // Opening chest restores Upgrade Bench prompt
+    player.pressKey('KeyE');
+    expect(propsBridge.chests[0].opened).toBe(true);
+    player.update(0.016, 0.08);
+    expect(player.getInteractPrompt()?.label).toBe('UPGRADE ASSAULT RIFLE (100 MATS)');
+  });
+
+  it('stokes Cozy Campfire on [E] and heals HP smoothly while inside radius', () => {
+    const { bus, player } = setupWave3Harness();
+    const sounds: SoundEventId[] = [];
+    const healVfx: Vec3Like[] = [];
+    const litCampfires: string[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:campfire_heal', (ev) => healVfx.push(ev.position));
+
+    const stationBridge = createMockStationBridge({
+      campfires: [
+        {
+          id: 'cf_1',
+          poiId: 'whispering_pines',
+          x: 0,
+          y: 0,
+          z: -2.8,
+          lit: false,
+          remainingSec: 25,
+          maxDurationSec: 25,
+          healPerSec: 3,
+          radius: 5.5,
+        },
+      ],
+    });
+    player.setStationBridge(stationBridge);
+    player.setOnCampfireLit((id) => litCampfires.push(id));
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Bot',
+      weaponId: 'ar',
+      rarity: 'common',
+      damage: 40,
+      hpDamage: 40,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1, z: -5 },
+      distance: 5,
+    });
+    expect(player.getHealth()).toBe(60);
+
+    // Unlit campfire prompt within 3.6m
+    player.update(0.016, 0.016);
+    expect(player.getInteractPrompt()?.label).toBe('STOKE CAMPFIRE');
+    expect(player.isNearCampfireHealing()).toBe(false);
+
+    // Stoke campfire -> ignites, emits campfire_ignite, invokes callback
+    player.pressKey('KeyE');
+    expect(stationBridge.campfires[0].lit).toBe(true);
+    expect(litCampfires).toEqual(['cf_1']);
+    expect(sounds).toContain('campfire_ignite');
+
+    // Step 3.0s inside campfire radius -> heals +9 HP (60 -> 69), emits periodic campfire_heal & VFX
+    let t = 0.05;
+    for (let i = 0; i < 60; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.isNearCampfireHealing()).toBe(true);
+    expect(player.getHudSnapshot().nearCampfireHealing).toBe(true);
+    expect(player.getHealth()).toBeCloseTo(69, 1);
+    expect(sounds.filter((s) => s === 'campfire_heal').length).toBeGreaterThanOrEqual(2);
+    expect(healVfx.length).toBeGreaterThanOrEqual(3);
+
+    // Walk outside campfire radius -> stops healing & clears flag
+    player.teleport({ x: 0, y: 0, z: 20 });
+    player.update(0.05, t + 0.05);
+    expect(player.isNearCampfireHealing()).toBe(false);
+    expect(player.getHudSnapshot().nearCampfireHealing).toBe(false);
+  });
+
+  it('destroys Slurp Barrels via hitscan & pickaxe, credits shield, and emits slurp VFX/SFX', () => {
+    const { collision, bus, weapons, player } = setupWave3Harness();
+    const sounds: SoundEventId[] = [];
+    const impacts: Array<{ material: string }> = [];
+    const slurpBursts: Array<{ position: Vec3Like; radius: number }> = [];
+    const brokenLog: Array<{ actorId: string; shieldAmount: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:impact', (ev) => impacts.push({ material: ev.material }));
+    bus.on('vfx:slurp_burst', (ev) => slurpBursts.push(ev));
+
+    const stationBridge = createMockStationBridge({
+      barrels: [
+        { id: 'slurp_1', x: 0, y: 0, z: -6, hp: 40, maxHp: 40, shieldAmount: 15, destroyed: false },
+        { id: 'slurp_2', x: 2.1, y: 0, z: 0, hp: 40, maxHp: 40, shieldAmount: 15, destroyed: false },
+      ],
+    });
+    // Include static colliders matching the barrels to ensure WeaponSystem still hits barrels cleanly
+    collision.setStaticColliders([
+      { id: 'slurp_col_1', minX: -0.65, minY: 0, minZ: -6.65, maxX: 0.65, maxY: 1.25, maxZ: -5.35 },
+      { id: 'slurp_col_2', minX: 1.45, minY: 0, minZ: -0.65, maxX: 2.75, maxY: 1.25, maxZ: 0.65 },
+    ]);
+    weapons.setStationBridge(stationBridge);
+    weapons.setOnSlurpBarrelBroken((actorId, shieldAmount) => {
+      brokenLog.push({ actorId, shieldAmount });
+    });
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    // Wound player below 100 HP to verify shield is credited directly (not hijacked by HP)
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Bot',
+      weaponId: 'ar',
+      rarity: 'common',
+      damage: 25,
+      hpDamage: 25,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1, z: -5 },
+      distance: 5,
+    });
+    expect(player.getHealth()).toBe(75);
+    expect(player.getShield()).toBe(0);
+
+    const arItem: ItemInstance = {
+      uid: 'ar_slurp',
+      weaponId: 'ar',
+      rarity: 'common',
+      magAmmo: 30,
+      stackCount: 1,
+    };
+
+    // Shot 1: 33 structureDamage -> barrel HP drops from 40 to 7 (not broken yet)
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arItem,
+      origin: { x: 0, y: 0.8, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(stationBridge.barrels[0].hp).toBe(7);
+    expect(stationBridge.barrels[0].destroyed).toBe(false);
+    expect(impacts.some((i) => i.material === 'shield')).toBe(true);
+    expect(player.getShield()).toBe(0);
+
+    // Shot 2: destroys barrel -> +15 shield, emits slurp_barrel_break & vfx:slurp_burst
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arItem,
+      origin: { x: 0, y: 0.8, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(stationBridge.barrels[0].destroyed).toBe(true);
+    expect(player.getShield()).toBe(15);
+    expect(player.getHealth()).toBe(75);
+    expect(sounds).toContain('slurp_barrel_break');
+    expect(slurpBursts.length).toBe(1);
+    expect(brokenLog).toEqual([{ actorId: 'player', shieldAmount: 15 }]);
+
+    // Pickaxe swing destroys slurp_2 within 3.2m melee range -> +15 more shield (15 -> 30)
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'pick_s', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+      origin: { x: 0, y: 0.8, z: 0 },
+      aimDir: { x: 1, y: 0, z: 0 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(stationBridge.barrels[1].destroyed).toBe(true);
+    expect(player.getShield()).toBe(30);
+    expect(slurpBursts.length).toBe(2);
+    expect(brokenLog.length).toBe(2);
+  });
+
+  it('tracks deterministic match quests in QuestTracker and emits ui:quest_complete once per quest', () => {
+    const bus = new EventBus();
+    const completedEvents: MatchQuest[] = [];
+    const sounds: SoundEventId[] = [];
+    bus.on('ui:quest_complete', (ev) => completedEvents.push(ev.quest));
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    const trackerA = new QuestTracker(bus);
+    const trackerB = new QuestTracker(new EventBus());
+    trackerA.reset(7777, 'solo');
+    trackerB.reset(7777, 'solo');
+
+    const questsA = trackerA.getQuests();
+    const questsB = trackerB.getQuests();
+    expect(questsA.length).toBe(3);
+    expect(questsA).toEqual(questsB); // Deterministic match-seeded selection
+    // All 3 picked quests are distinct kinds
+    expect(new Set(questsA.map((q) => q.id)).size).toBe(3);
+
+    // Pick first active quest and complete it incrementally
+    const firstQuest = questsA[0];
+    const kind = firstQuest.id.replace('quest_', '') as
+      | 'chest_open'
+      | 'damage_dealt'
+      | 'elimination'
+      | 'slurp_break'
+      | 'weapon_upgrade'
+      | 'campfire_ignite'
+      | 'vehicle_distance';
+
+    if (firstQuest.target > 1) {
+      trackerA.record(kind, 1);
+      expect(trackerA.getQuests()[0].progress).toBe(1);
+      expect(trackerA.getQuests()[0].completed).toBe(false);
+      expect(completedEvents.length).toBe(0);
+    }
+
+    // Complete first quest (overshooting clamps to target and fires completion once)
+    trackerA.record(kind, firstQuest.target + 50);
+    expect(trackerA.getQuests()[0].progress).toBe(firstQuest.target);
+    expect(trackerA.getQuests()[0].completed).toBe(true);
+    expect(trackerA.getCompletedCount()).toBe(1);
+    expect(trackerA.getCompletedBonusXp()).toBe(firstQuest.xpReward);
+    expect(completedEvents.length).toBe(1);
+    expect(completedEvents[0].id).toBe(firstQuest.id);
+    expect(sounds).toContain('quest_complete');
+
+    // Recording more after completion does NOT re-emit ui:quest_complete
+    trackerA.record(kind, 10);
+    expect(completedEvents.length).toBe(1);
+    expect(trackerA.getCompletedCount()).toBe(1);
   });
 });

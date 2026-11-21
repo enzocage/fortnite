@@ -838,6 +838,65 @@ describe('StormSystem', () => {
 
     storm.dispose();
   });
+
+  it('supports solo, zero_build, and faster blitz storm rules deterministically', () => {
+    const solo = new StormSystem(4201);
+    const zeroBuild = new StormSystem(4201);
+    zeroBuild.reset(4201, 'zero_build');
+
+    expect(zeroBuild.getState()).toEqual(solo.getState());
+    solo.update(20);
+    zeroBuild.update(20);
+    expect(zeroBuild.getState()).toEqual(solo.getState());
+
+    const blitz = new StormSystem(4201);
+    blitz.reset(4201, 'blitz');
+    expect(blitz.getMode()).toBe('blitz');
+
+    const blitzInit = blitz.getState();
+    expect(blitzInit.phase).toBe(1);
+    expect(blitzInit.totalPhases).toBe(6);
+    expect(blitzInit.currentRadius).toBeCloseTo(230, 1);
+    expect(blitzInit.currentRadius).toBeLessThan(WORLD_HALF);
+    expect(blitzInit.phaseDuration).toBeCloseTo(STORM_PHASES[0].waitDuration * 0.55, 4);
+
+    // Step blitz through all 6 phases and check 0.55x shrink durations and 1.5x late-phase DPS
+    const soloFresh = new StormSystem(4201);
+    soloFresh.reset(4201, 'solo');
+    for (let idx = 0; idx < STORM_PHASES.length; idx++) {
+      const soloCfg = STORM_PHASES[idx];
+      const stBeforeWait = blitz.getState();
+      expect(stBeforeWait.phase).toBe(idx + 1);
+      expect(stBeforeWait.phaseDuration).toBeCloseTo(soloCfg.waitDuration * 0.55, 4);
+
+      if (idx >= 3) {
+        expect(stBeforeWait.dps).toBeCloseTo(soloCfg.dps * 1.5, 4);
+      }
+
+      const waitRes = blitz.update(stBeforeWait.phaseDuration);
+      expect(waitRes.shrinkStarted).toBe(true);
+      const stShrink = blitz.getState();
+      expect(stShrink.isShrinking).toBe(true);
+      expect(stShrink.phaseDuration).toBeCloseTo(soloCfg.shrinkDuration * 0.55, 4);
+
+      const endRes = blitz.update(stShrink.phaseDuration);
+      if (idx < STORM_PHASES.length - 1) {
+        expect(endRes.phaseChanged).toBe(true);
+      } else {
+        expect(blitz.getState().currentRadius).toBe(0);
+      }
+    }
+
+    // Omitting mode in reset() restores solo defaults cleanly
+    blitz.reset(4201);
+    expect(blitz.getMode()).toBe('solo');
+    expect(blitz.getState()).toEqual(soloFresh.getState());
+
+    solo.dispose();
+    zeroBuild.dispose();
+    blitz.dispose();
+    soloFresh.dispose();
+  });
 });
 
 describe('WorldInteractables & EnvironmentDetail', () => {
@@ -929,6 +988,199 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(targetVault.opened).toBe(true);
 
     interactables.dispose();
+    terrain.dispose();
+  });
+
+  it('constructs 6 upgrade benches, 6 campfires, and 24 slurp barrels clear of water/buildings with full reset support', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 0.6) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 1.8 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    // 1. 6 Weapon Upgrade Benches at the 6 specified POIs
+    const benches = interactables.getUpgradeBenches();
+    expect(benches).toHaveLength(6);
+    expect(new Set(benches.map((b) => b.poiId))).toEqual(
+      new Set([
+        'metro_towers',
+        'market_row',
+        'sunny_suburbs',
+        'crater_depot',
+        'skyline_spire',
+        'frostpeak_citadel',
+      ]),
+    );
+    expect(interactables.getUpgradeBenchColliders()).toHaveLength(6);
+
+    for (const b of benches) {
+      expect(terrain.isWater(b.x, b.z)).toBe(false);
+      expect(b.y).toBeCloseTo(terrain.getHeightAt(b.x, b.z), 4);
+      expect(terrain.getNormalAt(b.x, b.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(b.x, b.y, b.z, 1.0)).toBe(true);
+      for (const v of interactables.getVaults()) {
+        expect(Math.hypot(b.x - v.x, b.z - v.z)).toBeGreaterThan(4.0);
+      }
+      for (const p of interactables.getLaunchPads()) {
+        expect(Math.hypot(b.x - p.x, b.z - p.z)).toBeGreaterThan(3.5);
+      }
+    }
+
+    const b0 = benches[0];
+    expect(interactables.getNearestUpgradeBench(b0.x + 2, b0.y, b0.z, 3.8)?.id).toBe(b0.id);
+    expect(interactables.getNearestUpgradeBench(b0.x + 10, b0.y, b0.z, 3.8)).toBeNull();
+    expect(interactables.getNearestUpgradeBench(b0.x + 10, b0.y, b0.z)?.id).toBe(b0.id);
+
+    // 2. 6 Cozy Campfires at the 6 scenic POIs
+    const campfires = interactables.getCampfires();
+    expect(campfires).toHaveLength(6);
+    expect(new Set(campfires.map((c) => c.poiId))).toEqual(
+      new Set([
+        'whispering_pines',
+        'crystal_basin',
+        'sunken_oasis',
+        'sunny_suburbs',
+        'frostpeak_citadel',
+        'scorched_caldera',
+      ]),
+    );
+
+    for (const cf of campfires) {
+      expect(cf.lit).toBe(false);
+      expect(cf.remainingSec).toBe(25);
+      expect(cf.maxDurationSec).toBe(25);
+      expect(cf.healPerSec).toBe(3);
+      expect(cf.radius).toBe(5.5);
+      expect(terrain.isWater(cf.x, cf.z)).toBe(false);
+      expect(cf.y).toBeCloseTo(terrain.getHeightAt(cf.x, cf.z), 4);
+      expect(terrain.getNormalAt(cf.x, cf.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(cf.x, cf.y, cf.z, 0.8)).toBe(true);
+    }
+
+    const cf0 = campfires[0];
+    const cfGroup = interactables.getGroup().getObjectByName(`Campfire_${cf0.id}`) as THREE.Group;
+    expect(cfGroup).toBeDefined();
+    const cfFlameGroup = cfGroup.children.find((ch) => ch instanceof THREE.Group) as THREE.Group;
+    expect(cfFlameGroup.visible).toBe(false);
+
+    expect(interactables.getActiveCampfireHealAt(cf0.x, cf0.y, cf0.z)).toBe(0);
+    expect(interactables.igniteCampfire('nonexistent_campfire')).toBe(false);
+    expect(interactables.igniteCampfire(cf0.id)).toBe(true);
+    expect(cf0.lit).toBe(true);
+    expect(cfFlameGroup.visible).toBe(true);
+    expect(interactables.igniteCampfire(cf0.id)).toBe(false); // already lit
+
+    expect(interactables.getActiveCampfireHealAt(cf0.x + 5.0, cf0.y, cf0.z)).toBe(3);
+    expect(interactables.getActiveCampfireHealAt(cf0.x + 6.0, cf0.y, cf0.z)).toBe(0);
+    expect(interactables.getActiveCampfireHealAt(cf0.x, cf0.y + 6.0, cf0.z)).toBe(0);
+
+    interactables.update(10, 10);
+    expect(cf0.remainingSec).toBeCloseTo(15, 4);
+    expect(cf0.lit).toBe(true);
+    expect(interactables.getActiveCampfireHealAt(cf0.x, cf0.y, cf0.z)).toBe(3);
+
+    interactables.update(16, 26);
+    expect(cf0.remainingSec).toBe(0);
+    expect(cf0.lit).toBe(false);
+    expect(cfFlameGroup.visible).toBe(false);
+    expect(interactables.getActiveCampfireHealAt(cf0.x, cf0.y, cf0.z)).toBe(0);
+    expect(interactables.igniteCampfire(cf0.id)).toBe(false); // burned out until reset
+
+    // 3. 24 Destructible Slurp Barrels
+    const barrels = interactables.getSlurpBarrels();
+    expect(barrels).toHaveLength(24);
+    expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
+    expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24);
+
+    for (const sb of barrels) {
+      expect(sb.hp).toBe(40);
+      expect(sb.maxHp).toBe(40);
+      expect(sb.shieldAmount).toBe(15);
+      expect(sb.destroyed).toBe(false);
+      expect(terrain.isWater(sb.x, sb.z)).toBe(false);
+      expect(sb.y).toBeCloseTo(terrain.getHeightAt(sb.x, sb.z), 4);
+      expect(terrain.getNormalAt(sb.x, sb.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(sb.x, sb.y, sb.z, 0.55)).toBe(true);
+      for (const other of barrels) {
+        if (other.id !== sb.id) {
+          expect(Math.hypot(sb.x - other.x, sb.z - other.z)).toBeGreaterThan(1.2);
+        }
+      }
+    }
+
+    const sb0 = barrels[0];
+    const sbGroup = interactables.getGroup().getObjectByName(`SlurpBarrel_${sb0.id}`) as THREE.Group;
+    expect(sbGroup.visible).toBe(true);
+
+    const chip = interactables.damageSlurpBarrel(sb0.id, 15);
+    expect(chip).toEqual({
+      destroyed: false,
+      shieldAmount: 0,
+      position: { x: sb0.x, y: sb0.y, z: sb0.z },
+    });
+    expect(sb0.hp).toBe(25);
+    expect(sb0.destroyed).toBe(false);
+    expect(sbGroup.visible).toBe(true);
+    expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
+
+    // Update animates hit wobble cleanly
+    interactables.update(0.05, 26.05);
+
+    const kill = interactables.damageSlurpBarrel(sb0.id, 25);
+    expect(kill).toEqual({
+      destroyed: true,
+      shieldAmount: 15,
+      position: { x: sb0.x, y: sb0.y, z: sb0.z },
+    });
+    expect(sb0.hp).toBe(0);
+    expect(sb0.destroyed).toBe(true);
+    expect(sbGroup.visible).toBe(false);
+    expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23);
+    expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
+    expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
+
+    // 4. reset() restores vaults, benches, campfires, and slurp barrels
+    interactables.unlockVault(interactables.getVaults()[0].id);
+    interactables.reset();
+
+    expect(interactables.getVaults().every((v) => !v.unlocked && !v.opened)).toBe(true);
+    expect(interactables.getVaultColliders()).toHaveLength(15);
+    expect(interactables.getUpgradeBenches()).toHaveLength(6);
+    expect(interactables.getUpgradeBenchColliders()).toHaveLength(6);
+    expect(
+      interactables
+        .getCampfires()
+        .every((c) => !c.lit && c.remainingSec === 25 && c.maxDurationSec === 25),
+    ).toBe(true);
+    expect(cfFlameGroup.visible).toBe(false);
+    expect(interactables.igniteCampfire(cf0.id)).toBe(true);
+    expect(
+      interactables
+        .getSlurpBarrels()
+        .every((s) => s.hp === 40 && s.maxHp === 40 && !s.destroyed),
+    ).toBe(true);
+    expect(sbGroup.visible).toBe(true);
+    expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24);
+
+    interactables.dispose();
+    builder.dispose();
     terrain.dispose();
   });
 });

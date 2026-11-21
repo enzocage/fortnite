@@ -1,10 +1,20 @@
 import * as THREE from 'three';
-import type { BackblingStyle, GliderDef, PickaxeDef, SkinDef, WeaponId } from '../types';
-import { GLIDERS, PICKAXES, SKINS, clamp } from '../core';
+import type {
+  AnimState,
+  BackblingStyle,
+  CharacterRenderState,
+  GliderDef,
+  PickaxeDef,
+  SkinDef,
+  WeaponId,
+} from '../types';
+import { GLIDERS, PICKAXES, SKINS, WEAPON_WRAPS, clamp } from '../core';
 import {
+  applyWeaponWrap,
   createBlueprintModel,
   createWeaponModel,
   disposeObject3D,
+  getWeaponWrapDef,
 } from './WeaponModels';
 
 export interface CharacterJoints {
@@ -39,6 +49,92 @@ interface BackblingParts {
   rightWing?: THREE.Group;
   packAntenna?: THREE.Group;
   shieldPivot?: THREE.Group;
+}
+
+const GROUND_SHADOW_BASE_OPACITY = 0.46;
+const GROUND_SHADOW_MAX_HEIGHT = 8.0;
+const GROUND_SHADOW_RADIUS = 0.48;
+let cachedGroundShadowTexture: THREE.CanvasTexture | null = null;
+
+function getGroundShadowTexture(): THREE.CanvasTexture {
+  if (cachedGroundShadowTexture) return cachedGroundShadowTexture;
+
+  const size = 128;
+  let canvas: HTMLCanvasElement;
+  if (typeof document !== 'undefined') {
+    canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const cx = size * 0.5;
+      const cy = size * 0.5;
+      const steps = 24;
+      for (let i = steps; i >= 1; i--) {
+        const r = (size * 0.46) * (i / steps);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.055)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  } else {
+    canvas = {
+      width: size,
+      height: size,
+      getContext: () => null,
+    } as unknown as HTMLCanvasElement;
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.name = 'ground_contact_shadow_tex';
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  cachedGroundShadowTexture = tex;
+  return tex;
+}
+
+function applyArmorRimShader(
+  mat: THREE.MeshStandardMaterial,
+  rimColor: THREE.ColorRepresentation,
+  strength = 0.22,
+): THREE.MeshStandardMaterial {
+  const rimCol = new THREE.Color(rimColor);
+  mat.userData.hasArmorRim = true;
+  mat.customProgramCacheKey = () => 'armor_fresnel_rim_v1';
+  mat.onBeforeCompile = (shader) => {
+    try {
+      if (
+        !shader ||
+        typeof shader.fragmentShader !== 'string' ||
+        !shader.fragmentShader.includes('#include <common>') ||
+        !shader.fragmentShader.includes('#include <opaque_fragment>')
+      ) {
+        return;
+      }
+      if (!shader.uniforms) {
+        shader.uniforms = {};
+      }
+      shader.uniforms.uRimColor = { value: rimCol };
+      shader.uniforms.uRimStrength = { value: strength };
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nuniform vec3 uRimColor;\nuniform float uRimStrength;',
+        )
+        .replace(
+          '#include <opaque_fragment>',
+          `float rimNdotV = clamp( dot( normal / max( length( normal ), 0.0001 ), vViewPosition / max( length( vViewPosition ), 0.0001 ) ), 0.0, 1.0 );
+float rimInv = 1.0 - rimNdotV;
+float rimFresnel = rimInv * rimInv * rimInv;
+outgoingLight += uRimColor * ( rimFresnel * uRimStrength );
+#include <opaque_fragment>`,
+        );
+    } catch {
+      // Safe fallback for mock or non-standard shader environments
+    }
+  };
+  return mat;
 }
 
 function makeMat(
@@ -95,6 +191,7 @@ export class CharacterRig {
   private glider: GliderDef;
 
   private equippedWeaponId: WeaponId = 'pickaxe';
+  private currentWrapId: string = WEAPON_WRAPS[0]?.id ?? 'factory_matte';
   private buildMode = false;
   private gliderOpen = false;
   private gliderOpenFactor = 0;
@@ -104,6 +201,9 @@ export class CharacterRig {
   private activeWeaponGroup: THREE.Group | null = null;
   private gliderVisualGroup: THREE.Group | null = null;
   private backblingParts: BackblingParts = { style: 'none' };
+  private groundShadowMesh: THREE.Mesh | null = null;
+  private groundShadowMat: THREE.MeshBasicMaterial | null = null;
+  private lastGroundedY = 0;
   private bossAuraEnabled = false;
   private bossAuraTime = 0;
   private bossAuraGroup: THREE.Group | null = null;
@@ -126,6 +226,7 @@ export class CharacterRig {
     this.joints.leftShoulder.rotation.set(-0.35, -0.1, 0.1);
     this.joints.leftElbow.rotation.set(-0.45, 0, 0);
 
+    this.buildGroundShadow();
     this.buildSkinVisuals();
     this.buildGliderVisual();
     this.setGliderOpen(false, 0);
@@ -262,6 +363,31 @@ export class CharacterRig {
     };
   }
 
+  private buildGroundShadow(): void {
+    const geo = new THREE.CircleGeometry(GROUND_SHADOW_RADIUS, 24);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x050810,
+      map: getGroundShadowTexture(),
+      transparent: true,
+      opacity: GROUND_SHADOW_BASE_OPACITY,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'ground_contact_shadow';
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(0, 0.025, 0);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.renderOrder = -1;
+
+    this.joints.root.add(mesh);
+    this.groundShadowMesh = mesh;
+    this.groundShadowMat = mat;
+  }
+
   private clearSkinVisuals(): void {
     for (const grp of this.skinVisualRoots) {
       disposeObject3D(grp);
@@ -282,13 +408,17 @@ export class CharacterRig {
   private buildSkinVisuals(): void {
     this.clearSkinVisuals();
 
-    const primary = makeMat(this.skin.primaryColor, 0.48, 0.16);
-    const secondary = makeMat(this.skin.secondaryColor, 0.56, 0.22);
-    const accent = makeMat(this.skin.accentColor, 0.30, 0.38, this.skin.accentColor, 0.16);
+    const primary = applyArmorRimShader(makeMat(this.skin.primaryColor, 0.48, 0.16), '#dbeafe', 0.18);
+    const secondary = applyArmorRimShader(makeMat(this.skin.secondaryColor, 0.56, 0.22), '#cbd5e1', 0.2);
+    const accent = applyArmorRimShader(
+      makeMat(this.skin.accentColor, 0.30, 0.38, this.skin.accentColor, 0.16),
+      this.skin.accentColor,
+      0.26,
+    );
     const skinMat = makeMat(this.skin.skinTone, 0.72, 0.02);
     const hairMat = makeMat(this.skin.hairColor, 0.78, 0.05);
     const darkTrim = makeMat('#0f172a', 0.55, 0.3);
-    const armorSteel = makeMat('#334155', 0.36, 0.58);
+    const armorSteel = applyArmorRimShader(makeMat('#334155', 0.36, 0.58), '#93c5fd', 0.24);
     const bootMat = makeMat('#1e293b', 0.65, 0.18);
     const soleMat = makeMat('#0f172a', 0.85, 0.05);
     const scleraMat = makeMat('#f8fafc', 0.25, 0.0);
@@ -520,7 +650,11 @@ export class CharacterRig {
       }
       case 'crown': {
         // Golden spiked royal crown
-        const crownGold = makeMat(this.skin.accentColor, 0.22, 0.78, this.skin.accentColor, 0.15);
+        const crownGold = applyArmorRimShader(
+          makeMat(this.skin.accentColor, 0.22, 0.78, this.skin.accentColor, 0.15),
+          '#fef08a',
+          0.28,
+        );
         createPart(headVis, new THREE.CylinderGeometry(0.132, 0.126, 0.052, 10), crownGold, 0, 0.305, 0);
         for (let i = 0; i < 6; i++) {
           const ang = (i / 6) * Math.PI * 2;
@@ -902,6 +1036,9 @@ export class CharacterRig {
 
     const targetKey = isBuildMode ? '__blueprint__' : weaponId;
     if (this.equippedWeaponId === weaponId && this.buildMode === isBuildMode && this.activeWeaponGroup) {
+      if (!isBuildMode && this.activeWeaponGroup.userData.appliedWrapId !== this.currentWrapId) {
+        applyWeaponWrap(this.activeWeaponGroup, this.currentWrapId);
+      }
       return;
     }
 
@@ -921,8 +1058,91 @@ export class CharacterRig {
       this.joints.weaponSocket.add(nextGroup);
     }
 
+    if (!isBuildMode && nextGroup.userData.appliedWrapId !== this.currentWrapId) {
+      applyWeaponWrap(nextGroup, this.currentWrapId);
+    }
+
     nextGroup.visible = true;
     this.activeWeaponGroup = nextGroup;
+  }
+
+  public setWeaponWrap(wrapId?: string): void {
+    if (this.disposed) return;
+    const resolvedId = getWeaponWrapDef(wrapId).id;
+    const changed = this.currentWrapId !== resolvedId;
+    this.currentWrapId = resolvedId;
+
+    if (
+      !this.buildMode &&
+      this.activeWeaponGroup &&
+      (changed || this.activeWeaponGroup.userData.appliedWrapId !== resolvedId)
+    ) {
+      applyWeaponWrap(this.activeWeaponGroup, resolvedId);
+    }
+  }
+
+  public getWeaponWrapId(): string {
+    return this.currentWrapId;
+  }
+
+  public updateGroundShadow(
+    grounded: boolean,
+    posY = this.joints.root.position.y,
+    groundY?: number,
+    animState?: AnimState,
+  ): void {
+    if (this.disposed || !this.groundShadowMesh || !this.groundShadowMat) return;
+
+    const safePosY = Number.isFinite(posY) ? posY : 0;
+    let effectiveHeight = 0;
+
+    if (groundY !== undefined && Number.isFinite(groundY)) {
+      const airHeight = Math.max(0, safePosY - groundY);
+      this.groundShadowMesh.position.y = -airHeight + 0.025;
+      effectiveHeight = !grounded && airHeight === 0 ? 1.5 : airHeight;
+      if (grounded && airHeight === 0) {
+        this.lastGroundedY = safePosY;
+      }
+    } else if (grounded) {
+      this.lastGroundedY = safePosY;
+      this.groundShadowMesh.position.y = 0.025;
+      effectiveHeight = 0;
+    } else {
+      const rise = Math.max(0, safePosY - this.lastGroundedY);
+      const minAirHeight = animState === 'skydive' || animState === 'glide' ? 6.5 : 1.6;
+      effectiveHeight = Math.max(rise, minAirHeight);
+      this.groundShadowMesh.position.y =
+        rise > 0 ? -Math.min(rise, GROUND_SHADOW_MAX_HEIGHT) + 0.025 : 0.025;
+    }
+
+    const t = clamp(effectiveHeight / GROUND_SHADOW_MAX_HEIGHT, 0, 1);
+    const fade = (1 - t) * (1 - t);
+    const opacity = GROUND_SHADOW_BASE_OPACITY * fade;
+    const scale = 1.0 - 0.55 * t;
+
+    this.groundShadowMat.opacity = opacity;
+    this.groundShadowMesh.scale.setScalar(scale);
+    this.groundShadowMesh.visible = opacity > 0.015;
+  }
+
+  public updateFromState(state: CharacterRenderState, groundY?: number): void {
+    if (this.disposed) return;
+
+    const px = Number.isFinite(state.position.x) ? state.position.x : 0;
+    const py = Number.isFinite(state.position.y) ? state.position.y : 0;
+    const pz = Number.isFinite(state.position.z) ? state.position.z : 0;
+    this.joints.root.position.set(px, py, pz);
+    this.joints.root.rotation.y = Number.isFinite(state.yaw) ? state.yaw : 0;
+
+    this.equipWeapon(state.weaponId, state.isBuilding);
+    if (state.weaponWrapId !== undefined) {
+      this.setWeaponWrap(state.weaponWrapId);
+    }
+    this.updateGroundShadow(state.grounded, py, groundY, state.animState);
+
+    if (state.isBoss !== undefined) {
+      this.setBossAura(Boolean(state.isBoss));
+    }
   }
 
   public getMuzzleWorldPosition(out?: THREE.Vector3): THREE.Vector3 {
@@ -1166,6 +1386,10 @@ export class CharacterRig {
     return this.backblingParts.style;
   }
 
+  public getGroundShadowMesh(): THREE.Mesh | null {
+    return this.groundShadowMesh;
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -1199,5 +1423,7 @@ export class CharacterRig {
 
     disposeObject3D(this.joints.root);
     this.joints.root.parent?.remove(this.joints.root);
+    this.groundShadowMesh = null;
+    this.groundShadowMat = null;
   }
 }

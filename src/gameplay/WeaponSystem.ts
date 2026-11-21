@@ -4,6 +4,7 @@ import type {
   MaterialType,
   ProjectileState,
   Rarity,
+  SlurpBarrelEntity,
   SoundEventId,
   Vec3Like,
   VehicleEntity,
@@ -28,6 +29,7 @@ import type {
   PropsInteractionBridge,
   ShieldBubbleState,
   VehicleBridge,
+  WorldStationBridge,
 } from './GameplayTypes';
 
 const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
@@ -145,6 +147,10 @@ export class WeaponSystem {
 
   private actorsProvider: (() => CombatActor[]) | null = null;
   private vehicleBridge: VehicleBridge | null = null;
+  private stationBridge: WorldStationBridge | null = null;
+  private onSlurpBarrelBroken:
+    | ((actorId: string, shieldAmount: number) => void)
+    | null = null;
   private projectiles: ActiveProjectile[] = [];
   private pendingBursts: PendingBurst[] = [];
   private shieldBubbles: ShieldBubbleState[] = [];
@@ -174,6 +180,20 @@ export class WeaponSystem {
 
   getVehicleBridge(): VehicleBridge | null {
     return this.vehicleBridge;
+  }
+
+  setStationBridge(bridge: WorldStationBridge | null): void {
+    this.stationBridge = bridge;
+  }
+
+  getStationBridge(): WorldStationBridge | null {
+    return this.stationBridge;
+  }
+
+  setOnSlurpBarrelBroken(
+    cb: ((actorId: string, shieldAmount: number) => void) | null,
+  ): void {
+    this.onSlurpBarrelBroken = cb;
   }
 
   getProjectiles(): ProjectileState[] {
@@ -294,12 +314,18 @@ export class WeaponSystem {
     isPlayerAttacker: boolean,
   ): DamageEvent {
     const damage = Math.max(1, Math.round(rawDamage));
+    const overshieldBefore = Math.max(0, target.overshield ?? 0);
+    const overshieldDamage = Math.min(overshieldBefore, damage);
+    const afterOvershield = damage - overshieldDamage;
     const shieldBefore = Math.max(0, target.shield);
-    const shieldDamage = Math.min(shieldBefore, damage);
-    const remaining = damage - shieldDamage;
+    const shieldDamage = Math.min(shieldBefore, afterOvershield);
+    const remaining = afterOvershield - shieldDamage;
     const hpDamage = Math.min(Math.max(0, target.hp), remaining);
     const isElimination = target.hp - hpDamage <= 0;
 
+    if (target.overshield !== undefined) {
+      target.overshield = Math.max(0, target.overshield - overshieldDamage);
+    }
     target.shield = Math.max(0, target.shield - shieldDamage);
     target.hp = Math.max(0, target.hp - hpDamage);
     if (target.hp <= 0) {
@@ -323,8 +349,10 @@ export class WeaponSystem {
 
     target.onDamage?.(ev);
 
-    const shieldBroke = shieldBefore > 0 && target.shield <= 0;
-    const hitShield = shieldDamage > 0;
+    const shieldBroke =
+      (shieldBefore > 0 && target.shield <= 0) ||
+      (overshieldBefore > 0 && (target.overshield ?? 0) <= 0 && shieldBefore === 0);
+    const hitShield = shieldDamage > 0 || overshieldDamage > 0;
 
     this.eventBus.emit('vfx:impact', {
       position: hitPoint,
@@ -538,6 +566,105 @@ export class WeaponSystem {
     return best;
   }
 
+  private raycastSlurpBarrels(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+    bridge?: WorldStationBridge | null,
+  ): { barrel: SlurpBarrelEntity; distance: number; point: Vec3Like; normal: Vec3Like } | null {
+    const activeBridge = bridge ?? this.stationBridge;
+    const barrels = activeBridge?.getSlurpBarrels();
+    if (!barrels || barrels.length === 0) return null;
+
+    const r = 0.65;
+    const h = 1.25;
+    let bestDist = maxDist;
+    let best: {
+      barrel: SlurpBarrelEntity;
+      distance: number;
+      point: Vec3Like;
+      normal: Vec3Like;
+    } | null = null;
+
+    for (let i = 0; i < barrels.length; i++) {
+      const barrel = barrels[i];
+      if (barrel.destroyed || barrel.hp <= 0) continue;
+      const hit = this.intersectRayAABB(
+        origin,
+        dir,
+        barrel.x - r,
+        barrel.y,
+        barrel.z - r,
+        barrel.x + r,
+        barrel.y + h,
+        barrel.z + r,
+        bestDist,
+      );
+      if (hit) {
+        bestDist = hit.distance;
+        best = { barrel, ...hit };
+      }
+    }
+
+    return best;
+  }
+
+  private creditSlurpShieldToActor(actor: CombatActor, shieldAmount: number): void {
+    if (shieldAmount <= 0) return;
+    const maxShield = actor.maxShield ?? 100;
+    const maxHp = actor.maxHp ?? 100;
+    const shieldAdded = Math.min(shieldAmount, Math.max(0, maxShield - actor.shield));
+    const overflow = shieldAmount - shieldAdded;
+    const hpAdded =
+      overflow > 0 ? Math.min(overflow, Math.max(0, maxHp - actor.hp)) : 0;
+
+    actor.shield = Math.min(maxShield, actor.shield + shieldAdded);
+    actor.hp = Math.min(maxHp, actor.hp + hpAdded);
+    actor.onHeal?.(hpAdded, shieldAdded);
+  }
+
+  private applySlurpBarrelHit(
+    bridge: WorldStationBridge,
+    barrelId: string,
+    dmg: number,
+    hitPoint: Vec3Like,
+    normal: Vec3Like,
+    actor: CombatActor | null,
+  ): boolean {
+    const res = bridge.damageSlurpBarrel(barrelId, dmg);
+    if (!res) return false;
+
+    this.eventBus.emit('vfx:impact', {
+      position: hitPoint,
+      normal,
+      material: 'shield',
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'shield_hit',
+      position: hitPoint,
+      spatial: true,
+    });
+
+    if (res.destroyed) {
+      if (actor) {
+        this.creditSlurpShieldToActor(actor, res.shieldAmount);
+      }
+      this.eventBus.emit('sound:play', {
+        id: 'slurp_barrel_break',
+        position: res.position,
+        spatial: true,
+      });
+      this.eventBus.emit('vfx:slurp_burst', {
+        position: res.position,
+        radius: 2.4,
+      });
+      if (actor) {
+        this.onSlurpBarrelBroken?.(actor.id, res.shieldAmount);
+      }
+    }
+    return true;
+  }
+
   private raycastShieldBubbles(
     origin: Vec3Like,
     dir: Vec3Like,
@@ -617,6 +744,7 @@ export class WeaponSystem {
     });
 
     const vBridge = params.vehicleBridge ?? this.vehicleBridge;
+    const sBridge = params.stationBridge ?? this.stationBridge;
     const props = this.propsBridge.getProps();
     const worldHit = this.collision.raycastWorld(params.origin, aimDir, def.range, {
       checkBuilds: true,
@@ -637,12 +765,19 @@ export class WeaponSystem {
       vBridge,
       params.actor.id,
     );
+    const barrelHit = this.raycastSlurpBarrels(
+      params.origin,
+      aimDir,
+      def.range,
+      sBridge,
+    );
 
     if (
       actorHit &&
       (!worldHit.hit || actorHit.distance <= worldHit.distance) &&
       (!llamaHit || actorHit.distance <= llamaHit.distance) &&
-      (!vehicleHit || actorHit.distance <= vehicleHit.distance)
+      (!vehicleHit || actorHit.distance <= vehicleHit.distance) &&
+      (!barrelHit || actorHit.distance <= barrelHit.distance)
     ) {
       const ev = this.applyActorDamage(
         params.actor,
@@ -660,6 +795,30 @@ export class WeaponSystem {
         shotsHit: 1,
         headshots: 0,
         damageDealt: ev.damage,
+      };
+    }
+
+    if (
+      barrelHit &&
+      sBridge &&
+      (!worldHit.hit ||
+        barrelHit.distance <= worldHit.distance + (worldHit.targetType === 'static' ? 0.06 : 0)) &&
+      (!llamaHit || barrelHit.distance <= llamaHit.distance) &&
+      (!vehicleHit || barrelHit.distance <= vehicleHit.distance)
+    ) {
+      this.applySlurpBarrelHit(
+        sBridge,
+        barrelHit.barrel.id,
+        def.structureDamage,
+        barrelHit.point,
+        barrelHit.normal,
+        params.actor,
+      );
+      return {
+        fired: true,
+        shotsHit: 1,
+        headshots: 0,
+        damageDealt: def.structureDamage,
       };
     }
 
@@ -1040,6 +1199,7 @@ export class WeaponSystem {
   ): FireWeaponResult {
     const def = WEAPONS[params.item.weaponId];
     const vBridge = params.vehicleBridge ?? this.vehicleBridge;
+    const sBridge = params.stationBridge ?? this.stationBridge;
     params.onAmmoConsumed?.();
 
     const muzzle = params.muzzlePos ?? params.origin;
@@ -1102,6 +1262,10 @@ export class WeaponSystem {
       });
 
       const entityMaxDist = worldHit.hit ? worldHit.distance : bubbleMaxDist;
+      const barrelMaxDist =
+        worldHit.hit && worldHit.targetType === 'static'
+          ? Math.min(bubbleMaxDist, worldHit.distance + 0.06)
+          : entityMaxDist;
       const actorHit = this.raycastActors(
         params.origin,
         rayDir,
@@ -1116,12 +1280,33 @@ export class WeaponSystem {
         vBridge,
         params.actor.id,
       );
+      const barrelHit = this.raycastSlurpBarrels(
+        params.origin,
+        rayDir,
+        barrelMaxDist,
+        sBridge,
+      );
 
-      let chosenType: 'actor' | 'llama' | 'vehicle' | 'world' | 'bubble' | 'none' = 'none';
+      let chosenType:
+        | 'actor'
+        | 'llama'
+        | 'vehicle'
+        | 'barrel'
+        | 'world'
+        | 'bubble'
+        | 'none' = 'none';
       let chosenDist = bubbleMaxDist;
       if (worldHit.hit && worldHit.distance <= chosenDist) {
         chosenType = 'world';
         chosenDist = worldHit.distance;
+      }
+      if (
+        barrelHit &&
+        barrelHit.distance <=
+          chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+      ) {
+        chosenType = 'barrel';
+        chosenDist = barrelHit.distance;
       }
       if (vehicleHit && vehicleHit.distance <= chosenDist) {
         chosenType = 'vehicle';
@@ -1146,15 +1331,17 @@ export class WeaponSystem {
             ? llamaHit!.point
             : chosenType === 'vehicle'
               ? vehicleHit!.point
-              : chosenType === 'world'
-                ? worldHit.point
-                : chosenType === 'bubble'
-                  ? bubbleHit!.point
-                  : {
-                      x: params.origin.x + rayDir.x * def.range,
-                      y: params.origin.y + rayDir.y * def.range,
-                      z: params.origin.z + rayDir.z * def.range,
-                    };
+              : chosenType === 'barrel'
+                ? barrelHit!.point
+                : chosenType === 'world'
+                  ? worldHit.point
+                  : chosenType === 'bubble'
+                    ? bubbleHit!.point
+                    : {
+                        x: params.origin.x + rayDir.x * def.range,
+                        y: params.origin.y + rayDir.y * def.range,
+                        z: params.origin.z + rayDir.z * def.range,
+                      };
 
       const isMythicPulse = params.item.weaponId === 'mythic_blade_rifle';
       this.eventBus.emit('vfx:tracer', {
@@ -1191,6 +1378,15 @@ export class WeaponSystem {
             distance: actorHit.distance,
           });
         }
+      } else if (chosenType === 'barrel' && barrelHit && sBridge) {
+        this.applySlurpBarrelHit(
+          sBridge,
+          barrelHit.barrel.id,
+          structDmg,
+          barrelHit.point,
+          barrelHit.normal,
+          params.actor,
+        );
       } else if (chosenType === 'llama' && llamaHit) {
         this.propsBridge.damageLlama?.(llamaHit.llama.id, structDmg, llamaHit.point);
         this.eventBus.emit('vfx:impact', {
@@ -1352,6 +1548,33 @@ export class WeaponSystem {
           Math.round(proj.structureDamage * falloff),
           impactPos,
         );
+      }
+    }
+
+    // Damage Slurp Barrels within splash radius
+    if (this.stationBridge) {
+      const barrels = this.stationBridge.getSlurpBarrels();
+      const ownerActor =
+        this.actorsProvider?.().find((a) => a.id === proj.ownerId && a.alive) ??
+        null;
+      for (let i = 0; i < barrels.length; i++) {
+        const barrel = barrels[i];
+        if (barrel.destroyed || barrel.hp <= 0) continue;
+        const center = { x: barrel.x, y: barrel.y + 0.625, z: barrel.z };
+        const d = dist3D(impactPos, center);
+        if (
+          d <= proj.splashRadius + 0.85 &&
+          !this.isBlockedByShieldBubble(impactPos, center)
+        ) {
+          this.applySlurpBarrelHit(
+            this.stationBridge,
+            barrel.id,
+            proj.structureDamage,
+            center,
+            { x: 0, y: 1, z: 0 },
+            ownerActor,
+          );
+        }
       }
     }
 
@@ -1617,6 +1840,10 @@ export class WeaponSystem {
           props,
         });
         const entityMaxDist = worldHit.hit ? worldHit.distance : maxStepDist;
+        const barrelMaxDist =
+          worldHit.hit && worldHit.targetType === 'static'
+            ? Math.min(maxStepDist, worldHit.distance + 0.06)
+            : entityMaxDist;
         const actorHit = this.raycastActors(
           prevPos,
           stepDir,
@@ -1630,12 +1857,27 @@ export class WeaponSystem {
           this.vehicleBridge,
           proj.ownerId,
         );
+        const barrelHit = this.raycastSlurpBarrels(
+          prevPos,
+          stepDir,
+          barrelMaxDist,
+          this.stationBridge,
+        );
 
-        let hitType: 'actor' | 'vehicle' | 'world' | 'bubble' | 'none' = 'none';
+        let hitType: 'actor' | 'vehicle' | 'barrel' | 'world' | 'bubble' | 'none' =
+          'none';
         let chosenDist = maxStepDist;
         if (worldHit.hit && worldHit.distance <= chosenDist) {
           hitType = 'world';
           chosenDist = worldHit.distance;
+        }
+        if (
+          barrelHit &&
+          barrelHit.distance <=
+            chosenDist + (hitType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+        ) {
+          hitType = 'barrel';
+          chosenDist = barrelHit.distance;
         }
         if (vehicleHit && vehicleHit.distance <= chosenDist) {
           hitType = 'vehicle';
@@ -1654,15 +1896,17 @@ export class WeaponSystem {
             ? actorHit!.point
             : hitType === 'vehicle'
               ? vehicleHit!.point
-              : hitType === 'world'
-                ? worldHit.point
-                : hitType === 'bubble'
-                  ? bubbleHit!.point
-                  : {
-                      x: prevPos.x + stepDx,
-                      y: prevPos.y + stepDy,
-                      z: prevPos.z + stepDz,
-                    };
+              : hitType === 'barrel'
+                ? barrelHit!.point
+                : hitType === 'world'
+                  ? worldHit.point
+                  : hitType === 'bubble'
+                    ? bubbleHit!.point
+                    : {
+                        x: prevPos.x + stepDx,
+                        y: prevPos.y + stepDy,
+                        z: prevPos.z + stepDz,
+                      };
 
         const tracerColor =
           proj.weaponId === 'rocket_launcher'
@@ -1796,6 +2040,18 @@ export class WeaponSystem {
                 nextPos,
                 travelDist,
                 proj.isPlayer,
+              );
+            } else if (hitType === 'barrel' && barrelHit && this.stationBridge) {
+              const ownerActor =
+                this.actorsProvider?.().find((a) => a.id === proj.ownerId && a.alive) ??
+                null;
+              this.applySlurpBarrelHit(
+                this.stationBridge,
+                barrelHit.barrel.id,
+                proj.structureDamage,
+                barrelHit.point,
+                barrelHit.normal,
+                ownerActor,
               );
             } else if (hitType === 'vehicle' && vehicleHit) {
               this.vehicleBridge?.damageVehicle(

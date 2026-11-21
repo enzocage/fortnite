@@ -13,3 +13,4 @@ export {
 export { BuildingSystem, classifyEditMask } from './BuildingSystem';
 export { WeaponSystem, computeWeaponDamage } from './WeaponSystem';
 export { PlayerController } from './PlayerController';
+export { QuestTracker, type QuestEventKind } from './QuestTracker';

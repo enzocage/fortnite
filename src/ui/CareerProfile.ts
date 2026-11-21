@@ -18,6 +18,7 @@ export interface MatchXpBreakdown {
   damageXp: number;
   placementXp: number;
   victoryBonusXp: number;
+  bonusXp: number;
   totalXp: number;
   previousLevel: number;
   newLevel: number;
@@ -175,7 +176,11 @@ export function computeMatchXpBreakdown(
   }
 
   const victoryBonusXp = summary.victory ? 500 : 0;
-  const totalXp = survivalXp + elimXp + damageXp + placementXp + victoryBonusXp;
+  const bonusXp =
+    typeof summary.bonusXp === 'number' && Number.isFinite(summary.bonusXp) && summary.bonusXp > 0
+      ? Math.round(summary.bonusXp)
+      : 0;
+  const totalXp = survivalXp + elimXp + damageXp + placementXp + victoryBonusXp + bonusXp;
 
   const safePrevXp = Math.max(0, Number.isFinite(currentTotalXp) ? Math.floor(currentTotalXp) : 0);
   const previousLevel = computeLevelFromXp(safePrevXp);
@@ -187,6 +192,7 @@ export function computeMatchXpBreakdown(
     damageXp,
     placementXp,
     victoryBonusXp,
+    bonusXp,
     totalXp,
     previousLevel,
     newLevel,

@@ -221,8 +221,12 @@ export class CharacterAnimator {
     root.rotation.y = finiteOr(state.yaw);
 
     rig.equipWeapon(state.weaponId, state.isBuilding);
+    if (state.weaponWrapId !== undefined) {
+      rig.setWeaponWrap(state.weaponWrapId);
+    }
 
     const anim = resolveAnimState(state);
+    rig.updateGroundShadow(state.grounded, finiteOr(state.position.y), undefined, anim);
     const shouldGlideOpen = anim === 'glide';
     if (shouldGlideOpen) {
       data.gliderFactor = safeDt > 0 ? damp(Math.max(data.gliderFactor, 0.25), 1, 14, safeDt) : 1;

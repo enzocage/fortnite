@@ -3,13 +3,16 @@ import {
   DEFAULT_SETTINGS,
   EMOTES,
   EventBus,
+  GAME_MODES,
   GLIDERS,
   PICKAXES,
   SKINS,
+  WEAPON_WRAPS,
 } from '../core';
 import type {
   Difficulty,
   EmoteId,
+  GameModeId,
   GameSettings,
   GraphicsQuality,
   KeybindMap,
@@ -19,6 +22,7 @@ import { computeCareerLevelProgress, loadCareerStats } from './CareerProfile';
 import {
   cloneSettings,
   formatKeyCodeLabel,
+  getGameModeMeta,
   getRarityMeta,
   KEYBIND_ACTION_DEFS,
   resolveKeybinds,
@@ -30,7 +34,7 @@ export type LobbyTabId = 'play' | 'locker' | 'controls' | 'settings';
 const SETTINGS_STORAGE_KEY = 'fortdrop_settings_v1';
 const LOBBY_STORAGE_KEY = 'fortdrop_lobby_v1';
 
-const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
+export const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
   playerName: 'FORTDROPPER',
   difficulty: 'standard',
   botCount: 29,
@@ -38,6 +42,8 @@ const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
   pickaxeId: PICKAXES[0]?.id ?? 'default_ax',
   gliderId: GLIDERS[0]?.id ?? 'aero_wing',
   selectedEmote: EMOTES[0]?.id ?? 'victory_groove',
+  gameMode: 'solo',
+  weaponWrapId: WEAPON_WRAPS[0]?.id ?? 'factory_matte',
 };
 
 function getSafeStorage(): Storage | null {
@@ -88,9 +94,19 @@ export function loadStoredLobbyConfig(): LobbyConfig {
     const raw = storage.getItem(LOBBY_STORAGE_KEY);
     if (!raw) return { ...DEFAULT_LOBBY_CONFIG };
     const parsed = JSON.parse(raw) as Partial<LobbyConfig>;
+    const gameMode = GAME_MODES.some((m) => m.id === parsed.gameMode)
+      ? parsed.gameMode
+      : DEFAULT_LOBBY_CONFIG.gameMode;
+    const weaponWrapId =
+      typeof parsed.weaponWrapId === 'string' &&
+      WEAPON_WRAPS.some((w) => w.id === parsed.weaponWrapId)
+        ? parsed.weaponWrapId
+        : DEFAULT_LOBBY_CONFIG.weaponWrapId;
     return {
       ...DEFAULT_LOBBY_CONFIG,
       ...parsed,
+      gameMode,
+      weaponWrapId,
       botCount:
         typeof parsed.botCount === 'number' && Number.isFinite(parsed.botCount)
           ? Math.max(1, Math.min(99, Math.round(parsed.botCount)))
@@ -114,7 +130,10 @@ export function saveStoredLobbyConfig(config: LobbyConfig): void {
 export interface LobbyScreenCallbacks {
   onStartMatch: (config: LobbyConfig) => void;
   onCosmeticChange: (
-    cosmetics: Pick<LobbyConfig, 'skinId' | 'pickaxeId' | 'gliderId' | 'selectedEmote'>,
+    cosmetics: Pick<
+      LobbyConfig,
+      'skinId' | 'pickaxeId' | 'gliderId' | 'selectedEmote'
+    > & { weaponWrapId?: string },
   ) => void;
   onSettingsChange: (settings: GameSettings) => void;
   onPreviewEmote: (emoteId: EmoteId) => void;
@@ -421,7 +440,20 @@ export class LobbyScreen {
       pickaxeId: this.config.pickaxeId,
       gliderId: this.config.gliderId,
       selectedEmote: this.config.selectedEmote,
+      weaponWrapId: this.config.weaponWrapId,
     });
+  }
+
+  private formatModeSummarySub(modeId: GameModeId | undefined, botCount: number): string {
+    const mode = getGameModeMeta(modeId);
+    const players = `${botCount + 1} PLAYERS`;
+    if (mode.id === 'zero_build') {
+      return `${mode.name} • ${players} • +50 OVERSHIELD`;
+    }
+    if (mode.id === 'blitz') {
+      return `${mode.name} • ${players} • 2X STORM PACE`;
+    }
+    return `${mode.name} • ${players} • 6 STORM PHASES`;
   }
 
   private renderTab(): void {
@@ -446,13 +478,15 @@ export class LobbyScreen {
     const leftCol = document.createElement('div');
     leftCol.className = 'fdr-lobby-left';
 
+    const activeMode = getGameModeMeta(this.config.gameMode);
+
     // Match Setup Card
     const setupCard = document.createElement('div');
     setupCard.className = 'fdr-glass-card';
 
     const head = document.createElement('div');
     head.className = 'fdr-section-head';
-    head.innerHTML = `<span>SQUAD &amp; MATCH SETUP</span><span style="color:#ffd000">SOLO</span>`;
+    head.innerHTML = `<span>SQUAD &amp; MATCH SETUP</span><span style="color:#ffd000">${activeMode.name}</span>`;
 
     const nameLabel = document.createElement('label');
     nameLabel.className = 'fdr-field-label';
@@ -526,7 +560,7 @@ export class LobbyScreen {
     const syncBotUI = (val: number) => {
       this.config.botCount = val;
       botLabelCount.textContent = `${val} BOTS (${val + 1} TOTAL)`;
-      modeSub.textContent = `SOLO • ${val + 1} PLAYERS • 6 STORM PHASES`;
+      modeSub.textContent = this.formatModeSummarySub(this.config.gameMode, val);
       this.updateBadge();
       presetButtons.forEach((btn, i) => {
         btn.classList.toggle('active', presetCounts[i] === val);
@@ -578,6 +612,9 @@ export class LobbyScreen {
     const emoteName =
       EMOTES.find((e) => e.id === this.config.selectedEmote)?.name ??
       'Victory Groove';
+    const wrapName =
+      WEAPON_WRAPS.find((w) => w.id === this.config.weaponWrapId)?.name ??
+      'Tactical Matte';
 
     const loadoutHead = document.createElement('div');
     loadoutHead.className = 'fdr-section-head';
@@ -590,6 +627,7 @@ export class LobbyScreen {
       <div class="fdr-loadout-chip">PICKAXE<b>${pickaxeName}</b></div>
       <div class="fdr-loadout-chip">GLIDER<b>${gliderName}</b></div>
       <div class="fdr-loadout-chip">EMOTE<b>${emoteName}</b></div>
+      <div class="fdr-loadout-chip fdr-loadout-chip-wide">WEAPON WRAP<b>${wrapName}</b></div>
     `;
 
     const danceBtn = document.createElement('button');
@@ -606,18 +644,50 @@ export class LobbyScreen {
     loadoutCard.append(loadoutHead, loadoutMini, danceBtn);
     leftCol.append(setupCard, loadoutCard);
 
-    // Right-Bottom Giant PLAY Dock
+    // Right-Bottom Game Mode Selector + PLAY Dock
     const playDock = document.createElement('div');
     playDock.className = 'fdr-play-dock';
 
+    const modeSelectorWrap = document.createElement('div');
+    modeSelectorWrap.className = 'fdr-mode-selector';
+    const modeSelectorHead = document.createElement('div');
+    modeSelectorHead.className = 'fdr-mode-selector-head';
+    modeSelectorHead.textContent = 'SELECT GAME MODE';
+    modeSelectorWrap.appendChild(modeSelectorHead);
+
+    for (const mode of GAME_MODES) {
+      const selected = (this.config.gameMode ?? 'solo') === mode.id;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `fdr-mode-select-card mode-${mode.id}${selected ? ' active' : ''}`;
+      btn.dataset.gameMode = mode.id;
+      btn.innerHTML = `
+        <div class="fdr-mode-select-top">
+          <span class="fdr-mode-select-title">${mode.name}</span>
+          <span class="fdr-mode-select-badge">${mode.badge}</span>
+        </div>
+        <div class="fdr-mode-select-sub">${mode.subtitle}</div>
+      `;
+      btn.addEventListener('click', () => {
+        this.playClick();
+        this.config.gameMode = mode.id;
+        saveStoredLobbyConfig(this.config);
+        this.renderTab();
+      });
+      modeSelectorWrap.appendChild(btn);
+    }
+
     const modeCard = document.createElement('div');
-    modeCard.className = 'fdr-mode-card';
+    modeCard.className = `fdr-mode-card mode-${activeMode.id}`;
     const modeTitle = document.createElement('div');
     modeTitle.className = 'fdr-mode-title';
-    modeTitle.textContent = 'BATTLE ROYALE — ZERO TO HERO';
+    modeTitle.textContent = `${activeMode.name} — ${activeMode.badge}`;
     const modeSub = document.createElement('div');
     modeSub.className = 'fdr-mode-sub';
-    modeSub.textContent = `SOLO • ${this.config.botCount + 1} PLAYERS • 6 STORM PHASES`;
+    modeSub.textContent = this.formatModeSummarySub(
+      activeMode.id,
+      this.config.botCount,
+    );
     modeCard.append(modeTitle, modeSub);
 
     const playBtn = document.createElement('button');
@@ -629,7 +699,7 @@ export class LobbyScreen {
       this.callbacks.onStartMatch(this.getConfig());
     });
 
-    playDock.append(modeCard, playBtn);
+    playDock.append(modeSelectorWrap, modeCard, playBtn);
 
     this.contentEl.append(leftCol, playDock);
   }
@@ -780,6 +850,65 @@ export class LobbyScreen {
       emoteGrid.appendChild(card);
     }
     panel.appendChild(emoteGrid);
+
+    // Weapon Wraps
+    panel.appendChild(
+      this.makeSectionHeader(
+        `WEAPON WRAPS (${WEAPON_WRAPS.length})`,
+        'FINISHES & CAMO',
+      ),
+    );
+    const wrapGrid = document.createElement('div');
+    wrapGrid.className = 'fdr-locker-grid';
+    for (const wrap of WEAPON_WRAPS) {
+      const selected = this.config.weaponWrapId === wrap.id;
+      const meta = getRarityMeta(wrap.rarity);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `fdr-cosmetic-card fdr-wrap-card rarity-${wrap.rarity}${selected ? ' selected' : ''}`;
+      card.dataset.wrapId = wrap.id;
+      card.style.borderColor = meta.border;
+
+      if (selected) {
+        const eqTag = document.createElement('span');
+        eqTag.className = 'fdr-equipped-tag';
+        eqTag.textContent = 'EQUIPPED';
+        card.appendChild(eqTag);
+      } else if (wrap.rarity === 'mythic') {
+        const crown = document.createElement('span');
+        crown.className = 'fdr-card-crown';
+        crown.innerHTML = getCrownSvg();
+        card.appendChild(crown);
+      }
+
+      const swatch = document.createElement('div');
+      swatch.className = `fdr-wrap-swatch pattern-${wrap.pattern}`;
+      swatch.style.background = `linear-gradient(135deg, ${wrap.primaryColor} 0%, ${wrap.secondaryColor} 58%, ${wrap.accentColor} 100%)`;
+      swatch.style.borderColor = meta.border;
+      const accentBar = document.createElement('span');
+      accentBar.className = 'fdr-wrap-accent-bar';
+      accentBar.style.background = wrap.emissiveColor ?? wrap.accentColor;
+      swatch.appendChild(accentBar);
+
+      const metaWrap = document.createElement('div');
+      const rarityEl = document.createElement('div');
+      rarityEl.className = 'fdr-card-rarity';
+      rarityEl.textContent = `${meta.label} • ${wrap.pattern.replace('_', ' ')}`;
+      const nameEl = document.createElement('div');
+      nameEl.className = 'fdr-card-name';
+      nameEl.textContent = wrap.name;
+      metaWrap.append(rarityEl, nameEl);
+
+      card.append(swatch, metaWrap);
+      card.addEventListener('click', () => {
+        this.playClick();
+        this.config.weaponWrapId = wrap.id;
+        this.emitCosmetics();
+        this.renderTab();
+      });
+      wrapGrid.appendChild(card);
+    }
+    panel.appendChild(wrapGrid);
 
     this.contentEl.appendChild(panel);
   }
@@ -987,9 +1116,13 @@ export class LobbyScreen {
       label: string,
       current: boolean,
       onToggle: (next: boolean) => void,
+      settingKey?: string,
     ) => {
       const row = document.createElement('div');
       row.className = 'fdr-setting-row';
+      if (settingKey) {
+        row.dataset.settingKey = settingKey;
+      }
       const lbl = document.createElement('div');
       lbl.className = 'fdr-setting-label';
       lbl.textContent = label;
@@ -998,10 +1131,12 @@ export class LobbyScreen {
       const onBtn = document.createElement('button');
       onBtn.type = 'button';
       onBtn.className = `fdr-pill${current ? ' active' : ''}`;
+      onBtn.dataset.toggleValue = 'on';
       onBtn.innerHTML = '<span>ON</span>';
       const offBtn = document.createElement('button');
       offBtn.type = 'button';
       offBtn.className = `fdr-pill${!current ? ' active' : ''}`;
+      offBtn.dataset.toggleValue = 'off';
       offBtn.innerHTML = '<span>OFF</span>';
 
       onBtn.addEventListener('click', () => {
@@ -1027,12 +1162,30 @@ export class LobbyScreen {
       list.appendChild(row);
     };
 
-    addToggle('SHOW FPS COUNTER', this.settings.showFps, (next) => {
-      this.settings.showFps = next;
-    });
-    addToggle('INVERT Y-AXIS', this.settings.invertY, (next) => {
-      this.settings.invertY = next;
-    });
+    addToggle(
+      'SHOW FPS COUNTER',
+      this.settings.showFps,
+      (next) => {
+        this.settings.showFps = next;
+      },
+      'showFps',
+    );
+    addToggle(
+      'INVERT Y-AXIS',
+      this.settings.invertY,
+      (next) => {
+        this.settings.invertY = next;
+      },
+      'invertY',
+    );
+    addToggle(
+      'VISUAL SOUND EFFECTS (360° RADAR)',
+      this.settings.visualAudio !== false,
+      (next) => {
+        this.settings.visualAudio = next;
+      },
+      'visualAudio',
+    );
 
     // Keybind Controls Section
     const keybindsSection = document.createElement('div');

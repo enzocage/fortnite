@@ -7,10 +7,13 @@ import type {
   CharacterRenderState,
   DamageEvent,
   EmoteId,
+  GameModeId,
   GamePhase,
   GameSettings,
+  ItemInstance,
   KeybindMap,
   MaterialType,
+  Rarity,
   SoundEventId,
   TerrainQuery,
   Vec3Like,
@@ -27,6 +30,8 @@ import {
   PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
+  RARITY_ORDER,
+  UPGRADE_COSTS,
   WATER_LEVEL,
   WEAPONS,
   clamp,
@@ -49,6 +54,7 @@ import type {
   PropsInteractionBridge,
   VaultBridge,
   VehicleBridge,
+  WorldStationBridge,
   WorldTraversalBridge,
 } from './GameplayTypes';
 import { InventorySystem } from './InventorySystem';
@@ -67,9 +73,20 @@ export class PlayerController {
   private traversalBridge: WorldTraversalBridge | null = null;
   private vehicleBridge: VehicleBridge | null = null;
   private vaultBridge: VaultBridge | null = null;
+  private stationBridge: WorldStationBridge | null = null;
   private onVaultUnlocked: ((lootPos: Vec3Like, poiId: string) => void) | null = null;
+  private onWeaponUpgraded: ((item: ItemInstance, cost: number) => void) | null = null;
+  private onCampfireLit: ((campfireId: string) => void) | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
+
+  private gameMode: GameModeId = 'solo';
+  private overshield = 0;
+  private maxOvershield = 0;
+  private lastDamageTime = -Infinity;
+  private overshieldRecharging = false;
+  private nearCampfireHealing = false;
+  private campfireHealVfxTimer = 0;
 
   private activeZipline: { zip: ZiplineEntity; t: number; dir: 1 | -1 } | null = null;
   private ziplineCooldown = 0;
@@ -211,7 +228,11 @@ export class PlayerController {
     options?: {
       vehicleBridge?: VehicleBridge | null;
       vaultBridge?: VaultBridge | null;
+      stationBridge?: WorldStationBridge | null;
+      gameMode?: GameModeId;
       onVaultUnlocked?: ((lootPos: Vec3Like, poiId: string) => void) | null;
+      onWeaponUpgraded?: ((item: ItemInstance, cost: number) => void) | null;
+      onCampfireLit?: ((campfireId: string) => void) | null;
     },
   ) {
     this.camera = camera;
@@ -233,8 +254,20 @@ export class PlayerController {
     if (options?.vaultBridge !== undefined) {
       this.setVaultBridge(options.vaultBridge);
     }
+    if (options?.stationBridge !== undefined) {
+      this.setStationBridge(options.stationBridge);
+    }
+    if (options?.gameMode !== undefined) {
+      this.setGameMode(options.gameMode);
+    }
     if (options?.onVaultUnlocked !== undefined) {
       this.setVaultUnlockHandler(options.onVaultUnlocked);
+    }
+    if (options?.onWeaponUpgraded !== undefined) {
+      this.setOnWeaponUpgraded(options.onWeaponUpgraded);
+    }
+    if (options?.onCampfireLit !== undefined) {
+      this.setOnCampfireLit(options.onCampfireLit);
     }
 
     this.unsubHitmarker = this.eventBus.on('combat:hitmarker', (ev) => {
@@ -301,10 +334,81 @@ export class PlayerController {
     this.vaultBridge = bridge;
   }
 
+  setStationBridge(bridge: WorldStationBridge | null): void {
+    const prev = this.stationBridge;
+    this.stationBridge = bridge;
+    if (bridge !== null) {
+      this.weapons.setStationBridge(bridge);
+    } else if (this.weapons.getStationBridge() === prev) {
+      this.weapons.setStationBridge(null);
+    }
+  }
+
   setVaultUnlockHandler(
     handler: ((lootPos: Vec3Like, poiId: string) => void) | null,
   ): void {
     this.onVaultUnlocked = handler;
+  }
+
+  setOnWeaponUpgraded(
+    cb: ((item: ItemInstance, cost: number) => void) | null,
+  ): void {
+    this.onWeaponUpgraded = cb;
+  }
+
+  setOnCampfireLit(cb: ((campfireId: string) => void) | null): void {
+    this.onCampfireLit = cb;
+  }
+
+  setGameMode(mode: GameModeId): void {
+    const prevMode = this.gameMode;
+    this.gameMode = mode;
+    if (mode === 'zero_build') {
+      this.maxOvershield = 50;
+      this.overshield = 50;
+      this.lastDamageTime = -Infinity;
+      this.overshieldRecharging = false;
+      this.isBuildMode = false;
+      this.lastBuildPreview = null;
+      this.building.setPreviewVisible(false);
+      this.building.cancelEdit();
+    } else {
+      this.maxOvershield = 0;
+      this.overshield = 0;
+      this.overshieldRecharging = false;
+      if (mode === 'blitz' && this.inventory.getTotalMaterials() === 0) {
+        this.inventory.addMaterial('wood', 150);
+        this.inventory.addMaterial('brick', 100);
+        this.inventory.addMaterial('metal', 100);
+      } else if (prevMode === 'blitz' && mode === 'solo' && this.phase === 'bus') {
+        const mats = this.inventory.getMaterials();
+        if (mats.wood === 150 && mats.brick === 100 && mats.metal === 100) {
+          this.inventory.spendMaterial('wood', 150);
+          this.inventory.spendMaterial('brick', 100);
+          this.inventory.spendMaterial('metal', 100);
+        }
+      }
+    }
+  }
+
+  getGameMode(): GameModeId {
+    return this.gameMode;
+  }
+
+  getOvershield(): number {
+    return this.overshield;
+  }
+
+  getMaxOvershield(): number {
+    return this.maxOvershield;
+  }
+
+  isNearCampfireHealing(): boolean {
+    return this.nearCampfireHealing;
+  }
+
+  getInteractPrompt(): PlayerInteractPrompt | null {
+    return this.interactPrompt;
   }
 
   addVaultKey(count = 1): number {
@@ -351,6 +455,9 @@ export class PlayerController {
       this.isSliding = false;
       this.isMantling = false;
       this.isSwimming = false;
+      this.nearCampfireHealing = false;
+      this.campfireHealVfxTimer = 0;
+      this.overshieldRecharging = false;
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
       this.building.setPreviewVisible(false);
@@ -502,20 +609,35 @@ export class PlayerController {
       eyePos: this.getEyePosition(),
       hp: this.health,
       shield: this.shield,
+      overshield: this.overshield,
       maxHp: this.maxHealth,
       maxShield: this.maxShield,
+      maxOvershield: this.maxOvershield,
       radius: PLAYER_RADIUS,
       height: h,
       alive: this.isAlive(),
       onDamage: (ev) => this.applyDamage(ev),
-      onHeal: (hpAdded, shieldAdded) => this.applySplashHeal(hpAdded + shieldAdded),
+      onHeal: (hpAdded, shieldAdded) => {
+        if (!this.isAlive()) return;
+        if (hpAdded > 0) {
+          this.health = Math.min(this.maxHealth, this.health + hpAdded);
+        }
+        if (shieldAdded > 0) {
+          this.shield = Math.min(this.maxShield, this.shield + shieldAdded);
+        }
+      },
       onImpulse: (impulse, grantFallImmunity) =>
         this.applyExternalImpulse(impulse, grantFallImmunity),
     };
   }
 
-  resetForMatch(busStartPos: Vec3Like, playerName?: string): void {
+  resetForMatch(
+    busStartPos: Vec3Like,
+    playerName?: string,
+    gameMode?: GameModeId,
+  ): void {
     if (playerName) this.playerName = playerName;
+    if (gameMode !== undefined) this.gameMode = gameMode;
     this.inventory.reset();
     this.building.cancelEdit();
     this.building.setPreviewVisible(false);
@@ -535,6 +657,22 @@ export class PlayerController {
     this.maxHealth = 100;
     this.shield = 0;
     this.maxShield = 100;
+    if (this.gameMode === 'zero_build') {
+      this.maxOvershield = 50;
+      this.overshield = 50;
+    } else {
+      this.maxOvershield = 0;
+      this.overshield = 0;
+    }
+    this.lastDamageTime = -Infinity;
+    this.overshieldRecharging = false;
+    this.nearCampfireHealing = false;
+    this.campfireHealVfxTimer = 0;
+    if (this.gameMode === 'blitz') {
+      this.inventory.addMaterial('wood', 150);
+      this.inventory.addMaterial('brick', 100);
+      this.inventory.addMaterial('metal', 100);
+    }
     this.stamina = 100;
     this.staminaRegenDelay = 0;
 
@@ -653,6 +791,13 @@ export class PlayerController {
 
   toggleBuildMode(force?: boolean): void {
     if (this.phase !== 'playing') return;
+    if (this.gameMode === 'zero_build') {
+      this.isBuildMode = false;
+      this.building.setPreviewVisible(false);
+      this.building.cancelEdit();
+      this.lastBuildPreview = null;
+      return;
+    }
     if (this.building.getEditState().active) {
       this.building.cancelEdit();
     }
@@ -667,6 +812,13 @@ export class PlayerController {
 
   selectBuildPiece(type: BuildPieceType): void {
     if (this.phase !== 'playing') return;
+    if (this.gameMode === 'zero_build') {
+      this.isBuildMode = false;
+      this.building.setPreviewVisible(false);
+      this.building.cancelEdit();
+      this.lastBuildPreview = null;
+      return;
+    }
     if (this.building.getEditState().active) {
       this.building.cancelEdit();
     }
@@ -676,7 +828,7 @@ export class PlayerController {
   }
 
   enterEditMode(): boolean {
-    if (this.phase !== 'playing') return false;
+    if (this.phase !== 'playing' || this.gameMode === 'zero_build') return false;
     const editState = this.building.getEditState();
     if (editState.active) {
       this.building.confirmEdit();
@@ -718,18 +870,63 @@ export class PlayerController {
     this.activeEmote = target;
   }
 
-  applyDamage(ev: DamageEvent): void {
+  applyDamage(ev: DamageEvent & { isStorm?: boolean }): void {
     if (!this.isAlive()) return;
+    const isStorm = Boolean(ev.isStorm) || ev.attackerId === 'storm';
 
-    let sDmg = ev.shieldDamage;
-    let hDmg = ev.hpDamage;
-    if (sDmg === 0 && hDmg === 0 && ev.damage > 0) {
-      sDmg = Math.min(this.shield, ev.damage);
-      hDmg = Math.min(this.health, ev.damage - sDmg);
+    if (isStorm) {
+      const stormDmg =
+        ev.hpDamage > 0 ? ev.hpDamage : Math.max(0, ev.damage);
+      this.health = Math.max(0, this.health - stormDmg);
+      if (this.health <= 0) {
+        this.handleEliminated();
+      }
+      return;
     }
 
-    this.shield = Math.max(0, this.shield - sDmg);
-    this.health = Math.max(0, this.health - hDmg);
+    this.lastDamageTime = this.elapsedTime;
+    this.overshieldRecharging = false;
+
+    const totalDmg =
+      ev.damage > 0
+        ? ev.damage
+        : Math.max(0, ev.shieldDamage) + Math.max(0, ev.hpDamage);
+
+    if (this.overshield > 0) {
+      const osDmg = Math.min(this.overshield, totalDmg);
+      this.overshield = Math.max(0, this.overshield - osDmg);
+      const rem = totalDmg - osDmg;
+      if (rem > 0) {
+        if (ev.attackerId === 'environment' || ev.attackerId === 'lava') {
+          const sDmg = Math.min(this.shield, Math.max(0, ev.shieldDamage));
+          const hDmg = Math.min(this.health, Math.max(0, rem - sDmg));
+          this.shield = Math.max(0, this.shield - sDmg);
+          this.health = Math.max(0, this.health - hDmg);
+        } else {
+          const sDmg = Math.min(this.shield, rem);
+          const hDmg = Math.min(this.health, rem - sDmg);
+          this.shield = Math.max(0, this.shield - sDmg);
+          this.health = Math.max(0, this.health - hDmg);
+        }
+      }
+    } else {
+      let sDmg = ev.shieldDamage;
+      let hDmg = ev.hpDamage;
+      if (
+        (sDmg === 0 && hDmg === 0 && ev.damage > 0) ||
+        (ev.attackerId !== 'environment' &&
+          ev.attackerId !== 'lava' &&
+          this.shield > 0 &&
+          sDmg === 0 &&
+          ev.damage > 0)
+      ) {
+        sDmg = Math.min(this.shield, ev.damage);
+        hDmg = Math.min(this.health, ev.damage - sDmg);
+      }
+
+      this.shield = Math.max(0, this.shield - sDmg);
+      this.health = Math.max(0, this.health - hDmg);
+    }
 
     // Directional indicator angle relative to player camera yaw
     const dx = ev.hitPoint.x - this.position.x;
@@ -758,6 +955,10 @@ export class PlayerController {
       this.exitActiveVehicle(false);
     }
     this.health = 0;
+    this.overshield = 0;
+    this.overshieldRecharging = false;
+    this.nearCampfireHealing = false;
+    this.campfireHealVfxTimer = 0;
     this.phase = 'eliminated';
     this.isBuildMode = false;
     this.isSliding = false;
@@ -1307,7 +1508,7 @@ export class PlayerController {
   }
 
   private tryPlaceBuild(): void {
-    if (this.buildCooldown > 0) return;
+    if (this.gameMode === 'zero_build' || this.buildCooldown > 0) return;
     const mat = this.getBuildMaterialOrFallback();
     const hasMats = this.inventory.getMaterials()[mat] >= BUILD_COST;
     const preview = this.building.computePreview(
@@ -1408,6 +1609,7 @@ export class PlayerController {
       spreadRad,
       isPlayer: true,
       vehicleBridge: this.vehicleBridge,
+      stationBridge: this.stationBridge,
       onAmmoConsumed: () => {
         if (def.magSize > 0 && item.magAmmo > 0) {
           item.magAmmo -= 1;
@@ -1500,6 +1702,7 @@ export class PlayerController {
   }
 
   repairTargetedBuild(): boolean {
+    if (this.gameMode === 'zero_build') return false;
     const piece = this.findRepairableBuildPiece();
     if (!piece) return false;
     const avail = this.inventory.getMaterials()[piece.material] ?? 0;
@@ -1667,15 +1870,107 @@ export class PlayerController {
     return true;
   }
 
+  private getWeaponUpgradeSpec(
+    item: ItemInstance | null,
+    slotIndex: number,
+  ): {
+    item: ItemInstance;
+    cost: number;
+    nextRarity: Rarity;
+    shortName: string;
+    magSize: number;
+  } | null {
+    if (slotIndex < 1 || slotIndex > 5 || !item) return null;
+    if (item.weaponId === 'pickaxe') return null;
+    const def = WEAPONS[item.weaponId];
+    if (!def || def.isConsumable || def.isThrowable || def.isGrappler) {
+      return null;
+    }
+    if (
+      item.rarity !== 'common' &&
+      item.rarity !== 'uncommon' &&
+      item.rarity !== 'rare' &&
+      item.rarity !== 'epic'
+    ) {
+      return null;
+    }
+    const cost = UPGRADE_COSTS[item.rarity];
+    const nextRarity = RARITY_ORDER[RARITY_ORDER.indexOf(item.rarity) + 1];
+    return {
+      item,
+      cost,
+      nextRarity,
+      shortName: def.shortName,
+      magSize: def.magSize,
+    };
+  }
+
+  private deductMaterialsProportionally(cost: number): boolean {
+    const mats = this.inventory.getMaterials();
+    const total = mats.wood + mats.brick + mats.metal;
+    if (total < cost || cost <= 0) return total >= cost;
+
+    const types: MaterialType[] = ['wood', 'brick', 'metal'];
+    const shares: Record<MaterialType, number> = { wood: 0, brick: 0, metal: 0 };
+    for (const m of types) {
+      const avail = mats[m];
+      if (avail > 0) {
+        shares[m] = Math.min(avail, Math.floor((avail / total) * cost));
+      }
+    }
+
+    let deficit = cost - (shares.wood + shares.brick + shares.metal);
+    if (deficit > 0) {
+      const order = [...types].sort((a, b) => {
+        const fracA = (mats[a] / total) * cost - shares[a];
+        const fracB = (mats[b] / total) * cost - shares[b];
+        if (Math.abs(fracB - fracA) > 1e-9) return fracB - fracA;
+        return mats[b] - shares[b] - (mats[a] - shares[a]);
+      });
+      for (const m of order) {
+        if (deficit <= 0) break;
+        const canTake = mats[m] - shares[m];
+        if (canTake > 0) {
+          const take = Math.min(canTake, deficit);
+          shares[m] += take;
+          deficit -= take;
+        }
+      }
+    }
+
+    for (const m of types) {
+      if (shares[m] > 0) {
+        this.inventory.spendMaterial(m, shares[m]);
+      }
+    }
+    return true;
+  }
+
   private findNearestInteractable(): {
-    kind: 'chest' | 'llama' | 'supply_drop' | 'loot_drop' | 'vault' | 'vehicle';
+    kind:
+      | 'chest'
+      | 'llama'
+      | 'supply_drop'
+      | 'loot_drop'
+      | 'vault'
+      | 'vehicle'
+      | 'upgrade_bench'
+      | 'campfire';
     id: string;
     prompt: PlayerInteractPrompt;
   } | null {
     const interactKey = this.formatKeyLabel(this.getResolvedKeybinds().interact);
     let bestDist = Infinity;
     let best: {
-      kind: 'chest' | 'llama' | 'supply_drop' | 'loot_drop' | 'vault' | 'vehicle';
+      kind:
+        | 'chest'
+        | 'llama'
+        | 'supply_drop'
+        | 'loot_drop'
+        | 'vault'
+        | 'vehicle'
+        | 'upgrade_bench'
+        | 'campfire';
       id: string;
       prompt: PlayerInteractPrompt;
     } | null = null;
@@ -1791,6 +2086,50 @@ export class PlayerController {
               label: veh.kind === 'cyber_bike' ? 'Drive Cyber Bike' : 'Drive Hover ATV',
               key: interactKey,
               rarity: 'rare',
+            },
+          };
+        }
+      }
+    }
+
+    if (best === null && this.stationBridge) {
+      const upgradeSpec = this.getWeaponUpgradeSpec(
+        this.inventory.getActiveItem(),
+        this.inventory.getActiveSlotIndex(),
+      );
+      if (upgradeSpec) {
+        const benches = this.stationBridge.getUpgradeBenches();
+        for (let i = 0; i < benches.length; i++) {
+          const bench = benches[i];
+          const d = dist3D(this.position, { x: bench.x, y: bench.y, z: bench.z });
+          if (d <= 3.8 && d < bestDist) {
+            bestDist = d;
+            best = {
+              kind: 'upgrade_bench',
+              id: bench.id,
+              prompt: {
+                label: `UPGRADE ${upgradeSpec.shortName} (${upgradeSpec.cost} MATS)`,
+                key: interactKey,
+                rarity: upgradeSpec.nextRarity,
+              },
+            };
+          }
+        }
+      }
+
+      const campfires = this.stationBridge.getCampfires();
+      for (let i = 0; i < campfires.length; i++) {
+        const cf = campfires[i];
+        if (cf.lit || cf.remainingSec <= 0) continue;
+        const d = dist3D(this.position, { x: cf.x, y: cf.y, z: cf.z });
+        if (d <= 3.6 && d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'campfire',
+            id: cf.id,
+            prompt: {
+              label: 'STOKE CAMPFIRE',
+              key: interactKey,
             },
           };
         }
@@ -1914,6 +2253,75 @@ export class PlayerController {
           this.wasAirborne = false;
           this.fallPeakY = this.position.y;
           this.eventBus.emit('sound:play', { id: 'ui_click', volume: 0.5 });
+        }
+        return;
+      }
+
+      if (candidate.kind === 'upgrade_bench' && this.stationBridge) {
+        const activeSlot = this.inventory.getActiveSlotIndex();
+        const spec = this.getWeaponUpgradeSpec(
+          this.inventory.getActiveItem(),
+          activeSlot,
+        );
+        if (!spec) {
+          return;
+        }
+        if (!this.deductMaterialsProportionally(spec.cost)) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+
+        spec.item.rarity = spec.nextRarity;
+        if (spec.magSize > 0) {
+          spec.item.magAmmo = spec.magSize;
+        }
+        if (this.reloadTimer > 0 && this.reloadSlotIndex === activeSlot) {
+          this.reloadTimer = 0;
+          this.reloadDuration = 0;
+          this.reloadSlotIndex = -1;
+        }
+
+        const bench = this.stationBridge
+          .getUpgradeBenches()
+          .find((b) => b.id === candidate.id);
+        const benchPos = bench
+          ? { x: bench.x, y: bench.y + 1.0, z: bench.z }
+          : { ...this.position };
+
+        this.eventBus.emit('sound:play', {
+          id: 'upgrade_weapon',
+          position: benchPos,
+          spatial: true,
+        });
+        this.eventBus.emit('vfx:weapon_upgrade', {
+          position: benchPos,
+          rarity: spec.nextRarity,
+        });
+        this.onWeaponUpgraded?.(spec.item, spec.cost);
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        return;
+      }
+
+      if (candidate.kind === 'campfire' && this.stationBridge) {
+        if (this.stationBridge.igniteCampfire(candidate.id)) {
+          const cf = this.stationBridge
+            .getCampfires()
+            .find((c) => c.id === candidate.id);
+          const pos = cf
+            ? { x: cf.x, y: cf.y + 0.4, z: cf.z }
+            : { ...this.position };
+          this.eventBus.emit('sound:play', {
+            id: 'campfire_ignite',
+            position: pos,
+            spatial: true,
+          });
+          this.eventBus.emit('vfx:campfire_heal', { position: pos });
+          this.onCampfireLit?.(candidate.id);
+          this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
         }
         return;
       }
@@ -2814,6 +3222,68 @@ export class PlayerController {
       }
     }
 
+    // Zero Build Overshield recharge after 6.5s without taking damage
+    if (
+      this.gameMode === 'zero_build' &&
+      this.isAlive() &&
+      this.overshield < this.maxOvershield
+    ) {
+      const timeSinceDamage = this.elapsedTime - this.lastDamageTime;
+      if (timeSinceDamage >= 6.5) {
+        if (!this.overshieldRecharging) {
+          this.overshieldRecharging = true;
+          this.eventBus.emit('sound:play', {
+            id: 'overshield_recharge',
+            position: { ...this.position },
+            spatial: true,
+          });
+        }
+        this.overshield = Math.min(this.maxOvershield, this.overshield + 12 * dt);
+        if (this.overshield >= this.maxOvershield) {
+          this.overshieldRecharging = false;
+        }
+      }
+    } else {
+      this.overshieldRecharging = false;
+    }
+
+    // Passive Cozy Campfire healing
+    if (this.stationBridge && this.isAlive()) {
+      const healPerSec = this.stationBridge.getActiveCampfireHealAt(
+        this.position.x,
+        this.position.y,
+        this.position.z,
+      );
+      if (healPerSec > 0) {
+        this.nearCampfireHealing = true;
+        if (this.health < this.maxHealth) {
+          this.health = Math.min(this.maxHealth, this.health + healPerSec * dt);
+        }
+        this.campfireHealVfxTimer -= dt;
+        if (this.campfireHealVfxTimer <= 0) {
+          this.campfireHealVfxTimer = 1.2;
+          this.eventBus.emit('sound:play', {
+            id: 'campfire_heal',
+            position: { ...this.position },
+            spatial: true,
+          });
+          this.eventBus.emit('vfx:campfire_heal', {
+            position: {
+              x: this.position.x,
+              y: this.position.y + 0.35,
+              z: this.position.z,
+            },
+          });
+        }
+      } else {
+        this.nearCampfireHealing = false;
+        this.campfireHealVfxTimer = 0;
+      }
+    } else {
+      this.nearCampfireHealing = false;
+      this.campfireHealVfxTimer = 0;
+    }
+
     // Reload timer
     if (this.reloadTimer > 0) {
       this.reloadTimer -= dt;
@@ -3285,6 +3755,10 @@ export class PlayerController {
       vehicle: vehicleSnap,
       activeVaultKeys: this.vaultKeys,
       grapplerCharges: activeItem?.weaponId === 'grappler' ? activeItem.magAmmo : null,
+      gameMode: this.gameMode,
+      overshield: Math.ceil(this.overshield),
+      maxOvershield: this.maxOvershield,
+      nearCampfireHealing: this.nearCampfireHealing,
     };
   }
 }

@@ -4,7 +4,11 @@ import {
   computeCareerLevelProgress,
   recordMatchCareerStats,
 } from './CareerProfile';
-import { cloneSettings, formatSurvivalTime } from './UIHelpers';
+import {
+  cloneSettings,
+  formatSurvivalTime,
+  getGameModeMeta,
+} from './UIHelpers';
 import { getBountyTargetSvg, getCrownSvg, getSkullSvg } from './WeaponIcons';
 
 export interface MatchOverlayCallbacks {
@@ -415,6 +419,14 @@ export class MatchOverlay {
 
     header.append(iconWrap, title);
 
+    const modeMeta = getGameModeMeta(summary.gameMode);
+    const modeRow = document.createElement('div');
+    modeRow.className = 'fdr-summary-mode-row';
+    const modeBadge = document.createElement('span');
+    modeBadge.className = `fdr-summary-mode-badge mode-${modeMeta.id}`;
+    modeBadge.textContent = `${modeMeta.name} • ${modeMeta.badge}`;
+    modeRow.appendChild(modeBadge);
+
     const sub = document.createElement('div');
     sub.className = 'fdr-summary-sub';
     if (summary.victory) {
@@ -507,6 +519,18 @@ export class MatchOverlay {
       xpRows.appendChild(el);
     }
 
+    const questsCompleted = Math.max(
+      0,
+      Math.floor(summary.questsCompleted ?? 0),
+    );
+    const questBonusXp = xpInfo?.bonusXp ?? Math.max(0, Math.round(summary.bonusXp ?? 0));
+    const questRow = document.createElement('div');
+    questRow.className = 'fdr-summary-quest-row';
+    questRow.innerHTML = `
+      <span class="fdr-summary-quest-done">QUESTS COMPLETED: <b>${questsCompleted} / ${Math.max(3, questsCompleted)}</b></span>
+      <span class="fdr-summary-quest-bonus">BONUS XP: <b>+${questBonusXp} XP</b></span>
+    `;
+
     const barWrap = document.createElement('div');
     barWrap.className = 'fdr-summary-xp-bar-wrap';
     const barMeta = document.createElement('div');
@@ -523,7 +547,7 @@ export class MatchOverlay {
     barTrack.appendChild(barFill);
     barWrap.append(barMeta, barTrack);
 
-    xpPanel.append(xpHead, xpRows, barWrap);
+    xpPanel.append(xpHead, xpRows, questRow, barWrap);
 
     const actions = document.createElement('div');
     actions.className = 'fdr-modal-actions';
@@ -549,7 +573,7 @@ export class MatchOverlay {
     });
 
     actions.append(playAgainBtn, lobbyBtn);
-    this.summaryCardEl.append(header, sub, statsGrid, xpPanel, actions);
+    this.summaryCardEl.append(header, modeRow, sub, statsGrid, xpPanel, actions);
   }
 
   dispose(): void {

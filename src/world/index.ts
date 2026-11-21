@@ -19,6 +19,10 @@ export {
 } from './PropsAndLoot';
 export { EnvironmentFX } from './EnvironmentFX';
 export { StormSystem, type StormUpdateResult } from './StormSystem';
-export { WorldInteractables, type UnlockVaultResult } from './WorldInteractables';
+export {
+  WorldInteractables,
+  type SlurpBarrelDamageResult,
+  type UnlockVaultResult,
+} from './WorldInteractables';
 export { EnvironmentDetail } from './EnvironmentDetail';
 export { VehicleSystem } from './VehicleSystem';

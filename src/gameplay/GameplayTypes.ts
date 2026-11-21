@@ -1,18 +1,22 @@
 import type {
   AmmoType,
   BuildPieceType,
+  CampfireEntity,
   DamageEvent,
   EditModeState,
+  GameModeId,
   GamePhase,
   HarvestableProp,
   ChestEntity,
   LaunchPadEntity,
   LootDrop,
   LootLlamaEntity,
+  SlurpBarrelEntity,
   SupplyDrop,
   ItemInstance,
   MaterialType,
   Rarity,
+  UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
   VehicleEntity,
@@ -38,6 +42,18 @@ export interface VehicleBridge {
 export interface VaultBridge {
   getVaults(): VaultEntity[];
   unlockVault(id: string): { unlocked: boolean; lootPos?: Vec3Like };
+}
+
+export interface WorldStationBridge {
+  getUpgradeBenches(): UpgradeBenchEntity[];
+  getCampfires(): CampfireEntity[];
+  igniteCampfire(id: string): boolean;
+  getActiveCampfireHealAt(x: number, y: number, z: number): number;
+  getSlurpBarrels(): SlurpBarrelEntity[];
+  damageSlurpBarrel(
+    id: string,
+    dmg: number,
+  ): { destroyed: boolean; shieldAmount: number; position: Vec3Like } | null;
 }
 
 export interface ShieldBubbleState {
@@ -103,8 +119,10 @@ export interface CombatActor {
   eyePos: Vec3Like;
   hp: number;
   shield: number;
+  overshield?: number;
   maxHp?: number;
   maxShield?: number;
+  maxOvershield?: number;
   velocity?: Vec3Like;
   fallImmune?: boolean;
   radius: number;
@@ -149,6 +167,7 @@ export interface FireWeaponParams {
   spreadRad: number;
   isPlayer: boolean;
   vehicleBridge?: VehicleBridge | null;
+  stationBridge?: WorldStationBridge | null;
   onAmmoConsumed?: () => void;
   onHarvest?: (matType: MaterialType, amount: number, isCrit: boolean) => void;
 }
@@ -173,6 +192,7 @@ export interface PlayerMatchStats {
   headshots: number;
   structuresBuilt: number;
   chestsOpened: number;
+  questsCompleted?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -232,4 +252,8 @@ export interface PlayerHudSnapshot {
   vehicle: PlayerVehicleSnapshot | null;
   activeVaultKeys: number;
   grapplerCharges: number | null;
+  gameMode: GameModeId;
+  overshield: number;
+  maxOvershield: number;
+  nearCampfireHealing: boolean;
 }

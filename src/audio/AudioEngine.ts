@@ -7,6 +7,7 @@ import type {
   SoundEventId,
   SoundEventPayload,
   Vec3Like,
+  VehicleKind,
   WeatherKind,
 } from '../types';
 import { MusicSequencer } from './MusicSequencer';
@@ -46,6 +47,13 @@ export interface BiomeAmbienceState {
   inStorm: boolean;
   weather: WeatherKind;
   active: boolean;
+}
+
+export interface VehicleEngineState {
+  active: boolean;
+  speedKmh: number;
+  isBoosting: boolean;
+  kind: VehicleKind;
 }
 
 export const BIOME_AMBIENCE_PROFILES: Record<
@@ -261,6 +269,17 @@ interface BiomeAmbienceRig {
   stormGain: GainNode;
 }
 
+interface VehicleEngineRig {
+  masterGain: GainNode;
+  humFilter: BiquadFilterNode | null;
+  humGain: GainNode;
+  whineGain: GainNode;
+  boostGain: GainNode;
+  oscA: OscillatorNode;
+  oscB: OscillatorNode;
+  boostOsc: OscillatorNode;
+}
+
 /**
  * Pure gain calculation for the Master, SFX, and Music buses.
  * Clamps all inputs safely to [0, 1] and treats non-finite values as 0.
@@ -299,6 +318,7 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'vault_unlock':
     case 'weather_thunder':
     case 'bounty_alert':
+    case 'quest_complete':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -322,6 +342,7 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'mantle_climb':
     case 'zipline_loop':
     case 'grappler_reel':
+    case 'campfire_heal':
       return 1;
     default:
       return 2;
@@ -330,6 +351,8 @@ export function getSoundPriority(id: SoundEventId): number {
 
 export function getMaxHearDistance(id: SoundEventId): number {
   switch (id) {
+    case 'campfire_heal':
+      return 35;
     case 'footstep':
     case 'footstep_wood':
     case 'footstep_stone':
@@ -342,6 +365,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'slide_loop':
     case 'mantle_climb':
       return 55;
+    case 'overshield_recharge':
+      return 65;
     case 'pickaxe_swing':
     case 'hit_wood':
     case 'hit_brick':
@@ -354,6 +379,11 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'zipline_attach':
     case 'zipline_loop':
       return 85;
+    case 'upgrade_weapon':
+    case 'campfire_ignite':
+      return 90;
+    case 'slurp_barrel_break':
+      return 100;
     case 'grappler_reel':
       return 110;
     case 'grappler_fire':
@@ -404,6 +434,7 @@ export class AudioEngine {
 
   private listenerPos: Vec3Like = { x: 0, y: 0, z: 0 };
   private unlocked = false;
+  private paused = false;
   private disposed = false;
   private gestureListenersBound = false;
   private gestureHandler: (() => void) | null = null;
@@ -416,6 +447,12 @@ export class AudioEngine {
   private desiredBiome: BiomeType | null = null;
   private desiredInStorm = false;
   private desiredWeather: WeatherKind = 'clear';
+
+  private vehicleEngineRig: VehicleEngineRig | null = null;
+  private vehicleEngineActive = false;
+  private vehicleEngineSpeedKmh = 0;
+  private vehicleEngineBoosting = false;
+  private vehicleEngineKind: VehicleKind = 'hover_atv';
 
   constructor(
     eventBus: EventBus,
@@ -479,6 +516,21 @@ export class AudioEngine {
       ...settings,
     };
     this.applyBusGains();
+    if (this.isSfxMuted()) {
+      this.teardownVehicleEngine();
+    }
+  }
+
+  setPaused(paused: boolean): void {
+    if (this.disposed) return;
+    this.paused = Boolean(paused);
+    if (this.paused) {
+      this.teardownVehicleEngine();
+    }
+  }
+
+  isPaused(): boolean {
+    return this.paused;
   }
 
   getSettings(): GameSettings {
@@ -756,6 +808,88 @@ export class AudioEngine {
     };
   }
 
+  /**
+   * Maintains a continuous pitch-mapped dual-oscillator + bandpass hover vehicle
+   * engine synthesizer loop with cyber_bike harmonic whine and boost sub-layer.
+   * Cleanly ramps down and releases nodes when inactive, paused, muted, or disposed.
+   */
+  updateVehicleEngine(
+    active: boolean,
+    speedKmh: number,
+    isBoosting: boolean,
+    kind: VehicleKind = 'hover_atv',
+  ): void {
+    if (this.disposed) return;
+
+    const cleanSpeed = Number.isFinite(speedKmh) ? clamp(speedKmh, 0, 220) : 0;
+    const cleanBoosting = Boolean(isBoosting);
+    const cleanKind: VehicleKind = kind === 'cyber_bike' ? 'cyber_bike' : 'hover_atv';
+
+    if (!active || this.paused || this.isSfxMuted()) {
+      this.teardownVehicleEngine();
+      return;
+    }
+
+    if (!this.ctx && (this.unlocked || typeof window === 'undefined')) {
+      this.ensureContext();
+    }
+
+    if (
+      !this.ctx ||
+      !this.sfxGain ||
+      this.ctx.state === 'closed' ||
+      (!this.unlocked && this.ctx.state === 'suspended')
+    ) {
+      this.teardownVehicleEngine();
+      return;
+    }
+
+    if (
+      this.vehicleEngineActive &&
+      this.vehicleEngineRig &&
+      Math.abs(this.vehicleEngineSpeedKmh - cleanSpeed) < 0.05 &&
+      this.vehicleEngineBoosting === cleanBoosting &&
+      this.vehicleEngineKind === cleanKind
+    ) {
+      return;
+    }
+
+    this.pruneVoices(this.ctx.currentTime);
+
+    if (!this.vehicleEngineActive && !this.ensurePolyphonyRoom(2)) {
+      return;
+    }
+
+    if (!this.vehicleEngineRig) {
+      this.vehicleEngineRig = this.createVehicleEngineRig(this.ctx, this.sfxGain);
+      if (!this.vehicleEngineRig) {
+        return;
+      }
+    }
+
+    this.vehicleEngineActive = true;
+    this.vehicleEngineSpeedKmh = cleanSpeed;
+    this.vehicleEngineBoosting = cleanBoosting;
+    this.vehicleEngineKind = cleanKind;
+
+    this.applyVehicleEngineParams(
+      this.ctx,
+      this.vehicleEngineRig,
+      cleanSpeed,
+      cleanBoosting,
+      cleanKind,
+    );
+  }
+
+  getVehicleEngineState(): VehicleEngineState {
+    return {
+      active: this.vehicleEngineActive,
+      speedKmh: this.vehicleEngineSpeedKmh,
+      isBoosting: this.vehicleEngineBoosting,
+      kind: this.vehicleEngineKind,
+    };
+  }
+
   getActiveVoiceCount(): number {
     if (this.ctx) {
       this.pruneVoices(this.ctx.currentTime);
@@ -782,6 +916,7 @@ export class AudioEngine {
     }
     this.unsubscribers.length = 0;
 
+    this.teardownVehicleEngine();
     this.teardownBiomeAmbience();
 
     for (const active of this.chestLoops.values()) {
@@ -925,8 +1060,40 @@ export class AudioEngine {
     }
   }
 
+  private isSfxMuted(): boolean {
+    const gains = computeBusGains(this.settings);
+    return gains.master <= 0.0001 || gains.sfx <= 0.0001;
+  }
+
+  private smoothParam(
+    param: AudioParam | undefined,
+    value: number,
+    time: number,
+    timeConstant = 0.055,
+    fallbackDuration = 0.08,
+  ): void {
+    if (!param) return;
+    const safeValue = Number.isFinite(value) ? Math.max(0.0001, value) : 0.0001;
+    if (typeof param.setTargetAtTime === 'function') {
+      try {
+        if (typeof param.cancelScheduledValues === 'function') {
+          param.cancelScheduledValues(time);
+        }
+        param.setTargetAtTime(safeValue, time, timeConstant);
+        return;
+      } catch {
+        // Fall back to linear ramp if mock rejects setTargetAtTime
+      }
+    }
+    this.rampParam(param, safeValue, time, fallbackDuration);
+  }
+
   private getReservedVoiceCount(): number {
-    return this.chestLoops.size + (this.ambienceActive ? 1 : 0);
+    return (
+      this.chestLoops.size +
+      (this.ambienceActive ? 1 : 0) +
+      (this.vehicleEngineActive ? 1 : 0)
+    );
   }
 
   private pruneVoices(now: number): void {
@@ -1152,6 +1319,175 @@ export class AudioEngine {
     this.safeDisconnect(rig.droneGain);
     this.safeDisconnect(rig.stormFilter);
     this.safeDisconnect(rig.stormGain);
+    this.safeDisconnect(rig.masterGain);
+  }
+
+  private createVehicleEngineRig(
+    ctx: AudioContext,
+    destination: AudioNode,
+  ): VehicleEngineRig | null {
+    if (typeof ctx.createGain !== 'function' || typeof ctx.createOscillator !== 'function') {
+      return null;
+    }
+
+    let masterGain: GainNode | null = null;
+    let humFilter: BiquadFilterNode | null = null;
+    let humGain: GainNode | null = null;
+    let whineGain: GainNode | null = null;
+    let boostGain: GainNode | null = null;
+    let oscA: OscillatorNode | null = null;
+    let oscB: OscillatorNode | null = null;
+    let boostOsc: OscillatorNode | null = null;
+
+    try {
+      const now = ctx.currentTime;
+      masterGain = ctx.createGain();
+      this.setParam(masterGain.gain, 0.0001, now);
+      masterGain.connect(destination);
+
+      humFilter = this.safeCreateFilter(ctx);
+      if (humFilter) {
+        humFilter.type = 'bandpass';
+        this.setParam(humFilter.frequency, 180, now);
+        this.setParam(humFilter.Q, 1.5, now);
+        humFilter.connect(masterGain);
+      }
+      const humTarget: AudioNode = humFilter ?? masterGain;
+
+      humGain = ctx.createGain();
+      this.setParam(humGain.gain, 0.0001, now);
+      humGain.connect(humTarget);
+
+      whineGain = ctx.createGain();
+      this.setParam(whineGain.gain, 0.0001, now);
+      whineGain.connect(humTarget);
+
+      boostGain = ctx.createGain();
+      this.setParam(boostGain.gain, 0.0001, now);
+      boostGain.connect(masterGain);
+
+      oscA = ctx.createOscillator();
+      oscA.type = 'sawtooth';
+      this.setParam(oscA.frequency, 78, now);
+      oscA.connect(humGain);
+      oscA.start(now);
+
+      oscB = ctx.createOscillator();
+      oscB.type = 'triangle';
+      this.setParam(oscB.frequency, 117, now);
+      oscB.detune?.setValueAtTime(5, now);
+      oscB.connect(whineGain);
+      oscB.start(now);
+
+      boostOsc = ctx.createOscillator();
+      boostOsc.type = 'sine';
+      this.setParam(boostOsc.frequency, 39, now);
+      boostOsc.connect(boostGain);
+      boostOsc.start(now);
+
+      return {
+        masterGain,
+        humFilter,
+        humGain,
+        whineGain,
+        boostGain,
+        oscA,
+        oscB,
+        boostOsc,
+      };
+    } catch {
+      this.safeDisconnect(oscA);
+      this.safeDisconnect(oscB);
+      this.safeDisconnect(boostOsc);
+      this.safeDisconnect(humGain);
+      this.safeDisconnect(whineGain);
+      this.safeDisconnect(boostGain);
+      this.safeDisconnect(humFilter);
+      this.safeDisconnect(masterGain);
+      return null;
+    }
+  }
+
+  private applyVehicleEngineParams(
+    ctx: AudioContext,
+    rig: VehicleEngineRig,
+    speedKmh: number,
+    isBoosting: boolean,
+    kind: VehicleKind,
+  ): void {
+    const now = ctx.currentTime;
+    const speedNorm = clamp(speedKmh / 145, 0, 1);
+    const boostLiftHz = isBoosting ? 16 : 0;
+    const kindLiftHz = kind === 'cyber_bike' ? 6 : 0;
+    const baseFreq = clamp(78 + speedNorm * 110 + boostLiftHz + kindLiftHz, 78, 210);
+    const harmonicFreq = Math.max(40, kind === 'cyber_bike' ? baseFreq * 3.1 : baseFreq * 1.5);
+    const boostFreq = Math.max(24, baseFreq * 0.5);
+    const filterFreq = Math.max(60, kind === 'cyber_bike' ? baseFreq * 2.8 : baseFreq * 1.95);
+    const filterQ = kind === 'cyber_bike' ? 2.1 : 1.4;
+
+    const humLevel = Math.max(0.0001, 0.045 + speedNorm * 0.032);
+    const whineLevel = Math.max(
+      0.0001,
+      kind === 'cyber_bike'
+        ? 0.052 + speedNorm * 0.038 + (isBoosting ? 0.015 : 0)
+        : 0.022 + speedNorm * 0.018,
+    );
+    const boostLevel = Math.max(0.0001, isBoosting ? 0.095 + speedNorm * 0.035 : 0.0001);
+    const masterLevel = Math.max(0.0001, 0.08 + speedNorm * 0.05 + (isBoosting ? 0.025 : 0));
+
+    try {
+      this.smoothParam(rig.oscA.frequency, baseFreq, now, 0.055, 0.08);
+      this.smoothParam(rig.oscB.frequency, harmonicFreq, now, 0.055, 0.08);
+      this.smoothParam(rig.boostOsc.frequency, boostFreq, now, 0.055, 0.08);
+
+      if (rig.humFilter) {
+        this.smoothParam(rig.humFilter.frequency, filterFreq, now, 0.06, 0.08);
+        this.smoothParam(rig.humFilter.Q, filterQ, now, 0.06, 0.08);
+      }
+
+      this.smoothParam(rig.humGain.gain, humLevel, now, 0.06, 0.08);
+      this.smoothParam(rig.whineGain.gain, whineLevel, now, 0.06, 0.08);
+      this.smoothParam(rig.boostGain.gain, boostLevel, now, 0.05, 0.07);
+      this.smoothParam(rig.masterGain.gain, masterLevel, now, 0.06, 0.08);
+    } catch {
+      // Gracefully tolerate incomplete AudioNode mocks
+    }
+  }
+
+  private teardownVehicleEngine(): void {
+    const rig = this.vehicleEngineRig;
+    this.vehicleEngineRig = null;
+    this.vehicleEngineActive = false;
+    this.vehicleEngineSpeedKmh = 0;
+    this.vehicleEngineBoosting = false;
+    this.vehicleEngineKind = 'hover_atv';
+
+    if (!rig) return;
+
+    const now = this.ctx ? this.ctx.currentTime : 0;
+    const stopAt = now + 0.05;
+    try {
+      this.rampParam(rig.masterGain.gain, 0.0001, now, 0.04);
+      this.rampParam(rig.humGain.gain, 0.0001, now, 0.04);
+      this.rampParam(rig.whineGain.gain, 0.0001, now, 0.04);
+      this.rampParam(rig.boostGain.gain, 0.0001, now, 0.04);
+    } catch {
+      // Ignore ramp errors during teardown
+    }
+
+    for (const osc of [rig.oscA, rig.oscB, rig.boostOsc]) {
+      try {
+        osc.stop(stopAt);
+      } catch {
+        // Ignore stop errors during teardown
+      }
+      this.safeDisconnect(osc);
+    }
+
+    this.safeDisconnect(rig.humFilter);
+    this.safeDisconnect(rig.humGain);
+    this.safeDisconnect(rig.whineGain);
+    this.safeDisconnect(rig.boostGain);
     this.safeDisconnect(rig.masterGain);
   }
 

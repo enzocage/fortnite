@@ -7,16 +7,37 @@ import {
   lerp,
   mulberry32,
 } from '../core';
-import type { StormState } from '../types';
+import type { GameModeId, StormState } from '../types';
+import type { StormPhaseConfig } from '../core';
 
 export interface StormUpdateResult {
   phaseChanged: boolean;
   shrinkStarted: boolean;
 }
 
+const BLITZ_DURATION_SCALE = 0.55;
+const BLITZ_INITIAL_RADIUS = 230;
+const BLITZ_TARGET_RADII = [165, 115, 70, 35, 14, 0] as const;
+const BLITZ_LATE_DPS_SCALE = 1.5;
+
+function buildStormPhasesForMode(mode: GameModeId): StormPhaseConfig[] {
+  if (mode !== 'blitz') {
+    return STORM_PHASES;
+  }
+  return STORM_PHASES.map((cfg, idx) => ({
+    phase: cfg.phase,
+    waitDuration: cfg.waitDuration * BLITZ_DURATION_SCALE,
+    shrinkDuration: cfg.shrinkDuration * BLITZ_DURATION_SCALE,
+    targetRadius: BLITZ_TARGET_RADII[idx] ?? cfg.targetRadius,
+    dps: cfg.phase >= 4 ? cfg.dps * BLITZ_LATE_DPS_SCALE : cfg.dps,
+  }));
+}
+
 export class StormSystem {
   private seed: number;
   private rand: () => number;
+  private mode: GameModeId = 'solo';
+  private activePhases: StormPhaseConfig[] = STORM_PHASES;
 
   private phase = 1;
   private currentCenterX = 0;
@@ -42,7 +63,7 @@ export class StormSystem {
   private material: THREE.ShaderMaterial;
   private geometry: THREE.CylinderGeometry;
 
-  constructor(seed = 4201) {
+  constructor(seed = 4201, mode: GameModeId = 'solo') {
     this.seed = seed;
     this.rand = mulberry32(seed + 909);
 
@@ -124,7 +145,7 @@ export class StormSystem {
     this.mesh.name = 'StormWall';
     this.mesh.frustumCulled = false;
 
-    this.reset(seed);
+    this.reset(seed, mode);
   }
 
   private pickNextCenter(
@@ -167,20 +188,23 @@ export class StormSystem {
     this.mesh.visible = !this.finished || this.currentRadius > 0.01;
   }
 
-  reset(seed = this.seed): void {
+  reset(seed = this.seed, mode: GameModeId = 'solo'): void {
     this.seed = seed;
+    this.mode = mode;
     this.rand = mulberry32(seed + 909);
+    this.activePhases = buildStormPhasesForMode(mode);
 
-    const first = STORM_PHASES[0];
+    const first = this.activePhases[0];
+    const initialRadius = mode === 'blitz' ? BLITZ_INITIAL_RADIUS : WORLD_HALF;
     this.phase = 1;
     this.currentCenterX = 0;
     this.currentCenterZ = 0;
-    this.currentRadius = WORLD_HALF;
+    this.currentRadius = initialRadius;
     this.startCenterX = 0;
     this.startCenterZ = 0;
-    this.startRadius = WORLD_HALF;
+    this.startRadius = initialRadius;
 
-    const nextC = this.pickNextCenter(0, 0, WORLD_HALF, first.targetRadius);
+    const nextC = this.pickNextCenter(0, 0, initialRadius, first.targetRadius);
     this.nextCenterX = nextC.x;
     this.nextCenterZ = nextC.z;
     this.nextRadius = first.targetRadius;
@@ -193,6 +217,14 @@ export class StormSystem {
     this.elapsed = 0;
 
     this.syncMeshTransform();
+  }
+
+  getMode(): GameModeId {
+    return this.mode;
+  }
+
+  getPhaseConfigs(): ReadonlyArray<StormPhaseConfig> {
+    return this.activePhases;
   }
 
   update(dt: number): StormUpdateResult {
@@ -212,7 +244,7 @@ export class StormSystem {
     let remaining = dt;
 
     while (remaining > 1e-7 && !this.finished) {
-      const cfg = STORM_PHASES[this.phase - 1];
+      const cfg = this.activePhases[this.phase - 1];
       const step = Math.min(remaining, Math.max(0, this.phaseTimeRemaining));
       this.phaseTimeRemaining -= step;
       remaining -= step;
@@ -241,10 +273,10 @@ export class StormSystem {
           this.currentCenterZ = this.nextCenterZ;
           this.currentRadius = this.nextRadius;
 
-          if (this.phase < STORM_PHASES.length) {
+          if (this.phase < this.activePhases.length) {
             this.phase += 1;
             phaseChanged = true;
-            const nextCfg = STORM_PHASES[this.phase - 1];
+            const nextCfg = this.activePhases[this.phase - 1];
             const nextC = this.pickNextCenter(
               this.currentCenterX,
               this.currentCenterZ,
@@ -274,7 +306,7 @@ export class StormSystem {
   getState(): StormState {
     return {
       phase: this.phase,
-      totalPhases: STORM_PHASES.length,
+      totalPhases: this.activePhases.length,
       currentCenterX: this.currentCenterX,
       currentCenterZ: this.currentCenterZ,
       currentRadius: this.currentRadius,

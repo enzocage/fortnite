@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { PickaxeDef, WeaponId } from '../types';
-import { PICKAXES } from '../core';
+import type { PickaxeDef, WeaponId, WeaponWrapDef } from '../types';
+import { PICKAXES, WEAPON_WRAPS, mulberry32 } from '../core';
 
 const RANGED_WEAPONS = new Set<WeaponId>([
   'ar',
@@ -37,19 +37,394 @@ export function hasMuzzleOffset(weaponId: WeaponId): boolean {
 
 /**
  * Disposes all BufferGeometries and Materials inside an Object3D subtree.
+ * Skips shared cached wrap materials while still disposing any replaced per-mesh baseMaterial.
  */
 export function disposeObject3D(root: THREE.Object3D): void {
+  const disposedMats = new Set<THREE.Material>();
+  const disposeMat = (m: THREE.Material | undefined): void => {
+    if (!m || disposedMats.has(m)) return;
+    if (m.userData?.sharedWrapMaterial) return;
+    disposedMats.add(m);
+    m.dispose();
+  };
+
   root.traverse((child) => {
     if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points) {
       child.geometry?.dispose();
       const mat = child.material;
       if (Array.isArray(mat)) {
-        for (const m of mat) m.dispose();
-      } else if (mat) {
-        mat.dispose();
+        for (const m of mat) disposeMat(m);
+      } else {
+        disposeMat(mat);
+      }
+      const baseMat = child.userData?.baseMaterial as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(baseMat)) {
+        for (const m of baseMat) disposeMat(m);
+      } else {
+        disposeMat(baseMat);
       }
     }
   });
+}
+
+function tagWrapTarget(mesh: THREE.Mesh): THREE.Mesh {
+  mesh.userData.wrapTarget = true;
+  return mesh;
+}
+
+const WRAP_TEXTURE_SIZE = 256;
+const wrapTextureCache = new Map<string, THREE.CanvasTexture>();
+const wrapMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
+const wrapTextureDrawn = new Map<string, boolean>();
+
+function hashWrapId(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+export function getWeaponWrapDef(wrapId?: string): WeaponWrapDef {
+  if (wrapId) {
+    const found = WEAPON_WRAPS.find((w) => w.id === wrapId);
+    if (found) return found;
+  }
+  return WEAPON_WRAPS.find((w) => w.id === 'factory_matte') ?? WEAPON_WRAPS[0];
+}
+
+function drawWrapPattern(ctx: CanvasRenderingContext2D, size: number, def: WeaponWrapDef): void {
+  const rand = mulberry32(hashWrapId(def.id));
+  const grad = ctx.createLinearGradient(0, 0, size, size);
+  grad.addColorStop(0, def.primaryColor);
+  grad.addColorStop(1, def.secondaryColor);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  switch (def.pattern) {
+    case 'solid': {
+      for (let i = 0; i < 160; i++) {
+        ctx.fillStyle = rand() > 0.5 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.06)';
+        ctx.fillRect(rand() * size, rand() * size, 6 + rand() * 24, 2);
+      }
+      ctx.strokeStyle = def.accentColor;
+      ctx.globalAlpha = 0.28;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, size * 0.35);
+      ctx.lineTo(size, size * 0.35);
+      ctx.moveTo(0, size * 0.72);
+      ctx.lineTo(size, size * 0.72);
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = def.accentColor;
+      for (const rx of [20, size - 20]) {
+        for (const ry of [20, size * 0.35 - 12, size - 20]) {
+          ctx.beginPath();
+          ctx.arc(rx, ry, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'camo': {
+      const colors = [def.secondaryColor, '#64748b', def.primaryColor, def.accentColor];
+      for (let i = 0; i < 28; i++) {
+        const cx = rand() * size;
+        const cy = rand() * size;
+        const r = 22 + rand() * 44;
+        const sides = 4 + Math.floor(rand() * 3);
+        ctx.fillStyle = colors[i % 3 === 0 ? 0 : i % 5 === 0 ? 3 : 1];
+        ctx.globalAlpha = i % 5 === 0 ? 0.65 : 0.85;
+        ctx.beginPath();
+        for (let s = 0; s < sides; s++) {
+          const ang = (s / sides) * Math.PI * 2 + rand() * 0.6;
+          const rad = r * (0.55 + rand() * 0.65);
+          const px = cx + Math.cos(ang) * rad;
+          const py = cy + Math.sin(ang) * rad;
+          if (s === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = def.accentColor;
+      for (let i = 0; i < 14; i++) {
+        ctx.beginPath();
+        ctx.arc(rand() * size, rand() * size, 3 + rand() * 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'neon_grid': {
+      const step = 32;
+      ctx.strokeStyle = def.accentColor;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.55;
+      for (let p = 0; p <= size; p += step) {
+        ctx.beginPath();
+        ctx.moveTo(p, 0);
+        ctx.lineTo(p, size);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, p);
+        ctx.lineTo(size, p);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 2.5;
+      ctx.globalAlpha = 0.9;
+      for (let i = 0; i < 8; i++) {
+        const sx = Math.floor(rand() * 7) * step;
+        const sy = Math.floor(rand() * 7) * step;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + step, sy + step);
+        ctx.lineTo(sx + step * 2, sy + step);
+        ctx.stroke();
+
+        ctx.fillStyle = def.accentColor;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'carbon': {
+      const cell = 16;
+      for (let y = 0; y < size; y += cell) {
+        for (let x = 0; x < size; x += cell) {
+          const odd = ((x / cell + y / cell) & 1) === 1;
+          ctx.fillStyle = odd ? def.secondaryColor : def.primaryColor;
+          ctx.fillRect(x, y, cell - 1, cell - 1);
+          ctx.fillStyle = odd ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.22)';
+          ctx.fillRect(x + 1, y + 1, cell - 4, 4);
+        }
+      }
+      ctx.strokeStyle = def.accentColor;
+      ctx.lineWidth = 3;
+      ctx.globalAlpha = 0.72;
+      ctx.beginPath();
+      ctx.moveTo(0, size * 0.78);
+      ctx.lineTo(size * 0.78, 0);
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, size * 0.88);
+      ctx.lineTo(size * 0.88, 0);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'magma': {
+      ctx.fillStyle = def.primaryColor;
+      ctx.fillRect(0, 0, size, size);
+      for (let i = 0; i < 45; i++) {
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.beginPath();
+        ctx.arc(rand() * size, rand() * size, 6 + rand() * 14, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (let v = 0; v < 12; v++) {
+        let px = rand() * size;
+        let py = rand() * size;
+        const pts: Array<[number, number]> = [[px, py]];
+        for (let s = 0; s < 6; s++) {
+          px += (rand() - 0.5) * 68;
+          py += (rand() - 0.5) * 68;
+          pts.push([px, py]);
+        }
+        ctx.strokeStyle = def.secondaryColor;
+        ctx.lineWidth = 7;
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        for (let idx = 0; idx < pts.length; idx++) {
+          const [x, y] = pts[idx];
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        ctx.strokeStyle = def.accentColor;
+        ctx.lineWidth = 2.4;
+        ctx.globalAlpha = 0.98;
+        ctx.beginPath();
+        for (let idx = 0; idx < pts.length; idx++) {
+          const [x, y] = pts[idx];
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#fef08a';
+      ctx.globalAlpha = 0.9;
+      for (let i = 0; i < 16; i++) {
+        ctx.beginPath();
+        ctx.arc(rand() * size, rand() * size, 1.5 + rand() * 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'gold_foil': {
+      const sheen = ctx.createLinearGradient(0, 0, size, 0);
+      sheen.addColorStop(0, def.secondaryColor);
+      sheen.addColorStop(0.35, def.primaryColor);
+      sheen.addColorStop(0.55, def.accentColor);
+      sheen.addColorStop(0.8, def.primaryColor);
+      sheen.addColorStop(1, def.secondaryColor);
+      ctx.fillStyle = sheen;
+      ctx.fillRect(0, 0, size, size);
+
+      for (let i = 0; i < 90; i++) {
+        ctx.fillStyle = rand() > 0.5 ? 'rgba(255,255,255,0.14)' : 'rgba(120,53,15,0.12)';
+        ctx.fillRect(0, rand() * size, size, 1 + rand() * 2);
+      }
+
+      ctx.strokeStyle = def.accentColor;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.72;
+      const step = 64;
+      for (let y = 0; y < size; y += step) {
+        for (let x = 0; x < size; x += step) {
+          ctx.beginPath();
+          ctx.moveTo(x + step * 0.5, y + 6);
+          ctx.lineTo(x + step - 6, y + step * 0.5);
+          ctx.lineTo(x + step * 0.5, y + step - 6);
+          ctx.lineTo(x + 6, y + step * 0.5);
+          ctx.lineTo(x + step * 0.5, y + 6);
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+  }
+}
+
+/**
+ * Node-safe procedural CanvasTexture generator for a WeaponWrapDef or wrapId (cached by wrap id).
+ */
+export function createWeaponWrapTexture(wrapOrId?: string | WeaponWrapDef): THREE.CanvasTexture {
+  const def = typeof wrapOrId === 'string' || wrapOrId === undefined
+    ? getWeaponWrapDef(wrapOrId)
+    : wrapOrId;
+  const cached = wrapTextureCache.get(def.id);
+  if (cached) return cached;
+
+  let canvas: HTMLCanvasElement;
+  let drew = false;
+  if (typeof document !== 'undefined') {
+    canvas = document.createElement('canvas');
+    canvas.width = WRAP_TEXTURE_SIZE;
+    canvas.height = WRAP_TEXTURE_SIZE;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      drawWrapPattern(ctx, WRAP_TEXTURE_SIZE, def);
+      drew = true;
+    }
+  } else {
+    canvas = {
+      width: WRAP_TEXTURE_SIZE,
+      height: WRAP_TEXTURE_SIZE,
+      getContext: () => null,
+    } as unknown as HTMLCanvasElement;
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.name = `weapon_wrap_tex_${def.id}`;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.needsUpdate = true;
+
+  wrapTextureDrawn.set(def.id, drew);
+  wrapTextureCache.set(def.id, texture);
+  return texture;
+}
+
+export function getWeaponWrapTexture(wrapId?: string): THREE.CanvasTexture {
+  return createWeaponWrapTexture(wrapId);
+}
+
+export function getWeaponWrapMaterial(wrapId?: string): THREE.MeshStandardMaterial {
+  const def = getWeaponWrapDef(wrapId);
+  const cached = wrapMaterialCache.get(def.id);
+  if (cached) return cached;
+
+  const texture = createWeaponWrapTexture(def);
+  const drew = wrapTextureDrawn.get(def.id) ?? false;
+
+  const emissiveIntensity = def.emissiveColor
+    ? def.pattern === 'gold_foil'
+      ? 0.24
+      : def.pattern === 'magma'
+        ? 0.85
+        : 0.72
+    : 0;
+
+  const material = new THREE.MeshStandardMaterial({
+    color: drew ? '#ffffff' : def.primaryColor,
+    map: texture,
+    metalness: def.metalness,
+    roughness: def.roughness,
+    emissive: def.emissiveColor ?? '#000000',
+    emissiveIntensity,
+    emissiveMap: drew && def.emissiveColor ? texture : null,
+  });
+  material.name = `weapon_wrap_${def.id}`;
+  material.userData.sharedWrapMaterial = true;
+  material.userData.wrapId = def.id;
+
+  wrapMaterialCache.set(def.id, material);
+  return material;
+}
+
+/**
+ * Applies a cached weapon wrap material onto primary body/receiver meshes of a weapon group.
+ */
+export function applyWeaponWrap(weaponGroup: THREE.Group, wrapId?: string): void {
+  if (!weaponGroup || weaponGroup.userData.wrapDisabled) return;
+  const def = getWeaponWrapDef(wrapId);
+  const wrapMat = getWeaponWrapMaterial(def.id);
+
+  let hasExplicitTargets = false;
+  weaponGroup.traverse((child) => {
+    if (child instanceof THREE.Mesh && child.userData.wrapTarget === true) {
+      hasExplicitTargets = true;
+    }
+  });
+
+  weaponGroup.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    if (child.userData.wrapTarget === false) return;
+
+    if (hasExplicitTargets) {
+      if (child.userData.wrapTarget !== true) return;
+    } else {
+      const name = (child.name || '').toLowerCase();
+      if (/(grip|scope|lens|sight|muzzle|barrel|trigger|mag|glow|rail|pin)/.test(name)) {
+        return;
+      }
+      const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+      if (mat instanceof THREE.MeshStandardMaterial) {
+        if (mat.transparent || mat.emissiveIntensity > 0.35) return;
+      } else if (mat instanceof THREE.MeshBasicMaterial) {
+        return;
+      }
+    }
+
+    if (!child.userData.baseMaterial) {
+      child.userData.baseMaterial = child.material;
+    }
+    child.material = wrapMat;
+  });
+
+  weaponGroup.userData.appliedWrapId = def.id;
 }
 
 function makeStandardMat(
@@ -134,6 +509,7 @@ function addCylinder(
 function buildPlasmaKatana(def: PickaxeDef): THREE.Group {
   const group = new THREE.Group();
   group.name = `weapon_pickaxe_${def.style}`;
+  group.userData.wrapDisabled = true;
 
   const handleMat = makeStandardMat(def.handleColor, 0.55, 0.35);
   const plasmaMat = makeStandardMat(def.headColor, 0.16, 0.15, def.headColor, 0.85);
@@ -169,6 +545,7 @@ function buildPlasmaKatana(def: PickaxeDef): THREE.Group {
 function buildMagmaAxe(def: PickaxeDef): THREE.Group {
   const group = new THREE.Group();
   group.name = `weapon_pickaxe_${def.style}`;
+  group.userData.wrapDisabled = true;
 
   const obsidianMat = makeStandardMat(def.handleColor, 0.52, 0.45);
   const magmaMat = makeStandardMat(def.headColor, 0.24, 0.2, def.headColor, 0.65);
@@ -209,6 +586,7 @@ function buildPickaxe(def: PickaxeDef): THREE.Group {
 
   const group = new THREE.Group();
   group.name = `weapon_pickaxe_${def.style}`;
+  group.userData.wrapDisabled = true;
 
   const handleMat = makeStandardMat(def.handleColor, 0.65, 0.2);
   const headMat = makeStandardMat(def.headColor, 0.32, 0.55);
@@ -279,8 +657,8 @@ function buildAssaultRifle(): THREE.Group {
   // Pistol grip centered around origin (0, 0, 0)
   addBox(group, 0.042, 0.12, 0.05, darkMetal, 0, -0.02, -0.02, 0.22, 0, 0);
   // Lower & upper SCAR-style receiver
-  addBox(group, 0.064, 0.085, 0.36, bodyGold, 0, 0.065, 0.09);
-  addBox(group, 0.058, 0.045, 0.38, bodyTan, 0, 0.115, 0.10);
+  tagWrapTarget(addBox(group, 0.064, 0.085, 0.36, bodyGold, 0, 0.065, 0.09));
+  tagWrapTarget(addBox(group, 0.058, 0.045, 0.38, bodyTan, 0, 0.115, 0.10));
   // Side handguard vents & charging handle
   addBox(group, 0.070, 0.022, 0.14, darkMetal, 0, 0.075, 0.21);
   addCylinder(group, 0.008, 0.008, 0.04, gunmetal, -0.042, 0.105, 0.08, 0, 0, Math.PI / 2, 6);
@@ -292,7 +670,7 @@ function buildAssaultRifle(): THREE.Group {
   // Curved magazine
   addBox(group, 0.036, 0.14, 0.06, darkMetal, 0, -0.03, 0.12, -0.18, 0, 0);
   // Angled boot stock
-  addBox(group, 0.05, 0.09, 0.20, bodyTan, 0, 0.06, -0.17, 0.08, 0, 0);
+  tagWrapTarget(addBox(group, 0.05, 0.09, 0.20, bodyTan, 0, 0.06, -0.17, 0.08, 0, 0));
   addBox(group, 0.052, 0.115, 0.04, darkMetal, 0, 0.045, -0.27);
   // Barrel + muzzle brake
   addCylinder(group, 0.015, 0.017, 0.26, gunmetal, 0, 0.085, 0.40, Math.PI / 2, 0, 0, 10);
@@ -314,7 +692,7 @@ function buildBurstAR(): THREE.Group {
   // Grip
   addBox(group, 0.04, 0.115, 0.05, dark, 0, -0.02, 0.0, 0.2, 0, 0);
   // Bullpup/tactical body
-  addBox(group, 0.062, 0.095, 0.42, slate, 0, 0.065, 0.04);
+  tagWrapTarget(addBox(group, 0.062, 0.095, 0.42, slate, 0, 0.065, 0.04));
   // Iconic elevated carry handle / rail
   addBox(group, 0.034, 0.05, 0.28, dark, 0, 0.135, 0.03);
   addBox(group, 0.038, 0.018, 0.30, steel, 0, 0.16, 0.03);
@@ -322,7 +700,7 @@ function buildBurstAR(): THREE.Group {
   // Rear bullpup mag
   addBox(group, 0.034, 0.125, 0.055, dark, 0, -0.015, -0.11, -0.12, 0, 0);
   // Forward handguard + tri-rail barrel
-  addBox(group, 0.05, 0.065, 0.14, accent, 0, 0.065, 0.27);
+  tagWrapTarget(addBox(group, 0.05, 0.065, 0.14, accent, 0, 0.065, 0.27));
   addCylinder(group, 0.015, 0.016, 0.22, steel, 0, 0.08, 0.41, Math.PI / 2, 0, 0, 10);
   addCylinder(group, 0.02, 0.02, 0.045, dark, 0, 0.08, 0.51, Math.PI / 2, 0, 0, 8);
 
@@ -341,15 +719,15 @@ function buildPumpShotgun(): THREE.Group {
 
   // Stock & angled grip
   addBox(group, 0.044, 0.10, 0.065, wood, 0, -0.01, -0.02, 0.38, 0, 0);
-  addBox(group, 0.046, 0.09, 0.22, wood, 0, 0.045, -0.15, 0.14, 0, 0);
+  tagWrapTarget(addBox(group, 0.046, 0.09, 0.22, wood, 0, 0.045, -0.15, 0.14, 0, 0));
   // Receiver + side shell carrier
-  addBox(group, 0.058, 0.08, 0.20, darkMetal, 0, 0.07, 0.08);
+  tagWrapTarget(addBox(group, 0.058, 0.08, 0.20, darkMetal, 0, 0.07, 0.08));
   addBox(group, 0.012, 0.045, 0.11, darkMetal, 0.032, 0.07, 0.08);
   // Long barrel & underbarrel shell tube
   addCylinder(group, 0.019, 0.02, 0.46, steel, 0, 0.095, 0.39, Math.PI / 2, 0, 0, 10);
   addCylinder(group, 0.016, 0.016, 0.38, darkMetal, 0, 0.055, 0.35, Math.PI / 2, 0, 0, 10);
   // Ribbed pump forend
-  addCylinder(group, 0.027, 0.027, 0.17, wood, 0, 0.055, 0.32, Math.PI / 2, 0, 0, 10);
+  tagWrapTarget(addCylinder(group, 0.027, 0.027, 0.17, wood, 0, 0.055, 0.32, Math.PI / 2, 0, 0, 10));
   // Front bead sight
   addCylinder(group, 0.007, 0.007, 0.016, brass, 0, 0.118, 0.59, 0, 0, 0, 6);
 
@@ -369,14 +747,14 @@ function buildTacShotgun(): THREE.Group {
   // Grip
   addBox(group, 0.042, 0.11, 0.05, dark, 0, -0.02, 0, 0.22, 0, 0);
   // Bulky red tactical receiver
-  addBox(group, 0.072, 0.105, 0.30, crimson, 0, 0.07, 0.08);
+  tagWrapTarget(addBox(group, 0.072, 0.105, 0.30, crimson, 0, 0.07, 0.08));
   addBox(group, 0.076, 0.03, 0.26, silver, 0, 0.115, 0.09);
   // Ammo counter indicator
   addBox(group, 0.078, 0.02, 0.06, glow, 0, 0.075, 0.05);
   // Short stubby stock
   addBox(group, 0.05, 0.085, 0.16, dark, 0, 0.055, -0.14, 0.08, 0, 0);
   // Thick ventilated barrel shroud + muzzle
-  addBox(group, 0.058, 0.082, 0.24, dark, 0, 0.075, 0.34);
+  tagWrapTarget(addBox(group, 0.058, 0.082, 0.24, dark, 0, 0.075, 0.34));
   addCylinder(group, 0.022, 0.022, 0.10, silver, 0, 0.088, 0.47, Math.PI / 2, 0, 0, 10);
   addCylinder(group, 0.017, 0.017, 0.08, dark, 0, 0.05, 0.45, Math.PI / 2, 0, 0, 10);
 
@@ -397,7 +775,7 @@ function buildHeavyShotgun(): THREE.Group {
   addBox(group, 0.044, 0.12, 0.052, matteDark, 0, -0.02, -0.01, 0.22, 0, 0);
 
   // Heavy reinforced receiver + top picatinny rail + crimson trim
-  addBox(group, 0.072, 0.098, 0.32, slateSteel, 0, 0.072, 0.09);
+  tagWrapTarget(addBox(group, 0.072, 0.098, 0.32, slateSteel, 0, 0.072, 0.09));
   addBox(group, 0.076, 0.022, 0.26, crimsonAccent, 0, 0.08, 0.08);
   addBox(group, 0.036, 0.018, 0.32, matteDark, 0, 0.132, 0.10);
 
@@ -419,7 +797,7 @@ function buildHeavyShotgun(): THREE.Group {
 
   // Heavy barrel + Ventilated Cooling Shroud with ribbed slots
   addCylinder(group, 0.022, 0.024, 0.34, silver, 0, 0.092, 0.42, Math.PI / 2, 0, 0, 12);
-  addBox(group, 0.060, 0.078, 0.23, matteDark, 0, 0.088, 0.36);
+  tagWrapTarget(addBox(group, 0.060, 0.078, 0.23, matteDark, 0, 0.088, 0.36));
   for (let v = 0; v < 4; v++) {
     addBox(group, 0.066, 0.084, 0.024, slateSteel, 0, 0.088, 0.28 + v * 0.054);
   }
@@ -441,7 +819,7 @@ function buildSMG(): THREE.Group {
   // Grip
   addBox(group, 0.038, 0.105, 0.045, dark, 0, -0.02, 0, 0.2, 0, 0);
   // Compact body
-  addBox(group, 0.054, 0.078, 0.26, dark, 0, 0.062, 0.06);
+  tagWrapTarget(addBox(group, 0.054, 0.078, 0.26, dark, 0, 0.062, 0.06));
   addBox(group, 0.058, 0.022, 0.22, cyan, 0, 0.092, 0.06);
   // Stick magazine
   addBox(group, 0.028, 0.14, 0.038, gunmetal, 0, -0.035, 0.11, -0.14, 0, 0);
@@ -468,9 +846,9 @@ function buildSniper(): THREE.Group {
 
   // Grip & skeleton precision stock
   addBox(group, 0.04, 0.11, 0.05, chassis, 0, -0.02, -0.01, 0.22, 0, 0);
-  addBox(group, 0.046, 0.085, 0.25, olive, 0, 0.05, -0.18, 0.05, 0, 0);
+  tagWrapTarget(addBox(group, 0.046, 0.085, 0.25, olive, 0, 0.05, -0.18, 0.05, 0, 0));
   // Long receiver + forend
-  addBox(group, 0.06, 0.08, 0.42, olive, 0, 0.065, 0.12);
+  tagWrapTarget(addBox(group, 0.06, 0.08, 0.42, olive, 0, 0.065, 0.12));
   // Bolt handle on right side (-X)
   addCylinder(group, 0.009, 0.009, 0.055, steel, -0.045, 0.08, 0.03, 0, 0, Math.PI / 2, 8);
   addMesh(group, new THREE.SphereGeometry(0.015, 8, 8), steel, -0.072, 0.072, 0.03);
@@ -507,7 +885,7 @@ function buildPistol(): THREE.Group {
   addBox(group, 0.038, 0.026, 0.19, frame, 0, 0.045, 0.065);
   addBox(group, 0.014, 0.032, 0.055, frame, 0, 0.022, 0.05);
   // Metallic slide + sights
-  addBox(group, 0.04, 0.042, 0.21, slide, 0, 0.075, 0.075);
+  tagWrapTarget(addBox(group, 0.04, 0.042, 0.21, slide, 0, 0.075, 0.075));
   addBox(group, 0.014, 0.012, 0.012, sight, 0, 0.10, 0.165);
   addBox(group, 0.02, 0.012, 0.012, sight, 0, 0.10, -0.015);
   // Barrel tip
@@ -531,7 +909,7 @@ function buildRocketLauncher(): THREE.Group {
   addBox(group, 0.042, 0.115, 0.052, darkMetal, 0, -0.025, 0.02, 0.18, 0, 0);
   addBox(group, 0.036, 0.095, 0.045, darkMetal, 0, -0.01, 0.22);
   // Main olive launcher tube
-  addCylinder(group, 0.068, 0.068, 0.78, olive, 0, 0.09, 0.08, Math.PI / 2, 0, 0, 14);
+  tagWrapTarget(addCylinder(group, 0.068, 0.068, 0.78, olive, 0, 0.09, 0.08, Math.PI / 2, 0, 0, 14));
   // Front & rear metal bands
   addCylinder(group, 0.074, 0.074, 0.06, darkMetal, 0, 0.09, 0.44, Math.PI / 2, 0, 0, 14);
   addCylinder(group, 0.078, 0.068, 0.12, darkMetal, 0, 0.09, -0.34, Math.PI / 2, 0, 0, 14);
@@ -560,10 +938,10 @@ function buildMythicBladeRifle(): THREE.Group {
   addBox(group, 0.046, 0.026, 0.052, goldTrim, 0, -0.075, -0.032, 0.24, 0, 0);
 
   // Sleek aerodynamic gold-white chassis
-  addBox(group, 0.066, 0.084, 0.40, pearlWhite, 0, 0.070, 0.11);
+  tagWrapTarget(addBox(group, 0.066, 0.084, 0.40, pearlWhite, 0, 0.070, 0.11));
   addBox(group, 0.054, 0.036, 0.44, goldTrim, 0, 0.118, 0.13);
   // Swept forward blade shroud
-  addBox(group, 0.058, 0.068, 0.22, pearlWhite, 0, 0.080, 0.39);
+  tagWrapTarget(addBox(group, 0.058, 0.068, 0.22, pearlWhite, 0, 0.080, 0.39));
   addBox(group, 0.044, 0.024, 0.24, goldTrim, 0, 0.118, 0.40);
 
   // Twin glowing cyan energy rails along sides + glowing top pulse core!
@@ -576,7 +954,7 @@ function buildMythicBladeRifle(): THREE.Group {
   addBox(group, 0.040, 0.08, 0.02, cyanEnergy, 0, -0.02, 0.135, -0.18, 0, 0);
 
   // Sleek sculpted mythic stock
-  addBox(group, 0.048, 0.082, 0.21, pearlWhite, 0, 0.064, -0.17, 0.06, 0, 0);
+  tagWrapTarget(addBox(group, 0.048, 0.082, 0.21, pearlWhite, 0, 0.064, -0.17, 0.06, 0, 0));
   addBox(group, 0.052, 0.11, 0.034, goldTrim, 0, 0.05, -0.27);
 
   // Holographic blade reflex optic
@@ -595,6 +973,7 @@ function buildMythicBladeRifle(): THREE.Group {
 function buildShockwaveGrenade(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_shockwave_grenade';
+  group.userData.wrapDisabled = true;
 
   const cyanCore = makeStandardMat('#22d3ee', 0.12, 0.2, '#22d3ee', 0.95);
   const violetGlow = makeStandardMat('#a855f7', 0.18, 0.25, '#a855f7', 0.85);
@@ -621,6 +1000,7 @@ function buildShockwaveGrenade(): THREE.Group {
 function buildFragGrenade(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_frag_grenade';
+  group.userData.wrapDisabled = true;
 
   const olive = makeStandardMat('#4d7c0f', 0.55, 0.22);
   const darkOlive = makeStandardMat('#365314', 0.62, 0.25);
@@ -651,6 +1031,7 @@ function buildFragGrenade(): THREE.Group {
 function buildChugSplash(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_chug_splash';
+  group.userData.wrapDisabled = true;
 
   const crateMat = makeStandardMat('#1e3a8a', 0.45, 0.25);
   const rimMat = makeStandardMat('#38bdf8', 0.3, 0.35, '#0ea5e9', 0.25);
@@ -681,6 +1062,7 @@ function buildChugSplash(): THREE.Group {
 function buildMiniShield(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_mini_shield';
+  group.userData.wrapDisabled = true;
 
   const potion = makeStandardMat('#0ea5e9', 0.18, 0.15, '#38bdf8', 0.55);
   const rim = makeStandardMat('#cbd5e1', 0.3, 0.65);
@@ -697,6 +1079,7 @@ function buildMiniShield(): THREE.Group {
 function buildShieldPotion(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_shield_potion';
+  group.userData.wrapDisabled = true;
 
   const potion = makeStandardMat('#0284c7', 0.15, 0.2, '#22d3ee', 0.6);
   const strap = makeStandardMat('#78350f', 0.75, 0.1);
@@ -713,6 +1096,7 @@ function buildShieldPotion(): THREE.Group {
 function buildBandages(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_bandages';
+  group.userData.wrapDisabled = true;
 
   const cloth = makeStandardMat('#f8fafc', 0.85, 0.02);
   const stripe = makeStandardMat('#ef4444', 0.65, 0.05);
@@ -728,6 +1112,7 @@ function buildBandages(): THREE.Group {
 function buildMedkit(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_medkit';
+  group.userData.wrapDisabled = true;
 
   const white = makeStandardMat('#f8fafc', 0.45, 0.1);
   const red = makeStandardMat('#ef4444', 0.4, 0.1);
@@ -763,8 +1148,8 @@ function buildGrappler(): THREE.Group {
   addBox(group, 0.016, 0.034, 0.056, darkGrip, 0, 0.024, 0.052);
 
   // Heavy pneumatic launcher receiver & upper shroud
-  addBox(group, 0.056, 0.068, 0.25, gunmetal, 0, 0.072, 0.07);
-  addBox(group, 0.048, 0.034, 0.24, darkGrip, 0, 0.112, 0.075);
+  tagWrapTarget(addBox(group, 0.056, 0.068, 0.25, gunmetal, 0, 0.072, 0.07));
+  tagWrapTarget(addBox(group, 0.048, 0.034, 0.24, darkGrip, 0, 0.112, 0.075));
 
   // Rear compressed-air booster canister + brass pressure cap
   addCylinder(group, 0.028, 0.028, 0.13, gunmetal, 0, 0.078, -0.085, Math.PI / 2, 0, 0, 12);
@@ -824,6 +1209,7 @@ function buildGrappler(): THREE.Group {
 function buildShieldBubble(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_shield_bubble';
+  group.userData.wrapDisabled = true;
 
   const coreBlue = makeStandardMat('#38bdf8', 0.12, 0.15, '#0ea5e9', 0.95);
   const hexShell = new THREE.MeshStandardMaterial({
@@ -892,6 +1278,7 @@ function buildShieldBubble(): THREE.Group {
 function buildSlurpJuice(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_slurp_juice';
+  group.userData.wrapDisabled = true;
 
   const cyanGlow = makeStandardMat('#06b6d4', 0.15, 0.15, '#22d3ee', 0.65);
   const limeGlow = makeStandardMat('#84cc16', 0.15, 0.15, '#a3e635', 0.55);
@@ -962,6 +1349,7 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
 export function createBlueprintModel(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_blueprint';
+  group.userData.wrapDisabled = true;
 
   const paperMat = new THREE.MeshStandardMaterial({
     color: '#38bdf8',

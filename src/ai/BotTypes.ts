@@ -5,6 +5,7 @@ import type {
   BotPersonality,
   BuildPiece,
   BuildPieceType,
+  CampfireEntity,
   CharacterRenderState,
   ChestEntity,
   EmoteId,
@@ -14,6 +15,7 @@ import type {
   LootDrop,
   MaterialType,
   Rarity,
+  SlurpBarrelEntity,
   StormState,
   TerrainQuery,
   Vec3Like,
@@ -199,7 +201,7 @@ export interface BotEntity {
   /** Deterministic PRNG state for per-bot variation */
   rngState: number;
 
-  // Boss & Wave 1/2 tactical/traversal state
+  // Boss & Wave 1/2/3 tactical/traversal state
   isBoss?: boolean;
   bossPoiId?: string;
   bossHomePos?: Vec3Like;
@@ -212,6 +214,9 @@ export interface BotEntity {
   recentDamageTaken?: number;
   recentDamageWindowStart?: number;
   eliminatedByPlayer?: boolean;
+  overshield?: number;
+  maxOvershield?: number;
+  campfireTargetId?: string | null;
 }
 
 export interface BotWorldContext {
@@ -273,6 +278,13 @@ export interface BotWorldContext {
   getBuildPieces?: () => BuildPiece[];
   getActiveShieldBubbles?: () => Array<{ position: Vec3Like; radius: number }>;
   getVehicles?: () => VehicleEntity[];
+  getSlurpBarrels?: () => SlurpBarrelEntity[];
+  damageSlurpBarrel?: (
+    id: string,
+    dmg: number,
+  ) => { destroyed: boolean; shieldAmount: number; position: Vec3Like } | null;
+  getCampfires?: () => CampfireEntity[];
+  igniteCampfire?: (id: string) => boolean;
   dropBotLoot(bot: BotEntity): void;
   eventBus: EventBus;
 }

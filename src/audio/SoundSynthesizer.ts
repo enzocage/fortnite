@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 72 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 78 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -209,17 +209,17 @@ export class SoundSynthesizer {
       case 'bounty_alert':
         return this.playBountyAlert(t, targetNode, vol, pitch);
       case 'upgrade_weapon':
-        return this.playVaultUnlock(t, targetNode, vol, pitch);
+        return this.playUpgradeWeapon(t, targetNode, vol, pitch);
       case 'campfire_ignite':
-        return this.playLavaBurn(t, targetNode, vol, pitch);
+        return this.playCampfireIgnite(t, targetNode, vol, pitch);
       case 'campfire_heal':
-        return this.playHealFinish(t, targetNode, vol, pitch);
+        return this.playCampfireHeal(t, targetNode, vol, pitch);
       case 'slurp_barrel_break':
-        return this.playSplashHeal(t, targetNode, vol, pitch);
+        return this.playSlurpBarrelBreak(t, targetNode, vol, pitch);
       case 'quest_complete':
-        return this.playPoiDiscover(t, targetNode, vol, pitch);
+        return this.playQuestComplete(t, targetNode, vol, pitch);
       case 'overshield_recharge':
-        return this.playShieldHit(t, targetNode, vol, pitch);
+        return this.playOvershieldRecharge(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
         return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':
@@ -2716,6 +2716,501 @@ export class SoundSynthesizer {
       wet: 0.22,
     });
     return 0.52;
+  }
+
+  // --- Wave 3 Bespoke SFX ---
+
+  private playUpgradeWeapon(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Hydraulic clamp snap: pneumatic hiss + mechanical lock thud + latch click
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.085,
+      gain: 0.28 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3200 * pitch,
+      filterFreqEnd: 1100 * pitch,
+      filterQ: 2.0,
+      wet: 0.14,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 210 * pitch,
+      freqEnd: 68 * pitch,
+      duration: 0.075,
+      gain: 0.36 * vol,
+      wet: 0.12,
+    });
+    this.tone(target, t + 0.012, {
+      type: 'square',
+      freqStart: 1120 * pitch,
+      freqEnd: 720 * pitch,
+      duration: 0.028,
+      gain: 0.13 * vol,
+    });
+
+    // Metallic wrench clank double-strike
+    this.tone(target, t + 0.1, {
+      type: 'triangle',
+      freqStart: 540 * pitch,
+      freqEnd: 465 * pitch,
+      duration: 0.09,
+      gain: 0.22 * vol,
+      wet: 0.18,
+    });
+    this.tone(target, t + 0.1, {
+      type: 'sine',
+      freqStart: 1340 * pitch,
+      freqEnd: 1180 * pitch,
+      duration: 0.07,
+      gain: 0.14 * vol,
+      wet: 0.18,
+    });
+    this.noise(target, t + 0.1, {
+      buffer: 'white',
+      duration: 0.025,
+      gain: 0.2 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2800 * pitch,
+      filterQ: 3.5,
+    });
+
+    this.tone(target, t + 0.18, {
+      type: 'triangle',
+      freqStart: 680 * pitch,
+      freqEnd: 510 * pitch,
+      duration: 0.11,
+      gain: 0.26 * vol,
+      wet: 0.22,
+    });
+    this.tone(target, t + 0.18, {
+      type: 'sine',
+      freqStart: 1620 * pitch,
+      freqEnd: 1390 * pitch,
+      duration: 0.095,
+      gain: 0.14 * vol,
+      wet: 0.2,
+    });
+
+    // Rising epic fifth-chord shimmer
+    this.tone(target, t + 0.24, {
+      type: 'sawtooth',
+      freqStart: 220 * pitch,
+      freqEnd: 440 * pitch,
+      duration: 0.32,
+      attack: 0.03,
+      gain: 0.14 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 900,
+      filterFreqEnd: 2800,
+      wet: 0.3,
+    });
+    const fifthChord = [523.25, 783.99, 1046.5, 1567.98];
+    for (let i = 0; i < fifthChord.length; i++) {
+      this.tone(target, t + 0.25 + i * 0.032, {
+        type: 'sine',
+        freqStart: fifthChord[i] * pitch,
+        duration: 0.34,
+        attack: 0.02,
+        gain: 0.15 * vol,
+        wet: 0.36,
+      });
+      this.tone(target, t + 0.25 + i * 0.032, {
+        type: 'triangle',
+        freqStart: fifthChord[i] * 1.5 * pitch,
+        duration: 0.22,
+        attack: 0.02,
+        gain: 0.06 * vol,
+        wet: 0.32,
+      });
+    }
+    this.noise(target, t + 0.25, {
+      buffer: 'white',
+      duration: 0.24,
+      gain: 0.1 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 4400,
+      wet: 0.3,
+    });
+    return 0.66;
+  }
+
+  private playCampfireIgnite(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Double flint spark strike transient
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.03,
+      gain: 0.32 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 4200 * pitch,
+      filterFreqEnd: 2600 * pitch,
+      filterQ: 3.2,
+    });
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 2650 * pitch,
+      freqEnd: 1450 * pitch,
+      duration: 0.032,
+      gain: 0.18 * vol,
+    });
+    this.noise(target, t + 0.045, {
+      buffer: 'white',
+      duration: 0.028,
+      gain: 0.26 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3600,
+    });
+    this.tone(target, t + 0.045, {
+      type: 'sine',
+      freqStart: 3100 * pitch,
+      freqEnd: 1850 * pitch,
+      duration: 0.025,
+      gain: 0.14 * vol,
+    });
+
+    // Warm filtered whoosh ignite burst
+    this.tone(target, t + 0.07, {
+      type: 'sine',
+      freqStart: 135 * pitch,
+      freqEnd: 48 * pitch,
+      duration: 0.22,
+      attack: 0.012,
+      gain: 0.4 * vol,
+      wet: 0.18,
+    });
+    this.noise(target, t + 0.07, {
+      buffer: 'pink',
+      duration: 0.42,
+      attack: 0.025,
+      gain: 0.42 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 320 * pitch,
+      filterFreqEnd: 1250 * pitch,
+      wet: 0.24,
+    });
+    this.noise(target, t + 0.085, {
+      buffer: 'pink',
+      duration: 0.38,
+      attack: 0.03,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 950 * pitch,
+      filterFreqEnd: 480 * pitch,
+      filterQ: 1.2,
+      wet: 0.2,
+    });
+
+    // Kindling crackle snaps
+    const crackles = [0.14, 0.23, 0.32];
+    for (let i = 0; i < crackles.length; i++) {
+      this.noise(target, t + crackles[i], {
+        buffer: 'white',
+        duration: 0.032,
+        gain: 0.16 * vol,
+        filterType: 'bandpass',
+        filterFreqStart: (2400 + i * 320) * pitch,
+        filterQ: 3.0,
+      });
+    }
+    return 0.54;
+  }
+
+  private playCampfireHeal(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Soft crackling ember pops
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 210 * pitch,
+      freqEnd: 115 * pitch,
+      duration: 0.045,
+      gain: 0.15 * vol,
+      wet: 0.14,
+    });
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.028,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * pitch,
+      filterQ: 3.4,
+      wet: 0.15,
+    });
+    this.noise(target, t + 0.08, {
+      buffer: 'pink',
+      duration: 0.06,
+      gain: 0.1 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1400 * pitch,
+      filterFreqEnd: 860 * pitch,
+      filterQ: 1.8,
+    });
+
+    // Warm major-third chime (F4 -> A4 + soft octave F5 glow)
+    this.tone(target, t + 0.025, {
+      type: 'sine',
+      freqStart: 349.23 * pitch,
+      duration: 0.28,
+      attack: 0.015,
+      gain: 0.18 * vol,
+      wet: 0.28,
+    });
+    this.tone(target, t + 0.025, {
+      type: 'triangle',
+      freqStart: 349.23 * pitch,
+      duration: 0.22,
+      attack: 0.018,
+      gain: 0.08 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1100,
+    });
+    this.tone(target, t + 0.085, {
+      type: 'sine',
+      freqStart: 440.0 * pitch,
+      duration: 0.3,
+      attack: 0.015,
+      gain: 0.18 * vol,
+      wet: 0.3,
+    });
+    this.tone(target, t + 0.13, {
+      type: 'sine',
+      freqStart: 698.46 * pitch,
+      duration: 0.24,
+      attack: 0.025,
+      gain: 0.085 * vol,
+      wet: 0.32,
+    });
+    return 0.42;
+  }
+
+  private playSlurpBarrelBreak(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Pressurized tank crack
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 175 * pitch,
+      freqEnd: 52 * pitch,
+      duration: 0.12,
+      gain: 0.44 * vol,
+      wet: 0.16,
+    });
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.065,
+      gain: 0.4 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1900 * pitch,
+      filterFreqEnd: 750 * pitch,
+      filterQ: 2.0,
+      distort: true,
+    });
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 780 * pitch,
+      freqEnd: 420 * pitch,
+      duration: 0.045,
+      gain: 0.12 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1600,
+    });
+
+    // Bubbly low-pass liquid splash
+    this.noise(target, t + 0.02, {
+      buffer: 'pink',
+      duration: 0.32,
+      attack: 0.01,
+      gain: 0.36 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1850 * pitch,
+      filterFreqEnd: 380 * pitch,
+      filterQ: 1.8,
+      wet: 0.24,
+    });
+    const bubbles = [
+      { offset: 0.04, start: 480, end: 980, dur: 0.075 },
+      { offset: 0.085, start: 620, end: 1280, dur: 0.085 },
+      { offset: 0.135, start: 790, end: 1580, dur: 0.09 },
+      { offset: 0.19, start: 920, end: 1820, dur: 0.095 },
+    ];
+    for (const b of bubbles) {
+      this.tone(target, t + b.offset, {
+        type: 'sine',
+        freqStart: b.start * pitch,
+        freqEnd: b.end * pitch,
+        duration: b.dur,
+        gain: 0.18 * vol,
+        wet: 0.24,
+      });
+    }
+
+    // Bright effervescent slurp fizz + chime accent
+    this.noise(target, t + 0.04, {
+      buffer: 'white',
+      duration: 0.38,
+      attack: 0.02,
+      gain: 0.2 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3900,
+      wet: 0.25,
+    });
+    this.tone(target, t + 0.11, {
+      type: 'sine',
+      freqStart: 1174.66 * pitch,
+      duration: 0.24,
+      gain: 0.13 * vol,
+      wet: 0.3,
+    });
+    return 0.48;
+  }
+
+  private playQuestComplete(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Crisp tactile sub accent
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 164.81 * pitch,
+      freqEnd: 82.41 * pitch,
+      duration: 0.14,
+      gain: 0.28 * vol,
+      wet: 0.18,
+    });
+
+    // Triumphant 3-note heroic arpeggio chime (D5 -> F#5 -> D6) with clean sustain tail
+    const arpeggio: Array<{ offset: number; freq: number; dur: number; gain: number }> = [
+      { offset: 0.0, freq: 587.33, dur: 0.22, gain: 0.2 },
+      { offset: 0.11, freq: 739.99, dur: 0.24, gain: 0.22 },
+      { offset: 0.22, freq: 1174.66, dur: 0.58, gain: 0.24 },
+    ];
+    for (const note of arpeggio) {
+      this.tone(target, t + note.offset, {
+        type: 'sine',
+        freqStart: note.freq * pitch,
+        duration: note.dur,
+        attack: 0.01,
+        gain: note.gain * vol,
+        wet: 0.36,
+      });
+      this.tone(target, t + note.offset, {
+        type: 'triangle',
+        freqStart: note.freq * 0.5 * pitch,
+        duration: note.dur * 0.9,
+        attack: 0.012,
+        gain: note.gain * 0.55 * vol,
+        wet: 0.28,
+      });
+    }
+
+    // Sustained warm fifth bed & shimmer tail on final note
+    this.tone(target, t + 0.22, {
+      type: 'triangle',
+      freqStart: 880.0 * pitch,
+      duration: 0.54,
+      attack: 0.025,
+      gain: 0.12 * vol,
+      wet: 0.36,
+    });
+    this.noise(target, t + 0.22, {
+      buffer: 'white',
+      duration: 0.36,
+      gain: 0.09 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 4600,
+      wet: 0.35,
+    });
+    return 0.84;
+  }
+
+  private playOvershieldRecharge(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Futuristic rising FM electric sweep
+    const fmDur = 0.46;
+    const carrier = this.ctx.createOscillator();
+    carrier.type = 'sine';
+    const carrierStart = Math.max(20, 240 * pitch);
+    const carrierEnd = Math.max(20, 660 * pitch);
+    carrier.frequency.setValueAtTime(carrierStart, t);
+    carrier.frequency.exponentialRampToValueAtTime(carrierEnd, t + 0.44);
+
+    const mod = this.ctx.createOscillator();
+    mod.type = 'sine';
+    const modStart = Math.max(20, 120 * pitch);
+    const modEnd = Math.max(20, 330 * pitch);
+    mod.frequency.setValueAtTime(modStart, t);
+    mod.frequency.exponentialRampToValueAtTime(modEnd, t + 0.44);
+
+    const modGain = this.ctx.createGain();
+    modGain.gain.setValueAtTime(0.0001, t);
+    modGain.gain.linearRampToValueAtTime(Math.max(0.5, 95 * pitch), t + 0.16);
+    modGain.gain.exponentialRampToValueAtTime(Math.max(0.0001, 14 * pitch), t + 0.44);
+
+    const fmEnv = this.ctx.createGain();
+    const peakFmGain = Math.max(0.0002, 0.24 * vol);
+    fmEnv.gain.setValueAtTime(0.0001, t);
+    fmEnv.gain.linearRampToValueAtTime(peakFmGain, t + 0.14);
+    fmEnv.gain.exponentialRampToValueAtTime(0.0001, t + fmDur);
+
+    mod.connect(modGain);
+    try {
+      modGain.connect(carrier.frequency);
+    } catch {
+      // Ignore AudioParam connect errors on minimal mocks
+    }
+
+    const fmFilter = this.safeCreateFilter();
+    if (fmFilter) {
+      fmFilter.type = 'lowpass';
+      fmFilter.frequency?.setValueAtTime?.(820, t);
+      fmFilter.frequency?.exponentialRampToValueAtTime?.(3200, t + 0.44);
+      carrier.connect(fmFilter);
+      fmFilter.connect(fmEnv);
+    } else {
+      carrier.connect(fmEnv);
+    }
+
+    fmEnv.connect(target);
+    this.routeWet(fmEnv, t, fmDur, 0.28);
+    mod.start(t);
+    carrier.start(t);
+    mod.stop(t + fmDur + 0.015);
+    carrier.stop(t + fmDur + 0.015);
+
+    // Smooth triangle harmonic swell
+    this.tone(target, t + 0.04, {
+      type: 'triangle',
+      freqStart: 360 * pitch,
+      freqEnd: 990 * pitch,
+      duration: 0.42,
+      attack: 0.12,
+      gain: 0.18 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 900,
+      filterFreqEnd: 2800,
+      wet: 0.28,
+    });
+
+    // High electric shimmer + crystalline lock chimes
+    this.noise(target, t + 0.08, {
+      buffer: 'white',
+      duration: 0.38,
+      attack: 0.06,
+      gain: 0.13 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1600 * pitch,
+      filterFreqEnd: 4200 * pitch,
+      filterQ: 2.8,
+      wet: 0.32,
+    });
+    this.tone(target, t + 0.18, {
+      type: 'sine',
+      freqStart: 1318.51 * pitch,
+      duration: 0.26,
+      attack: 0.015,
+      gain: 0.12 * vol,
+      wet: 0.34,
+    });
+    this.tone(target, t + 0.26, {
+      type: 'sine',
+      freqStart: 1760.0 * pitch,
+      duration: 0.26,
+      attack: 0.015,
+      gain: 0.12 * vol,
+      wet: 0.34,
+    });
+    return 0.54;
   }
 
   private playSurfaceFootstep(

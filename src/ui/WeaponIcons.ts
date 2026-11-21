@@ -3,6 +3,7 @@ import type {
   BuildPieceType,
   MaterialType,
   VehicleKind,
+  VisualSoundCue,
   WeaponId,
   WeatherKind,
 } from '../types';
@@ -377,4 +378,69 @@ export function getWeatherIconSvg(weather: WeatherKind): string {
         <path d="M16 4V7M16 25V28M4 16H7M25 16H28M7.5 7.5L9.7 9.7M22.3 22.3L24.5 24.5M24.5 7.5L22.3 9.7M9.7 22.3L7.5 24.5" stroke="#ffd000" stroke-width="2" stroke-linecap="round"/>
       </svg>`;
   }
+}
+
+export function getVisualAudioIconSvg(kind: VisualSoundCue['kind']): string {
+  switch (kind) {
+    case 'footstep':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <ellipse cx="11" cy="12" rx="3.4" ry="5.5" transform="rotate(-12 11 12)" fill="#f8fafc" stroke="#0f172a" stroke-width="1.4"/>
+        <circle cx="12" cy="20" r="2.3" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.3"/>
+        <ellipse cx="21" cy="15" rx="3.4" ry="5.5" transform="rotate(12 21 15)" fill="#f8fafc" stroke="#0f172a" stroke-width="1.4"/>
+        <circle cx="20" cy="23" r="2.3" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.3"/>
+      </svg>`;
+    case 'gunfire':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4L19 12L27 9L21 16L28 21L19 20L18 28L14 21L6 24L11 16L4 11L13 12L16 4Z" fill="#ef4444" stroke="#fef08a" stroke-width="1.5" stroke-linejoin="round"/>
+        <circle cx="16" cy="16" r="3.4" fill="#ffd000"/>
+      </svg>`;
+    case 'chest':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M6 12C6 9.5 8 8 10.5 8H21.5C24 8 26 9.5 26 12V15H6V12Z" fill="#f59e0b" stroke="#0f172a" stroke-width="1.6"/>
+        <rect x="6" y="15" width="20" height="10" rx="2" fill="#d97706" stroke="#0f172a" stroke-width="1.6"/>
+        <path d="M6 15H26" stroke="#fef08a" stroke-width="2"/>
+        <rect x="13.5" y="13" width="5" height="5" rx="1" fill="#ffd000" stroke="#0f172a" stroke-width="1.2"/>
+      </svg>`;
+    case 'vehicle':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="10.5" stroke="#22d3ee" stroke-width="2.8" fill="rgba(15,23,42,0.8)"/>
+        <circle cx="16" cy="16" r="3" fill="#ffd000"/>
+        <path d="M6.5 14H25.5M16 19V26" stroke="#22d3ee" stroke-width="2.4" stroke-linecap="round"/>
+      </svg>`;
+    case 'glider':
+    default:
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <path d="M4 15L16 8L28 15L22 18L16 14L10 18L4 15Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M16 14V24M12 24H20" stroke="#e0f2fe" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>`;
+  }
+}
+
+export function getUpgradeBenchIconSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M5 13H22L27 10V16L21 18H9L5 13Z" fill="#22d3ee" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M11 18H19L21 25H9L11 18Z" fill="#0ea5e9" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M7 25H23" stroke="#bae6fd" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M13 8L17 4L20 7L16 11" stroke="#ffd000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+export function getCampfireIconSvg(lit = true): string {
+  if (!lit) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+      <circle cx="16" cy="17" r="9" stroke="#64748b" stroke-width="2.6" stroke-dasharray="3.2 2.4" fill="rgba(30,41,59,0.85)"/>
+      <path d="M11 20L21 14M11 14L21 20" stroke="#475569" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M16 4C16 4 23 10.5 23 16.5C23 20.6 19.9 23.5 16 23.5C12.1 23.5 9 20.6 9 16.5C9 12.2 12.2 9.4 13.5 7.5C13.5 10.2 15 11.2 15 11.2C14.8 8.3 16 4 16 4Z" fill="#fb923c" stroke="#7c2d12" stroke-width="1.4" stroke-linejoin="round"/>
+    <path d="M16 11.5C16 11.5 19.2 14.5 19.2 17.5C19.2 19.5 17.8 21 16 21C14.2 21 12.8 19.5 12.8 17.5C12.8 15 16 11.5 16 11.5Z" fill="#fde047"/>
+    <path d="M8 25.5L24 23M8 23L24 25.5" stroke="#b45309" stroke-width="2.6" stroke-linecap="round"/>
+  </svg>`;
+}
+
+export function getOvershieldBoltSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+    <path d="M13.5 2L5 13.5H11.5L10.5 22L19 10.5H12.5L13.5 2Z" fill="#e9d5ff" stroke="#22d3ee" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`;
 }

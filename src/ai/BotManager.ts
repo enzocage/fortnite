@@ -2,6 +2,7 @@ import type {
   BotSummary,
   DamageEvent,
   Difficulty,
+  GameModeId,
   KillFeedEntry,
   POIDef,
   Rarity,
@@ -107,6 +108,7 @@ interface ActiveBounty {
 export class BotManager {
   private ctx: BotWorldContext;
   private difficulty: Difficulty;
+  private gameMode: GameModeId;
   private baseSeed: number;
   private matchCounter = 0;
   private bots: BotEntity[] = [];
@@ -130,10 +132,12 @@ export class BotManager {
     ctx: BotWorldContext,
     difficulty: Difficulty = 'standard',
     seed = 9001,
+    gameMode: GameModeId = 'solo',
   ) {
     this.ctx = ctx;
     this.difficulty = difficulty;
     this.baseSeed = seed;
+    this.gameMode = gameMode;
     this.bindEvents();
   }
 
@@ -169,7 +173,14 @@ export class BotManager {
     this.pendingVaultKeyBosses = [];
   }
 
-  spawnBots(count: number, busTotalDuration: number): void {
+  spawnBots(
+    count = 20,
+    busTotalDuration = 20,
+    mode?: GameModeId,
+  ): void {
+    if (mode !== undefined) {
+      this.gameMode = mode;
+    }
     this.bots = [];
     this.botMap.clear();
     this.lastElapsed = 0;
@@ -187,8 +198,17 @@ export class BotManager {
     const terrainPois = this.ctx.terrain.getPOIs();
     const poiList: POIDef[] = terrainPois.length > 0 ? terrainPois : POIS;
 
-    const minJump = Math.min(1.2, Math.max(0.1, busTotalDuration * 0.1));
-    const maxJump = Math.max(minJump + 0.5, busTotalDuration - 2.0);
+    const isZeroBuild = this.gameMode === 'zero_build';
+    const isBlitz = this.gameMode === 'blitz';
+    const minJump = isBlitz
+      ? Math.min(0.35, Math.max(0.05, busTotalDuration * 0.025))
+      : Math.min(1.2, Math.max(0.1, busTotalDuration * 0.1));
+    const maxJump = isBlitz
+      ? Math.max(
+          minJump + 0.4,
+          Math.min(busTotalDuration * 0.45, Math.max(2.0, busTotalDuration - 2.0)),
+        )
+      : Math.max(minJump + 0.5, busTotalDuration - 2.0);
     const bossCount = total >= 12 ? BOSS_SPECS.length : 0;
     const regularCount = total - bossCount;
 
@@ -213,12 +233,27 @@ export class BotManager {
 
       // Spread jump times smoothly across bus flight
       const frac = regularCount > 1 ? i / (regularCount - 1) : 0.5;
-      const jitter = (rng() - 0.5) * 1.8;
+      const jitter = (rng() - 0.5) * (isBlitz ? 0.9 : 1.8);
       const dropJumpTime = clamp(
         minJump + frac * (maxJump - minJump) + jitter,
         minJump,
         maxJump,
       );
+
+      const blitzWeaponId: WeaponId | null = isBlitz
+        ? (i + (matchSeed & 1)) % 2 === 0
+          ? 'ar'
+          : 'smg'
+        : null;
+      const blitzStarterItem = blitzWeaponId
+        ? {
+            uid: `${id}_blitz_starter`,
+            weaponId: blitzWeaponId,
+            rarity: 'uncommon' as const,
+            magAmmo: WEAPONS[blitzWeaponId].magSize,
+            stackCount: 1,
+          }
+        : null;
 
       const bot: BotEntity = {
         id,
@@ -244,6 +279,8 @@ export class BotManager {
         maxHp: 100,
         shield: 0,
         maxShield: 100,
+        overshield: isZeroBuild ? 50 : 0,
+        maxOvershield: isZeroBuild ? 50 : 0,
         alive: true,
         kills: 0,
         damageDealt: 0,
@@ -267,22 +304,22 @@ export class BotManager {
               magAmmo: 0,
               stackCount: 1,
             },
-            null,
+            blitzStarterItem,
             null,
             null,
             null,
             null,
           ],
-          activeSlot: 0,
+          activeSlot: blitzStarterItem ? 1 : 0,
           ammo: {
-            light: 0,
-            medium: 0,
+            light: blitzWeaponId === 'smg' ? 60 : 0,
+            medium: blitzWeaponId === 'ar' ? 60 : 0,
             shells: 0,
             heavy: 0,
             rockets: 0,
           },
           materials: {
-            wood: 0,
+            wood: isBlitz ? 100 : 0,
             brick: 0,
             metal: 0,
           },
@@ -397,6 +434,8 @@ export class BotManager {
         maxHp: 150,
         shield: 150,
         maxShield: 150,
+        overshield: isZeroBuild ? 50 : 0,
+        maxOvershield: isZeroBuild ? 50 : 0,
         alive: true,
         kills: 0,
         damageDealt: 0,
@@ -531,6 +570,7 @@ export class BotManager {
     playerPos: Vec3Like,
   ): void {
     this.lastElapsed = elapsed;
+    const safeOvershieldDt = Math.max(0, dt);
     for (const bot of this.bots) {
       if (!bot.alive || bot.state === 'eliminated') continue;
       const distToPlayer = dist3D(bot.position, playerPos);
@@ -543,7 +583,23 @@ export class BotManager {
         elapsed,
         dt,
         isFarLOD,
+        this.gameMode,
       );
+      if (
+        this.gameMode === 'zero_build' &&
+        bot.alive &&
+        bot.hp > 0 &&
+        bot.state !== 'bus' &&
+        safeOvershieldDt > 0
+      ) {
+        const maxOs = bot.maxOvershield ?? 50;
+        const curOs = bot.overshield ?? 0;
+        const timeSinceDamage =
+          bot.lastDamageTime < 0 ? Infinity : elapsed - bot.lastDamageTime;
+        if (curOs < maxOs && timeSinceDamage >= 6.5) {
+          bot.overshield = Math.min(maxOs, curOs + 12 * safeOvershieldDt);
+        }
+      }
     }
     this.stepBountyLifecycle(playerPos, elapsed);
   }
@@ -760,20 +816,42 @@ export class BotManager {
 
     const prevHp = bot.hp;
     const prevShield = bot.shield;
+    const prevOvershield = bot.overshield ?? 0;
+    const isStorm = damageEvent.attackerId === 'storm';
 
-    if (damageEvent.shieldDamage > 0 || damageEvent.hpDamage > 0) {
-      const shieldDmg = Math.min(bot.shield, Math.max(0, damageEvent.shieldDamage));
-      const overflow = Math.max(0, damageEvent.shieldDamage - shieldDmg);
+    if (!isStorm && prevOvershield > 0) {
+      const totalIncoming = Math.max(
+        0,
+        damageEvent.damage > 0
+          ? damageEvent.damage
+          : damageEvent.shieldDamage + damageEvent.hpDamage,
+      );
+      const osAbsorbed = Math.min(prevOvershield, totalIncoming);
+      bot.overshield = Math.max(0, prevOvershield - osAbsorbed);
+      const afterOs = Math.max(0, totalIncoming - osAbsorbed);
+      const shieldAbsorbed = Math.min(bot.shield, afterOs);
+      bot.shield = Math.max(0, bot.shield - shieldAbsorbed);
+      const hpAbsorbed = Math.max(0, afterOs - shieldAbsorbed);
+      bot.hp = Math.max(0, bot.hp - hpAbsorbed);
+    } else if (damageEvent.shieldDamage > 0 || damageEvent.hpDamage > 0) {
+      const shieldDmg = isStorm
+        ? 0
+        : Math.min(bot.shield, Math.max(0, damageEvent.shieldDamage));
+      const overflow = isStorm
+        ? Math.max(0, damageEvent.shieldDamage)
+        : Math.max(0, damageEvent.shieldDamage - shieldDmg);
       bot.shield = Math.max(0, bot.shield - shieldDmg);
       bot.hp = Math.max(0, bot.hp - Math.max(0, damageEvent.hpDamage) - overflow);
     } else if (damageEvent.damage > 0) {
-      const absorbed = Math.min(bot.shield, damageEvent.damage);
+      const absorbed = isStorm ? 0 : Math.min(bot.shield, damageEvent.damage);
       bot.shield = Math.max(0, bot.shield - absorbed);
       bot.hp = Math.max(0, bot.hp - (damageEvent.damage - absorbed));
     }
 
     const totalAppliedDamage =
-      Math.max(0, prevShield - bot.shield) + Math.max(0, prevHp - bot.hp);
+      Math.max(0, prevOvershield - (bot.overshield ?? 0)) +
+      Math.max(0, prevShield - bot.shield) +
+      Math.max(0, prevHp - bot.hp);
     if (
       bot.recentDamageWindowStart === undefined ||
       nowSec - bot.recentDamageWindowStart > 3.0
@@ -1083,6 +1161,26 @@ export class BotManager {
 
   getDifficulty(): Difficulty {
     return this.difficulty;
+  }
+
+  setGameMode(mode: GameModeId): void {
+    const changed = this.gameMode !== mode;
+    this.gameMode = mode;
+    if (!changed) return;
+    for (const bot of this.bots) {
+      if (!bot.alive || bot.state === 'eliminated') continue;
+      if (mode === 'zero_build') {
+        bot.maxOvershield = 50;
+        bot.overshield = 50;
+      } else {
+        bot.maxOvershield = 0;
+        bot.overshield = 0;
+      }
+    }
+  }
+
+  getGameMode(): GameModeId {
+    return this.gameMode;
   }
 
   reset(): void {

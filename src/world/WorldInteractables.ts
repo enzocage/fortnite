@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { EventBus, POIS } from '../core';
 import type {
+  CampfireEntity,
   ColliderBox,
   LaunchPadEntity,
+  SlurpBarrelEntity,
   TerrainQuery,
+  UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
   ZiplineEntity,
@@ -40,6 +43,40 @@ export interface UnlockVaultResult {
   lootPos?: Vec3Like;
 }
 
+export interface SlurpBarrelDamageResult {
+  destroyed: boolean;
+  shieldAmount: number;
+  position: Vec3Like;
+}
+
+interface UpgradeBenchVisual {
+  data: UpgradeBenchEntity;
+  group: THREE.Group;
+  reticleGroup: THREE.Group;
+  holoRing: THREE.Mesh;
+  baseReticleY: number;
+  collider: ColliderBox;
+}
+
+interface CampfireVisual {
+  data: CampfireEntity;
+  group: THREE.Group;
+  emberMesh: THREE.Mesh;
+  emberUnlitMat: THREE.Material;
+  emberLitMat: THREE.Material;
+  flameGroup: THREE.Group;
+  flames: THREE.Mesh[];
+  sparks: THREE.Mesh[];
+}
+
+interface SlurpBarrelVisual {
+  data: SlurpBarrelEntity;
+  group: THREE.Group;
+  bodyGroup: THREE.Group;
+  collider: ColliderBox;
+  hitAnim: number;
+}
+
 export class WorldInteractables {
   private group = new THREE.Group();
   private eventBus?: EventBus;
@@ -47,6 +84,12 @@ export class WorldInteractables {
   private ziplines: ZiplineEntity[] = [];
   private vaults: VaultEntity[] = [];
   private vaultsMap = new Map<string, VaultVisual>();
+  private upgradeBenches: UpgradeBenchEntity[] = [];
+  private upgradeBenchVisuals: UpgradeBenchVisual[] = [];
+  private campfires: CampfireEntity[] = [];
+  private campfiresMap = new Map<string, CampfireVisual>();
+  private slurpBarrels: SlurpBarrelEntity[] = [];
+  private slurpBarrelsMap = new Map<string, SlurpBarrelVisual>();
   private padVisuals: PadVisual[] = [];
   private ziplineOrbs: ZiplineOrb[] = [];
   private geometries: THREE.BufferGeometry[] = [];
@@ -58,6 +101,9 @@ export class WorldInteractables {
     this.buildLaunchPads(terrain);
     this.buildZiplines(terrain);
     this.buildVaults(terrain);
+    this.buildUpgradeBenches(terrain);
+    this.buildCampfires(terrain);
+    this.buildSlurpBarrels(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -536,6 +582,514 @@ export class WorldInteractables {
     }
   }
 
+  private buildUpgradeBenches(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      dx: number;
+      dz: number;
+      rotationY: number;
+    }> = [
+      { id: 'bench_metro_towers', poiId: 'metro_towers', dx: -8, dz: 0, rotationY: Math.PI * 0.5 },
+      { id: 'bench_market_row', poiId: 'market_row', dx: -10, dz: 2, rotationY: Math.PI * 0.5 },
+      { id: 'bench_sunny_suburbs', poiId: 'sunny_suburbs', dx: -16, dz: 0, rotationY: Math.PI * 0.5 },
+      { id: 'bench_crater_depot', poiId: 'crater_depot', dx: 20, dz: -8, rotationY: 0 },
+      { id: 'bench_skyline_spire', poiId: 'skyline_spire', dx: -10, dz: 2, rotationY: Math.PI * 0.5 },
+      { id: 'bench_frostpeak_citadel', poiId: 'frostpeak_citadel', dx: -9, dz: 10, rotationY: Math.PI * 0.5 },
+    ];
+
+    const steelDarkMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.42, metalness: 0.78 }),
+    );
+    const clampMetalMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#64748b', roughness: 0.3, metalness: 0.88 }),
+    );
+    const goldAccentMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#b45309',
+        emissiveIntensity: 0.45,
+        roughness: 0.25,
+        metalness: 0.82,
+      }),
+    );
+    const holoCyanMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.5,
+        roughness: 0.18,
+        metalness: 0.3,
+      }),
+    );
+    const holoWireMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#67e8f9',
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const legGeo = this.addGeo(new THREE.BoxGeometry(0.18, 0.88, 0.18));
+    const lowerShelfGeo = this.addGeo(new THREE.BoxGeometry(1.9, 0.08, 0.84));
+    const tableTopGeo = this.addGeo(new THREE.BoxGeometry(2.2, 0.16, 1.1));
+    const clampBaseGeo = this.addGeo(new THREE.BoxGeometry(0.28, 0.24, 0.48));
+    const clampJawGeo = this.addGeo(new THREE.BoxGeometry(0.16, 0.28, 0.24));
+    const clampBoltGeo = this.addGeo(new THREE.CylinderGeometry(0.05, 0.05, 0.36, 8));
+    clampBoltGeo.rotateZ(Math.PI * 0.5);
+    const gantryPostGeo = this.addGeo(new THREE.BoxGeometry(0.1, 0.62, 0.1));
+    const gantryHeaderGeo = this.addGeo(new THREE.BoxGeometry(1.75, 0.18, 0.14));
+    const gantryStripGeo = this.addGeo(new THREE.BoxGeometry(1.45, 0.06, 0.04));
+    const padBaseGeo = this.addGeo(new THREE.CylinderGeometry(0.46, 0.52, 0.06, 16));
+    const padCoreGeo = this.addGeo(new THREE.CylinderGeometry(0.36, 0.36, 0.07, 16));
+    const holoBeamGeo = this.addGeo(new THREE.CylinderGeometry(0.48, 0.3, 0.52, 14, 1, true));
+    const reticleRingGeo = this.addGeo(new THREE.TorusGeometry(0.36, 0.032, 8, 24));
+    const reticleDiamondGeo = this.addGeo(new THREE.OctahedronGeometry(0.14, 0));
+    const reticleBarGeo = this.addGeo(new THREE.BoxGeometry(0.68, 0.025, 0.025));
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+
+      const x = poi.x + spec.dx;
+      const z = poi.z + spec.dz;
+      const y = terrain.getHeightAt(x, z);
+
+      const data: UpgradeBenchEntity = {
+        id: spec.id,
+        poiId: spec.poiId,
+        x,
+        y,
+        z,
+        rotationY: spec.rotationY,
+      };
+      this.upgradeBenches.push(data);
+
+      const benchGroup = new THREE.Group();
+      benchGroup.name = `UpgradeBench_${spec.id}`;
+      benchGroup.position.set(x, y, z);
+      benchGroup.rotation.y = spec.rotationY;
+
+      // 4 heavy corner legs + lower shelf + solid tabletop
+      for (const lx of [-0.94, 0.94]) {
+        for (const lz of [-0.4, 0.4]) {
+          const leg = new THREE.Mesh(legGeo, steelDarkMat);
+          leg.position.set(lx, 0.44, lz);
+          leg.castShadow = true;
+          leg.receiveShadow = true;
+          benchGroup.add(leg);
+        }
+      }
+
+      const lowerShelf = new THREE.Mesh(lowerShelfGeo, steelDarkMat);
+      lowerShelf.position.set(0, 0.24, 0);
+      lowerShelf.receiveShadow = true;
+      benchGroup.add(lowerShelf);
+
+      const tableTop = new THREE.Mesh(tableTopGeo, steelDarkMat);
+      tableTop.position.set(0, 0.92, 0);
+      tableTop.castShadow = true;
+      tableTop.receiveShadow = true;
+      benchGroup.add(tableTop);
+
+      // Metallic side clamps (left & right vice assemblies with gold bolts)
+      for (const side of [-1, 1]) {
+        const clampBase = new THREE.Mesh(clampBaseGeo, clampMetalMat);
+        clampBase.position.set(side * 0.86, 1.12, 0);
+        clampBase.castShadow = true;
+        benchGroup.add(clampBase);
+
+        const clampJaw = new THREE.Mesh(clampJawGeo, clampMetalMat);
+        clampJaw.position.set(side * 0.72, 1.16, 0);
+        benchGroup.add(clampJaw);
+
+        const clampBolt = new THREE.Mesh(clampBoltGeo, goldAccentMat);
+        clampBolt.position.set(side * 0.96, 1.12, 0);
+        benchGroup.add(clampBolt);
+      }
+
+      // Rear tool/holo header bar
+      for (const gx of [-0.82, 0.82]) {
+        const post = new THREE.Mesh(gantryPostGeo, clampMetalMat);
+        post.position.set(gx, 1.31, -0.46);
+        post.castShadow = true;
+        benchGroup.add(post);
+      }
+      const header = new THREE.Mesh(gantryHeaderGeo, steelDarkMat);
+      header.position.set(0, 1.66, -0.46);
+      header.castShadow = true;
+      benchGroup.add(header);
+
+      const statusStrip = new THREE.Mesh(gantryStripGeo, goldAccentMat);
+      statusStrip.position.set(0, 1.66, -0.38);
+      benchGroup.add(statusStrip);
+
+      // Holographic cyan/gold weapon projection pad
+      const padBase = new THREE.Mesh(padBaseGeo, clampMetalMat);
+      padBase.position.set(0, 1.01, 0.04);
+      benchGroup.add(padBase);
+
+      const padCore = new THREE.Mesh(padCoreGeo, holoCyanMat);
+      padCore.position.set(0, 1.02, 0.04);
+      benchGroup.add(padCore);
+
+      const holoBeam = new THREE.Mesh(holoBeamGeo, holoWireMat);
+      holoBeam.position.set(0, 1.31, 0.04);
+      benchGroup.add(holoBeam);
+
+      // Animated floating holographic reticle
+      const reticleGroup = new THREE.Group();
+      reticleGroup.position.set(0, 1.44, 0.04);
+
+      const holoRing = new THREE.Mesh(reticleRingGeo, goldAccentMat);
+      reticleGroup.add(holoRing);
+
+      const diamond = new THREE.Mesh(reticleDiamondGeo, holoCyanMat);
+      reticleGroup.add(diamond);
+
+      const barH = new THREE.Mesh(reticleBarGeo, holoWireMat);
+      const barV = new THREE.Mesh(reticleBarGeo, holoWireMat);
+      barV.rotation.z = Math.PI * 0.5;
+      reticleGroup.add(barH, barV);
+
+      benchGroup.add(reticleGroup);
+      this.group.add(benchGroup);
+
+      const cosR = Math.abs(Math.cos(spec.rotationY));
+      const sinR = Math.abs(Math.sin(spec.rotationY));
+      const halfX = 1.1 * cosR + 0.55 * sinR;
+      const halfZ = 1.1 * sinR + 0.55 * cosR;
+
+      const collider: ColliderBox = {
+        id: `${spec.id}_col`,
+        minX: x - halfX,
+        minY: y,
+        minZ: z - halfZ,
+        maxX: x + halfX,
+        maxY: y + 1.45,
+        maxZ: z + halfZ,
+        material: 'metal',
+        tag: `upgrade_bench:${spec.id}`,
+      };
+
+      this.upgradeBenchVisuals.push({
+        data,
+        group: benchGroup,
+        reticleGroup,
+        holoRing,
+        baseReticleY: 1.44,
+        collider,
+      });
+    }
+  }
+
+  private buildCampfires(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{ id: string; poiId: string; dx: number; dz: number }> = [
+      { id: 'campfire_whispering_pines', poiId: 'whispering_pines', dx: 2, dz: -2 },
+      { id: 'campfire_crystal_basin', poiId: 'crystal_basin', dx: 10, dz: -8 },
+      { id: 'campfire_sunken_oasis', poiId: 'sunken_oasis', dx: -16, dz: 10 },
+      { id: 'campfire_sunny_suburbs', poiId: 'sunny_suburbs', dx: 0, dz: -22 },
+      { id: 'campfire_frostpeak_citadel', poiId: 'frostpeak_citadel', dx: -9, dz: 24 },
+      { id: 'campfire_scorched_caldera', poiId: 'scorched_caldera', dx: 15, dz: 3 },
+    ];
+
+    const stoneMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#64748b', roughness: 0.9, metalness: 0.06 }),
+    );
+    const darkStoneMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.92, metalness: 0.05 }),
+    );
+    const ashBedMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#1e1b18', roughness: 0.95, metalness: 0.02 }),
+    );
+    const charredLogMat = this.addMat(
+      new THREE.MeshStandardMaterial({ color: '#3b2416', roughness: 0.88, metalness: 0.04 }),
+    );
+    const emberUnlitMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#292524',
+        emissive: '#7c2d12',
+        emissiveIntensity: 0.08,
+        roughness: 0.92,
+      }),
+    );
+    const emberLitMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#ea580c',
+        emissive: '#f97316',
+        emissiveIntensity: 1.75,
+        roughness: 0.45,
+      }),
+    );
+    const flameOuterMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#ea580c',
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const flameMidMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#f59e0b',
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const flameCoreMat = this.addMat(
+      new THREE.MeshBasicMaterial({
+        color: '#fef08a',
+        transparent: true,
+        opacity: 0.92,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const stoneGeo = this.addGeo(new THREE.DodecahedronGeometry(0.19, 0));
+    const ashGeo = this.addGeo(new THREE.CylinderGeometry(0.62, 0.66, 0.06, 12));
+    const emberGeo = this.addGeo(new THREE.CylinderGeometry(0.32, 0.42, 0.12, 10));
+    const logGeo = this.addGeo(new THREE.CylinderGeometry(0.08, 0.1, 1.05, 8));
+    const flameOuterGeo = this.addGeo(new THREE.ConeGeometry(0.36, 1.15, 7));
+    const flameMidGeo = this.addGeo(new THREE.ConeGeometry(0.25, 0.88, 7));
+    const flameCoreGeo = this.addGeo(new THREE.ConeGeometry(0.14, 0.58, 6));
+    const sparkGeo = this.addGeo(new THREE.OctahedronGeometry(0.055, 0));
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+
+      const x = poi.x + spec.dx;
+      const z = poi.z + spec.dz;
+      const y = terrain.getHeightAt(x, z);
+
+      const data: CampfireEntity = {
+        id: spec.id,
+        poiId: spec.poiId,
+        x,
+        y,
+        z,
+        lit: false,
+        remainingSec: 25,
+        maxDurationSec: 25,
+        healPerSec: 3,
+        radius: 5.5,
+      };
+      this.campfires.push(data);
+
+      const fireGroup = new THREE.Group();
+      fireGroup.name = `Campfire_${spec.id}`;
+      fireGroup.position.set(x, y, z);
+
+      // Ash bed + dark ember core
+      const ashBed = new THREE.Mesh(ashGeo, ashBedMat);
+      ashBed.position.y = 0.03;
+      ashBed.receiveShadow = true;
+      fireGroup.add(ashBed);
+
+      const emberMesh = new THREE.Mesh(emberGeo, emberUnlitMat);
+      emberMesh.position.y = 0.08;
+      fireGroup.add(emberMesh);
+
+      // 10-stone fire ring
+      const stoneCount = 10;
+      for (let s = 0; s < stoneCount; s++) {
+        const ang = (s / stoneCount) * Math.PI * 2;
+        const stone = new THREE.Mesh(stoneGeo, s % 2 === 0 ? stoneMat : darkStoneMat);
+        stone.position.set(Math.cos(ang) * 0.68, 0.12, Math.sin(ang) * 0.68);
+        stone.scale.set(1.0 + (s % 3) * 0.14, 0.72, 0.95);
+        stone.rotation.set(s * 0.3, ang, s * 0.2);
+        stone.castShadow = true;
+        stone.receiveShadow = true;
+        fireGroup.add(stone);
+      }
+
+      // 4 crossed charred logs
+      for (let l = 0; l < 4; l++) {
+        const ang = (l / 4) * Math.PI * 2 + 0.35;
+        const log = new THREE.Mesh(logGeo, charredLogMat);
+        log.position.set(Math.cos(ang) * 0.14, 0.22, Math.sin(ang) * 0.14);
+        log.rotation.order = 'YXZ';
+        log.rotation.y = ang;
+        log.rotation.z = 1.05;
+        log.castShadow = true;
+        fireGroup.add(log);
+      }
+
+      // Multi-layer flickering flame cones + rising spark motes (hidden until lit)
+      const flameGroup = new THREE.Group();
+      flameGroup.visible = false;
+
+      const fOuter = new THREE.Mesh(flameOuterGeo, flameOuterMat);
+      fOuter.position.y = 0.62;
+      const fMid = new THREE.Mesh(flameMidGeo, flameMidMat);
+      fMid.position.y = 0.52;
+      const fCore = new THREE.Mesh(flameCoreGeo, flameCoreMat);
+      fCore.position.y = 0.4;
+      flameGroup.add(fOuter, fMid, fCore);
+
+      const sparks: THREE.Mesh[] = [];
+      for (let sp = 0; sp < 3; sp++) {
+        const spark = new THREE.Mesh(sparkGeo, flameCoreMat);
+        spark.position.set(0, 0.7 + sp * 0.28, 0);
+        flameGroup.add(spark);
+        sparks.push(spark);
+      }
+
+      fireGroup.add(flameGroup);
+      this.group.add(fireGroup);
+
+      this.campfiresMap.set(spec.id, {
+        data,
+        group: fireGroup,
+        emberMesh,
+        emberUnlitMat,
+        emberLitMat,
+        flameGroup,
+        flames: [fOuter, fMid, fCore],
+        sparks,
+      });
+    }
+  }
+
+  private buildSlurpBarrels(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const clusterSpecs: Array<{
+      poiId: string;
+      offsets: Array<[number, number]>;
+    }> = [
+      { poiId: 'metro_towers', offsets: [[6, -8], [7.6, -8], [6.8, -6.5]] },
+      { poiId: 'sunny_suburbs', offsets: [[19, 3], [20.6, 3]] },
+      { poiId: 'crystal_basin', offsets: [[9, 10], [10.6, 10]] },
+      { poiId: 'market_row', offsets: [[-1, -15], [0.6, -15], [-0.2, -16.5]] },
+      { poiId: 'crater_depot', offsets: [[24, -19], [25.6, -19], [24.8, -20.5]] },
+      { poiId: 'whispering_pines', offsets: [[1, 16], [2.6, 16]] },
+      { poiId: 'frostpeak_citadel', offsets: [[6, 24], [7.6, 24]] },
+      { poiId: 'scorched_caldera', offsets: [[22, -14], [23.6, -14], [22.8, -15.5]] },
+      { poiId: 'sunken_oasis', offsets: [[8, -6], [9.6, -6]] },
+      { poiId: 'skyline_spire', offsets: [[8, 1], [9.6, 1]] },
+    ];
+
+    const slurpBodyMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#06b6d4',
+        emissive: '#0ea5e9',
+        emissiveIntensity: 0.72,
+        roughness: 0.16,
+        metalness: 0.25,
+      }),
+    );
+    const slurpGlowMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#67e8f9',
+        emissive: '#22d3ee',
+        emissiveIntensity: 1.45,
+        roughness: 0.12,
+        metalness: 0.15,
+      }),
+    );
+    const bandMetalMat = this.addMat(
+      new THREE.MeshStandardMaterial({
+        color: '#334155',
+        roughness: 0.32,
+        metalness: 0.85,
+      }),
+    );
+
+    const barrelBodyGeo = this.addGeo(new THREE.CylinderGeometry(0.42, 0.42, 1.12, 16));
+    const hoopGeo = this.addGeo(new THREE.CylinderGeometry(0.455, 0.455, 0.1, 16));
+    const lidGeo = this.addGeo(new THREE.CylinderGeometry(0.38, 0.42, 0.08, 16));
+    const valveGeo = this.addGeo(new THREE.CylinderGeometry(0.11, 0.11, 0.1, 10));
+    const gaugeGeo = this.addGeo(new THREE.BoxGeometry(0.14, 0.62, 0.08));
+
+    let barrelIdx = 0;
+    for (const cluster of clusterSpecs) {
+      const poi = poiMap.get(cluster.poiId);
+      if (!poi) continue;
+
+      for (const [dx, dz] of cluster.offsets) {
+        const id = `slurp_${cluster.poiId}_${++barrelIdx}`;
+        const x = poi.x + dx;
+        const z = poi.z + dz;
+        const y = terrain.getHeightAt(x, z);
+
+        const data: SlurpBarrelEntity = {
+          id,
+          x,
+          y,
+          z,
+          hp: 40,
+          maxHp: 40,
+          shieldAmount: 15,
+          destroyed: false,
+        };
+        this.slurpBarrels.push(data);
+
+        const barrelGroup = new THREE.Group();
+        barrelGroup.name = `SlurpBarrel_${id}`;
+        barrelGroup.position.set(x, y, z);
+
+        const bodyGroup = new THREE.Group();
+
+        const tank = new THREE.Mesh(barrelBodyGeo, slurpBodyMat);
+        tank.position.y = 0.58;
+        tank.castShadow = true;
+        tank.receiveShadow = true;
+        bodyGroup.add(tank);
+
+        // Top, middle, and bottom metallic bands
+        for (const hy of [0.1, 0.58, 1.06]) {
+          const hoop = new THREE.Mesh(hoopGeo, bandMetalMat);
+          hoop.position.y = hy;
+          hoop.castShadow = true;
+          bodyGroup.add(hoop);
+        }
+
+        const lid = new THREE.Mesh(lidGeo, bandMetalMat);
+        lid.position.y = 1.14;
+        bodyGroup.add(lid);
+
+        const valve = new THREE.Mesh(valveGeo, slurpGlowMat);
+        valve.position.set(0.14, 1.2, 0);
+        bodyGroup.add(valve);
+
+        const gauge = new THREE.Mesh(gaugeGeo, slurpGlowMat);
+        gauge.position.set(0, 0.58, 0.41);
+        bodyGroup.add(gauge);
+
+        barrelGroup.add(bodyGroup);
+        this.group.add(barrelGroup);
+
+        const collider: ColliderBox = {
+          id: `${id}_col`,
+          minX: x - 0.52,
+          minY: y,
+          minZ: z - 0.52,
+          maxX: x + 0.52,
+          maxY: y + 1.25,
+          maxZ: z + 0.52,
+          material: 'metal',
+          tag: `slurp_barrel:${id}`,
+        };
+
+        this.slurpBarrelsMap.set(id, {
+          data,
+          group: barrelGroup,
+          bodyGroup,
+          collider,
+          hitAnim: 0,
+        });
+      }
+    }
+  }
+
   getGroup(): THREE.Group {
     return this.group;
   }
@@ -561,6 +1115,154 @@ export class WorldInteractables {
       }
     }
     return out;
+  }
+
+  getUpgradeBenches(): UpgradeBenchEntity[] {
+    return this.upgradeBenches;
+  }
+
+  getNearestUpgradeBench(
+    x: number,
+    y: number,
+    z: number,
+    maxDist = Infinity,
+  ): UpgradeBenchEntity | null {
+    let best: UpgradeBenchEntity | null = null;
+    let bestDist = maxDist;
+    for (let i = 0; i < this.upgradeBenches.length; i++) {
+      const b = this.upgradeBenches[i];
+      const d = Math.hypot(b.x - x, b.y - y, b.z - z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  getUpgradeBenchColliders(): ColliderBox[] {
+    return this.upgradeBenchVisuals.map((v) => v.collider);
+  }
+
+  getCampfires(): CampfireEntity[] {
+    return this.campfires;
+  }
+
+  igniteCampfire(id: string): boolean {
+    const entry = this.campfiresMap.get(id);
+    if (!entry || entry.data.lit || entry.data.remainingSec <= 0) {
+      return false;
+    }
+    entry.data.lit = true;
+    entry.flameGroup.visible = true;
+    entry.emberMesh.material = entry.emberLitMat;
+    return true;
+  }
+
+  getActiveCampfireHealAt(x: number, y: number, z: number): number {
+    for (let i = 0; i < this.campfires.length; i++) {
+      const c = this.campfires[i];
+      if (!c.lit || c.remainingSec <= 0) continue;
+      if (Math.hypot(x - c.x, y - c.y, z - c.z) <= c.radius) {
+        return c.healPerSec;
+      }
+    }
+    return 0;
+  }
+
+  getSlurpBarrels(): SlurpBarrelEntity[] {
+    return this.slurpBarrels;
+  }
+
+  damageSlurpBarrel(id: string, dmg: number): SlurpBarrelDamageResult | null {
+    const entry = this.slurpBarrelsMap.get(id);
+    if (!entry || entry.data.destroyed) {
+      return null;
+    }
+    const pos: Vec3Like = { x: entry.data.x, y: entry.data.y, z: entry.data.z };
+    if (dmg <= 0) {
+      return { destroyed: false, shieldAmount: 0, position: pos };
+    }
+
+    entry.data.hp = Math.max(0, entry.data.hp - dmg);
+    if (entry.data.hp <= 0) {
+      entry.data.hp = 0;
+      entry.data.destroyed = true;
+      entry.group.visible = false;
+      entry.hitAnim = 0;
+      return {
+        destroyed: true,
+        shieldAmount: entry.data.shieldAmount,
+        position: pos,
+      };
+    }
+
+    entry.hitAnim = 1.0;
+    return {
+      destroyed: false,
+      shieldAmount: 0,
+      position: pos,
+    };
+  }
+
+  getSlurpBarrelColliders(): ColliderBox[] {
+    const out: ColliderBox[] = [];
+    for (const entry of this.slurpBarrelsMap.values()) {
+      if (!entry.data.destroyed) {
+        out.push(entry.collider);
+      }
+    }
+    return out;
+  }
+
+  getStationColliders(): ColliderBox[] {
+    return [
+      ...this.getUpgradeBenchColliders(),
+      ...this.getSlurpBarrelColliders(),
+    ];
+  }
+
+  getColliders(): ColliderBox[] {
+    return [
+      ...this.getVaultColliders(),
+      ...this.getUpgradeBenchColliders(),
+      ...this.getSlurpBarrelColliders(),
+    ];
+  }
+
+  reset(): void {
+    for (const v of this.vaultsMap.values()) {
+      v.data.unlocked = false;
+      v.data.opened = false;
+      v.openProgress = 0;
+      v.doorPivot.rotation.y = 0;
+      v.wheelGroup.rotation.z = 0;
+      v.keypadMat.color.set('#facc15');
+      v.keypadMat.emissive.set('#f59e0b');
+      v.keypadMat.emissiveIntensity = 1.55;
+    }
+
+    for (const b of this.upgradeBenchVisuals) {
+      b.group.visible = true;
+      b.reticleGroup.position.y = b.baseReticleY;
+      b.reticleGroup.rotation.set(0, 0, 0);
+    }
+
+    for (const cf of this.campfiresMap.values()) {
+      cf.data.lit = false;
+      cf.data.remainingSec = cf.data.maxDurationSec;
+      cf.flameGroup.visible = false;
+      cf.emberMesh.material = cf.emberUnlitMat;
+    }
+
+    for (const sb of this.slurpBarrelsMap.values()) {
+      sb.data.hp = sb.data.maxHp;
+      sb.data.destroyed = false;
+      sb.group.visible = true;
+      sb.bodyGroup.scale.set(1, 1, 1);
+      sb.bodyGroup.rotation.set(0, 0, 0);
+      sb.hitAnim = 0;
+    }
   }
 
   unlockVault(vaultId: string): UnlockVaultResult {
@@ -632,6 +1334,66 @@ export class WorldInteractables {
       }
       vaultIdx++;
     }
+
+    // Animate Upgrade Bench floating holographic reticles
+    for (let i = 0; i < this.upgradeBenchVisuals.length; i++) {
+      const b = this.upgradeBenchVisuals[i];
+      b.reticleGroup.position.y = b.baseReticleY + Math.sin(elapsed * 2.6 + i * 0.9) * 0.08;
+      b.reticleGroup.rotation.y = elapsed * 1.85 + i * 0.5;
+      b.holoRing.rotation.z = elapsed * 1.15;
+    }
+
+    // Update & flicker lit Campfires; extinguish when remainingSec <= 0
+    let cfIdx = 0;
+    for (const cf of this.campfiresMap.values()) {
+      if (cf.data.lit && cf.data.remainingSec > 0) {
+        cf.data.remainingSec = Math.max(0, cf.data.remainingSec - safeDt);
+        if (cf.data.remainingSec <= 0) {
+          cf.data.remainingSec = 0;
+          cf.data.lit = false;
+          cf.flameGroup.visible = false;
+          cf.emberMesh.material = cf.emberUnlitMat;
+        } else {
+          cf.flameGroup.visible = true;
+          const phase = elapsed * 12.0 + cfIdx * 1.7;
+          for (let f = 0; f < cf.flames.length; f++) {
+            const flame = cf.flames[f];
+            const flickerY = 0.86 + Math.sin(phase + f * 2.1) * 0.16 + Math.cos(phase * 1.37 + f) * 0.08;
+            const flickerXZ = 0.92 + Math.cos(phase * 1.15 + f * 1.4) * 0.1;
+            flame.scale.set(flickerXZ, Math.max(0.55, flickerY), flickerXZ);
+            flame.rotation.y = elapsed * (2.2 + f * 0.9) * (f % 2 === 0 ? 1 : -1);
+            flame.rotation.z = Math.sin(phase * 0.65 + f) * 0.08;
+          }
+          for (let sp = 0; sp < cf.sparks.length; sp++) {
+            const spark = cf.sparks[sp];
+            const cycle = (elapsed * 0.85 + sp * 0.33 + cfIdx * 0.21) % 1;
+            const ang = elapsed * 2.4 + sp * 2.1;
+            const rad = 0.12 + cycle * 0.22;
+            spark.position.set(Math.cos(ang) * rad, 0.35 + cycle * 1.15, Math.sin(ang) * rad);
+            const sScale = 1.0 - cycle * 0.65;
+            spark.scale.set(sScale, sScale, sScale);
+          }
+        }
+      } else if (cf.flameGroup.visible) {
+        cf.flameGroup.visible = false;
+      }
+      cfIdx++;
+    }
+
+    // Decay hit wobble animation on damaged Slurp Barrels
+    for (const sb of this.slurpBarrelsMap.values()) {
+      if (sb.hitAnim > 0) {
+        sb.hitAnim = Math.max(0, sb.hitAnim - safeDt * 5.5);
+        const wobble = Math.sin(sb.hitAnim * Math.PI * 3.0) * sb.hitAnim * 0.12;
+        sb.bodyGroup.rotation.z = wobble;
+        const squash = 1.0 - sb.hitAnim * 0.08;
+        sb.bodyGroup.scale.set(1.0 + sb.hitAnim * 0.06, squash, 1.0 + sb.hitAnim * 0.06);
+        if (sb.hitAnim === 0) {
+          sb.bodyGroup.rotation.z = 0;
+          sb.bodyGroup.scale.set(1, 1, 1);
+        }
+      }
+    }
   }
 
   dispose(): void {
@@ -646,5 +1408,11 @@ export class WorldInteractables {
     this.ziplines = [];
     this.vaults = [];
     this.vaultsMap.clear();
+    this.upgradeBenches = [];
+    this.upgradeBenchVisuals = [];
+    this.campfires = [];
+    this.campfiresMap.clear();
+    this.slurpBarrels = [];
+    this.slurpBarrelsMap.clear();
   }
 }

@@ -1,11 +1,14 @@
 import type {
   AmmoType,
   BuildPiece,
+  CampfireEntity,
   Difficulty,
+  GameModeId,
   ItemInstance,
   LaunchPadEntity,
   MaterialType,
   POIDef,
+  SlurpBarrelEntity,
   Vec3Like,
   VehicleEntity,
   WeaponId,
@@ -732,7 +735,11 @@ export function shouldBotBuildDefense(
   nowSec: number,
   threatDistance = 30,
   roll?: number,
+  gameMode: GameModeId = 'solo',
 ): boolean {
+  if (gameMode === 'zero_build') {
+    return false;
+  }
   if (
     bot.state === 'bus' ||
     bot.state === 'skydiving' ||
@@ -1127,6 +1134,7 @@ export function selectLaunchPadForRotation(
   bot: Pick<BotEntity, 'position' | 'launchPadCooldown' | 'isBoss'>,
   launchPads: LaunchPadEntity[],
   destination: Vec3Like,
+  preferNearbyStormPad = false,
 ): LaunchPadEntity | null {
   if ((bot.launchPadCooldown ?? 0) > 0 || launchPads.length === 0) return null;
 
@@ -1136,24 +1144,31 @@ export function selectLaunchPadForRotation(
     destination.x,
     destination.z,
   );
-  if (distToDest < 45) return null;
+  const minRotDist = preferNearbyStormPad ? 18 : 45;
+  if (distToDest < minRotDist) return null;
 
   let bestPad: LaunchPadEntity | null = null;
   let bestScore = Infinity;
 
   for (const pad of launchPads) {
     if (Math.abs(pad.y - bot.position.y) > 12) continue;
+    if (isInVolcanoLavaHazard(pad.x, pad.z)) continue;
 
     const dToPad = dist2D(bot.position.x, bot.position.z, pad.x, pad.z);
     if (dToPad > 78) continue;
 
     const dPadToDest = dist2D(pad.x, pad.z, destination.x, destination.z);
-    const helpsRotation =
-      dPadToDest < distToDest + 12 &&
-      (dToPad <= 28 || dToPad + dPadToDest * 0.45 < distToDest + 15);
+    const helpsRotation = preferNearbyStormPad
+      ? (dToPad <= 28 && dPadToDest < distToDest + 16) ||
+        (dPadToDest < distToDest + 12 &&
+          dToPad + dPadToDest * 0.45 < distToDest + 15)
+      : dPadToDest < distToDest + 12 &&
+        (dToPad <= 28 || dToPad + dPadToDest * 0.45 < distToDest + 15);
     if (!helpsRotation) continue;
 
-    const score = dToPad + dPadToDest * 0.35;
+    // Prioritize nearby <= 28m launch pads strongly during storm/edge rotations
+    const proximityBonus = preferNearbyStormPad && dToPad <= 28 ? -25 : 0;
+    const score = dToPad + dPadToDest * 0.35 + proximityBonus;
     if (score < bestScore) {
       bestScore = score;
       bestPad = pad;
@@ -2286,6 +2301,7 @@ function stepLootingState(
   elapsed: number,
   safeDt: number,
   isFarLOD: boolean,
+  gameMode: GameModeId = 'solo',
 ): MoveIntent {
   bot.isCrouching = false;
 
@@ -2336,7 +2352,12 @@ function stepLootingState(
 
   if (ranLootScan || isFarLOD || bot.stateTimer > 1.0) {
     const desiredMatGoal = bot.personality === 'builder' ? 240 : 120;
-    if (weaponCount >= 1 && getTotalMaterials(bot) < desiredMatGoal && !needRotateStorm) {
+    if (
+      gameMode !== 'zero_build' &&
+      weaponCount >= 1 &&
+      getTotalMaterials(bot) < desiredMatGoal &&
+      !needRotateStorm
+    ) {
       bot.state = 'harvesting';
       bot.stateTimer = 0;
     } else {
@@ -2447,6 +2468,7 @@ function stepRotatingState(
   ctx: BotWorldContext,
   weaponCount: number,
   inStormNow: boolean,
+  farFromSafeZone: boolean,
   needRotateStorm: boolean,
   elapsed: number,
   safeDt: number,
@@ -2501,8 +2523,20 @@ function stepRotatingState(
     destination = bot.lastHeardNoisePos;
     bot.launchPadTargetId = null;
   } else {
+    const moveTargetOutsideSafe =
+      needRotateStorm &&
+      bot.moveTarget &&
+      ctx.storm.currentRadius > 0 &&
+      dist2D(
+        bot.moveTarget.x,
+        bot.moveTarget.z,
+        ctx.storm.currentCenterX,
+        ctx.storm.currentCenterZ,
+      ) >
+        ctx.storm.currentRadius * 0.9;
     if (
       !bot.moveTarget ||
+      moveTargetOutsideSafe ||
       dist2D(bot.position.x, bot.position.z, bot.moveTarget.x, bot.moveTarget.z) < 6 ||
       ctx.terrain.isWater(bot.moveTarget.x, bot.moveTarget.z) ||
       isInVolcanoLavaHazard(bot.moveTarget.x, bot.moveTarget.z, VOLCANO_LAVA_SAFE_RADIUS + 1.5)
@@ -2531,7 +2565,19 @@ function stepRotatingState(
         }
       }
       if (!pad) {
-        pad = selectLaunchPadForRotation(bot, pads, safeDest);
+        const preferStormPad = inStormNow || farFromSafeZone;
+        pad = selectLaunchPadForRotation(bot, pads, safeDest, preferStormPad);
+        if (!pad && preferStormPad) {
+          const safeCenter: Vec3Like = {
+            x: ctx.storm.currentCenterX,
+            y: ctx.terrain.getHeightAt(ctx.storm.currentCenterX, ctx.storm.currentCenterZ),
+            z: ctx.storm.currentCenterZ,
+          };
+          pad = selectLaunchPadForRotation(bot, pads, safeCenter, true);
+          if (pad) {
+            bot.moveTarget = safeCenter;
+          }
+        }
         bot.launchPadTargetId = pad ? pad.id : null;
       }
       destination = pad ? { x: pad.x, y: pad.y, z: pad.z } : safeDest;
@@ -2574,9 +2620,9 @@ function stepRotatingState(
     destination.x,
     destination.z,
     safeDt,
-    inStormNow || bot.launchPadTargetId ? 0 : 15,
+    inStormNow || farFromSafeZone || bot.launchPadTargetId ? 0 : 15,
   );
-  if (inStormNow || bot.launchPadTargetId) {
+  if (inStormNow || farFromSafeZone || bot.launchPadTargetId) {
     bot.isSprinting = true;
     intent.speed = SPRINT_SPEED;
   }
@@ -2675,6 +2721,275 @@ function applyVolcanoLavaAvoidance(
   return intent;
 }
 
+function trySlurpBarrelRecovery(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  profile: DifficultyProfile,
+  combatMatch: { target: BotCombatTarget; hasLOS: boolean; distance: number } | null,
+  inStormNow: boolean,
+  safeDt: number,
+  isFarLOD: boolean,
+): MoveIntent | null {
+  if (isFarLOD || !ctx.getSlurpBarrels || !ctx.damageSlurpBarrel) return null;
+  if (bot.state === 'healing' || inStormNow) return null;
+  if (bot.shield >= 75 || bot.shield >= bot.maxShield) return null;
+
+  const inCloseRangePanic =
+    combatMatch !== null &&
+    ((combatMatch.hasLOS && combatMatch.distance < 18) ||
+      combatMatch.distance < 14 ||
+      (bot.hp < 45 && combatMatch.distance < 26));
+  if (inCloseRangePanic) return null;
+
+  const barrels = ctx.getSlurpBarrels();
+  if (!barrels || barrels.length === 0) return null;
+
+  let bestBarrel: SlurpBarrelEntity | null = null;
+  let bestDist = 14.0001;
+  for (const barrel of barrels) {
+    if (barrel.destroyed || barrel.hp <= 0) continue;
+    if (Math.abs(barrel.y - bot.position.y) > 4.5) continue;
+    if (isInVolcanoLavaHazard(barrel.x, barrel.z)) continue;
+    const d = dist2D(bot.position.x, bot.position.z, barrel.x, barrel.z);
+    if (d <= 14 && d < bestDist) {
+      bestDist = d;
+      bestBarrel = barrel;
+    }
+  }
+  if (!bestBarrel) return null;
+
+  const eye = getBotEyePos(bot);
+  const aimPoint: Vec3Like = {
+    x: bestBarrel.x,
+    y: bestBarrel.y + 0.65,
+    z: bestBarrel.z,
+  };
+  const dx = aimPoint.x - eye.x;
+  const dy = aimPoint.y - eye.y;
+  const dz = aimPoint.z - eye.z;
+  const horiz = Math.hypot(dx, dz) || 0.001;
+  const targetYaw = Math.atan2(dx, dz);
+  const targetPitch = Math.atan2(dy, horiz);
+  bot.yaw = lerpAngle(
+    bot.yaw,
+    targetYaw,
+    clamp(profile.turnSpeedRadPerSec * safeDt, 0, 1),
+  );
+  bot.pitch = clamp(targetPitch, -1.2, 1.2);
+
+  const weaponChoice = selectBestWeaponForDistance(
+    bot.inventory.items,
+    Math.max(2.5, bestDist),
+    bot.inventory.ammo,
+  );
+  const useFirearm =
+    weaponChoice !== null &&
+    weaponChoice.item.weaponId !== 'pickaxe' &&
+    !WEAPONS[weaponChoice.item.weaponId].isThrowable &&
+    !(weaponChoice.item.weaponId === 'rocket_launcher' && bestDist < 9);
+
+  if (useFirearm && weaponChoice) {
+    const item = weaponChoice.item;
+    const def = WEAPONS[item.weaponId];
+    bot.inventory.activeSlot = weaponChoice.slotIndex;
+
+    if (item.magAmmo <= 0) {
+      if (
+        bot.reloadTimer <= 0 &&
+        def.ammoType &&
+        (bot.inventory.ammo[def.ammoType] ?? 0) > 0
+      ) {
+        bot.reloadSlot = weaponChoice.slotIndex;
+        bot.reloadTimer = def.reloadTime;
+        bot.burstQueue = 0;
+      }
+      return bestDist > 6
+        ? moveTowardPoint(bot, bestBarrel.x, bestBarrel.z, safeDt, 10)
+        : emptyMoveIntent();
+    }
+
+    const hasLOS = bestDist <= 2.8 || ctx.hasLineOfSight(eye, aimPoint);
+    if (!hasLOS) {
+      return moveTowardPoint(bot, bestBarrel.x, bestBarrel.z, safeDt, 10);
+    }
+
+    const yawDiff = Math.abs(normalizeAngle(targetYaw - bot.yaw));
+    bot.isAiming = bestDist > 6;
+    if (yawDiff <= 0.55 && bot.fireCooldown <= 0 && bot.reloadTimer <= 0) {
+      const dmg = Math.max(
+        1,
+        Math.round(def.baseDamage * (RARITY_MULTIPLIER[item.rarity] ?? 1)),
+      );
+      const res = ctx.damageSlurpBarrel(bestBarrel.id, dmg);
+      item.magAmmo = Math.max(0, item.magAmmo - 1);
+      bot.isFiring = true;
+      bot.recoilKick = 0.85;
+      bot.fireCooldown = 1 / Math.max(0.5, def.fireRate * profile.fireRateScale);
+
+      ctx.eventBus.emit('vfx:tracer', { from: eye, to: aimPoint });
+      ctx.eventBus.emit('vfx:impact', {
+        position: aimPoint,
+        normal: { x: 0, y: 1, z: 0 },
+        material: 'shield',
+      });
+      ctx.eventBus.emit('audio:noise', {
+        position: { ...bot.position },
+        kind: 'gunfire',
+        sourceId: bot.id,
+        radius: 48,
+      });
+
+      if (res?.destroyed) {
+        bot.shield = Math.min(bot.maxShield, bot.shield + res.shieldAmount);
+        ctx.eventBus.emit('vfx:slurp_burst', {
+          position: { ...res.position },
+          radius: 3.5,
+        });
+        ctx.eventBus.emit('sound:play', {
+          id: 'slurp_barrel_break',
+          position: { ...res.position },
+          spatial: true,
+        });
+      }
+    }
+
+    return bestDist > 9
+      ? moveTowardPoint(bot, bestBarrel.x, bestBarrel.z, safeDt, 12)
+      : emptyMoveIntent();
+  }
+
+  bot.inventory.activeSlot = 0;
+  if (bestDist <= 3.2) {
+    if (bot.harvestCooldown <= 0 && bot.fireCooldown <= 0) {
+      const res = ctx.damageSlurpBarrel(bestBarrel.id, WEAPONS.pickaxe.structureDamage);
+      bot.harvestSwingTimer = 0.4;
+      bot.harvestCooldown = 1 / WEAPONS.pickaxe.fireRate;
+      bot.fireCooldown = 1 / WEAPONS.pickaxe.fireRate;
+      bot.isFiring = true;
+
+      ctx.eventBus.emit('vfx:impact', {
+        position: aimPoint,
+        normal: { x: 0, y: 1, z: 0 },
+        material: 'shield',
+      });
+
+      if (res?.destroyed) {
+        bot.shield = Math.min(bot.maxShield, bot.shield + res.shieldAmount);
+        ctx.eventBus.emit('vfx:slurp_burst', {
+          position: { ...res.position },
+          radius: 3.5,
+        });
+        ctx.eventBus.emit('sound:play', {
+          id: 'slurp_barrel_break',
+          position: { ...res.position },
+          spatial: true,
+        });
+      }
+    }
+    return emptyMoveIntent();
+  }
+
+  return moveTowardPoint(bot, bestBarrel.x, bestBarrel.z, safeDt, 10);
+}
+
+function tryCampfireHealing(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  combatMatch: { target: BotCombatTarget; hasLOS: boolean; distance: number } | null,
+  needRotateStorm: boolean,
+  safeDt: number,
+  isFarLOD: boolean,
+): MoveIntent | null {
+  if (isFarLOD || !ctx.getCampfires) return null;
+  if (
+    combatMatch !== null ||
+    bot.state === 'combat' ||
+    bot.state === 'healing' ||
+    needRotateStorm
+  ) {
+    bot.campfireTargetId = null;
+    return null;
+  }
+
+  const campfires = ctx.getCampfires();
+  if (!campfires || campfires.length === 0) {
+    bot.campfireTargetId = null;
+    return null;
+  }
+
+  let chosen: CampfireEntity | null = null;
+  if (bot.campfireTargetId) {
+    const existing = campfires.find((c) => c.id === bot.campfireTargetId);
+    if (
+      existing &&
+      existing.remainingSec > 0 &&
+      bot.hp < Math.min(bot.maxHp, 85) &&
+      dist2D(bot.position.x, bot.position.z, existing.x, existing.z) <= 18 &&
+      Math.abs(existing.y - bot.position.y) <= 4.5 &&
+      !isInVolcanoLavaHazard(existing.x, existing.z)
+    ) {
+      chosen = existing;
+    } else {
+      bot.campfireTargetId = null;
+    }
+  }
+
+  if (!chosen && bot.hp < 65 && bot.hp < bot.maxHp) {
+    let bestScore = Infinity;
+    for (const cf of campfires) {
+      if (cf.remainingSec <= 0) continue;
+      if (Math.abs(cf.y - bot.position.y) > 4.5) continue;
+      if (isInVolcanoLavaHazard(cf.x, cf.z)) continue;
+      const d = dist2D(bot.position.x, bot.position.z, cf.x, cf.z);
+      if (d > 16) continue;
+      const score = d - (cf.lit ? 3 : 0);
+      if (score < bestScore) {
+        bestScore = score;
+        chosen = cf;
+      }
+    }
+    if (chosen) {
+      bot.campfireTargetId = chosen.id;
+    }
+  }
+
+  if (!chosen) return null;
+
+  const d = dist2D(bot.position.x, bot.position.z, chosen.x, chosen.z);
+  const healRadius = chosen.radius > 0 ? chosen.radius : 5.5;
+
+  if (!chosen.lit && d <= 3.6 && ctx.igniteCampfire) {
+    const ignited = ctx.igniteCampfire(chosen.id);
+    if (ignited) {
+      ctx.eventBus.emit('sound:play', {
+        id: 'campfire_ignite',
+        position: { x: chosen.x, y: chosen.y, z: chosen.z },
+        spatial: true,
+      });
+    }
+  }
+
+  if (chosen.lit && chosen.remainingSec > 0 && d <= healRadius) {
+    const healRate = chosen.healPerSec > 0 ? chosen.healPerSec : 3;
+    bot.hp = Math.min(bot.maxHp, bot.hp + healRate * safeDt);
+    if (d > Math.min(3.2, healRadius * 0.7)) {
+      bot.isCrouching = false;
+      return moveTowardPoint(bot, chosen.x, chosen.z, safeDt, 12);
+    }
+    const dx = chosen.x - bot.position.x;
+    const dz = chosen.z - bot.position.z;
+    if (Math.hypot(dx, dz) > 0.4) {
+      bot.yaw = lerpAngle(bot.yaw, Math.atan2(dx, dz), clamp(6 * safeDt, 0, 1));
+    }
+    bot.isSprinting = false;
+    bot.isCrouching = true;
+    return emptyMoveIntent();
+  }
+
+  bot.isCrouching = false;
+  return moveTowardPoint(bot, chosen.x, chosen.z, safeDt, 10);
+}
+
 /**
  * Advances a single bot's state machine, physics, perception, combat, building, and animations.
  */
@@ -2686,6 +3001,7 @@ export function updateBot(
   elapsed: number,
   dt: number,
   isFarLOD: boolean,
+  gameMode: GameModeId = 'solo',
 ): void {
   if (!bot.alive || bot.hp <= 0 || bot.state === 'eliminated') {
     bot.alive = false;
@@ -2753,13 +3069,26 @@ export function updateBot(
     bot.thinkCooldown = 0.4 + nextBotRand(bot) * 0.2;
   }
 
-  const inStormNow = isInStorm(bot, ctx, 4);
+  const distToSafeCenter = dist2D(
+    bot.position.x,
+    bot.position.z,
+    ctx.storm.currentCenterX,
+    ctx.storm.currentCenterZ,
+  );
+  const inStormNow =
+    ctx.storm.currentRadius > 0
+      ? distToSafeCenter > Math.max(0, ctx.storm.currentRadius - 4)
+      : isInStorm(bot, ctx, 4);
+  const farFromSafeZone =
+    ctx.storm.currentRadius > 0 &&
+    distToSafeCenter > ctx.storm.currentRadius * 0.92;
   const nextDist =
     ctx.storm.nextRadius > 0
       ? dist2D(bot.position.x, bot.position.z, ctx.storm.nextCenterX, ctx.storm.nextCenterZ)
       : 0;
   const needRotateStorm =
     inStormNow ||
+    farFromSafeZone ||
     (ctx.storm.isShrinking && ctx.storm.nextRadius > 0 && nextDist > ctx.storm.nextRadius * 0.92);
 
   let combatMatch: { target: BotCombatTarget; hasLOS: boolean; distance: number } | null = null;
@@ -2790,7 +3119,19 @@ export function updateBot(
     }
   }
 
-  if (shouldBotBuildDefense(bot, difficulty, elapsed, combatMatch ? combatMatch.distance : 30)) {
+  if (gameMode === 'zero_build') {
+    bot.isBuilding = false;
+    bot.buildAnimTimer = 0;
+  } else if (
+    shouldBotBuildDefense(
+      bot,
+      difficulty,
+      elapsed,
+      combatMatch ? combatMatch.distance : 30,
+      undefined,
+      gameMode,
+    )
+  ) {
     const threatPos =
       combatMatch?.target.position ??
       bot.lastKnownEnemyPos ??
@@ -2861,6 +3202,7 @@ export function updateBot(
     healChoice !== null &&
     lowHpForHeal &&
     (!closeThreat ||
+      gameMode === 'zero_build' ||
       bot.buildCooldown > 0 ||
       getTotalMaterials(bot) < BUILD_COST ||
       healChoice.item.weaponId === 'chug_splash' ||
@@ -2909,61 +3251,87 @@ export function updateBot(
     }
   }
 
-  let intent: MoveIntent;
-  switch (bot.state) {
-    case 'healing':
-      intent = stepHealingState(
+  let intent: MoveIntent | null = null;
+  if (bot.state !== 'healing') {
+    intent = trySlurpBarrelRecovery(
+      bot,
+      ctx,
+      profile,
+      combatMatch,
+      inStormNow,
+      safeDt,
+      isFarLOD,
+    );
+    if (!intent) {
+      intent = tryCampfireHealing(
         bot,
         ctx,
         combatMatch,
-        closeThreat,
         needRotateStorm,
-        safeDt,
-      );
-      break;
-    case 'combat':
-      intent = stepCombatState(
-        bot,
-        ctx,
-        difficulty,
-        profile,
-        combatMatch,
-        weaponCount,
-        elapsed,
         safeDt,
         isFarLOD,
       );
-      break;
-    case 'looting':
-      intent = stepLootingState(
-        bot,
-        ctx,
-        weaponCount,
-        needRotateStorm,
-        elapsed,
-        safeDt,
-        isFarLOD,
-      );
-      break;
-    case 'harvesting':
-      intent = stepHarvestingState(bot, ctx, needRotateStorm, elapsed, safeDt, isFarLOD);
-      break;
-    default:
-      intent = stepRotatingState(
-        bot,
-        ctx,
-        weaponCount,
-        inStormNow,
-        needRotateStorm,
-        elapsed,
-        safeDt,
-        isFarLOD,
-      );
-      if (intent.launchedGliding) {
-        updateAnimState(bot);
-        return;
-      }
-      break;
+    }
+  }
+
+  if (!intent) {
+    switch (bot.state) {
+      case 'healing':
+        intent = stepHealingState(
+          bot,
+          ctx,
+          combatMatch,
+          closeThreat,
+          needRotateStorm,
+          safeDt,
+        );
+        break;
+      case 'combat':
+        intent = stepCombatState(
+          bot,
+          ctx,
+          difficulty,
+          profile,
+          combatMatch,
+          weaponCount,
+          elapsed,
+          safeDt,
+          isFarLOD,
+        );
+        break;
+      case 'looting':
+        intent = stepLootingState(
+          bot,
+          ctx,
+          weaponCount,
+          needRotateStorm,
+          elapsed,
+          safeDt,
+          isFarLOD,
+          gameMode,
+        );
+        break;
+      case 'harvesting':
+        intent = stepHarvestingState(bot, ctx, needRotateStorm, elapsed, safeDt, isFarLOD);
+        break;
+      default:
+        intent = stepRotatingState(
+          bot,
+          ctx,
+          weaponCount,
+          inStormNow,
+          farFromSafeZone,
+          needRotateStorm,
+          elapsed,
+          safeDt,
+          isFarLOD,
+        );
+        if (intent.launchedGliding) {
+          updateAnimState(bot);
+          return;
+        }
+        break;
+    }
   }
 
   if (!isFarLOD && ctx.getVehicles) {
@@ -3075,8 +3443,9 @@ export class BotBrain {
     bot: Pick<BotEntity, 'position' | 'launchPadCooldown' | 'isBoss'>,
     launchPads: LaunchPadEntity[],
     destination: Vec3Like,
+    preferNearbyStormPad = false,
   ): LaunchPadEntity | null {
-    return selectLaunchPadForRotation(bot, launchPads, destination);
+    return selectLaunchPadForRotation(bot, launchPads, destination, preferNearbyStormPad);
   }
 
   isInVolcanoLavaHazard(
@@ -3112,8 +3481,9 @@ export class BotBrain {
     nowSec: number,
     threatDistance?: number,
     roll?: number,
+    gameMode: GameModeId = 'solo',
   ): boolean {
-    return shouldBotBuildDefense(bot, difficulty, nowSec, threatDistance, roll);
+    return shouldBotBuildDefense(bot, difficulty, nowSec, threatDistance, roll, gameMode);
   }
 
   computeBotSpread(
@@ -3133,7 +3503,8 @@ export class BotBrain {
     elapsed: number,
     dt: number,
     isFarLOD: boolean,
+    gameMode: GameModeId = 'solo',
   ): void {
-    updateBot(bot, ctx, difficulty, busPos, elapsed, dt, isFarLOD);
+    updateBot(bot, ctx, difficulty, busPos, elapsed, dt, isFarLOD, gameMode);
   }
 }

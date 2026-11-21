@@ -1,8 +1,10 @@
 import { POIS, WORLD_SIZE } from '../core';
 import type {
+  CampfireEntity,
   GameSettings,
   HUDState,
   LaunchPadEntity,
+  UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
   ZiplineEntity,
@@ -14,7 +16,13 @@ import {
   resolveKeybinds,
   worldToMapNorm,
 } from './UIHelpers';
-import { getCrownSvg, getVaultLockSvg, getVehicleIconSvg } from './WeaponIcons';
+import {
+  getCampfireIconSvg,
+  getCrownSvg,
+  getUpgradeBenchIconSvg,
+  getVaultLockSvg,
+  getVehicleIconSvg,
+} from './WeaponIcons';
 
 export interface FullMapCallbacks {
   onWaypointChange: (waypoint: { x: number; z: number } | null) => void;
@@ -37,6 +45,8 @@ export class FullMapOverlay {
   private ziplines: ZiplineEntity[] = [];
   private vehicles: VehicleEntity[] = [];
   private vaults: VaultEntity[] = [];
+  private upgradeBenches: UpgradeBenchEntity[] = [];
+  private campfires: CampfireEntity[] = [];
 
   private open = false;
   private lastState: HUDState | null = null;
@@ -148,6 +158,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch vault">${getVaultLockSvg(false)}</span>
         <span>BOSS VAULT</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch bench">${getUpgradeBenchIconSvg()}</span>
+        <span>UPGRADE BENCH</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch campfire">${getCampfireIconSvg(true)}</span>
+        <span>CAMPFIRE</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -190,6 +208,17 @@ export class FullMapOverlay {
 
   setWorldVaults(vaults: VaultEntity[]): void {
     this.vaults = vaults;
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldStations(
+    benches: UpgradeBenchEntity[],
+    campfires: CampfireEntity[],
+  ): void {
+    this.upgradeBenches = benches;
+    this.campfires = campfires;
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -448,6 +477,102 @@ export class FullMapOverlay {
       }
     }
     ctx.restore();
+
+    // Upgrade Benches (cyan anvil/wrench marker) & Campfires (orange flame / dim stone ring)
+    if (this.upgradeBenches.length > 0) {
+      ctx.save();
+      for (const bench of this.upgradeBenches) {
+        const bp = toPx(bench.x, bench.z);
+        ctx.save();
+        ctx.translate(bp.x, bp.y);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(8, 24, 48, 0.92)';
+        ctx.fill();
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        ctx.fillStyle = '#22d3ee';
+        ctx.beginPath();
+        ctx.moveTo(-4.8, -1.8);
+        ctx.lineTo(3.8, -1.8);
+        ctx.lineTo(5.2, -3.2);
+        ctx.lineTo(5.2, 0.2);
+        ctx.lineTo(2.4, 0.8);
+        ctx.lineTo(3.2, 3.6);
+        ctx.lineTo(-3.2, 3.6);
+        ctx.lineTo(-2.4, 0.8);
+        ctx.lineTo(-4.8, -0.4);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#e0f2fe';
+        ctx.fillRect(-3.2, -1.5, 6.2, 1.1);
+
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    if (this.campfires.length > 0) {
+      ctx.save();
+      for (const campfire of this.campfires) {
+        const cp = toPx(campfire.x, campfire.z);
+        ctx.save();
+        ctx.translate(cp.x, cp.y);
+
+        if (campfire.lit) {
+          ctx.beginPath();
+          ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(41, 18, 8, 0.92)';
+          ctx.fill();
+          ctx.strokeStyle = '#d6d3d1';
+          ctx.lineWidth = 1.6;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(0, -5.2);
+          ctx.lineTo(3.8, -0.5);
+          ctx.lineTo(3.2, 3.8);
+          ctx.lineTo(0, 4.8);
+          ctx.lineTo(-3.2, 3.8);
+          ctx.lineTo(-3.8, -0.5);
+          ctx.closePath();
+          ctx.fillStyle = '#fb923c';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.moveTo(0, -2.4);
+          ctx.lineTo(1.8, 1.0);
+          ctx.lineTo(0, 3.4);
+          ctx.lineTo(-1.8, 1.0);
+          ctx.closePath();
+          ctx.fillStyle = '#fde047';
+          ctx.fill();
+        } else {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(30, 41, 59, 0.85)';
+          ctx.fill();
+          ctx.setLineDash([2.5, 2]);
+          ctx.strokeStyle = '#64748b';
+          ctx.lineWidth = 1.8;
+          ctx.stroke();
+          ctx.restore();
+
+          ctx.beginPath();
+          ctx.arc(0, 0, 2.0, 0, Math.PI * 2);
+          ctx.fillStyle = '#475569';
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+      ctx.restore();
+    }
 
     // Interactive Boss Vaults (locked gold padlock vs unlocked green/gold padlock)
     if (this.vaults.length > 0) {

@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   AnimState,
   BiomeType,
   CharacterRenderState,
   EmoteId,
+  Rarity,
   WeaponId,
 } from '../../types';
 import {
@@ -12,17 +13,23 @@ import {
   EventBus,
   GLIDERS,
   PICKAXES,
+  RARITY_COLORS,
   SKINS,
   WEAPONS,
+  WEAPON_WRAPS,
 } from '../../core';
 import {
   CharacterAnimator,
   CharacterRig,
   VFXManager,
+  applyWeaponWrap,
   createBlueprintModel,
   createWeaponModel,
+  createWeaponWrapTexture,
   disposeObject3D,
   getBiomeDustColors,
+  getWeaponWrapMaterial,
+  getWeaponWrapTexture,
   hasMuzzleOffset,
   isRangedWeapon,
   isThrowableWeapon,
@@ -214,13 +221,17 @@ describe('CharacterRig', () => {
     expect(height).toBeGreaterThan(1.75);
     expect(height).toBeLessThan(1.98);
 
-    let allCastShadows = true;
+    let allBodyCastShadows = true;
     root.traverse((child) => {
-      if (child instanceof THREE.Mesh && !child.castShadow) {
-        allCastShadows = false;
+      if (child instanceof THREE.Mesh && child.name !== 'ground_contact_shadow' && !child.castShadow) {
+        allBodyCastShadows = false;
       }
     });
-    expect(allCastShadows).toBe(true);
+    expect(allBodyCastShadows).toBe(true);
+
+    const shadowDisc = root.getObjectByName('ground_contact_shadow') as THREE.Mesh;
+    expect(shadowDisc).toBeInstanceOf(THREE.Mesh);
+    expect(shadowDisc.castShadow).toBe(false);
 
     rig.dispose();
   });
@@ -1056,5 +1067,396 @@ describe('VFXManager', () => {
     vfx.updateThrowArc(arcPoints);
     expect(vfx.getActiveEffectCount()).toBe(0);
     expect(vfx.isThrowArcVisible()).toBe(false);
+  });
+
+  it('spawns, updates, clears, and disposes Wave-3 VFX (weapon_upgrade, slurp_burst, campfire_heal) and caps impact decals at <= 40', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. Weapon Upgrade holographic ring + rising spark bursts across rarities
+    const rarities: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
+    for (const rarity of rarities) {
+      bus.emit('vfx:weapon_upgrade', {
+        position: { x: 2, y: 0.5, z: 3 },
+        rarity,
+      });
+    }
+    expect(vfx.getActiveWeaponUpgradeCount()).toBe(6);
+
+    // 2. Slurp Barrel Burst (cyan dome + upward droplets)
+    bus.emit('vfx:slurp_burst', {
+      position: { x: -4, y: 0.2, z: 5 },
+      radius: 4.5,
+    });
+    expect(vfx.getActiveSlurpBurstCount()).toBe(1);
+
+    // 3. Campfire Heal rising warm green/amber ember motes
+    bus.emit('vfx:campfire_heal', {
+      position: { x: 6, y: 0, z: -2 },
+    });
+    expect(vfx.getActiveCampfireHealCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(8);
+
+    // Verify rarity color tint applied cleanly to upgrade VFX
+    expect(RARITY_COLORS.mythic).toBeDefined();
+
+    // Advance past transient Wave-3 effect lifetimes (~1.3s)
+    for (let i = 0; i < 28; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveWeaponUpgradeCount()).toBe(0);
+    expect(vfx.getActiveSlurpBurstCount()).toBe(0);
+    expect(vfx.getActiveCampfireHealCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // 4. Pooled Surface Bullet Impact Decals (wood, brick, metal, dirt)
+    // Shield, flesh, and shield_break should NOT spawn surface decals
+    bus.emit('vfx:impact', {
+      position: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      material: 'shield',
+    });
+    bus.emit('vfx:impact', {
+      position: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      material: 'flesh',
+    });
+    bus.emit('vfx:impact', {
+      position: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      material: 'shield_break',
+    });
+    expect(vfx.getActiveImpactDecalCount()).toBe(0);
+
+    // Spawn decals on surface materials with wall & floor normals
+    const surfaceMats = ['wood', 'brick', 'metal', 'dirt'] as const;
+    bus.emit('vfx:impact', {
+      position: { x: 1, y: 2, z: 3 },
+      normal: { x: 1, y: 0, z: 0 },
+      material: 'wood',
+    });
+    expect(vfx.getActiveImpactDecalCount()).toBe(1);
+
+    const decal0 = scene.getObjectByName('vfx_impact_decal_0') as THREE.Mesh;
+    expect(decal0).toBeInstanceOf(THREE.Mesh);
+    expect(decal0.visible).toBe(true);
+    const decalMat0 = decal0.material as THREE.MeshBasicMaterial;
+    expect(decalMat0.polygonOffset).toBe(true);
+    expect(decalMat0.depthWrite).toBe(false);
+    const initialOpacity = decalMat0.opacity;
+
+    // Oriented cleanly to wall normal (+X -> world normal of CircleGeometry(+Z) points along +X)
+    const localNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(decal0.quaternion);
+    expect(localNormal.x).toBeCloseTo(1, 3);
+    expect(Math.abs(localNormal.y)).toBeLessThan(1e-3);
+    expect(Math.abs(localNormal.z)).toBeLessThan(1e-3);
+
+    // Halfway through 12s fade (6.0s), decal is still active and smoothly faded
+    for (let i = 0; i < 60; i++) {
+      vfx.update(0.1);
+    }
+    expect(vfx.getActiveImpactDecalCount()).toBe(1);
+    expect(decalMat0.opacity).toBeLessThan(initialOpacity);
+    expect(decalMat0.opacity).toBeGreaterThan(0.1);
+
+    // Past 12s, decal fades out and returns to pool
+    for (let i = 0; i < 65; i++) {
+      vfx.update(0.1);
+    }
+    expect(vfx.getActiveImpactDecalCount()).toBe(0);
+    expect(decal0.visible).toBe(false);
+
+    // Flood 65 surface impacts -> pool strictly capped at <= 40
+    for (let i = 0; i < 65; i++) {
+      bus.emit('vfx:impact', {
+        position: { x: i * 0.2, y: 0, z: 0 },
+        normal: { x: 0, y: 1, z: 0 },
+        material: surfaceMats[i % surfaceMats.length],
+      });
+    }
+    expect(vfx.getActiveImpactDecalCount()).toBeLessThanOrEqual(40);
+    expect(vfx.getActiveImpactDecalCount()).toBe(40);
+
+    // clear() resets decals and Wave-3 transient effects
+    bus.emit('vfx:weapon_upgrade', { position: { x: 0, y: 1, z: 0 }, rarity: 'legendary' });
+    bus.emit('vfx:slurp_burst', { position: { x: 1, y: 0, z: 1 }, radius: 4 });
+    bus.emit('vfx:campfire_heal', { position: { x: 2, y: 0, z: 2 } });
+    vfx.clear();
+    expect(vfx.getActiveImpactDecalCount()).toBe(0);
+    expect(vfx.getActiveWeaponUpgradeCount()).toBe(0);
+    expect(vfx.getActiveSlurpBurstCount()).toBe(0);
+    expect(vfx.getActiveCampfireHealCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() unsubscribes Wave-3 EventBus channels cleanly
+    vfx.dispose();
+    bus.emit('vfx:weapon_upgrade', { position: { x: 0, y: 1, z: 0 }, rarity: 'epic' });
+    bus.emit('vfx:slurp_burst', { position: { x: 0, y: 0, z: 0 }, radius: 4 });
+    bus.emit('vfx:campfire_heal', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:impact', {
+      position: { x: 0, y: 0, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      material: 'metal',
+    });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+    expect(vfx.getActiveImpactDecalCount()).toBe(0);
+  });
+});
+
+describe('Wave-3 Weapon Wraps, Ground Contact Shadow & Armor Rim Polish', () => {
+  it('supports all 6 WEAPON_WRAPS patterns with cached materials/textures, selective gun wrapping, and Node-safe 2D canvas drawing', () => {
+    expect(WEAPON_WRAPS).toHaveLength(6);
+
+    const gunIds: WeaponId[] = [
+      'ar',
+      'burst_ar',
+      'pump_shotgun',
+      'tac_shotgun',
+      'heavy_shotgun',
+      'smg',
+      'sniper',
+      'pistol',
+      'rocket_launcher',
+      'mythic_blade_rifle',
+      'grappler',
+    ];
+
+    for (const wrap of WEAPON_WRAPS) {
+      const texA = getWeaponWrapTexture(wrap.id);
+      const texB = createWeaponWrapTexture(wrap.id);
+      const matA = getWeaponWrapMaterial(wrap.id);
+      const matB = getWeaponWrapMaterial(wrap.id);
+
+      expect(texA).toBeInstanceOf(THREE.CanvasTexture);
+      expect(texB).toBe(texA);
+      expect(matA).toBeInstanceOf(THREE.MeshStandardMaterial);
+      expect(matB).toBe(matA);
+      expect(matA.map).toBe(texA);
+      expect(matA.metalness).toBeCloseTo(wrap.metalness, 5);
+      expect(matA.roughness).toBeCloseTo(wrap.roughness, 5);
+
+      for (const gunId of gunIds) {
+        const gun = createWeaponModel(gunId);
+        let targetCount = 0;
+        let nonTargetCount = 0;
+
+        applyWeaponWrap(gun, wrap.id);
+        gun.traverse((child) => {
+          if (!(child instanceof THREE.Mesh)) return;
+          if (child.userData.wrapTarget === true) {
+            targetCount++;
+            expect(child.material).toBe(matA);
+          } else {
+            nonTargetCount++;
+            expect(child.material).not.toBe(matA);
+          }
+        });
+
+        expect(targetCount).toBeGreaterThanOrEqual(1);
+        expect(nonTargetCount).toBeGreaterThanOrEqual(1);
+        disposeObject3D(gun);
+      }
+    }
+
+    // Unknown or undefined wrapId defaults cleanly to factory_matte
+    const ar = createWeaponModel('ar');
+    applyWeaponWrap(ar, undefined);
+    const factoryMat = getWeaponWrapMaterial('factory_matte');
+    let wrappedMatchesFactory = false;
+    ar.traverse((c) => {
+      if (c instanceof THREE.Mesh && c.userData.wrapTarget === true && c.material === factoryMat) {
+        wrappedMatchesFactory = true;
+      }
+    });
+    expect(wrappedMatchesFactory).toBe(true);
+
+    applyWeaponWrap(ar, 'non_existent_wrap_id');
+    expect(ar.userData.appliedWrapId).toBe('factory_matte');
+    disposeObject3D(ar);
+
+    // Mocked browser canvas environment: verifies zero fillText/ellipse calls and null-context resilience
+    const forbiddenCalls: string[] = [];
+    const allowedDraws = {
+      fillRect: vi.fn(),
+      arc: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      fill: vi.fn(),
+      stroke: vi.fn(),
+      createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
+      fillText: () => forbiddenCalls.push('fillText'),
+      ellipse: () => forbiddenCalls.push('ellipse'),
+    };
+
+    const originalDocument = (globalThis as { document?: unknown }).document;
+    try {
+      (globalThis as { document?: unknown }).document = {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => allowedDraws,
+        }),
+      };
+
+      for (const wrap of WEAPON_WRAPS) {
+        const freshTex = createWeaponWrapTexture({ ...wrap, id: `mock_${wrap.id}` });
+        expect(freshTex).toBeInstanceOf(THREE.CanvasTexture);
+      }
+      expect(forbiddenCalls).toEqual([]);
+      expect(allowedDraws.fillRect).toHaveBeenCalled();
+      expect(allowedDraws.arc).toHaveBeenCalled();
+
+      // Null 2D context gracefully handled without throwing
+      (globalThis as { document?: unknown }).document = {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => null,
+        }),
+      };
+      const nullCtxTex = createWeaponWrapTexture({
+        ...WEAPON_WRAPS[0],
+        id: 'mock_null_ctx_wrap',
+      });
+      expect(nullCtxTex).toBeInstanceOf(THREE.CanvasTexture);
+    } finally {
+      if (originalDocument === undefined) {
+        delete (globalThis as { document?: unknown }).document;
+      } else {
+        (globalThis as { document?: unknown }).document = originalDocument;
+      }
+    }
+  });
+
+  it('tracks CharacterRig.setWeaponWrap across weapon swaps & updateFromState, fades Ground Contact Shadow Disc smoothly, and guards armor rim shaders', () => {
+    const rig = new CharacterRig(SKINS[0], PICKAXES[0], GLIDERS[0]);
+    const animator = new CharacterAnimator();
+
+    // Weapon wrap changes & persists across weapon equips
+    rig.equipWeapon('ar', false);
+    for (const wrap of WEAPON_WRAPS) {
+      rig.setWeaponWrap(wrap.id);
+      expect(rig.getWeaponWrapId()).toBe(wrap.id);
+
+      const expectedMat = getWeaponWrapMaterial(wrap.id);
+      let appliedToReceiver = false;
+      rig.joints.weaponSocket.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.userData.wrapTarget === true) {
+          expect(child.material).toBe(expectedMat);
+          appliedToReceiver = true;
+        }
+      });
+      expect(appliedToReceiver).toBe(true);
+    }
+
+    // Swapping to another gun automatically applies the active wrap
+    rig.setWeaponWrap('magma_rift');
+    rig.equipWeapon('sniper', false);
+    const magmaMat = getWeaponWrapMaterial('magma_rift');
+    let sniperWrapped = false;
+    rig.joints.weaponSocket.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.visible && child.userData.wrapTarget === true) {
+        // Note: check the active sniper group specifically
+        let p: THREE.Object3D | null = child;
+        while (p && p.parent !== rig.joints.weaponSocket) p = p.parent;
+        if (p && p.visible) {
+          expect(child.material).toBe(magmaMat);
+          sniperWrapped = true;
+        }
+      }
+    });
+    expect(sniperWrapped).toBe(true);
+
+    // updateFromState & CharacterAnimator.update respect state.weaponWrapId
+    rig.updateFromState(makeRenderState({ weaponId: 'tac_shotgun', weaponWrapId: 'midas_gold' }));
+    expect(rig.getWeaponWrapId()).toBe('midas_gold');
+    animator.update(
+      rig,
+      makeRenderState({ weaponId: 'ar', weaponWrapId: 'neon_cyber', grounded: true }),
+      0,
+    );
+    expect(rig.getWeaponWrapId()).toBe('neon_cyber');
+
+    // Ground Contact Shadow Disc fades scale & opacity smoothly with airborne height
+    const shadow = rig.getGroundShadowMesh()!;
+    expect(shadow).toBeInstanceOf(THREE.Mesh);
+    const shadowMat = shadow.material as THREE.MeshBasicMaterial;
+    expect(shadowMat).toBeInstanceOf(THREE.MeshBasicMaterial);
+    expect(shadowMat.depthWrite).toBe(false);
+    expect(shadowMat.transparent).toBe(true);
+    expect(shadowMat.map).toBeInstanceOf(THREE.CanvasTexture);
+
+    rig.updateFromState(
+      makeRenderState({ position: { x: 0, y: 10, z: 0 }, grounded: true }),
+      10,
+    );
+    const groundedOpacity = shadowMat.opacity;
+    const groundedScale = shadow.scale.x;
+    expect(groundedOpacity).toBeGreaterThan(0.35);
+    expect(groundedScale).toBeCloseTo(1, 3);
+    expect(shadow.position.y).toBeCloseTo(0.025, 3);
+    expect(shadow.visible).toBe(true);
+
+    rig.updateFromState(
+      makeRenderState({ position: { x: 0, y: 12.5, z: 0 }, grounded: false }),
+      10,
+    );
+    const midAirOpacity = shadowMat.opacity;
+    const midAirScale = shadow.scale.x;
+    expect(midAirOpacity).toBeLessThan(groundedOpacity);
+    expect(midAirOpacity).toBeGreaterThan(0.05);
+    expect(midAirScale).toBeLessThan(groundedScale);
+    expect(shadow.position.y).toBeCloseTo(-2.475, 2);
+
+    rig.updateFromState(
+      makeRenderState({ position: { x: 0, y: 20, z: 0 }, grounded: false }),
+      10,
+    );
+    expect(shadowMat.opacity).toBeLessThan(0.02);
+    expect(shadow.visible).toBe(false);
+
+    // Landing restores contact shadow cleanly
+    rig.updateFromState(
+      makeRenderState({ position: { x: 0, y: 10, z: 0 }, grounded: true }),
+      10,
+    );
+    expect(shadowMat.opacity).toBeCloseTo(groundedOpacity, 4);
+    expect(shadow.scale.x).toBeCloseTo(1, 3);
+    expect(shadow.visible).toBe(true);
+
+    // Armor Rim / Fresnel onBeforeCompile shader safety across Three.js GLSL & mock envs
+    let rimMatCount = 0;
+    rig.getGroup().traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+        const mat = child.material;
+        if (mat.userData.hasArmorRim) {
+          rimMatCount++;
+          const mockShader = {
+            uniforms: {},
+            vertexShader: THREE.ShaderLib.standard.vertexShader,
+            fragmentShader: THREE.ShaderLib.standard.fragmentShader,
+          };
+          expect(() =>
+            mat.onBeforeCompile(mockShader as unknown as THREE.WebGLProgramParametersWithUniforms, {} as THREE.WebGLRenderer),
+          ).not.toThrow();
+          expect(mockShader.fragmentShader).toContain('uniform vec3 uRimColor;');
+          expect(mockShader.fragmentShader).toContain('rimFresnel');
+          expect(mockShader.fragmentShader).not.toContain('pow(');
+
+          // Partial/null edge cases must never throw
+          expect(() =>
+            mat.onBeforeCompile(
+              { uniforms: undefined, vertexShader: '', fragmentShader: '' } as unknown as THREE.WebGLProgramParametersWithUniforms,
+              {} as THREE.WebGLRenderer,
+            ),
+          ).not.toThrow();
+        }
+      }
+    });
+    expect(rimMatCount).toBeGreaterThan(0);
+
+    rig.dispose();
   });
 });

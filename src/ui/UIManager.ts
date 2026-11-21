@@ -2,6 +2,7 @@ import './ui.css';
 import { EventBus } from '../core';
 import type {
   BannerMessage,
+  CampfireEntity,
   DamageNumberEvent,
   EmoteId,
   GamePhase,
@@ -10,7 +11,9 @@ import type {
   KillFeedEntry,
   LaunchPadEntity,
   LobbyConfig,
+  MatchQuest,
   MatchSummary,
+  UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
   ZiplineEntity,
@@ -28,7 +31,7 @@ export interface UIManagerCallbacks {
     cosmetics: Pick<
       LobbyConfig,
       'skinId' | 'pickaxeId' | 'gliderId' | 'selectedEmote'
-    >,
+    > & { weaponWrapId?: string },
   ) => void;
   onSettingsChange?: (settings: GameSettings) => void;
   onEmoteSelect?: (emoteId: EmoteId) => void;
@@ -144,6 +147,13 @@ export class UIManager {
 
   setWorldVaults(vaults: VaultEntity[]): void {
     this.fullMap.setWorldVaults(vaults);
+  }
+
+  setWorldStations(
+    benches: UpgradeBenchEntity[],
+    campfires: CampfireEntity[],
+  ): void {
+    this.fullMap.setWorldStations(benches, campfires);
   }
 
   setPhase(phase: GamePhase): void {
@@ -264,12 +274,24 @@ export class UIManager {
     this.matchOverlay.showBountyToast(ev);
   }
 
+  showQuestCompleteToast(quest: MatchQuest): void {
+    this.hud.showQuestCompleteToast(quest);
+  }
+
   getCareerStats(): CareerStats {
     return loadCareerStats();
   }
 
   getSettings(): GameSettings {
     return this.lobby.getSettings();
+  }
+
+  setSettings(settings: GameSettings): void {
+    const copy = cloneSettings(settings);
+    this.lobby.syncSettings(copy);
+    this.hud.setSettings(copy);
+    this.fullMap.setSettings(copy);
+    this.matchOverlay.setSettings(copy);
   }
 
   getLobbyConfig(): LobbyConfig {
@@ -306,6 +328,9 @@ export class UIManager {
       }),
       this.eventBus.on('ui:bounty', (ev) => {
         this.showBountyToast(ev);
+      }),
+      this.eventBus.on('ui:quest_complete', (ev) => {
+        this.showQuestCompleteToast(ev.quest);
       }),
       this.eventBus.on('combat:siphon', (ev) => {
         this.hud.triggerSiphonFlash(ev.amount, ev.healthAdded, ev.shieldAdded, true);

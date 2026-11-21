@@ -1,17 +1,21 @@
 import {
   DEFAULT_KEYBINDS,
+  GAME_MODES,
   RARITY_COLORS,
   WORLD_HALF,
   WORLD_SIZE,
 } from '../core';
 import type {
   BiomeType,
+  GameModeId,
   GameSettings,
   HUDState,
   KeybindMap,
+  MatchQuest,
   Rarity,
   StormState,
   VehicleKind,
+  VisualSoundCue,
   WeatherKind,
 } from '../types';
 
@@ -435,6 +439,7 @@ export function resolveKeybinds(keybinds?: Partial<KeybindMap>): KeybindMap {
 export function cloneSettings(settings: GameSettings): GameSettings {
   return {
     ...settings,
+    visualAudio: settings.visualAudio !== false,
     keybinds: resolveKeybinds(settings.keybinds),
   };
 }
@@ -529,4 +534,93 @@ export function getContextualHudHints(
     });
   }
   return hints;
+}
+
+/**
+ * Returns GAME_MODES metadata entry for a GameModeId (defaulting to 'solo').
+ */
+export function getGameModeMeta(modeId?: GameModeId): {
+  id: GameModeId;
+  name: string;
+  subtitle: string;
+  badge: string;
+} {
+  return GAME_MODES.find((m) => m.id === modeId) ?? GAME_MODES[0];
+}
+
+/**
+ * Returns HUD mode chip text ('ZERO BUILD' | 'BLITZ'), or '' for default 'solo'.
+ */
+export function formatModeBadgeLabel(modeId?: GameModeId): string {
+  if (!modeId || modeId === 'solo') return '';
+  if (modeId === 'zero_build') return 'ZERO BUILD';
+  if (modeId === 'blitz') return 'BLITZ';
+  return String(modeId).toUpperCase();
+}
+
+/**
+ * Computes clamped [0, 100] Overshield bar percentage.
+ */
+export function computeOvershieldPct(
+  overshield?: number,
+  maxOvershield?: number,
+): number {
+  if (
+    typeof maxOvershield !== 'number' ||
+    !Number.isFinite(maxOvershield) ||
+    maxOvershield <= 0
+  ) {
+    return 0;
+  }
+  const cur =
+    typeof overshield === 'number' && Number.isFinite(overshield)
+      ? Math.max(0, overshield)
+      : 0;
+  return Math.max(0, Math.min(100, (cur / maxOvershield) * 100));
+}
+
+/**
+ * Computes clamped [0, 100] MatchQuest progress bar percentage.
+ */
+export function computeQuestProgressPct(
+  quest: Pick<MatchQuest, 'progress' | 'target' | 'completed'>,
+): number {
+  if (quest.completed) return 100;
+  const target =
+    typeof quest.target === 'number' && Number.isFinite(quest.target) && quest.target > 0
+      ? quest.target
+      : 1;
+  const progress =
+    typeof quest.progress === 'number' && Number.isFinite(quest.progress)
+      ? Math.max(0, quest.progress)
+      : 0;
+  return Math.max(0, Math.min(100, (progress / target) * 100));
+}
+
+/**
+ * Selects up to `maxCount` highest-intensity VisualSoundCue items in a deterministic copy.
+ */
+export function selectVisibleVisualSoundCues(
+  cues?: VisualSoundCue[],
+  maxCount = 8,
+): VisualSoundCue[] {
+  if (!Array.isArray(cues) || cues.length === 0 || maxCount <= 0) {
+    return [];
+  }
+  const valid = cues.filter(
+    (c) =>
+      Boolean(c) &&
+      typeof c.angleRad === 'number' &&
+      Number.isFinite(c.angleRad),
+  );
+  valid.sort((a, b) => (b.intensity ?? 0) - (a.intensity ?? 0));
+  return valid.slice(0, maxCount);
+}
+
+/**
+ * Converts a finite angle in radians to degrees (0 fallback).
+ */
+export function angleRadToDeg(angleRad: number): number {
+  if (!Number.isFinite(angleRad)) return 0;
+  return (angleRad * 180) / Math.PI;
 }

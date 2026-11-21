@@ -1,6 +1,14 @@
 import * as THREE from 'three';
-import type { AmmoType, BiomeType, BuildPieceType, MaterialType, Vec3Like, WeaponId } from '../types';
-import { EventBus, MATERIAL_STATS, WEAPONS, clamp } from '../core';
+import type {
+  AmmoType,
+  BiomeType,
+  BuildPieceType,
+  MaterialType,
+  Rarity,
+  Vec3Like,
+  WeaponId,
+} from '../types';
+import { EventBus, MATERIAL_STATS, RARITY_COLORS, WEAPONS, clamp } from '../core';
 
 type ImpactMaterial =
   | 'wood'
@@ -294,6 +302,128 @@ interface VehicleBoostSlot {
   sparks: VehicleBoostSpark[];
 }
 
+interface WeaponUpgradeSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface WeaponUpgradeSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  innerRingMesh: THREE.Mesh;
+  innerRingMat: THREE.MeshBasicMaterial;
+  sparks: WeaponUpgradeSpark[];
+}
+
+interface SlurpDroplet {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface SlurpBurstSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  droplets: SlurpDroplet[];
+}
+
+interface CampfireMote {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  swaySpeed: number;
+  baseScale: number;
+}
+
+interface CampfireHealSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  glowRingMesh: THREE.Mesh;
+  glowRingMat: THREE.MeshBasicMaterial;
+  motes: CampfireMote[];
+}
+
+interface ImpactDecalSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  baseOpacity: number;
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+}
+
+function createImpactDecalTexture(): THREE.CanvasTexture {
+  const size = 128;
+  let canvas: HTMLCanvasElement;
+  if (typeof document !== 'undefined') {
+    canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const cx = size * 0.5;
+      const cy = size * 0.5;
+      // Soft outer scorch halo via concentric circles (no ellipse/fillText)
+      for (let i = 16; i >= 1; i--) {
+        ctx.fillStyle = 'rgba(220, 220, 220, 0.055)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, size * 0.45 * (i / 16), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Crisp splinter/crack rays
+      ctx.strokeStyle = 'rgba(85, 85, 85, 0.85)';
+      ctx.lineWidth = 3;
+      for (let r = 0; r < 8; r++) {
+        const ang = (r / 8) * Math.PI * 2 + (r % 2) * 0.18;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(ang) * 8, cy + Math.sin(ang) * 8);
+        ctx.lineTo(cx + Math.cos(ang) * (size * 0.41), cy + Math.sin(ang) * (size * 0.41));
+        ctx.stroke();
+      }
+      // Dark bullet impact core
+      ctx.fillStyle = 'rgba(20, 20, 20, 0.96)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, size * 0.16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    canvas = {
+      width: size,
+      height: size,
+      getContext: () => null,
+    } as unknown as HTMLCanvasElement;
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.name = 'vfx_impact_decal_tex';
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 function isFiniteVec3(v: Vec3Like | null | undefined): v is Vec3Like {
   return (
     v !== null &&
@@ -325,6 +455,14 @@ const GRAPPLE_LINE_POOL_SIZE = 8;
 const SHIELD_BUBBLE_POOL_SIZE = 8;
 const VEHICLE_BOOST_POOL_SIZE = 24;
 const VEHICLE_BOOST_SPARK_COUNT = 10;
+const WEAPON_UPGRADE_POOL_SIZE = 8;
+const WEAPON_UPGRADE_SPARK_COUNT = 14;
+const SLURP_BURST_POOL_SIZE = 10;
+const SLURP_BURST_DROPLET_COUNT = 16;
+const CAMPFIRE_HEAL_POOL_SIZE = 12;
+const CAMPFIRE_HEAL_MOTE_COUNT = 12;
+const IMPACT_DECAL_POOL_SIZE = 40;
+const IMPACT_DECAL_DURATION = 12.0;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -340,6 +478,7 @@ export class VFXManager {
 
   private readonly sharedGeometries: THREE.BufferGeometry[] = [];
   private readonly ownedMaterials: THREE.Material[] = [];
+  private readonly ownedTextures: THREE.Texture[] = [];
 
   private readonly unitBoxGeo: THREE.BoxGeometry;
   private readonly unitCylinderGeo: THREE.CylinderGeometry;
@@ -354,6 +493,7 @@ export class VFXManager {
   private readonly droneRotorGeo: THREE.TorusGeometry;
   private readonly beamCylGeo: THREE.CylinderGeometry;
   private readonly hexDomeGeo: THREE.IcosahedronGeometry;
+  private readonly impactDecalTex: THREE.CanvasTexture;
 
   private readonly tracers: TracerSlot[] = [];
   private readonly muzzles: MuzzleSlot[] = [];
@@ -369,6 +509,10 @@ export class VFXManager {
   private readonly grappleLines: GrappleLineSlot[] = [];
   private readonly shieldBubbles: ShieldBubbleSlot[] = [];
   private readonly vehicleBoosts: VehicleBoostSlot[] = [];
+  private readonly weaponUpgrades: WeaponUpgradeSlot[] = [];
+  private readonly slurpBursts: SlurpBurstSlot[] = [];
+  private readonly campfireHeals: CampfireHealSlot[] = [];
+  private readonly impactDecals: ImpactDecalSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -402,6 +546,10 @@ export class VFXManager {
   private grappleLineCursor = 0;
   private shieldBubbleCursor = 0;
   private vehicleBoostCursor = 0;
+  private weaponUpgradeCursor = 0;
+  private slurpBurstCursor = 0;
+  private campfireHealCursor = 0;
+  private impactDecalCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -435,6 +583,8 @@ export class VFXManager {
     this.droneRotorGeo = this.trackGeo(new THREE.TorusGeometry(0.14, 0.022, 6, 12));
     this.beamCylGeo = this.trackGeo(new THREE.CylinderGeometry(0.42, 0.68, 1, 12, 1, true));
     this.hexDomeGeo = this.trackGeo(new THREE.IcosahedronGeometry(1, 1));
+    this.impactDecalTex = createImpactDecalTexture();
+    this.ownedTextures.push(this.impactDecalTex);
 
     // Pre-allocated throw trajectory preview arc + landing ring
     this.throwArcGroup = new THREE.Group();
@@ -1466,6 +1616,234 @@ export class VFXManager {
         sparks,
       });
     }
+
+    // 15. Weapon Upgrade Bench Holographic Ring + Rising Spark Burst
+    for (let i = 0; i < WEAPON_UPGRADE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x26a6ff,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+      outerRingMesh.rotation.x = -Math.PI / 2;
+      group.add(outerRingMesh);
+
+      const innerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const innerRingMesh = new THREE.Mesh(this.unitRingGeo, innerRingMat);
+      innerRingMesh.rotation.x = -Math.PI / 2;
+      group.add(innerRingMesh);
+
+      const sparks: WeaponUpgradeSpark[] = [];
+      for (let s = 0; s < WEAPON_UPGRADE_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: 0x26a6ff,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = s % 2 === 0 ? this.unitCrystalGeo : this.unitBoxGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / WEAPON_UPGRADE_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.45,
+          speedY: 1.8,
+          spin: 3.5,
+          baseScale: 0.09,
+        });
+      }
+
+      this.root.add(group);
+      this.weaponUpgrades.push({
+        active: false,
+        age: 0,
+        duration: 0.92,
+        group,
+        outerRingMesh,
+        outerRingMat,
+        innerRingMesh,
+        innerRingMat,
+        sparks,
+      });
+    }
+
+    // 16. Slurp Barrel Burst (glowing cyan liquid splash dome + upward droplet particles)
+    for (let i = 0; i < SLURP_BURST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x06b6d4,
+          transparent: true,
+          opacity: 0.48,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.unitSphereGeo, domeMat);
+      group.add(domeMesh);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x67e8f9,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const droplets: SlurpDroplet[] = [];
+      for (let d = 0; d < SLURP_BURST_DROPLET_COUNT; d++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: d % 4 === 0 ? 0xa3e635 : d % 2 === 0 ? 0x67e8f9 : 0x22d3ee,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = d % 2 === 0 ? this.unitSphereGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        droplets.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.11,
+        });
+      }
+
+      this.root.add(group);
+      this.slurpBursts.push({
+        active: false,
+        age: 0,
+        duration: 0.85,
+        radius: 4.0,
+        group,
+        domeMesh,
+        domeMat,
+        ringMesh,
+        ringMat,
+        droplets,
+      });
+    }
+
+    // 17. Campfire Heal (rising warm green/amber healing ember motes)
+    for (let i = 0; i < CAMPFIRE_HEAL_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+
+      const glowRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x4ade80,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const glowRingMesh = new THREE.Mesh(this.unitRingGeo, glowRingMat);
+      glowRingMesh.rotation.x = -Math.PI / 2;
+      group.add(glowRingMesh);
+
+      const motes: CampfireMote[] = [];
+      for (let m = 0; m < CAMPFIRE_HEAL_MOTE_COUNT; m++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: m % 3 === 0 ? 0xfbbf24 : m % 2 === 0 ? 0x4ade80 : 0xf97316,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = m % 2 === 0 ? this.unitCrystalGeo : this.unitSphereGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        motes.push({
+          mesh,
+          material,
+          angle: (m / CAMPFIRE_HEAL_MOTE_COUNT) * Math.PI * 2,
+          radius: 0.5,
+          speedY: 1.4,
+          swaySpeed: 2.5,
+          baseScale: 0.085,
+        });
+      }
+
+      this.root.add(group);
+      this.campfireHeals.push({
+        active: false,
+        age: 0,
+        duration: 1.15,
+        group,
+        glowRingMesh,
+        glowRingMat,
+        motes,
+      });
+    }
+
+    // 18. Surface Bullet Impact Decals (max 40 pooled circular scorch/splinter discs, polygonOffset: true)
+    for (let i = 0; i < IMPACT_DECAL_POOL_SIZE; i++) {
+      const material = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x3f3f46,
+          map: this.impactDecalTex,
+          transparent: true,
+          opacity: 0.86,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2,
+          side: THREE.DoubleSide,
+        }),
+      );
+      const mesh = new THREE.Mesh(this.unitCircleGeo, material);
+      mesh.name = `vfx_impact_decal_${i}`;
+      mesh.visible = false;
+      this.root.add(mesh);
+      this.impactDecals.push({
+        active: false,
+        age: 0,
+        duration: IMPACT_DECAL_DURATION,
+        baseOpacity: 0.86,
+        mesh,
+        material,
+      });
+    }
   }
 
   private subscribeEvents(): void {
@@ -1490,6 +1868,11 @@ export class VFXManager {
         this.spawnShieldBubble(e.id, e.position, e.radius, e.duration),
       ),
       this.eventBus.on('vfx:vehicle_boost', (e) => this.spawnVehicleBoost(e.position, e.direction)),
+      this.eventBus.on('vfx:weapon_upgrade', (e) =>
+        this.spawnWeaponUpgrade(e.position, e.rarity),
+      ),
+      this.eventBus.on('vfx:slurp_burst', (e) => this.spawnSlurpBurst(e.position, e.radius)),
+      this.eventBus.on('vfx:campfire_heal', (e) => this.spawnCampfireHeal(e.position)),
     );
   }
 
@@ -1650,17 +2033,28 @@ export class VFXManager {
   }
 
   private spawnImpact(position: Vec3Like, normal: Vec3Like, material: ImpactMaterial): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const safeNormal: Vec3Like = isFiniteVec3(normal) ? normal : { x: 0, y: 1, z: 0 };
 
     if (material === 'shield_break') {
-      this.spawnShieldBreak(position, normal);
+      this.spawnShieldBreak(position, safeNormal);
       return;
+    }
+
+    if (
+      material === 'wood' ||
+      material === 'brick' ||
+      material === 'metal' ||
+      material === 'dirt'
+    ) {
+      this.spawnImpactDecal(position, safeNormal, material);
     }
 
     const slot = this.bursts[this.burstCursor];
     this.burstCursor = (this.burstCursor + 1) % BURST_POOL_SIZE;
 
-    this.tmpDir.set(normal.x, normal.y, normal.z);
+    this.tmpDir.set(safeNormal.x, safeNormal.y, safeNormal.z);
     if (this.tmpDir.lengthSq() < 1e-8) {
       this.tmpDir.set(0, 1, 0);
     } else {
@@ -2587,6 +2981,121 @@ export class VFXManager {
       this.throwLandingRingGroup.rotation.y += 1.6 * safeDt;
       this.throwArcDotMat.opacity = 0.72 + 0.22 * Math.sin(this.throwArcAge * 6);
     }
+
+    // 16. Weapon Upgrade Holographic Rings + Rising Sparks
+    for (let i = 0; i < WEAPON_UPGRADE_POOL_SIZE; i++) {
+      const wu = this.weaponUpgrades[i];
+      if (!wu.active) continue;
+      wu.age += safeDt;
+      const t = wu.age / wu.duration;
+      if (t >= 1) {
+        wu.active = false;
+        wu.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      wu.outerRingMesh.scale.setScalar(0.35 + 1.45 * easeOut);
+      wu.outerRingMat.opacity = 0.94 * fade;
+
+      wu.innerRingMesh.position.y = 0.12 + 1.25 * easeOut;
+      wu.innerRingMesh.rotation.z += 4.2 * safeDt;
+      wu.innerRingMesh.scale.setScalar(0.25 + 0.95 * easeOut);
+      wu.innerRingMat.opacity = 0.88 * fade;
+
+      for (let s = 0; s < WEAPON_UPGRADE_SPARK_COUNT; s++) {
+        const sp = wu.sparks[s];
+        const ang = sp.angle + wu.age * sp.spin;
+        const rad = sp.radius * (1 + 0.45 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 6 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.5 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 17. Slurp Barrel Bursts (glowing cyan liquid dome + upward droplets)
+    for (let i = 0; i < SLURP_BURST_POOL_SIZE; i++) {
+      const sb = this.slurpBursts[i];
+      if (!sb.active) continue;
+      sb.age += safeDt;
+      const t = sb.age / sb.duration;
+      if (t >= 1) {
+        sb.active = false;
+        sb.group.visible = false;
+        continue;
+      }
+
+      const expand = 1 - Math.pow(1 - Math.min(1, t * 1.7), 2);
+      const fade = 1 - t;
+      sb.domeMesh.scale.set(
+        sb.radius * (0.35 + 0.65 * expand),
+        sb.radius * (0.3 + 0.5 * expand),
+        sb.radius * (0.35 + 0.65 * expand),
+      );
+      sb.domeMat.opacity = 0.48 * fade;
+
+      sb.ringMesh.scale.setScalar(sb.radius * (0.32 + 0.85 * expand));
+      sb.ringMat.opacity = 0.9 * fade;
+
+      for (let d = 0; d < SLURP_BURST_DROPLET_COUNT; d++) {
+        const dr = sb.droplets[d];
+        dr.vy -= 6.8 * safeDt;
+        dr.mesh.position.x += dr.vx * safeDt;
+        dr.mesh.position.y = Math.max(0.02, dr.mesh.position.y + dr.vy * safeDt);
+        dr.mesh.position.z += dr.vz * safeDt;
+        dr.mesh.rotation.y += 5 * safeDt;
+        dr.mesh.scale.setScalar(dr.baseScale * (1 - 0.45 * t));
+        dr.material.opacity = fade;
+      }
+    }
+
+    // 18. Campfire Healing Ember Motes
+    for (let i = 0; i < CAMPFIRE_HEAL_POOL_SIZE; i++) {
+      const ch = this.campfireHeals[i];
+      if (!ch.active) continue;
+      ch.age += safeDt;
+      const t = ch.age / ch.duration;
+      if (t >= 1) {
+        ch.active = false;
+        ch.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      ch.glowRingMesh.scale.setScalar(0.55 + 0.55 * t);
+      ch.glowRingMat.opacity = 0.55 * fade;
+
+      for (let m = 0; m < CAMPFIRE_HEAL_MOTE_COUNT; m++) {
+        const mt = ch.motes[m];
+        const ang = mt.angle + ch.age * mt.swaySpeed;
+        const rad = mt.radius * (1 - 0.25 * t);
+        mt.mesh.position.x = Math.cos(ang) * rad;
+        mt.mesh.position.y += mt.speedY * safeDt;
+        mt.mesh.position.z = Math.sin(ang) * rad;
+        mt.mesh.rotation.x += 4 * safeDt;
+        mt.mesh.rotation.y += 5 * safeDt;
+        mt.mesh.scale.setScalar(mt.baseScale * (1 - 0.5 * t));
+        mt.material.opacity = 0.95 * fade;
+      }
+    }
+
+    // 19. Pooled Surface Bullet Impact Decals (fade smoothly over 12s)
+    for (let i = 0; i < IMPACT_DECAL_POOL_SIZE; i++) {
+      const d = this.impactDecals[i];
+      if (!d.active) continue;
+      d.age += safeDt;
+      const t = d.age / d.duration;
+      if (t >= 1) {
+        d.active = false;
+        d.mesh.visible = false;
+        continue;
+      }
+      d.material.opacity = d.baseOpacity * (1 - Math.pow(t, 1.35));
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -2701,6 +3210,177 @@ export class VFXManager {
       sp.rx = (this.nextRand() - 0.5) * 16;
       sp.ry = (this.nextRand() - 0.5) * 16;
     }
+  }
+
+  private spawnWeaponUpgrade(position: Vec3Like, rarity: Rarity): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.weaponUpgrades[this.weaponUpgradeCursor];
+    this.weaponUpgradeCursor = (this.weaponUpgradeCursor + 1) % WEAPON_UPGRADE_POOL_SIZE;
+
+    const hexColor = RARITY_COLORS[rarity] ?? RARITY_COLORS.rare;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.92;
+
+    slot.group.position.set(position.x, position.y + 0.08, position.z);
+    slot.group.visible = true;
+
+    slot.outerRingMat.color.set(hexColor);
+    slot.outerRingMat.opacity = 0.94;
+    slot.outerRingMesh.scale.setScalar(0.35);
+
+    slot.innerRingMat.color.set(hexColor);
+    slot.innerRingMat.opacity = 0.9;
+    slot.innerRingMesh.position.set(0, 0.12, 0);
+    slot.innerRingMesh.rotation.set(-Math.PI / 2, 0, 0);
+    slot.innerRingMesh.scale.setScalar(0.25);
+
+    for (let s = 0; s < WEAPON_UPGRADE_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / WEAPON_UPGRADE_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      sp.radius = 0.25 + this.nextRand() * 0.45;
+      sp.speedY = 1.4 + this.nextRand() * 1.8;
+      sp.spin = (this.nextRand() > 0.5 ? 1 : -1) * (3 + this.nextRand() * 3);
+      sp.baseScale = 0.075 + this.nextRand() * 0.05;
+
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.06 + this.nextRand() * 0.25,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.color.set(s % 4 === 0 ? '#ffffff' : hexColor);
+      sp.material.opacity = 1;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnSlurpBurst(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.slurpBursts[this.slurpBurstCursor];
+    this.slurpBurstCursor = (this.slurpBurstCursor + 1) % SLURP_BURST_POOL_SIZE;
+
+    const safeRadius = Math.max(1.2, Number.isFinite(radius) ? radius : 4.0);
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.85;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.06, position.z);
+    slot.group.visible = true;
+
+    slot.domeMesh.scale.set(safeRadius * 0.35, safeRadius * 0.3, safeRadius * 0.35);
+    slot.domeMat.opacity = 0.48;
+    slot.ringMesh.scale.setScalar(safeRadius * 0.32);
+    slot.ringMat.opacity = 0.9;
+
+    for (let d = 0; d < SLURP_BURST_DROPLET_COUNT; d++) {
+      const dr = slot.droplets[d];
+      const ang = (d / SLURP_BURST_DROPLET_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const horiz = (0.7 + this.nextRand() * 1.5) * Math.min(2.2, safeRadius * 0.55);
+      dr.vx = Math.cos(ang) * horiz;
+      dr.vy = 2.6 + this.nextRand() * 2.5;
+      dr.vz = Math.sin(ang) * horiz;
+      dr.baseScale = 0.085 + this.nextRand() * 0.065;
+      dr.mesh.position.set(Math.cos(ang) * 0.22, 0.2 + this.nextRand() * 0.25, Math.sin(ang) * 0.22);
+      dr.mesh.scale.setScalar(dr.baseScale);
+      dr.material.opacity = 1;
+      dr.mesh.visible = true;
+    }
+  }
+
+  private spawnCampfireHeal(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.campfireHeals[this.campfireHealCursor];
+    this.campfireHealCursor = (this.campfireHealCursor + 1) % CAMPFIRE_HEAL_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.15;
+
+    slot.group.position.set(position.x, position.y + 0.08, position.z);
+    slot.group.visible = true;
+
+    slot.glowRingMesh.scale.setScalar(0.55);
+    slot.glowRingMat.opacity = 0.55;
+
+    for (let m = 0; m < CAMPFIRE_HEAL_MOTE_COUNT; m++) {
+      const mt = slot.motes[m];
+      mt.angle = (m / CAMPFIRE_HEAL_MOTE_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      mt.radius = 0.25 + this.nextRand() * 0.75;
+      mt.speedY = 1.1 + this.nextRand() * 1.25;
+      mt.swaySpeed = (this.nextRand() > 0.5 ? 1 : -1) * (1.8 + this.nextRand() * 2.2);
+      mt.baseScale = 0.065 + this.nextRand() * 0.045;
+
+      mt.mesh.position.set(
+        Math.cos(mt.angle) * mt.radius,
+        0.1 + this.nextRand() * 0.35,
+        Math.sin(mt.angle) * mt.radius,
+      );
+      mt.mesh.scale.setScalar(mt.baseScale);
+      mt.material.opacity = 0.95;
+      mt.mesh.visible = true;
+    }
+  }
+
+  private spawnImpactDecal(
+    position: Vec3Like,
+    normal: Vec3Like,
+    material: 'wood' | 'brick' | 'metal' | 'dirt',
+  ): void {
+    const slot = this.impactDecals[this.impactDecalCursor];
+    this.impactDecalCursor = (this.impactDecalCursor + 1) % IMPACT_DECAL_POOL_SIZE;
+
+    this.tmpDir.set(normal.x, normal.y, normal.z);
+    if (this.tmpDir.lengthSq() < 1e-8) {
+      this.tmpDir.set(0, 1, 0);
+    } else {
+      this.tmpDir.normalize();
+    }
+
+    let tint = '#5c3317';
+    let scale = 0.21 + this.nextRand() * 0.06;
+    switch (material) {
+      case 'wood':
+        tint = '#5c3317';
+        scale = 0.20 + this.nextRand() * 0.06;
+        break;
+      case 'brick':
+        tint = '#475569';
+        scale = 0.23 + this.nextRand() * 0.07;
+        break;
+      case 'metal':
+        tint = '#1e293b';
+        scale = 0.16 + this.nextRand() * 0.05;
+        break;
+      case 'dirt':
+        tint = '#3f2e18';
+        scale = 0.24 + this.nextRand() * 0.07;
+        break;
+    }
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = IMPACT_DECAL_DURATION;
+    slot.baseOpacity = 0.86;
+
+    slot.mesh.position.set(
+      position.x + this.tmpDir.x * 0.014,
+      position.y + this.tmpDir.y * 0.014,
+      position.z + this.tmpDir.z * 0.014,
+    );
+    this.tmpQuat.setFromUnitVectors(this.zAxis, this.tmpDir);
+    slot.mesh.quaternion.copy(this.tmpQuat);
+    slot.mesh.rotateZ(this.nextRand() * Math.PI * 2);
+    slot.mesh.scale.setScalar(scale);
+
+    slot.material.color.set(tint);
+    slot.material.opacity = slot.baseOpacity;
+    slot.mesh.visible = true;
   }
 
   /**
@@ -2820,6 +3500,9 @@ export class VFXManager {
     for (const s of this.grappleLines) if (s.active) count++;
     for (const s of this.shieldBubbles) if (s.active) count++;
     for (const s of this.vehicleBoosts) if (s.active) count++;
+    for (const s of this.weaponUpgrades) if (s.active) count++;
+    for (const s of this.slurpBursts) if (s.active) count++;
+    for (const s of this.campfireHeals) if (s.active) count++;
     return count;
   }
 
@@ -2874,6 +3557,30 @@ export class VFXManager {
   public getActiveVehicleBoostCount(): number {
     let count = 0;
     for (const vb of this.vehicleBoosts) if (vb.active) count++;
+    return count;
+  }
+
+  public getActiveWeaponUpgradeCount(): number {
+    let count = 0;
+    for (const wu of this.weaponUpgrades) if (wu.active) count++;
+    return count;
+  }
+
+  public getActiveSlurpBurstCount(): number {
+    let count = 0;
+    for (const sb of this.slurpBursts) if (sb.active) count++;
+    return count;
+  }
+
+  public getActiveCampfireHealCount(): number {
+    let count = 0;
+    for (const ch of this.campfireHeals) if (ch.active) count++;
+    return count;
+  }
+
+  public getActiveImpactDecalCount(): number {
+    let count = 0;
+    for (const d of this.impactDecals) if (d.active) count++;
     return count;
   }
 
@@ -2936,6 +3643,22 @@ export class VFXManager {
       vb.active = false;
       vb.group.visible = false;
     }
+    for (const wu of this.weaponUpgrades) {
+      wu.active = false;
+      wu.group.visible = false;
+    }
+    for (const sb of this.slurpBursts) {
+      sb.active = false;
+      sb.group.visible = false;
+    }
+    for (const ch of this.campfireHeals) {
+      ch.active = false;
+      ch.group.visible = false;
+    }
+    for (const d of this.impactDecals) {
+      d.active = false;
+      d.mesh.visible = false;
+    }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;
     this.throwArcAge = 0;
@@ -2961,6 +3684,11 @@ export class VFXManager {
       mat.dispose();
     }
     this.ownedMaterials.length = 0;
+
+    for (const tex of this.ownedTextures) {
+      tex.dispose();
+    }
+    this.ownedTextures.length = 0;
 
     this.scene.remove(this.root);
   }
