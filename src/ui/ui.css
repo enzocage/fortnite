@@ -1,0 +1,1883 @@
+/* FORTDROP ROYALE — Battle Royale Stylized UI */
+
+.fdr-root {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+  font-family: 'Barlow Condensed', 'Impact', 'Arial Narrow', sans-serif;
+  color: #ffffff;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 20;
+}
+
+.fdr-root * {
+  box-sizing: border-box;
+}
+
+.fdr-hidden {
+  display: none !important;
+}
+
+/* Rarity 5-Tier Gradients & Borders */
+.rarity-common {
+  background: linear-gradient(165deg, #8b9bb0 0%, #3d4859 100%);
+  border-color: #cbd5e1;
+  --rarity-accent: #cbd5e1;
+}
+
+.rarity-uncommon {
+  background: linear-gradient(165deg, #42e357 0%, #157029 100%);
+  border-color: #86efac;
+  --rarity-accent: #38d94b;
+}
+
+.rarity-rare {
+  background: linear-gradient(165deg, #2cb1ff 0%, #1749b8 100%);
+  border-color: #7dd3fc;
+  --rarity-accent: #26a6ff;
+}
+
+.rarity-epic {
+  background: linear-gradient(165deg, #bf5aff 0%, #5b1bb2 100%);
+  border-color: #e9a8ff;
+  --rarity-accent: #b44cff;
+}
+
+.rarity-legendary {
+  background: linear-gradient(165deg, #ffbd2e 0%, #b44507 100%);
+  border-color: #fde047;
+  --rarity-accent: #ffaa1d;
+}
+
+/* Shared Slanted Button Styles */
+.fdr-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 22px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-radius: 5px;
+  transform: skewX(-10deg);
+  cursor: pointer;
+  pointer-events: auto;
+  font-family: 'Barlow Condensed', 'Impact', sans-serif;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffffff;
+  background: rgba(14, 24, 48, 0.9);
+  box-shadow: 0 5px 0 rgba(4, 9, 20, 0.72), 0 8px 20px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease;
+}
+
+.fdr-btn > * {
+  transform: skewX(10deg);
+}
+
+.fdr-btn:hover {
+  filter: brightness(1.12);
+  transform: skewX(-10deg) translateY(-2px);
+}
+
+.fdr-btn:active {
+  transform: skewX(-10deg) translateY(2px);
+  box-shadow: 0 2px 0 rgba(4, 9, 20, 0.8);
+}
+
+.fdr-btn-gold {
+  background: linear-gradient(180deg, #ffe23b 0%, #ffad00 100%);
+  border-color: #fff6a8;
+  color: #161000;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
+  box-shadow: 0 6px 0 #a36200, 0 10px 28px rgba(255, 208, 0, 0.42);
+}
+
+.fdr-btn-cyan {
+  background: linear-gradient(180deg, #22d3ee 0%, #0284c7 100%);
+  border-color: #bae6fd;
+  color: #ffffff;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 5px 0 #075985, 0 8px 22px rgba(0, 180, 255, 0.35);
+}
+
+.fdr-btn-dark {
+  background: linear-gradient(180deg, rgba(24, 38, 72, 0.94) 0%, rgba(11, 18, 36, 0.96) 100%);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #f8fafc;
+}
+
+/* ============================================================================
+   LOBBY SCREEN (Transparent over live 3D island + character!)
+   ============================================================================ */
+.fdr-lobby {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px 24px 20px;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 54% 48%,
+    rgba(6, 14, 30, 0) 26%,
+    rgba(6, 14, 30, 0.36) 80%,
+    rgba(4, 9, 22, 0.68) 100%
+  );
+}
+
+.fdr-lobby-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  pointer-events: auto;
+}
+
+.fdr-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 18px 6px 14px;
+  background: linear-gradient(110deg, rgba(12, 22, 46, 0.9) 0%, rgba(16, 36, 78, 0.82) 100%);
+  border: 2px solid rgba(255, 208, 0, 0.72);
+  border-radius: 6px;
+  transform: skewX(-10deg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-brand-inner {
+  transform: skewX(10deg);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.fdr-brand-title {
+  font-family: 'Titan One', 'Impact', sans-serif;
+  font-size: clamp(20px, 2.3vw, 28px);
+  letter-spacing: 0.04em;
+  color: #ffd000;
+  text-shadow: 0 3px 0 #1f1400, 0 5px 14px rgba(0, 0, 0, 0.75);
+}
+
+.fdr-brand-tag {
+  font-size: 13px;
+  font-weight: 800;
+  color: #22d3ee;
+  letter-spacing: 0.14em;
+}
+
+.fdr-nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fdr-nav-tab {
+  padding: 8px 22px;
+  background: rgba(11, 20, 42, 0.8);
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-radius: 5px;
+  transform: skewX(-10deg);
+  cursor: pointer;
+  color: #cbd5e1;
+  font-family: 'Barlow Condensed', 'Impact', sans-serif;
+  font-weight: 800;
+  font-size: 19px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: all 0.12s ease;
+}
+
+.fdr-nav-tab > span {
+  display: inline-block;
+  transform: skewX(10deg);
+}
+
+.fdr-nav-tab:hover {
+  border-color: #38bdf8;
+  color: #ffffff;
+  background: rgba(20, 42, 82, 0.9);
+}
+
+.fdr-nav-tab.active {
+  background: linear-gradient(180deg, #ffe23b 0%, #ffaa00 100%);
+  border-color: #fff8b8;
+  color: #161000;
+  box-shadow: 0 4px 18px rgba(255, 208, 0, 0.45);
+}
+
+.fdr-lobby-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(11, 20, 42, 0.82);
+  border: 2px solid rgba(34, 211, 238, 0.48);
+  border-radius: 5px;
+  transform: skewX(-10deg);
+  font-size: 15px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.fdr-lobby-badge > span {
+  transform: skewX(10deg);
+}
+
+.fdr-lobby-content {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  margin-top: 14px;
+  pointer-events: none;
+  min-height: 0;
+}
+
+/* Left Panel on PLAY tab */
+.fdr-lobby-left {
+  width: clamp(275px, 24vw, 336px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: auto;
+  align-self: flex-start;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.fdr-glass-card {
+  background: linear-gradient(155deg, rgba(12, 23, 48, 0.86) 0%, rgba(8, 14, 32, 0.88) 100%);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-left: 5px solid #00b4ff;
+  border-radius: 8px;
+  padding: 14px 16px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
+}
+
+.fdr-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #22d3ee;
+}
+
+.fdr-field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+  margin-bottom: 5px;
+}
+
+.fdr-text-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: rgba(7, 13, 28, 0.9);
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-radius: 5px;
+  color: #ffffff;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  outline: none;
+  transition: border-color 0.14s ease;
+}
+
+.fdr-text-input:focus {
+  border-color: #ffd000;
+}
+
+.fdr-pill-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fdr-pill {
+  flex: 1;
+  min-width: 68px;
+  padding: 7px 10px;
+  background: rgba(15, 28, 56, 0.85);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  transform: skewX(-8deg);
+  cursor: pointer;
+  color: #cbd5e1;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  text-transform: uppercase;
+  text-align: center;
+  transition: all 0.12s ease;
+}
+
+.fdr-pill > span {
+  display: inline-block;
+  transform: skewX(8deg);
+}
+
+.fdr-pill:hover {
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.fdr-pill.active {
+  background: linear-gradient(180deg, #00b4ff 0%, #0369a1 100%);
+  border-color: #bae6fd;
+  color: #ffffff;
+  box-shadow: 0 3px 12px rgba(0, 180, 255, 0.35);
+}
+
+.fdr-range {
+  width: 100%;
+  accent-color: #ffd000;
+  cursor: pointer;
+}
+
+.fdr-loadout-mini {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  text-transform: none;
+}
+
+.fdr-loadout-chip {
+  padding: 6px 8px;
+  background: rgba(7, 14, 30, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 5px;
+}
+
+.fdr-loadout-chip b {
+  display: block;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+/* Right-bottom PLAY CTA Dock */
+.fdr-play-dock {
+  align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.fdr-mode-card {
+  padding: 10px 18px;
+  background: rgba(11, 20, 42, 0.88);
+  border: 2px solid rgba(34, 211, 238, 0.55);
+  border-radius: 6px;
+  transform: skewX(-10deg);
+  text-align: right;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-mode-card > div {
+  transform: skewX(10deg);
+}
+
+.fdr-mode-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.fdr-mode-sub {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #22d3ee;
+}
+
+.fdr-play-btn {
+  width: clamp(230px, 22vw, 300px);
+  height: clamp(64px, 8vh, 80px);
+  border: 3px solid #fff8b8;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffe94d 0%, #ffb400 58%, #f08a00 100%);
+  transform: skewX(-10deg);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 7px 0 #995800, 0 14px 36px rgba(255, 208, 0, 0.5);
+  transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease;
+}
+
+.fdr-play-btn:hover {
+  filter: brightness(1.08);
+  transform: skewX(-10deg) translateY(-3px);
+}
+
+.fdr-play-btn:active {
+  transform: skewX(-10deg) translateY(3px);
+  box-shadow: 0 3px 0 #995800;
+}
+
+.fdr-play-btn span {
+  transform: skewX(10deg);
+  font-family: 'Titan One', 'Impact', sans-serif;
+  font-size: clamp(28px, 3vw, 38px);
+  letter-spacing: 0.06em;
+  color: #171000;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.55);
+}
+
+/* Locker / Controls / Settings Sub-panels */
+.fdr-wide-panel {
+  width: min(740px, 60vw);
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  pointer-events: auto;
+  background: linear-gradient(160deg, rgba(10, 20, 44, 0.9) 0%, rgba(7, 13, 28, 0.92) 100%);
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-left: 5px solid #ffd000;
+  border-radius: 10px;
+  padding: 16px 20px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6);
+}
+
+.fdr-locker-group-title {
+  margin: 12px 0 8px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #ffd000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fdr-locker-group-title:first-child {
+  margin-top: 0;
+}
+
+.fdr-locker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+  gap: 10px;
+}
+
+.fdr-cosmetic-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px;
+  min-height: 92px;
+  border-radius: 7px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  color: #ffffff;
+  text-align: left;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.35);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.fdr-cosmetic-card:hover {
+  transform: translateY(-2px) scale(1.02);
+}
+
+.fdr-cosmetic-card.selected {
+  outline: 3px solid #ffd000;
+  box-shadow: 0 0 18px rgba(255, 208, 0, 0.65);
+}
+
+.fdr-swatch-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.fdr-swatch-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-card-rarity {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  opacity: 0.9;
+}
+
+.fdr-card-name {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.65);
+}
+
+.fdr-equipped-tag {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #ffd000;
+  color: #161000;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+/* Controls Cheat Sheet */
+.fdr-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.fdr-controls-box {
+  background: rgba(14, 26, 52, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  padding: 12px;
+}
+
+.fdr-controls-box h4 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: #22d3ee;
+  letter-spacing: 0.08em;
+}
+
+.fdr-key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font-family: 'Montserrat', sans-serif;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.fdr-key-row:last-child {
+  border-bottom: none;
+}
+
+.fdr-keycap {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #1e293b;
+  border: 1px solid #64748b;
+  box-shadow: 0 2px 0 #0f172a;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 800;
+  font-size: 13px;
+  color: #ffd000;
+  text-transform: uppercase;
+}
+
+/* Settings Panel */
+.fdr-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fdr-setting-row {
+  display: grid;
+  grid-template-columns: 180px 1fr 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(14, 26, 52, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+}
+
+.fdr-setting-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.fdr-setting-val {
+  text-align: right;
+  font-size: 16px;
+  font-weight: 800;
+  color: #ffd000;
+}
+
+/* ============================================================================
+   IN-GAME HUD
+   ============================================================================ */
+.fdr-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fdr-storm-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 95px rgba(168, 85, 247, 0.68), inset 0 0 28px rgba(217, 70, 239, 0.55);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.fdr-storm-vignette.active {
+  opacity: 1;
+}
+
+/* Top-Left FPS Badge */
+.fdr-fps-badge {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  padding: 4px 11px;
+  background: rgba(10, 18, 36, 0.78);
+  border: 1px solid rgba(52, 235, 94, 0.6);
+  border-radius: 4px;
+  transform: skewX(-10deg);
+  font-size: 15px;
+  font-weight: 800;
+  color: #34eb5e;
+}
+
+/* Top-Center Compass */
+.fdr-compass-wrap {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(320px, 34vw, 460px);
+  height: 44px;
+  background: linear-gradient(180deg, rgba(10, 18, 36, 0.84) 0%, rgba(10, 18, 36, 0.45) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.fdr-compass-center-mark {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 7px solid #ffd000;
+  z-index: 3;
+}
+
+.fdr-compass-tape {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-compass-tick {
+  position: absolute;
+  top: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+  font-weight: 800;
+  font-size: 13px;
+  color: rgba(226, 232, 240, 0.85);
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.9);
+}
+
+.fdr-compass-tick.cardinal {
+  top: 7px;
+  font-size: 17px;
+  color: #ffd000;
+}
+
+.fdr-compass-tick.ordinal {
+  font-size: 14px;
+  color: #7dd3fc;
+}
+
+.fdr-compass-tick::before {
+  content: '';
+  width: 2px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.45);
+  margin-bottom: 2px;
+}
+
+.fdr-compass-waypoint {
+  position: absolute;
+  bottom: 2px;
+  transform: translateX(-50%);
+  width: 10px;
+  height: 10px;
+  background: #22d3ee;
+  border: 2px solid #ffffff;
+  transform-origin: center;
+  rotate: 45deg;
+  box-shadow: 0 0 8px #22d3ee;
+}
+
+.fdr-compass-readout {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 800;
+  color: #cbd5e1;
+  background: rgba(8, 14, 30, 0.72);
+  padding: 0 5px;
+  border-radius: 3px;
+}
+
+/* Drop / Glider Action Prompt beneath Compass */
+.fdr-phase-hint {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%) skewX(-10deg);
+  padding: 6px 18px;
+  background: linear-gradient(90deg, rgba(0, 180, 255, 0.92), rgba(14, 116, 144, 0.92));
+  border: 2px solid #bae6fd;
+  border-radius: 5px;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  box-shadow: 0 5px 18px rgba(0, 180, 255, 0.4);
+  white-space: nowrap;
+}
+
+.fdr-phase-hint > span {
+  display: inline-block;
+  transform: skewX(10deg);
+}
+
+/* Top-Right Minimap & Telemetry */
+.fdr-minimap-cluster {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: clamp(164px, 14vw, 200px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fdr-minimap-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #0a1b38;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.fdr-minimap-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-minimap-mapkey {
+  position: absolute;
+  bottom: 4px;
+  right: 5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(8, 14, 30, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  font-size: 11px;
+  font-weight: 800;
+  color: #ffd000;
+}
+
+.fdr-telemetry-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+
+.fdr-tele-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 4px 6px;
+  background: rgba(10, 18, 38, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  transform: skewX(-8deg);
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+}
+
+.fdr-tele-pill > * {
+  transform: skewX(8deg);
+}
+
+.fdr-tele-pill svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.fdr-tele-pill.storm {
+  border-color: rgba(192, 132, 252, 0.65);
+  color: #f3e8ff;
+}
+
+.fdr-tele-pill.storm.shrinking {
+  background: rgba(109, 40, 217, 0.86);
+  border-color: #f0abfc;
+}
+
+.fdr-tele-pill.alive {
+  color: #ffffff;
+}
+
+.fdr-tele-pill.elims {
+  color: #ffd000;
+}
+
+/* Bottom-Left Kill Feed */
+.fdr-killfeed {
+  position: absolute;
+  bottom: 16px;
+  left: 14px;
+  width: clamp(230px, 21vw, 320px);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fdr-kf-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(9, 16, 34, 0.8);
+  border-left: 3px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+  animation: fdrSlideInLeft 0.18s ease-out;
+}
+
+.fdr-kf-row.player-involved {
+  border-left-color: #ffd000;
+  background: rgba(34, 28, 10, 0.86);
+}
+
+.fdr-kf-icon {
+  width: 22px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.fdr-kf-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-kf-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 96px;
+}
+
+.fdr-kf-hs {
+  color: #ffd000;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.fdr-kf-dist {
+  margin-left: auto;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* Bottom-Center Vitals, Interact, Channel Bar */
+.fdr-bottom-center {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(280px, 27vw, 370px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.fdr-interact-prompt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(10, 18, 38, 0.9);
+  border: 2px solid #22d3ee;
+  border-radius: 6px;
+  transform: skewX(-8deg);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.fdr-interact-prompt > * {
+  transform: skewX(8deg);
+}
+
+.fdr-channel-bar {
+  width: 82%;
+  background: rgba(8, 15, 32, 0.9);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 5px;
+  padding: 4px 8px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+.fdr-channel-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 800;
+  color: #ffd000;
+  margin-bottom: 3px;
+}
+
+.fdr-channel-track {
+  height: 7px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fdr-channel-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ffd000, #fff07a);
+  width: 0%;
+}
+
+.fdr-vitals-stack {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fdr-stamina-wrap {
+  width: 100%;
+  height: 6px;
+  background: rgba(8, 15, 32, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fdr-stamina-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #ffffff);
+  transition: width 0.08s linear;
+}
+
+.fdr-vital-bar {
+  position: relative;
+  height: 22px;
+  background: rgba(8, 15, 32, 0.85);
+  border: 2px solid rgba(255, 255, 255, 0.26);
+  border-radius: 4px;
+  transform: skewX(-8deg);
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-vital-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  transition: width 0.1s ease-out;
+}
+
+.fdr-vital-fill.shield {
+  background: linear-gradient(90deg, #0284c7 0%, #22d3ee 100%);
+}
+
+.fdr-vital-fill.health {
+  background: linear-gradient(90deg, #16a34a 0%, #34eb5e 100%);
+}
+
+.fdr-vital-fill.health.low {
+  background: linear-gradient(90deg, #b91c1c 0%, #ef4444 100%);
+}
+
+.fdr-vital-text {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  transform: skewX(8deg);
+  font-size: 15px;
+  font-weight: 800;
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* Bottom-Right Materials + Build Tiles + 6-Slot Hotbar */
+.fdr-bottom-right {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+
+.fdr-build-mats-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fdr-mats-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fdr-mat-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: rgba(10, 18, 38, 0.84);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  transform: skewX(-8deg);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.fdr-mat-chip.active {
+  border-color: #22d3ee;
+  background: rgba(12, 54, 88, 0.9);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.45);
+}
+
+.fdr-mat-chip > * {
+  transform: skewX(8deg);
+}
+
+.fdr-mat-chip svg {
+  width: 18px;
+  height: 18px;
+}
+
+.fdr-build-tiles {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fdr-build-tile {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 18, 38, 0.84);
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-radius: 5px;
+  padding: 4px;
+}
+
+.fdr-build-tile.active {
+  border-color: #38bdf8;
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.92), rgba(10, 32, 64, 0.94));
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.6);
+  transform: translateY(-3px);
+}
+
+.fdr-build-tile svg {
+  width: 24px;
+  height: 24px;
+}
+
+.fdr-build-key {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #cbd5e1;
+}
+
+.fdr-hotbar-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.fdr-active-ammo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 5px 10px;
+  background: rgba(10, 18, 38, 0.86);
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-radius: 5px;
+  transform: skewX(-8deg);
+  margin-right: 2px;
+}
+
+.fdr-active-ammo > * {
+  transform: skewX(8deg);
+}
+
+.fdr-ammo-main {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  color: #ffffff;
+}
+
+.fdr-ammo-res {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffd000;
+}
+
+.fdr-hotbar-slots {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.fdr-slot-card {
+  position: relative;
+  width: clamp(48px, 4.2vw, 62px);
+  height: clamp(56px, 5vw, 72px);
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  background: rgba(10, 18, 38, 0.72);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.fdr-slot-card.active {
+  transform: translateY(-6px);
+  border-width: 3px;
+  border-color: #ffffff;
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.55);
+}
+
+.fdr-slot-key {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 2px #000000;
+}
+
+.fdr-slot-svg {
+  width: 78%;
+  height: 62%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
+}
+
+.fdr-slot-svg svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-slot-count {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 1px 3px #000000;
+}
+
+/* Center Tactical Overlay: Crosshair, Scope, Hitmarker, Damage Arc, Numbers */
+.fdr-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.fdr-ch-dot {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  left: -2px;
+  top: -2px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 3px #000000;
+}
+
+.fdr-ch-tick {
+  position: absolute;
+  background: #ffffff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.95);
+}
+
+.fdr-ch-tick.top {
+  width: 2px;
+  height: 8px;
+  left: -1px;
+  bottom: var(--ch-gap, 8px);
+}
+
+.fdr-ch-tick.bottom {
+  width: 2px;
+  height: 8px;
+  left: -1px;
+  top: var(--ch-gap, 8px);
+}
+
+.fdr-ch-tick.left {
+  width: 8px;
+  height: 2px;
+  top: -1px;
+  right: var(--ch-gap, 8px);
+}
+
+.fdr-ch-tick.right {
+  width: 8px;
+  height: 2px;
+  top: -1px;
+  left: var(--ch-gap, 8px);
+}
+
+.fdr-crosshair.build .fdr-ch-tick,
+.fdr-crosshair.build .fdr-ch-dot {
+  background: #38bdf8;
+}
+
+/* Sniper Scope */
+.fdr-sniper-scope {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at center,
+    transparent 24%,
+    rgba(3, 7, 15, 0.92) 26%,
+    #02050b 48%
+  );
+}
+
+.fdr-scope-h {
+  position: absolute;
+  top: 50%;
+  left: 20%;
+  right: 20%;
+  height: 2px;
+  background: rgba(15, 23, 42, 0.9);
+  box-shadow: 0 0 4px rgba(56, 189, 248, 0.45);
+}
+
+.fdr-scope-v {
+  position: absolute;
+  left: 50%;
+  top: 12%;
+  bottom: 12%;
+  width: 2px;
+  background: rgba(15, 23, 42, 0.9);
+  box-shadow: 0 0 4px rgba(56, 189, 248, 0.45);
+}
+
+.fdr-scope-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48vmin;
+  height: 48vmin;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 3px solid #0f172a;
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.85);
+}
+
+/* Hitmarker */
+.fdr-hitmarker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.fdr-hitmarker.active {
+  opacity: 1;
+}
+
+.fdr-hm-line {
+  position: absolute;
+  width: 9px;
+  height: 3px;
+  background: #ffffff;
+  border-radius: 2px;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+}
+
+.fdr-hitmarker.shield .fdr-hm-line {
+  background: #22d3ee;
+}
+
+.fdr-hitmarker.headshot .fdr-hm-line {
+  background: #ffd000;
+}
+
+.fdr-hitmarker.elim .fdr-hm-line {
+  background: #ef4444;
+  width: 12px;
+  height: 3.5px;
+}
+
+.fdr-hm-line.tl {
+  top: 5px;
+  left: 3px;
+  transform: rotate(45deg);
+}
+.fdr-hm-line.tr {
+  top: 5px;
+  right: 3px;
+  transform: rotate(-45deg);
+}
+.fdr-hm-line.bl {
+  bottom: 5px;
+  left: 3px;
+  transform: rotate(-45deg);
+}
+.fdr-hm-line.br {
+  bottom: 5px;
+  right: 3px;
+  transform: rotate(45deg);
+}
+
+/* Directional Damage Arc */
+.fdr-damage-arc-wrap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 240px;
+  height: 240px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.fdr-damage-arc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 14px solid transparent;
+  border-top-color: rgba(239, 68, 68, 0.92);
+  filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.85));
+}
+
+/* Projected Damage Numbers */
+.fdr-damage-numbers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.fdr-dmg-num {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-family: 'Barlow Condensed', 'Impact', sans-serif;
+  font-weight: 900;
+  font-size: 24px;
+  color: #ffffff;
+  text-shadow: 0 2px 0 #000000, 0 0 8px rgba(0, 0, 0, 0.9);
+  will-change: transform, opacity;
+}
+
+.fdr-dmg-num.shield {
+  color: #22d3ee;
+}
+
+.fdr-dmg-num.headshot {
+  color: #ffd000;
+  font-size: 32px;
+  text-shadow: 0 2px 0 #261400, 0 0 12px rgba(255, 208, 0, 0.8);
+}
+
+/* 3x3 Edit Mode Grid */
+.fdr-edit-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  background: rgba(9, 18, 40, 0.88);
+  border: 2px solid #38bdf8;
+  border-radius: 10px;
+  pointer-events: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+}
+
+.fdr-edit-header {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #38bdf8;
+}
+
+.fdr-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 52px);
+  grid-template-rows: repeat(3, 52px);
+  gap: 6px;
+}
+
+.fdr-edit-tile {
+  border-radius: 5px;
+  border: 2px solid #38bdf8;
+  background: rgba(14, 116, 144, 0.45);
+  cursor: pointer;
+  transition: background 0.08s ease, transform 0.08s ease;
+}
+
+.fdr-edit-tile:hover {
+  transform: scale(1.05);
+  border-color: #ffffff;
+}
+
+.fdr-edit-tile.selected {
+  background: rgba(248, 250, 252, 0.16);
+  border-color: #cbd5e1;
+}
+
+.fdr-edit-tile.invalid {
+  border-color: #ef4444;
+}
+
+.fdr-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.fdr-edit-btn {
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: #1e293b;
+  color: #ffffff;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.fdr-edit-btn.confirm {
+  background: #0284c7;
+  border-color: #7dd3fc;
+}
+
+/* Radial Emote Wheel */
+.fdr-emote-wheel-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 10, 24, 0.4);
+  pointer-events: auto;
+  z-index: 25;
+}
+
+.fdr-emote-wheel {
+  position: relative;
+  width: 310px;
+  height: 310px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(14, 28, 58, 0.92) 0%, rgba(8, 16, 36, 0.95) 100%);
+  border: 3px solid #22d3ee;
+  box-shadow: 0 0 36px rgba(0, 180, 255, 0.42);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 8px;
+  padding: 20px;
+}
+
+.fdr-emote-slice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px;
+  border-radius: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  color: #ffffff;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.fdr-emote-slice:hover {
+  transform: scale(1.05);
+  border-color: #ffd000;
+  box-shadow: 0 0 18px rgba(255, 208, 0, 0.6);
+}
+
+.fdr-emote-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  background: #0f172a;
+  border: 3px solid #ffd000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  color: #ffd000;
+  cursor: pointer;
+}
+
+/* Pointer Lock Prompt */
+.fdr-pointer-prompt {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translate(-50%, -50%) skewX(-10deg);
+  padding: 10px 24px;
+  background: rgba(9, 17, 36, 0.88);
+  border: 2px solid #ffd000;
+  border-radius: 6px;
+  text-align: center;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+
+.fdr-pointer-prompt > div {
+  transform: skewX(10deg);
+}
+
+.fdr-pointer-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #ffd000;
+}
+
+.fdr-pointer-sub {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+/* ============================================================================
+   FULL TACTICAL MAP OVERLAY (M)
+   ============================================================================ */
+.fdr-fullmap-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 9, 22, 0.76);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+  z-index: 30;
+}
+
+.fdr-fullmap-frame {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: rgba(11, 20, 42, 0.95);
+  border: 2px solid #22d3ee;
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.75);
+}
+
+.fdr-fullmap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fdr-fullmap-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffd000;
+  letter-spacing: 0.08em;
+}
+
+.fdr-fullmap-hint {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.fdr-fullmap-canvas {
+  display: block;
+  width: min(76vh, 76vw, 620px);
+  height: min(76vh, 76vw, 620px);
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  cursor: crosshair;
+}
+
+/* ============================================================================
+   MATCH OVERLAYS: BANNERS, PAUSE MENU, VICTORY / ELIMINATED SUMMARY
+   ============================================================================ */
+.fdr-banner-layer {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 28;
+}
+
+.fdr-banner-toast {
+  padding: 8px 26px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  transform: skewX(-10deg);
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  animation: fdrBannerPop 0.22s ease-out;
+}
+
+.fdr-banner-toast > div {
+  transform: skewX(10deg);
+}
+
+.fdr-banner-toast.info {
+  background: linear-gradient(90deg, rgba(14, 116, 144, 0.94), rgba(29, 78, 216, 0.94));
+  border-color: #7dd3fc;
+}
+
+.fdr-banner-toast.storm {
+  background: linear-gradient(90deg, rgba(107, 33, 168, 0.95), rgba(162, 28, 175, 0.95));
+  border-color: #f0abfc;
+}
+
+.fdr-banner-toast.elim {
+  background: linear-gradient(90deg, rgba(153, 27, 27, 0.95), rgba(217, 119, 6, 0.95));
+  border-color: #fde047;
+}
+
+.fdr-banner-toast.victory {
+  background: linear-gradient(90deg, #ffad00, #ffe642, #ffad00);
+  border-color: #ffffff;
+  color: #161000;
+}
+
+.fdr-banner-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.fdr-banner-sub {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.92;
+}
+
+.fdr-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 10, 24, 0.78);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+  z-index: 35;
+}
+
+.fdr-modal-card {
+  width: min(520px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 22px 26px;
+  background: linear-gradient(160deg, rgba(14, 26, 54, 0.96), rgba(8, 14, 30, 0.98));
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.75);
+}
+
+.fdr-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  text-align: center;
+}
+
+.fdr-victory-title {
+  font-family: 'Titan One', 'Impact', sans-serif;
+  font-size: clamp(28px, 3.8vw, 42px);
+  color: #ffd000;
+  text-shadow: 0 4px 0 #78350f, 0 8px 24px rgba(255, 208, 0, 0.5);
+}
+
+.fdr-elim-title {
+  font-family: 'Titan One', 'Impact', sans-serif;
+  font-size: clamp(28px, 3.6vw, 40px);
+  color: #f87171;
+  text-shadow: 0 4px 0 #450a0a, 0 8px 24px rgba(239, 68, 68, 0.45);
+}
+
+.fdr-summary-sub {
+  text-align: center;
+  font-size: 18px;
+  font-weight: 800;
+  color: #22d3ee;
+  margin-bottom: 14px;
+}
+
+.fdr-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 18px;
+}
+
+.fdr-stat-box {
+  padding: 9px 12px;
+  background: rgba(15, 28, 58, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-left: 4px solid #00b4ff;
+  border-radius: 6px;
+}
+
+.fdr-stat-box.highlight {
+  border-left-color: #ffd000;
+}
+
+.fdr-stat-k {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.08em;
+}
+
+.fdr-stat-v {
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.fdr-modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+@keyframes fdrSlideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fdrBannerPop {
+  from {
+    opacity: 0;
+    transform: skewX(-10deg) translateY(-10px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: skewX(-10deg) translateY(0) scale(1);
+  }
+}

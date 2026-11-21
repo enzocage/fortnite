@@ -1,0 +1,211 @@
+import type {
+  AmmoType,
+  AnimState,
+  BotAIState,
+  BotPersonality,
+  BuildPiece,
+  BuildPieceType,
+  CharacterRenderState,
+  ChestEntity,
+  EmoteId,
+  HarvestableProp,
+  ItemInstance,
+  LootDrop,
+  MaterialType,
+  Rarity,
+  StormState,
+  TerrainQuery,
+  Vec3Like,
+  WallDir,
+  WeaponId,
+} from '../types';
+import type { EventBus } from '../core';
+
+export interface BotInventory {
+  /** Slot 0 is pickaxe; slots 1..5 hold weapons and consumables. */
+  items: (ItemInstance | null)[];
+  activeSlot: number;
+  ammo: Record<AmmoType, number>;
+  materials: Record<MaterialType, number>;
+}
+
+export interface BotCombatTarget {
+  id: string;
+  name: string;
+  position: Vec3Like;
+  eyePos: Vec3Like;
+  hp: number;
+  shield: number;
+  alive: boolean;
+  isPlayer?: boolean;
+  radius?: number;
+  height?: number;
+}
+
+export interface BotRenderState extends CharacterRenderState {
+  id: string;
+  name: string;
+  state: BotAIState;
+  alive: boolean;
+  skinId: string;
+  pickaxeId: string;
+  gliderId: string;
+  gliderOpen: boolean;
+  gliderFactor: number;
+  isCrouching: boolean;
+  isHiddenInBus: boolean;
+}
+
+export interface BotEntity {
+  id: string;
+  name: string;
+  skinId: string;
+  pickaxeId: string;
+  gliderId: string;
+  personality: BotPersonality;
+  state: BotAIState;
+
+  position: Vec3Like;
+  velocity: Vec3Like;
+  yaw: number;
+  pitch: number;
+  grounded: boolean;
+  isCrouching: boolean;
+  isSprinting: boolean;
+  moveSpeed: number;
+  radius: number;
+  height: number;
+
+  hp: number;
+  maxHp: number;
+  shield: number;
+  maxShield: number;
+  alive: boolean;
+  kills: number;
+  damageDealt: number;
+
+  animState: AnimState;
+  isAiming: boolean;
+  isFiring: boolean;
+  isBuilding: boolean;
+  emoteId: EmoteId | null;
+  recoilKick: number;
+  harvestSwingTimer: number;
+  gliderOpen: boolean;
+  gliderFactor: number;
+
+  inventory: BotInventory;
+
+  // Drop & Navigation state
+  targetPoiId: string | null;
+  dropJumpTime: number;
+  dropTarget: Vec3Like;
+  moveTarget: Vec3Like | null;
+  patrolAngle: number;
+
+  // Combat & Perception state
+  targetEnemyId: string | null;
+  lastKnownEnemyPos: Vec3Like | null;
+  enemyLostTimer: number;
+  lastHeardNoisePos: Vec3Like | null;
+  lastHeardNoiseTime: number;
+  lastDamageTime: number;
+  lastDamagerId: string | null;
+  lastAttackerName: string | null;
+  lastDamageWeaponId: WeaponId | null;
+  lastDamageRarity: Rarity | null;
+  lastDamageHeadshot: boolean;
+  reactionTimer: number;
+
+  // Weapon / Action timers
+  fireCooldown: number;
+  burstQueue: number;
+  burstTimer: number;
+  reloadTimer: number;
+  reloadSlot: number;
+  healTimer: number;
+  healSlot: number;
+  buildCooldown: number;
+  buildAnimTimer: number;
+  harvestCooldown: number;
+
+  // Tactical movement state
+  strafeDir: -1 | 1;
+  strafeTimer: number;
+  jumpCooldown: number;
+  crouchToggleTimer: number;
+  stateTimer: number;
+  thinkCooldown: number;
+  scanCooldown: number;
+
+  // World interaction targets
+  harvestTargetId: string | null;
+  lootTargetId: string | null;
+  chestTargetId: string | null;
+  ignoredTargetId: string | null;
+  ignoredTargetUntil: number;
+  stuckTimer: number;
+  lastStuckCheckPos: Vec3Like;
+
+  /** Deterministic PRNG state for per-bot variation */
+  rngState: number;
+}
+
+export interface BotWorldContext {
+  terrain: TerrainQuery;
+  storm: StormState;
+  getChests(): ChestEntity[];
+  openChest(chestId: string): boolean;
+  getLootDrops(): LootDrop[];
+  pickupLootDrop(dropId: string): LootDrop | null;
+  getProps(): HarvestableProp[];
+  damageProp(
+    propId: string,
+    amount: number,
+    hitPoint: Vec3Like,
+  ): {
+    hit: boolean;
+    destroyed: boolean;
+    isCrit?: boolean;
+    matType: MaterialType;
+    yieldAmount: number;
+  };
+  resolveMovement(
+    pos: Vec3Like,
+    vel: Vec3Like,
+    radius: number,
+    height: number,
+    dt: number,
+  ): {
+    position: Vec3Like;
+    velocity: Vec3Like;
+    grounded: boolean;
+    groundMaterial?: MaterialType | 'grass' | 'stone';
+  };
+  hasLineOfSight(from: Vec3Like, to: Vec3Like): boolean;
+  placeBuildPiece(
+    ownerId: string,
+    type: BuildPieceType,
+    material: MaterialType,
+    gx: number,
+    gy: number,
+    gz: number,
+    dir: WallDir,
+    rotation: 0 | 1 | 2 | 3,
+  ): boolean | BuildPiece | null;
+  fireWeapon(
+    bot: BotEntity,
+    item: ItemInstance,
+    origin: Vec3Like,
+    aimDir: Vec3Like,
+    spreadRad: number,
+  ): {
+    fired: boolean;
+    shotsHit?: number;
+    headshots?: number;
+    damageDealt?: number;
+  } | void;
+  getCombatTargets(): BotCombatTarget[];
+  dropBotLoot(bot: BotEntity): void;
+  eventBus: EventBus;
+}
