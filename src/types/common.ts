@@ -23,7 +23,17 @@ export type Difficulty = 'casual' | 'standard' | 'sweaty';
 
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
-export type BiomeType = 'ocean' | 'beach' | 'grassland' | 'forest' | 'highland' | 'urban';
+export type BiomeType =
+  | 'ocean'
+  | 'beach'
+  | 'grassland'
+  | 'forest'
+  | 'highland'
+  | 'urban'
+  | 'snow'
+  | 'desert'
+  | 'volcanic'
+  | 'cyber';
 
 export interface GameSettings {
   sensitivity: number;

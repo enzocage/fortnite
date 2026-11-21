@@ -1,5 +1,5 @@
 import { POIS, WORLD_SIZE } from '../core';
-import type { HUDState } from '../types';
+import type { HUDState, LaunchPadEntity, ZiplineEntity } from '../types';
 import { mapNormToWorld, worldToMapNorm } from './UIHelpers';
 
 export interface FullMapCallbacks {
@@ -17,6 +17,8 @@ export class FullMapOverlay {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
   private terrainMapCanvas: HTMLCanvasElement | null = null;
+  private launchPads: LaunchPadEntity[] = [];
+  private ziplines: ZiplineEntity[] = [];
 
   private open = false;
   private lastState: HUDState | null = null;
@@ -100,6 +102,14 @@ export class FullMapOverlay {
 
   setTerrainMapCanvas(canvas: HTMLCanvasElement): void {
     this.terrainMapCanvas = canvas;
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldTraversal(launchPads: LaunchPadEntity[], ziplines: ZiplineEntity[]): void {
+    this.launchPads = launchPads;
+    this.ziplines = ziplines;
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -247,9 +257,46 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
-    // 6 POI Labels
+    // Zipline routes & Launch Pads / Thermal Geysers
+    if (this.ziplines.length > 0) {
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.78)';
+      ctx.lineWidth = 2.0;
+      for (const zip of this.ziplines) {
+        const a = toPx(zip.start.x, zip.start.z);
+        const b = toPx(zip.end.x, zip.end.z);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        ctx.fillStyle = '#fef08a';
+        ctx.beginPath();
+        ctx.arc(a.x, a.y, 2.5, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    if (this.launchPads.length > 0) {
+      ctx.save();
+      for (const pad of this.launchPads) {
+        const p = toPx(pad.x, pad.z);
+        ctx.fillStyle = pad.kind === 'geyser' ? '#fb923c' : '#38bdf8';
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // 10 POI Labels
     ctx.save();
-    ctx.font = '800 15px "Barlow Condensed", sans-serif';
+    ctx.font = '800 13px "Barlow Condensed", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const poi of POIS) {

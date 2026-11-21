@@ -1,5 +1,11 @@
 export { TextureFactory } from './TextureFactory';
-export { TerrainSystem, type BuildingFootprint } from './TerrainSystem';
+export {
+  TerrainSystem,
+  RIVER_POLYLINE,
+  VOLCANO_CENTER_X,
+  VOLCANO_CENTER_Z,
+  type BuildingFootprint,
+} from './TerrainSystem';
 export {
   WorldBuilder,
   type ChestSpot,
@@ -13,3 +19,5 @@ export {
 } from './PropsAndLoot';
 export { EnvironmentFX } from './EnvironmentFX';
 export { StormSystem, type StormUpdateResult } from './StormSystem';
+export { WorldInteractables } from './WorldInteractables';
+export { EnvironmentDetail } from './EnvironmentDetail';

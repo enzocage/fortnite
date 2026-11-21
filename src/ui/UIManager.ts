@@ -8,8 +8,10 @@ import type {
   GameSettings,
   HUDState,
   KillFeedEntry,
+  LaunchPadEntity,
   LobbyConfig,
   MatchSummary,
+  ZiplineEntity,
 } from '../types';
 import { FullMapOverlay } from './FullMapOverlay';
 import { HUDManager } from './HUDManager';
@@ -121,6 +123,10 @@ export class UIManager {
   setTerrainMapCanvas(canvas: HTMLCanvasElement): void {
     this.hud.setTerrainMapCanvas(canvas);
     this.fullMap.setTerrainMapCanvas(canvas);
+  }
+
+  setWorldTraversal(launchPads: LaunchPadEntity[], ziplines: ZiplineEntity[]): void {
+    this.fullMap.setWorldTraversal(launchPads, ziplines);
   }
 
   setPhase(phase: GamePhase): void {

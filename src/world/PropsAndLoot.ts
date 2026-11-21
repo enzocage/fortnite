@@ -209,7 +209,7 @@ export class PropsAndLoot {
     this.buildingZones = [];
 
     for (const c of colliders) {
-      if (c.tag && c.tag.startsWith('building')) {
+      if (c.tag && c.tag.startsWith('building') && !c.tag.startsWith('building_sky_island')) {
         this.buildingZones.push({
           minX: c.minX,
           maxX: c.maxX,
@@ -219,10 +219,10 @@ export class PropsAndLoot {
       }
     }
 
-    // 1. Spawn Chests (>= 55)
+    // 1. Spawn Chests (>= 85)
     const allChestSpots: ChestSpot[] = chestSpots.map((s) => ({ ...s }));
     let extraChestAttempts = 0;
-    while (allChestSpots.length < 62 && extraChestAttempts < 1200) {
+    while (allChestSpots.length < 88 && extraChestAttempts < 1800) {
       extraChestAttempts++;
       const angle = this.rand() * Math.PI * 2;
       const dist = 25 + Math.sqrt(this.rand()) * (ISLAND_RADIUS - 42);
@@ -231,8 +231,8 @@ export class PropsAndLoot {
       if (this.terrain.isWater(x, z)) continue;
       if (this.isInsideBuildingZone(x, z, 2.5)) continue;
       const n = this.terrain.getNormalAt(x, z);
-      if (n.y < 0.86) continue;
-      if (allChestSpots.some((c) => Math.hypot(c.x - x, c.z - z) < 16)) continue;
+      if (n.y < 0.85) continue;
+      if (allChestSpots.some((c) => Math.hypot(c.x - x, c.z - z) < 15)) continue;
       allChestSpots.push({
         x,
         y: this.terrain.getHeightAt(x, z),
@@ -245,10 +245,10 @@ export class PropsAndLoot {
       this.createChest(`chest_${i}`, allChestSpots[i]);
     }
 
-    // 2. Spawn Floor Loot (>= 100)
+    // 2. Spawn Floor Loot (>= 160)
     const allFloorSpots: FloorLootSpot[] = floorLootSpots.map((s) => ({ ...s }));
     let extraFloorAttempts = 0;
-    while (allFloorSpots.length < 118 && extraFloorAttempts < 1600) {
+    while (allFloorSpots.length < 165 && extraFloorAttempts < 2400) {
       extraFloorAttempts++;
       const angle = this.rand() * Math.PI * 2;
       const dist = 15 + Math.sqrt(this.rand()) * (ISLAND_RADIUS - 35);
@@ -257,8 +257,8 @@ export class PropsAndLoot {
       if (this.terrain.isWater(x, z)) continue;
       if (this.isInsideBuildingZone(x, z, 2.0)) continue;
       const n = this.terrain.getNormalAt(x, z);
-      if (n.y < 0.85) continue;
-      if (allFloorSpots.some((f) => Math.hypot(f.x - x, f.z - z) < 10)) continue;
+      if (n.y < 0.84) continue;
+      if (allFloorSpots.some((f) => Math.hypot(f.x - x, f.z - z) < 9.5)) continue;
       allFloorSpots.push({
         x,
         y: this.terrain.getHeightAt(x, z) + 0.05,
@@ -273,7 +273,6 @@ export class PropsAndLoot {
       if (roll < 0.56) {
         const item = this.rollWeaponLoot(false);
         payload = { item };
-        // Also drop a small matching ammo pack slightly offset for weapons
         const ammoType = WEAPONS[item.weaponId].ammoType;
         if (ammoType) {
           this.spawnLootDrop(
@@ -295,12 +294,12 @@ export class PropsAndLoot {
       this.spawnLootDrop(spot, payload);
     }
 
-    // 3. Spawn Harvestable Props (>= 260, aim ~290)
-    const targetProps = 290;
+    // 3. Spawn Harvestable Props (>= 460 across ALL 13 PropKinds!)
+    const targetProps = 470;
     let attempts = 0;
     let propIdx = 0;
 
-    // Guaranteed clustered vehicles & crates near POIs first
+    // Guaranteed clustered vehicles, containers, crystals & biome anchors near POIs first
     for (const poi of POIS) {
       if (poi.id === 'crystal_basin') continue;
       const offsets = [
@@ -310,24 +309,52 @@ export class PropsAndLoot {
         [-4, -28],
       ];
       for (const [ox, oz] of offsets) {
-        const px = poi.x + ox + (this.rand() - 0.5) * 6;
-        const pz = poi.z + oz + (this.rand() - 0.5) * 6;
+        const px = poi.x + ox + (this.rand() - 0.5) * 5;
+        const pz = poi.z + oz + (this.rand() - 0.5) * 5;
         if (this.terrain.isWater(px, pz)) continue;
-        if (this.isInsideBuildingZone(px, pz, 2.2)) continue;
-        const kind: PropKind =
-          poi.biome === 'urban'
-            ? this.rand() < 0.7 ? 'car' : 'crate'
-            : poi.biome === 'highland'
-              ? this.rand() < 0.6 ? 'crate' : 'rock'
-              : this.rand() < 0.5 ? 'fence' : 'car';
+        if (this.isInsideBuildingZone(px, pz, 2.5)) continue;
+        let kind: PropKind;
+        if (poi.biome === 'urban') {
+          kind = this.rand() < 0.55 ? 'car' : this.rand() < 0.65 ? 'shipping_container' : 'crate';
+        } else if (poi.biome === 'highland') {
+          kind = this.rand() < 0.45 ? 'shipping_container' : this.rand() < 0.65 ? 'crate' : 'rock';
+        } else if (poi.biome === 'snow') {
+          kind = this.rand() < 0.6 ? 'tree_snow_pine' : 'rock';
+        } else if (poi.biome === 'desert') {
+          kind = this.rand() < 0.55 ? 'cactus' : 'tree_palm';
+        } else if (poi.biome === 'volcanic') {
+          kind = this.rand() < 0.6 ? 'obsidian_crystal' : 'rock';
+        } else if (poi.biome === 'cyber') {
+          kind = this.rand() < 0.65 ? 'cyber_pylon' : 'shipping_container';
+        } else if (poi.biome === 'forest') {
+          kind = this.rand() < 0.55 ? 'tree_redwood' : 'tree_pine';
+        } else {
+          kind = this.rand() < 0.5 ? 'fence' : 'car';
+        }
         this.createProp(`prop_${propIdx++}`, kind, px, pz);
       }
     }
 
-    while (this.propsList.length < targetProps && attempts < 4500) {
+    // Guarantee at least one of every single PropKind on valid terrain
+    const guaranteedKinds: Array<{ kind: PropKind; x: number; z: number }> = [
+      { kind: 'tree_redwood', x: 145, z: -135 },
+      { kind: 'tree_snow_pine', x: -35, z: -215 },
+      { kind: 'tree_palm', x: -205, z: 5 },
+      { kind: 'cactus', x: -245, z: -38 },
+      { kind: 'obsidian_crystal', x: -195, z: 105 },
+      { kind: 'cyber_pylon', x: 142, z: 145 },
+      { kind: 'shipping_container', x: 16, z: 135 },
+    ];
+    for (const g of guaranteedKinds) {
+      if (!this.terrain.isWater(g.x, g.z) && !this.isInsideBuildingZone(g.x, g.z, 2.2)) {
+        this.createProp(`prop_${propIdx++}`, g.kind, g.x, g.z);
+      }
+    }
+
+    while (this.propsList.length < targetProps && attempts < 7000) {
       attempts++;
       const angle = this.rand() * Math.PI * 2;
-      const dist = 10 + Math.sqrt(this.rand()) * (ISLAND_RADIUS - 22);
+      const dist = 10 + Math.sqrt(this.rand()) * (ISLAND_RADIUS - 20);
       const x = Math.cos(angle) * dist;
       const z = Math.sin(angle) * dist;
 
@@ -336,24 +363,32 @@ export class PropsAndLoot {
       if (y < 0.45) continue;
       if (this.isInsideBuildingZone(x, z, 2.2)) continue;
       const n = this.terrain.getNormalAt(x, z);
-      if (n.y < 0.82) continue;
+      if (n.y < 0.78) continue;
 
-      if (allChestSpots.some((c) => Math.hypot(c.x - x, c.z - z) < 2.6)) continue;
-      if (this.propsList.some((p) => Math.hypot(p.x - x, p.z - z) < 4.5)) continue;
+      if (allChestSpots.some((c) => Math.hypot(c.x - x, c.z - z) < 2.5)) continue;
+      if (this.propsList.some((p) => Math.hypot(p.x - x, p.z - z) < 4.0)) continue;
 
       const biome = this.terrain.getBiomeAt(x, z);
       let kind: PropKind;
       const r = this.rand();
-      if (biome === 'forest') {
-        kind = r < 0.72 ? 'tree_pine' : r < 0.88 ? 'rock' : r < 0.95 ? 'tree_oak' : 'crate';
+      if (biome === 'snow') {
+        kind = r < 0.65 ? 'tree_snow_pine' : r < 0.88 ? 'rock' : 'crate';
+      } else if (biome === 'desert') {
+        kind = r < 0.48 ? 'cactus' : r < 0.78 ? 'tree_palm' : r < 0.92 ? 'rock' : 'crate';
+      } else if (biome === 'volcanic') {
+        kind = r < 0.56 ? 'obsidian_crystal' : r < 0.88 ? 'rock' : 'crate';
+      } else if (biome === 'cyber') {
+        kind = r < 0.5 ? 'cyber_pylon' : r < 0.74 ? 'shipping_container' : r < 0.9 ? 'car' : 'crate';
+      } else if (biome === 'forest') {
+        kind = r < 0.48 ? 'tree_pine' : r < 0.78 ? 'tree_redwood' : r < 0.9 ? 'rock' : r < 0.96 ? 'tree_oak' : 'crate';
       } else if (biome === 'highland') {
-        kind = r < 0.45 ? 'rock' : r < 0.75 ? 'tree_pine' : r < 0.9 ? 'crate' : 'car';
+        kind = r < 0.42 ? 'rock' : r < 0.68 ? 'tree_pine' : r < 0.85 ? 'shipping_container' : r < 0.94 ? 'crate' : 'car';
       } else if (biome === 'urban') {
-        kind = r < 0.42 ? 'car' : r < 0.68 ? 'crate' : r < 0.85 ? 'tree_oak' : 'fence';
+        kind = r < 0.4 ? 'car' : r < 0.62 ? 'shipping_container' : r < 0.78 ? 'crate' : r < 0.9 ? 'tree_oak' : 'fence';
       } else if (biome === 'beach') {
-        kind = r < 0.55 ? 'rock' : r < 0.85 ? 'tree_oak' : 'crate';
+        kind = r < 0.48 ? 'tree_palm' : r < 0.82 ? 'rock' : 'crate';
       } else {
-        kind = r < 0.46 ? 'tree_oak' : r < 0.68 ? 'tree_pine' : r < 0.84 ? 'rock' : r < 0.93 ? 'fence' : 'car';
+        kind = r < 0.44 ? 'tree_oak' : r < 0.68 ? 'tree_pine' : r < 0.82 ? 'rock' : r < 0.91 ? 'fence' : 'car';
       }
 
       this.createProp(`prop_${propIdx++}`, kind, x, z);
@@ -535,6 +570,218 @@ export class PropsAndLoot {
       crate.castShadow = true;
       crate.receiveShadow = true;
       visual.add(crate);
+    } else if (kind === 'tree_redwood') {
+      material = 'wood';
+      maxHp = 260;
+      matYield = 58;
+      radius = 0.95 * scale;
+      height = 11.2 * scale;
+
+      const trunk = new THREE.Mesh(
+        this.getGeo('redwood_trunk', () => new THREE.CylinderGeometry(0.45, 0.72, 5.2, 8)),
+        barkMat,
+      );
+      trunk.position.y = 2.6;
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+      visual.add(trunk);
+
+      const leafMat = this.getMat('redwood_leaf', () =>
+        new THREE.MeshStandardMaterial({ color: '#155e2c', roughness: 0.86 }),
+      );
+      for (const [cy, cr, ch, idx] of [
+        [5.2, 3.0, 3.6, 0],
+        [7.4, 2.3, 3.2, 1],
+        [9.4, 1.5, 2.8, 2],
+      ]) {
+        const cone = new THREE.Mesh(
+          this.getGeo(`redwood_cone_${idx}`, () => new THREE.ConeGeometry(cr, ch, 8)),
+          leafMat,
+        );
+        cone.position.y = cy;
+        cone.castShadow = true;
+        cone.receiveShadow = true;
+        visual.add(cone);
+      }
+    } else if (kind === 'tree_snow_pine') {
+      material = 'wood';
+      maxHp = 165;
+      matYield = 38;
+      radius = 0.65 * scale;
+      height = 7.6 * scale;
+
+      const trunk = new THREE.Mesh(
+        this.getGeo('pine_trunk', () => new THREE.CylinderGeometry(0.24, 0.42, 3.0, 8)),
+        barkMat,
+      );
+      trunk.position.y = 1.5;
+      trunk.castShadow = true;
+      visual.add(trunk);
+
+      const snowLeafMat = this.getMat('snow_leaf', () =>
+        new THREE.MeshStandardMaterial({ color: '#1e4e46', roughness: 0.85 }),
+      );
+      const snowCapMat = this.getMat('snow_cap', () =>
+        new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.8 }),
+      );
+      for (let i = 0; i < 3; i++) {
+        const cr = [2.2, 1.75, 1.25][i];
+        const ch = [2.6, 2.3, 2.0][i];
+        const cy = [3.1, 4.6, 5.9][i];
+        const cone = new THREE.Mesh(
+          this.getGeo(`pine_cone_${i}`, () => new THREE.ConeGeometry(cr, ch, 8)),
+          snowLeafMat,
+        );
+        cone.position.y = cy;
+        cone.castShadow = true;
+        visual.add(cone);
+
+        const cap = new THREE.Mesh(
+          this.getGeo(`snow_cap_${i}`, () => new THREE.ConeGeometry(cr * 0.72, ch * 0.46, 8)),
+          snowCapMat,
+        );
+        cap.position.y = cy + ch * 0.28;
+        visual.add(cap);
+      }
+    } else if (kind === 'tree_palm') {
+      material = 'wood';
+      maxHp = 120;
+      matYield = 28;
+      radius = 0.55 * scale;
+      height = 6.2 * scale;
+
+      const palmBark = this.getMat('palm_bark', () =>
+        new THREE.MeshStandardMaterial({ color: '#9a6b42', roughness: 0.9 }),
+      );
+      const palmLeaf = this.getMat('palm_leaf', () =>
+        new THREE.MeshStandardMaterial({ color: '#4ade80', roughness: 0.78 }),
+      );
+      for (let seg = 0; seg < 4; seg++) {
+        const piece = new THREE.Mesh(
+          this.getGeo('palm_seg', () => new THREE.CylinderGeometry(0.18, 0.24, 1.35, 7)),
+          palmBark,
+        );
+        piece.position.set(seg * 0.12, 0.65 + seg * 1.25, 0);
+        piece.rotation.z = -0.09;
+        piece.castShadow = true;
+        visual.add(piece);
+      }
+      const frondGeo = this.getGeo('palm_frond', () => new THREE.BoxGeometry(2.1, 0.14, 0.55));
+      for (let f = 0; f < 5; f++) {
+        const a = (f / 5) * Math.PI * 2;
+        const frond = new THREE.Mesh(frondGeo, palmLeaf);
+        frond.position.set(0.42 + Math.cos(a) * 1.1, 5.3, Math.sin(a) * 1.1);
+        frond.rotation.y = -a;
+        frond.rotation.z = -0.32;
+        frond.castShadow = true;
+        visual.add(frond);
+      }
+    } else if (kind === 'cactus') {
+      material = 'wood';
+      maxHp = 95;
+      matYield = 20;
+      radius = 0.55 * scale;
+      height = 3.2 * scale;
+
+      const cactusMat = this.getMat('cactus_mat', () =>
+        new THREE.MeshStandardMaterial({ color: '#16a34a', roughness: 0.8 }),
+      );
+      const body = new THREE.Mesh(
+        this.getGeo('cactus_body', () => new THREE.CylinderGeometry(0.26, 0.3, 2.9, 8)),
+        cactusMat,
+      );
+      body.position.y = 1.45;
+      body.castShadow = true;
+      visual.add(body);
+
+      const armGeo = this.getGeo('cactus_arm', () => new THREE.CylinderGeometry(0.17, 0.19, 1.1, 7));
+      const armL = new THREE.Mesh(armGeo, cactusMat);
+      armL.position.set(0.45, 1.85, 0);
+      armL.rotation.z = -0.35;
+      const armR = new THREE.Mesh(armGeo, cactusMat);
+      armR.position.set(-0.42, 1.55, 0);
+      armR.rotation.z = 0.35;
+      visual.add(armL, armR);
+    } else if (kind === 'obsidian_crystal') {
+      material = 'brick';
+      maxHp = 220;
+      matYield = 45;
+      radius = 0.95 * scale;
+      height = 3.4 * scale;
+
+      const obsMat = this.getMat('obsidian_mat', () =>
+        new THREE.MeshStandardMaterial({
+          color: '#1f1726',
+          emissive: '#f97316',
+          emissiveIntensity: 0.38,
+          roughness: 0.35,
+          metalness: 0.3,
+        }),
+      );
+      const shardGeo = this.getGeo('obsidian_geo', () => new THREE.ConeGeometry(0.55, 3.1, 5));
+      const main = new THREE.Mesh(shardGeo, obsMat);
+      main.position.y = 1.5;
+      main.rotation.z = 0.12;
+      main.castShadow = true;
+      const side = new THREE.Mesh(shardGeo, obsMat);
+      side.position.set(0.45, 0.95, 0.3);
+      side.scale.set(0.65, 0.65, 0.65);
+      side.rotation.set(0.25, 0, -0.32);
+      visual.add(main, side);
+    } else if (kind === 'cyber_pylon') {
+      material = 'metal';
+      maxHp = 200;
+      matYield = 42;
+      radius = 0.72 * scale;
+      height = 3.6 * scale;
+
+      const frameMat = this.getMat('cyber_frame', () =>
+        new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.35, metalness: 0.7 }),
+      );
+      const glowMat = this.getMat('cyber_glow', () =>
+        new THREE.MeshStandardMaterial({
+          color: '#22d3ee',
+          emissive: '#06b6d4',
+          emissiveIntensity: 1.2,
+          roughness: 0.2,
+        }),
+      );
+      const base = new THREE.Mesh(
+        this.getGeo('cyber_base', () => new THREE.BoxGeometry(1.1, 3.2, 1.1)),
+        frameMat,
+      );
+      base.position.y = 1.6;
+      base.castShadow = true;
+      const core = new THREE.Mesh(
+        this.getGeo('cyber_core', () => new THREE.OctahedronGeometry(0.48, 0)),
+        glowMat,
+      );
+      core.position.y = 3.65;
+      visual.add(base, core);
+    } else if (kind === 'shipping_container') {
+      material = 'metal';
+      maxHp = 320;
+      matYield = 64;
+      radius = 1.85 * scale;
+      height = 2.6 * scale;
+
+      const contColors = ['#dc2626', '#2563eb', '#eab308', '#059669'];
+      const col = contColors[Math.floor(this.rand() * contColors.length)];
+      const contMat = this.getMat(`container:${col}`, () =>
+        new THREE.MeshStandardMaterial({
+          map: this.textures.getCorrugatedTexture(col),
+          roughness: 0.55,
+          metalness: 0.35,
+        }),
+      );
+      const box = new THREE.Mesh(
+        this.getGeo('container_geo', () => new THREE.BoxGeometry(2.5, 2.6, 5.2)),
+        contMat,
+      );
+      box.position.y = 1.3;
+      box.castShadow = true;
+      box.receiveShadow = true;
+      visual.add(box);
     } else {
       // fence
       material = 'wood';

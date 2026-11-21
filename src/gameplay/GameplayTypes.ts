@@ -6,6 +6,7 @@ import type {
   GamePhase,
   HarvestableProp,
   ChestEntity,
+  LaunchPadEntity,
   LootDrop,
   SupplyDrop,
   ItemInstance,
@@ -13,7 +14,13 @@ import type {
   Rarity,
   Vec3Like,
   WeaponId,
+  ZiplineEntity,
 } from '../types';
+
+export interface WorldTraversalBridge {
+  getLaunchPads(): LaunchPadEntity[];
+  getZiplines(): ZiplineEntity[];
+}
 
 export interface PropsInteractionBridge {
   getProps(): HarvestableProp[];

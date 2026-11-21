@@ -21,25 +21,56 @@ export interface BuildingFootprint {
   color: string;
 }
 
-interface RoadSegment {
+interface Segment2D {
   ax: number;
   az: number;
   bx: number;
   bz: number;
 }
 
-const SEGMENTS = 160;
+const SEGMENTS = 240;
 const STRIDE = SEGMENTS + 1;
-const CELL_SIZE = WORLD_SIZE / SEGMENTS; // 5.0m
+const CELL_SIZE = WORLD_SIZE / SEGMENTS; // ~3.333m
 
 const CRYSTAL_BASIN = POIS.find((p) => p.id === 'crystal_basin')!;
 const CRATER_DEPOT = POIS.find((p) => p.id === 'crater_depot')!;
+const FROSTPEAK = POIS.find((p) => p.id === 'frostpeak_citadel')!;
+const SCORCHED = POIS.find((p) => p.id === 'scorched_caldera')!;
+const SUNKEN_OASIS = POIS.find((p) => p.id === 'sunken_oasis')!;
+const SKYLINE = POIS.find((p) => p.id === 'skyline_spire')!;
+const WHISPERING = POIS.find((p) => p.id === 'whispering_pines')!;
 
 // Crater pit offset inside Crater Depot so warehouses sit on flat western/northern yard
 const CRATER_CENTER_X = CRATER_DEPOT.x + 22;
 const CRATER_CENTER_Z = CRATER_DEPOT.z + 16;
 
-// Road polyline segments connecting all 6 POIs cleanly on dry land
+// Volcanic magma caldera pit offset inside Scorched Caldera (keeps POI center exact plateauY)
+export const VOLCANO_CENTER_X = SCORCHED.x - 19;
+export const VOLCANO_CENTER_Z = SCORCHED.z + 17;
+
+// Sculpted winding River Gorge draining Crystal Basin to the Southern Ocean
+export const RIVER_POLYLINE: Array<[number, number]> = [
+  [44, -74],
+  [70, -40],
+  [92, -6],
+  [102, 34],
+  [104, 88],
+  [98, 158],
+  [94, 240],
+  [90, 348],
+];
+
+const RIVER_SEGMENTS: Segment2D[] = [];
+for (let i = 0; i < RIVER_POLYLINE.length - 1; i++) {
+  RIVER_SEGMENTS.push({
+    ax: RIVER_POLYLINE[i][0],
+    az: RIVER_POLYLINE[i][1],
+    bx: RIVER_POLYLINE[i + 1][0],
+    bz: RIVER_POLYLINE[i + 1][1],
+  });
+}
+
+// Road polyline segments connecting all 10 POIs cleanly across the island
 const ROAD_POLYLINES: Array<Array<[number, number]>> = [
   // Sunny Suburbs -> Metro Towers
   [
@@ -48,6 +79,41 @@ const ROAD_POLYLINES: Array<Array<[number, number]>> = [
     [-105, -70],
     [-75, -40],
   ],
+  // Sunny Suburbs -> Frostpeak Citadel
+  [
+    [-165, -155],
+    [-112, -206],
+    [-60, -234],
+    [-10, -245],
+  ],
+  // Frostpeak Citadel -> Whispering Pines
+  [
+    [-10, -245],
+    [60, -226],
+    [118, -196],
+    [165, -165],
+  ],
+  // Sunny Suburbs -> Sunken Oasis -> Scorched Caldera
+  [
+    [-165, -155],
+    [-202, -88],
+    [-225, -15],
+    [-208, 60],
+    [-175, 125],
+  ],
+  // Sunken Oasis -> Metro Towers
+  [
+    [-225, -15],
+    [-152, -28],
+    [-75, -40],
+  ],
+  // Scorched Caldera -> Crater Depot
+  [
+    [-175, 125],
+    [-102, 142],
+    [-30, 138],
+    [40, 125],
+  ],
   // Metro Towers -> Crater Depot
   [
     [-75, -40],
@@ -55,11 +121,17 @@ const ROAD_POLYLINES: Array<Array<[number, number]>> = [
     [0, 90],
     [40, 125],
   ],
-  // Crater Depot -> Market Row
+  // Crater Depot -> Southern River Bridge -> Skyline Spire
   [
     [40, 125],
-    [105, 95],
-    [145, 65],
+    [76, 152],
+    [118, 160],
+    [160, 165],
+  ],
+  // Skyline Spire -> Market Row
+  [
+    [160, 165],
+    [172, 102],
     [175, 35],
   ],
   // Market Row -> Whispering Pines
@@ -78,17 +150,18 @@ const ROAD_POLYLINES: Array<Array<[number, number]>> = [
     [-110, -166],
     [-165, -155],
   ],
-  // Metro Towers -> West/South Shore of Crystal Basin -> Market Row
+  // Metro Towers -> Crystal Basin South -> Northern River Bridge -> Market Row
   [
     [-75, -40],
-    [-25, -62],
-    [25, -52],
-    [95, -25],
+    [-22, -56],
+    [34, -44],
+    [94, 8],
+    [140, 24],
     [175, 35],
   ],
 ];
 
-const ROAD_SEGMENTS: RoadSegment[] = [];
+const ROAD_SEGMENTS: Segment2D[] = [];
 for (const line of ROAD_POLYLINES) {
   for (let i = 0; i < line.length - 1; i++) {
     ROAD_SEGMENTS.push({
@@ -100,7 +173,7 @@ for (const line of ROAD_POLYLINES) {
   }
 }
 
-function distToSegment(px: number, pz: number, s: RoadSegment): number {
+function distToSegment(px: number, pz: number, s: Segment2D): number {
   const vx = s.bx - s.ax;
   const vz = s.bz - s.az;
   const wx = px - s.ax;
@@ -137,8 +210,16 @@ export class TerrainSystem implements TerrainQuery {
       const d = distToSegment(x, z, ROAD_SEGMENTS[i]);
       if (d < minDist) minDist = d;
     }
-    // Core asphalt 3.6m half-width, shoulder fade out to 6.2m
-    return 1 - smoothstep(3.4, 6.2, minDist);
+    return 1 - smoothstep(3.4, 6.0, minDist);
+  }
+
+  private distToRiver(x: number, z: number): number {
+    let minDist = Infinity;
+    for (let i = 0; i < RIVER_SEGMENTS.length; i++) {
+      const d = distToSegment(x, z, RIVER_SEGMENTS[i]);
+      if (d < minDist) minDist = d;
+    }
+    return minDist;
   }
 
   private computeCoastRadius(x: number, z: number): number {
@@ -147,7 +228,6 @@ export class TerrainSystem implements TerrainQuery {
     const nx = x / r;
     const nz = z / r;
     const n = fbm2D(nx * 2.1, nz * 2.1, 3, 2.0, 0.5, this.seed + 7);
-    // Keep outer coastline in [318, 342] so edge POIs sit safely on land while r > 345 is ocean
     return ISLAND_RADIUS - 3 + clamp(n * 15, -14, 10);
   }
 
@@ -156,14 +236,28 @@ export class TerrainSystem implements TerrainQuery {
     const coastRadius = this.computeCoastRadius(x, z);
     const shoreDist = coastRadius - r;
 
-    // Rolling interior elevation
+    // Multi-octave rolling interior + alpine/volcanic macro elevation
     const macroNoise = fbm2D(x * 0.0042, z * 0.0042, 4, 2.05, 0.5, this.seed + 13);
     const ridgeNoise = 1 - Math.abs(fbm2D(x * 0.0075, z * 0.0075, 3, 2.0, 0.5, this.seed + 37));
-    const detailNoise = fbm2D(x * 0.018, z * 0.018, 2, 2.0, 0.5, this.seed + 71) * 1.4;
+    const detailNoise = fbm2D(x * 0.022, z * 0.022, 2, 2.0, 0.5, this.seed + 71) * 1.45;
 
-    // NE forest elevation boost, gentle central valley
-    const neBoost = smoothstep(-60, 200, x) * smoothstep(60, -200, z) * 5.5;
-    let interiorH = 11.5 + macroNoise * 7.5 + (ridgeNoise - 0.5) * 4.5 + detailNoise + neBoost;
+    // Scenic regional terrain massing: Frostpeak mountain in North, Pine ridge in NE, Volcano uplift in SW
+    const frostDist = Math.hypot(x - FROSTPEAK.x, z - FROSTPEAK.z);
+    const frostPeakMass = (1 - smoothstep(40, 128, frostDist)) * 25.0;
+
+    const volcDist = Math.hypot(x - SCORCHED.x, z - SCORCHED.z);
+    const volcMass = (1 - smoothstep(45, 112, volcDist)) * 9.5;
+
+    const neBoost = smoothstep(-60, 200, x) * smoothstep(60, -200, z) * 5.8;
+
+    let interiorH =
+      11.0 +
+      macroNoise * 7.2 +
+      (ridgeNoise - 0.5) * 4.8 +
+      detailNoise +
+      neBoost +
+      frostPeakMass +
+      volcMass;
     interiorH = Math.max(4.5, interiorH);
 
     // Coastal beach and ocean shelf shaping
@@ -181,7 +275,8 @@ export class TerrainSystem implements TerrainQuery {
       h = lerp(Math.min(interiorH, 4.2), interiorH, t);
     }
 
-    // Apply POI plateau shaping
+    // Apply all 10 POI plateau shapes cleanly
+    const riverDist = this.distToRiver(x, z);
     for (const poi of POIS) {
       const dx = x - poi.x;
       const dz = z - poi.z;
@@ -191,12 +286,10 @@ export class TerrainSystem implements TerrainQuery {
         if (d < 84) {
           let basinH: number;
           if (d <= 18) {
-            // Central elevated island r <= 18 at y = 2.5
             basinH = 2.5;
           } else if (d < 26) {
             basinH = lerp(2.5, -1.8, smoothstep(18, 26, d));
           } else if (d <= 44) {
-            // Scenic sunken lake y ~ -1.8
             basinH = -1.8 + Math.sin(x * 0.15) * Math.cos(z * 0.15) * 0.08;
           } else if (d < 58) {
             basinH = lerp(-1.8, 2.2, smoothstep(44, 58, d));
@@ -209,13 +302,23 @@ export class TerrainSystem implements TerrainQuery {
         continue;
       }
 
-      const flatR = poi.radius * 0.68;
-      const outerR = poi.radius * 1.15;
+      const flatR = poi.radius * 0.7;
+      const outerR = poi.radius * 1.18;
       if (d <= flatR) {
         h = poi.plateauY;
       } else if (d < outerR) {
         const t = smoothstep(flatR, outerR, d);
         h = lerp(poi.plateauY, h, t);
+      }
+    }
+
+    // Carve River Gorge AFTER POI plateau skirts so the channel stays unbroken to the ocean
+    if (riverDist < 12.5) {
+      if (riverDist <= 4.6) {
+        h = Math.min(h, -1.6 + Math.sin(x * 0.25 + z * 0.2) * 0.12);
+      } else {
+        const bankT = smoothstep(4.6, 12.5, riverDist);
+        h = lerp(-1.6, h, bankT);
       }
     }
 
@@ -231,6 +334,32 @@ export class TerrainSystem implements TerrainQuery {
       } else {
         const rimOut = smoothstep(11.5, 15.5, craterDist);
         h = lerp(CRATER_DEPOT.plateauY + 1.15, h, rimOut);
+      }
+    }
+
+    // Active Volcanic Caldera Pit inside Scorched Caldera
+    const calDist = Math.hypot(x - VOLCANO_CENTER_X, z - VOLCANO_CENTER_Z);
+    if (calDist < 19.5) {
+      if (calDist <= 10.5) {
+        const cup = smoothstep(0, 10.5, calDist);
+        h = lerp(SCORCHED.plateauY - 5.2, SCORCHED.plateauY - 3.8, cup);
+      } else if (calDist <= 14.5) {
+        const wall = smoothstep(10.5, 14.5, calDist);
+        h = lerp(SCORCHED.plateauY - 3.8, SCORCHED.plateauY + 4.8, wall);
+      } else {
+        const rimOut = smoothstep(14.5, 19.5, calDist);
+        h = lerp(SCORCHED.plateauY + 4.8, h, rimOut);
+      }
+    }
+
+    // Shallow oasis lagoon basin inside Sunken Oasis SE yard
+    const oasisPoolDist = Math.hypot(x - (SUNKEN_OASIS.x + 20), z - (SUNKEN_OASIS.z + 18));
+    if (oasisPoolDist < 13.5) {
+      const oasisFloorY = SUNKEN_OASIS.plateauY - 2.1;
+      if (oasisPoolDist <= 7.5) {
+        h = oasisFloorY;
+      } else {
+        h = lerp(oasisFloorY, h, smoothstep(7.5, 13.5, oasisPoolDist));
       }
     }
 
@@ -314,7 +443,10 @@ export class TerrainSystem implements TerrainQuery {
   }
 
   isWater(x: number, z: number): boolean {
-    return this.getHeightAt(x, z) <= WATER_LEVEL;
+    const h = this.getHeightAt(x, z);
+    if (h <= WATER_LEVEL) return true;
+    const oasisDist = Math.hypot(x - (SUNKEN_OASIS.x + 20), z - (SUNKEN_OASIS.z + 18));
+    return oasisDist < 10.5 && h < SUNKEN_OASIS.plateauY - 1.3;
   }
 
   getBiomeAt(x: number, z: number): BiomeType {
@@ -323,25 +455,40 @@ export class TerrainSystem implements TerrainQuery {
 
     if (h <= WATER_LEVEL) {
       const basinDist = Math.hypot(x - CRYSTAL_BASIN.x, z - CRYSTAL_BASIN.z);
-      return basinDist < CRYSTAL_BASIN.radius ? 'grassland' : 'ocean';
+      if (basinDist < CRYSTAL_BASIN.radius) return 'grassland';
+      if (r < ISLAND_RADIUS - 12) return 'grassland';
+      return 'ocean';
     }
 
     if (h < 2.4 && r > ISLAND_RADIUS - 65) {
       return 'beach';
     }
 
+    // Check explicit POI radii first
     for (const poi of POIS) {
       if (Math.hypot(x - poi.x, z - poi.z) <= poi.radius) {
         return poi.biome;
       }
     }
 
-    // Organic northeast pine forest biome surrounding Whispering Pines
-    if (Math.hypot((x - 155) * 0.85, (z + 150) * 0.95) < 128) {
+    // Extended smooth organic regional biome zones
+    if (Math.hypot((x - FROSTPEAK.x) * 0.92, z - FROSTPEAK.z) < 105) {
+      return 'snow';
+    }
+    if (Math.hypot(x - SCORCHED.x, z - SCORCHED.z) < 95) {
+      return 'volcanic';
+    }
+    if (Math.hypot(x - SUNKEN_OASIS.x, (z - SUNKEN_OASIS.z) * 0.9) < 92) {
+      return 'desert';
+    }
+    if (Math.hypot(x - SKYLINE.x, z - SKYLINE.z) < 80) {
+      return 'cyber';
+    }
+    if (Math.hypot((x - WHISPERING.x) * 0.85, (z - WHISPERING.z) * 0.95) < 126) {
       return 'forest';
     }
 
-    if (h >= 15.5) {
+    if (h >= 16.0) {
       return 'highland';
     }
 
@@ -384,10 +531,10 @@ export class TerrainSystem implements TerrainQuery {
   ): void {
     const r = Math.hypot(x, z);
     const basinDist = Math.hypot(x - CRYSTAL_BASIN.x, z - CRYSTAL_BASIN.z);
-    const patch = fbm2D(x * 0.025, z * 0.025, 2, 2.0, 0.5, this.seed + 199);
+    const patch = fbm2D(x * 0.028, z * 0.028, 2, 2.0, 0.5, this.seed + 199);
 
     if (h < -0.25) {
-      if (basinDist < 62) {
+      if (basinDist < 62 || r < ISLAND_RADIUS - 15) {
         outColor.set('#2894a8');
       } else {
         const depthT = clamp((-h - 0.25) / 5.5, 0, 1);
@@ -396,44 +543,80 @@ export class TerrainSystem implements TerrainQuery {
       return;
     }
 
-    // Coastal beach or lake shoreline sand
     const isOuterShore = r > ISLAND_RADIUS - 58 && h < 3.4;
     const isBasinShore = basinDist < 58 && basinDist > 16 && h < 1.3;
-    if (isOuterShore || isBasinShore) {
+    const riverDist = this.distToRiver(x, z);
+    const isRiverBank = riverDist < 8.8 && h < 2.2 && r < ISLAND_RADIUS - 12;
+
+    if (isOuterShore || isBasinShore || isRiverBank) {
       const sandEdge = isOuterShore
         ? smoothstep(2.0, 3.4, h)
-        : smoothstep(0.4, 1.3, h);
+        : isRiverBank
+          ? smoothstep(5.5, 8.8, riverDist)
+          : smoothstep(0.4, 1.3, h);
       const sandCol = new THREE.Color('#f2d48c');
       const grassCol = new THREE.Color('#47c74a');
       outColor.copy(sandCol).lerp(grassCol, sandEdge);
     } else {
       const biome = this.getBiomeAt(x, z);
-      if (biome === 'forest') {
-        outColor.set(patch > 0 ? '#2b823f' : '#246f36');
-      } else if (biome === 'highland') {
-        outColor.set(patch > 0.1 ? '#7c8568' : '#647858');
-      } else if (biome === 'urban') {
-        outColor.set('#626d7a');
-      } else {
-        outColor.set(patch > 0.05 ? '#52cf50' : '#3fb848');
+      switch (biome) {
+        case 'snow':
+          outColor.set(patch > 0.05 ? '#f8fafc' : '#e0f2fe');
+          break;
+        case 'volcanic':
+          outColor.set(patch > 0.1 ? '#3b2b33' : '#261e24');
+          break;
+        case 'desert':
+          outColor.set(patch > 0 ? '#e39053' : '#cf763e');
+          break;
+        case 'cyber':
+          outColor.set(patch > 0 ? '#2d4c5c' : '#1f3645');
+          break;
+        case 'forest':
+          outColor.set(patch > 0 ? '#2b823f' : '#246f36');
+          break;
+        case 'highland':
+          outColor.set(patch > 0.1 ? '#7c8568' : '#647858');
+          break;
+        case 'urban':
+          outColor.set('#626d7a');
+          break;
+        default:
+          outColor.set(patch > 0.05 ? '#52cf50' : '#3fb848');
+          break;
       }
 
-      // Steep slopes transition to stylized cliff grey-brown
-      if (slopeY < 0.88) {
-        const cliffT = smoothstep(0.88, 0.7, slopeY);
-        outColor.lerp(new THREE.Color('#776e67'), cliffT);
+      // Steep cliff strata exposure
+      if (slopeY < 0.86) {
+        const cliffT = smoothstep(0.86, 0.66, slopeY);
+        const cliffColor =
+          biome === 'snow'
+            ? '#64748b'
+            : biome === 'desert'
+              ? '#9a4322'
+              : biome === 'volcanic'
+                ? '#18141c'
+                : '#776e67';
+        outColor.lerp(new THREE.Color(cliffColor), cliffT);
       }
     }
 
-    // Crater Depot crater dark scorch tint
+    // Crater Depot meteor scorch
     const craterDist = Math.hypot(x - CRATER_CENTER_X, z - CRATER_CENTER_Z);
     if (craterDist < 13) {
       const scorch = 1 - smoothstep(4, 13, craterDist);
       outColor.lerp(new THREE.Color('#493e4f'), scorch * 0.78);
     }
 
+    // Scorched Caldera hot magma glow around lava pit center
+    const calDist = Math.hypot(x - VOLCANO_CENTER_X, z - VOLCANO_CENTER_Z);
+    if (calDist < 15.5) {
+      const glow = 1 - smoothstep(7, 15.5, calDist);
+      outColor.lerp(new THREE.Color('#ea580c'), glow * 0.65);
+    }
+
     // Road asphalt blend on dry terrain
-    if (road > 0.05 && h > 0.35) {
+    if (road > 0.05 && h > 0.4) {
       outColor.lerp(new THREE.Color('#3b414c'), road * 0.92);
     }
   }
@@ -459,8 +642,8 @@ export class TerrainSystem implements TerrainQuery {
         positions[idx * 3 + 1] = h;
         positions[idx * 3 + 2] = z;
 
-        uvs[idx * 2] = (ix / SEGMENTS) * 44;
-        uvs[idx * 2 + 1] = (iz / SEGMENTS) * 44;
+        uvs[idx * 2] = (ix / SEGMENTS) * 56;
+        uvs[idx * 2 + 1] = (iz / SEGMENTS) * 56;
 
         const normal = this.getNormalAt(x, z);
         this.computeSurfaceHexAndLinear(
@@ -502,7 +685,7 @@ export class TerrainSystem implements TerrainQuery {
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
       map: this.detailTexture,
-      roughness: 0.92,
+      roughness: 0.9,
       metalness: 0.02,
     });
 
@@ -517,7 +700,7 @@ export class TerrainSystem implements TerrainQuery {
   getMapTextureCanvas(): HTMLCanvasElement {
     if (this.mapCanvas) return this.mapCanvas;
 
-    const size = 512;
+    const size = 1024;
     if (typeof document === 'undefined') {
       return {
         width: size,
@@ -538,7 +721,6 @@ export class TerrainSystem implements TerrainQuery {
     const img = ctx.createImageData(size, size);
     const data = img.data;
 
-    // Normalized NW sun direction for subtle relief hillshading
     const sunX = -0.6;
     const sunY = 0.68;
     const sunZ = -0.42;
@@ -555,8 +737,9 @@ export class TerrainSystem implements TerrainQuery {
         let b: number;
 
         if (h <= WATER_LEVEL) {
+          const distCenter = Math.hypot(wx, wz);
           const basinDist = Math.hypot(wx - CRYSTAL_BASIN.x, wz - CRYSTAL_BASIN.z);
-          if (basinDist < CRYSTAL_BASIN.radius) {
+          if (basinDist < CRYSTAL_BASIN.radius || distCenter < ISLAND_RADIUS - 15) {
             r = 44;
             g = 196;
             b = 224;
@@ -566,7 +749,6 @@ export class TerrainSystem implements TerrainQuery {
             g = Math.round(lerp(76, 178, shallow));
             b = Math.round(lerp(136, 209, shallow));
           }
-          // Crisp shoreline foam ring
           if (h > -0.25) {
             r = Math.round(lerp(r, 215, 0.5));
             g = Math.round(lerp(g, 245, 0.5));
@@ -575,40 +757,73 @@ export class TerrainSystem implements TerrainQuery {
         } else {
           const n = this.getNormalAt(wx, wz);
           const hillShade = clamp(
-            0.78 + (n.x * sunX + n.y * sunY + n.z * sunZ) * 0.34,
-            0.62,
-            1.14,
+            0.78 + (n.x * sunX + n.y * sunY + n.z * sunZ) * 0.36,
+            0.58,
+            1.16,
           );
           const distCenter = Math.hypot(wx, wz);
           const basinDist = Math.hypot(wx - CRYSTAL_BASIN.x, wz - CRYSTAL_BASIN.z);
           const road = this.getRoadMaskAt(wx, wz);
+          const calDist = Math.hypot(wx - VOLCANO_CENTER_X, wz - VOLCANO_CENTER_Z);
 
-          if ((distCenter > ISLAND_RADIUS - 55 && h < 3.0) || (basinDist < 57 && basinDist > 16 && h < 1.1)) {
+          if (calDist < 10.2) {
+            r = 249;
+            g = 115;
+            b = 22;
+          } else if (
+            (distCenter > ISLAND_RADIUS - 55 && h < 3.0) ||
+            (basinDist < 57 && basinDist > 16 && h < 1.1)
+          ) {
             r = 240;
             g = 212;
             b = 140;
           } else {
             const biome = this.getBiomeAt(wx, wz);
-            if (biome === 'forest') {
-              r = 46;
-              g = 136;
-              b = 64;
-            } else if (biome === 'highland') {
-              r = 122;
-              g = 132;
-              b = 104;
-            } else if (biome === 'urban') {
-              r = 104;
-              g = 114;
-              b = 126;
-            } else {
-              r = 82;
-              g = 201;
-              b = 80;
+            switch (biome) {
+              case 'snow':
+                r = 232;
+                g = 244;
+                b = 252;
+                break;
+              case 'volcanic':
+                r = 68;
+                g = 52;
+                b = 58;
+                break;
+              case 'desert':
+                r = 224;
+                g = 142;
+                b = 84;
+                break;
+              case 'cyber':
+                r = 48;
+                g = 86;
+                b = 104;
+                break;
+              case 'forest':
+                r = 46;
+                g = 136;
+                b = 64;
+                break;
+              case 'highland':
+                r = 122;
+                g = 132;
+                b = 104;
+                break;
+              case 'urban':
+                r = 104;
+                g = 114;
+                b = 126;
+                break;
+              default:
+                r = 82;
+                g = 201;
+                b = 80;
+                break;
             }
           }
 
-          if (road > 0.28) {
+          if (road > 0.28 && calDist >= 10.2) {
             const rt = smoothstep(0.28, 0.72, road);
             r = Math.round(lerp(r, 64, rt));
             g = Math.round(lerp(g, 70, rt));
@@ -629,39 +844,20 @@ export class TerrainSystem implements TerrainQuery {
 
     ctx.putImageData(img, 0, 0);
 
-    // Draw building footprints (real footprints if registered, or schematic POI silhouettes)
     const footprintsToDraw: BuildingFootprint[] =
       this.buildingFootprints.length > 0
         ? this.buildingFootprints
-        : POIS.flatMap((p) => {
-            if (p.id === 'crystal_basin') {
-              return [{ x: p.x, z: p.z, w: 9, d: 9, color: '#0ea5e9' }];
-            }
-            const col =
-              p.biome === 'urban'
-                ? '#c25943'
-                : p.biome === 'forest'
-                  ? '#854d0e'
-                  : p.biome === 'highland'
-                    ? '#dc2626'
-                    : '#7dd3fc';
-            return [
-              { x: p.x - 16, z: p.z - 16, w: 12, d: 10, color: col },
-              { x: p.x + 16, z: p.z - 16, w: 12, d: 10, color: col },
-              { x: p.x - 16, z: p.z + 16, w: 12, d: 10, color: col },
-              { x: p.x + 16, z: p.z + 16, w: 11, d: 10, color: col },
-            ];
-          });
+        : POIS.map((p) => ({ x: p.x, z: p.z, w: 12, d: 12, color: '#94a3b8' }));
 
     for (const fp of footprintsToDraw) {
       const cx = ((fp.x + WORLD_HALF) / WORLD_SIZE) * size;
       const cz = ((fp.z + WORLD_HALF) / WORLD_SIZE) * size;
-      const pw = Math.max(2, (fp.w / WORLD_SIZE) * size);
-      const pd = Math.max(2, (fp.d / WORLD_SIZE) * size);
+      const pw = Math.max(3, (fp.w / WORLD_SIZE) * size);
+      const pd = Math.max(3, (fp.d / WORLD_SIZE) * size);
       ctx.fillStyle = fp.color;
       ctx.fillRect(cx - pw * 0.5, cz - pd * 0.5, pw, pd);
       ctx.strokeStyle = 'rgba(15, 23, 42, 0.75)';
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.2;
       ctx.strokeRect(cx - pw * 0.5, cz - pd * 0.5, pw, pd);
     }
 

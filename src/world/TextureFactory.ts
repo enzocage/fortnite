@@ -475,6 +475,273 @@ export class TextureFactory {
     });
   }
 
+  getSnowTexture(): THREE.CanvasTexture {
+    return this.createTexture('snow', 256, (ctx, s) => {
+      const rand = mulberry32(909);
+      ctx.fillStyle = '#eff6ff';
+      ctx.fillRect(0, 0, s, s);
+
+      for (let i = 0; i < 180; i++) {
+        const x = rand() * s;
+        const y = rand() * s;
+        const r = 6 + rand() * 18;
+        ctx.fillStyle = rand() > 0.45 ? 'rgba(255,255,255,0.65)' : 'rgba(186,230,253,0.34)';
+        for (const ox of [-s, 0, s]) {
+          for (const oy of [-s, 0, s]) {
+            ctx.beginPath();
+            ctx.arc(x + ox, y + oy, r, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+
+      for (let i = 0; i < 420; i++) {
+        const x = rand() * s;
+        const y = rand() * s;
+        ctx.fillStyle = rand() > 0.35 ? '#ffffff' : '#bae6fd';
+        ctx.fillRect(x, y, 2, 2);
+      }
+    });
+  }
+
+  getSandstoneTexture(): THREE.CanvasTexture {
+    return this.createTexture('sandstone', 256, (ctx, s) => {
+      const rand = mulberry32(1010);
+      ctx.fillStyle = '#d97745';
+      ctx.fillRect(0, 0, s, s);
+
+      const bands = 12;
+      const bh = s / bands;
+      const palette = ['#d97745', '#c85a32', '#e5925c', '#b44825', '#df8448'];
+      for (let i = 0; i < bands; i++) {
+        ctx.fillStyle = palette[i % palette.length];
+        ctx.fillRect(0, i * bh, s, bh);
+        ctx.fillStyle = 'rgba(72, 26, 12, 0.22)';
+        ctx.fillRect(0, i * bh + bh - 2, s, 2);
+      }
+
+      for (let i = 0; i < 550; i++) {
+        const x = rand() * s;
+        const y = rand() * s;
+        ctx.fillStyle = rand() > 0.5 ? 'rgba(255,230,195,0.22)' : 'rgba(92,35,16,0.22)';
+        ctx.fillRect(x, y, 2 + rand() * 3, 2);
+      }
+    });
+  }
+
+  getBasaltTexture(): THREE.CanvasTexture {
+    return this.createTexture('basalt', 256, (ctx, s) => {
+      const rand = mulberry32(1111);
+      ctx.fillStyle = '#24222a';
+      ctx.fillRect(0, 0, s, s);
+
+      for (let i = 0; i < 110; i++) {
+        const x = rand() * s;
+        const y = rand() * s;
+        const w = 14 + rand() * 28;
+        const h = 14 + rand() * 28;
+        ctx.fillStyle = rand() > 0.5 ? '#2f2b38' : '#1b1921';
+        for (const ox of [-s, 0, s]) {
+          for (const oy of [-s, 0, s]) {
+            ctx.fillRect(x + ox, y + oy, w, h);
+          }
+        }
+      }
+
+      // Glowing magma hairline fractures
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 24; i++) {
+        const x = rand() * s;
+        const y = rand() * s;
+        ctx.strokeStyle = i % 3 === 0 ? 'rgba(249, 115, 22, 0.72)' : 'rgba(15, 13, 18, 0.75)';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + (rand() - 0.5) * 46, y + (rand() - 0.5) * 46);
+        ctx.stroke();
+      }
+    });
+  }
+
+  getCastleStoneTexture(): THREE.CanvasTexture {
+    return this.createTexture('castle_stone', 256, (ctx, s) => {
+      const rand = mulberry32(1212);
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(0, 0, s, s);
+
+      const rows = 6;
+      const cols = 4;
+      const rh = s / rows;
+      const cw = s / cols;
+      const stones = ['#94a3b8', '#7c8ba1', '#8392a7', '#6b7a90'];
+
+      for (let r = 0; r < rows; r++) {
+        const off = (r % 2) * (cw * 0.5);
+        for (let c = -1; c <= cols; c++) {
+          const x = c * cw + off;
+          const y = r * rh;
+          ctx.fillStyle = stones[Math.floor(rand() * stones.length)];
+          ctx.fillRect(x + 3, y + 3, cw - 6, rh - 6);
+          ctx.fillStyle = 'rgba(255,255,255,0.18)';
+          ctx.fillRect(x + 3, y + 3, cw - 6, 4);
+        }
+      }
+    });
+  }
+
+  getCyberMetalTexture(): THREE.CanvasTexture {
+    return this.createTexture('cyber_metal', 256, (ctx, s) => {
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, s, s);
+
+      const grad = ctx.createLinearGradient(0, 0, s, s);
+      grad.addColorStop(0, '#1e293b');
+      grad.addColorStop(1, '#090f1f');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, s, s);
+
+      ctx.strokeStyle = '#1e3a5f';
+      ctx.lineWidth = 3;
+      const step = 64;
+      for (let x = 0; x < s; x += step) {
+        for (let y = 0; y < s; y += step) {
+          ctx.strokeRect(x + 2, y + 2, step - 4, step - 4);
+        }
+      }
+
+      // Glowing cyan circuit accents
+      ctx.strokeStyle = '#22d3ee';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(0, 32);
+      ctx.lineTo(96, 32);
+      ctx.lineTo(128, 64);
+      ctx.lineTo(s, 64);
+      ctx.moveTo(32, s);
+      ctx.lineTo(32, 160);
+      ctx.lineTo(64, 128);
+      ctx.lineTo(192, 128);
+      ctx.stroke();
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(96, 32, 4, 0, Math.PI * 2);
+      ctx.arc(64, 128, 4, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  getCorrugatedTexture(colorHex: string): THREE.CanvasTexture {
+    const norm = normalizeHex(colorHex);
+    return this.createTexture(`corrugated:${norm}`, 256, (ctx, s) => {
+      const hi = shadeHex(norm, 1.18);
+      const lo = shadeHex(norm, 0.72);
+      ctx.fillStyle = norm;
+      ctx.fillRect(0, 0, s, s);
+
+      const ribs = 16;
+      const rw = s / ribs;
+      for (let i = 0; i < ribs; i++) {
+        const x = i * rw;
+        ctx.fillStyle = hi;
+        ctx.fillRect(x, 0, rw * 0.35, s);
+        ctx.fillStyle = lo;
+        ctx.fillRect(x + rw * 0.65, 0, rw * 0.35, s);
+      }
+
+      ctx.strokeStyle = shadeHex(norm, 0.55);
+      ctx.lineWidth = 6;
+      ctx.strokeRect(3, 3, s - 6, s - 6);
+    });
+  }
+
+  getMarbleTexture(): THREE.CanvasTexture {
+    return this.createTexture('marble', 256, (ctx, s) => {
+      const rand = mulberry32(1313);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillRect(0, 0, s, s);
+
+      const step = 64;
+      for (let x = 0; x < s; x += step) {
+        for (let y = 0; y < s; y += step) {
+          ctx.fillStyle = (x / step + y / step) % 2 === 0 ? '#f1f5f9' : '#dce4ee';
+          ctx.fillRect(x + 1, y + 1, step - 2, step - 2);
+        }
+      }
+
+      ctx.strokeStyle = 'rgba(100, 116, 139, 0.25)';
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 18; i++) {
+        const x = rand() * s;
+        const y = rand() * s;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + (rand() - 0.5) * 60, y + (rand() - 0.5) * 60);
+        ctx.stroke();
+      }
+    });
+  }
+
+  getBillboardTexture(variant: 'burger' | 'cyber' | 'royal'): THREE.CanvasTexture {
+    return this.createTexture(`billboard:${variant}`, 256, (ctx, s) => {
+      const grad = ctx.createLinearGradient(0, 0, s, s);
+      if (variant === 'burger') {
+        grad.addColorStop(0, '#ea580c');
+        grad.addColorStop(1, '#dc2626');
+      } else if (variant === 'cyber') {
+        grad.addColorStop(0, '#0284c7');
+        grad.addColorStop(1, '#7c3aed');
+      } else {
+        grad.addColorStop(0, '#1e3a8a');
+        grad.addColorStop(1, '#4c1d95');
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, s, s);
+
+      ctx.strokeStyle = variant === 'cyber' ? '#22d3ee' : '#facc15';
+      ctx.lineWidth = 10;
+      ctx.strokeRect(8, 8, s - 16, s - 16);
+
+      if (variant === 'burger') {
+        // Stylized stacked burger emblem
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(58, 58, 140, 34);
+        ctx.fillStyle = '#22c55e';
+        ctx.fillRect(52, 96, 152, 16);
+        ctx.fillStyle = '#78350f';
+        ctx.fillRect(56, 116, 144, 28);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(58, 148, 140, 26);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(46, 192, 164, 18);
+      } else if (variant === 'cyber') {
+        // Futuristic chevron visor & energy bars
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillRect(36, 48, 184, 24);
+        ctx.fillStyle = '#f472b6';
+        ctx.fillRect(36, 86, 140, 20);
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(36, 120, 184, 28);
+        ctx.fillStyle = '#e0f2fe';
+        ctx.fillRect(36, 166, 112, 22);
+      } else {
+        // Golden crown & diamond badge
+        ctx.fillStyle = '#facc15';
+        ctx.beginPath();
+        ctx.moveTo(58, 156);
+        ctx.lineTo(58, 80);
+        ctx.lineTo(94, 118);
+        ctx.lineTo(128, 64);
+        ctx.lineTo(162, 118);
+        ctx.lineTo(198, 80);
+        ctx.lineTo(198, 156);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillRect(58, 174, 140, 22);
+      }
+    });
+  }
+
   dispose(): void {
     for (const tex of this.cache.values()) {
       tex.dispose();

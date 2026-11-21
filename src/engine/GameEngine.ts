@@ -22,6 +22,7 @@ import type {
   EmoteId,
   GamePhase,
   GameSettings,
+  GraphicsQuality,
   HUDState,
   KillFeedEntry,
   LobbyConfig,
@@ -32,11 +33,13 @@ import type {
   WeaponId,
 } from '../types';
 import {
+  EnvironmentDetail,
   EnvironmentFX,
   PropsAndLoot,
   StormSystem,
   TerrainSystem,
   WorldBuilder,
+  WorldInteractables,
   type WorldBuildResult,
 } from '../world';
 import {
@@ -85,6 +88,8 @@ export interface FortdropDebugAPI {
   spawnNearbyBot(distance?: number): boolean;
   triggerVictory(): void;
   getStats(): MatchSummary | null;
+  teleportToPOI(poiId: string): boolean;
+  getWorldStats(): Record<string, unknown>;
 }
 
 declare global {
@@ -109,6 +114,9 @@ export class GameEngine {
   private terrain: TerrainSystem;
   private worldBuilder: WorldBuilder;
   private worldBuildResult: WorldBuildResult;
+  private worldInteractables: WorldInteractables;
+  private environmentDetail: EnvironmentDetail;
+  private currentDetailQuality: GraphicsQuality = 'high';
   private environmentFX: EnvironmentFX;
   private propsAndLoot: PropsAndLoot;
   private stormSystem: StormSystem;
@@ -209,7 +217,7 @@ export class GameEngine {
 
     // 2. Scene, Camera, Lighting, Fog
     this.scene = new THREE.Scene();
-    this.fog = new THREE.Fog(0x96d7ff, 180, 620);
+    this.fog = new THREE.Fog(0x96d7ff, 220, 740);
     this.scene.fog = this.fog;
 
     this.camera = new THREE.PerspectiveCamera(
@@ -259,6 +267,9 @@ export class GameEngine {
     this.environmentFX = new EnvironmentFX(4201);
     this.scene.add(this.environmentFX.getGroup());
 
+    this.worldInteractables = new WorldInteractables(this.terrain);
+    this.scene.add(this.worldInteractables.getGroup());
+
     this.propsAndLoot = new PropsAndLoot(this.terrain, this.eventBus, 4201);
     this.propsAndLoot.populate(
       this.worldBuildResult.chestSpots,
@@ -298,9 +309,22 @@ export class GameEngine {
       onPreviewEmote: (emoteId) => this.previewLobbyEmote(emoteId),
     });
     this.uiManager.setTerrainMapCanvas(this.terrain.getMapTextureCanvas());
+    this.uiManager.setWorldTraversal(
+      this.worldInteractables.getLaunchPads(),
+      this.worldInteractables.getZiplines(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.settings = this.uiManager.getSettings();
+
+    this.currentDetailQuality = this.settings.graphicsQuality;
+    this.environmentDetail = new EnvironmentDetail(
+      this.terrain,
+      this.worldBuildResult.colliders,
+      this.currentDetailQuality,
+      4201,
+    );
+    this.scene.add(this.environmentDetail.getGroup());
 
     // 7. Audio Engine
     this.audioEngine = new AudioEngine(this.eventBus, this.settings);
@@ -332,6 +356,7 @@ export class GameEngine {
       this.settings,
     );
     this.playerController.attachInputListeners(this.renderer.domElement);
+    this.playerController.setTraversalBridge(this.worldInteractables);
 
     // 9. Player Character Rig
     this.playerRig = this.createCharacterRigFromConfig(this.lobbyConfig);
@@ -353,8 +378,16 @@ export class GameEngine {
     this.bindDOMEvents();
     this.exposeDebugAPI();
 
-    // 12. Start in Lobby
+    // 12. Start in Lobby (or jump directly to a POI in headless/URL QA mode)
     this.enterLobby();
+    if (typeof window !== 'undefined') {
+      const qaPoi = new URLSearchParams(window.location.search).get('qaPoi');
+      if (qaPoi && POIS.some((p) => p.id === qaPoi)) {
+        this.startMatch(this.uiManager.getLobbyConfig(), true);
+        window.__GAME__?.teleportToPOI(qaPoi);
+        window.__GAME__?.giveLoadout();
+      }
+    }
     this.startLoop();
   }
 
@@ -366,8 +399,12 @@ export class GameEngine {
   }
 
   private findLobbyPedestalSpot(): Vec3Like {
-    const x = -18;
-    const z = 148;
+    let x = -14;
+    let z = 222;
+    if (this.terrain.isWater(x, z)) {
+      x = -18;
+      z = 148;
+    }
     const y = this.terrain.getHeightAt(x, z) + 0.42;
     return { x, y, z };
   }
@@ -820,6 +857,19 @@ export class GameEngine {
       }
     }
 
+    if (this.environmentDetail && next.graphicsQuality !== this.currentDetailQuality) {
+      this.currentDetailQuality = next.graphicsQuality;
+      this.scene.remove(this.environmentDetail.getGroup());
+      this.environmentDetail.dispose();
+      this.environmentDetail = new EnvironmentDetail(
+        this.terrain,
+        this.worldBuildResult.colliders,
+        this.currentDetailQuality,
+        4201,
+      );
+      this.scene.add(this.environmentDetail.getGroup());
+    }
+
     if (this.phase === 'lobby') {
       this.camera.fov = 52;
       this.camera.updateProjectionMatrix();
@@ -908,7 +958,7 @@ export class GameEngine {
     }
   }
 
-  public startMatch(config: LobbyConfig): void {
+  public startMatch(config: LobbyConfig, skipStartBanner = false): void {
     this.lobbyConfig = { ...config };
     this.applyCosmetics(config);
     this.paused = false;
@@ -992,13 +1042,15 @@ export class GameEngine {
     this.audioEngine.unlock();
     this.eventBus.emit('sound:play', { id: 'bus_horn' });
     this.eventBus.emit('music:set', { track: 'bus' });
-    this.eventBus.emit('ui:banner', {
-      id: 'bus_drop',
-      title: 'BATTLE BUS DEPLOYED',
-      subtitle: 'PICK A LANDING SPOT & PRESS [SPACE] TO DROP',
-      tone: 'info',
-      durationMs: 3600,
-    });
+    if (!skipStartBanner) {
+      this.eventBus.emit('ui:banner', {
+        id: 'bus_drop',
+        title: 'BATTLE BUS DEPLOYED',
+        subtitle: 'PICK A LANDING SPOT & PRESS [SPACE] TO DROP',
+        tone: 'info',
+        durationMs: 3600,
+      });
+    }
   }
 
   private createBotVisuals(): void {
@@ -1095,8 +1147,10 @@ export class GameEngine {
       this.environmentFX.setBusTransform(this.busPos, this.busYaw, false);
     }
 
-    // 2. Environment, Props/Loot, Supply Drops
-    this.environmentFX.update(dt, this.totalElapsed);
+    // 2. Animated World, Interactables, Flora Detail, Props/Loot, Supply Drops
+    this.worldBuilder.update(dt, this.totalElapsed);
+    this.worldInteractables.update(dt, this.totalElapsed);
+    this.environmentDetail.update(dt, this.totalElapsed);
     this.propsAndLoot.update(dt, this.totalElapsed);
     this.collision.setPropColliders(this.propsAndLoot.getActivePropColliders());
 
@@ -1156,6 +1210,12 @@ export class GameEngine {
 
     const pRender = this.playerController.getCharacterRenderState();
     this.syncPlayerRig(pRender, dt);
+    this.environmentFX.update(
+      dt,
+      this.totalElapsed,
+      pRender.position,
+      this.terrain.getBiomeAt(pRender.position.x, pRender.position.z),
+    );
 
     // Player Storm DPS tick
     const inStorm =
@@ -1212,7 +1272,15 @@ export class GameEngine {
   }
 
   private stepLobby(dt: number): void {
-    this.environmentFX.update(dt, this.totalElapsed);
+    this.worldBuilder.update(dt, this.totalElapsed);
+    this.worldInteractables.update(dt, this.totalElapsed);
+    this.environmentDetail.update(dt, this.totalElapsed);
+    this.environmentFX.update(
+      dt,
+      this.totalElapsed,
+      this.lobbyPos,
+      this.terrain.getBiomeAt(this.lobbyPos.x, this.lobbyPos.z),
+    );
 
     // Gentle Lobby Bus cruise bob
     this.environmentFX.setBusTransform(
@@ -1348,8 +1416,8 @@ export class GameEngine {
   ): void {
     // 1. Fog transition when inside Storm
     const targetColorHex = inStorm ? 0x4b1d8c : 0x96d7ff;
-    const targetNear = inStorm ? 25 : 180;
-    const targetFar = inStorm ? 165 : 620;
+    const targetNear = inStorm ? 25 : 220;
+    const targetFar = inStorm ? 165 : 740;
     const t = 1 - Math.exp(-5 * dt);
 
     const tmpCol = new THREE.Color(targetColorHex);
@@ -1364,8 +1432,13 @@ export class GameEngine {
     const snappedZ = Math.round(focusPos.z / texelSize) * texelSize;
     const snappedY = Math.round(focusPos.y / texelSize) * texelSize;
 
+    const sunDir = this.environmentFX.getSunDirection();
     this.sunLight.target.position.set(snappedX, snappedY, snappedZ);
-    this.sunLight.position.set(snappedX + 110, snappedY + 145, snappedZ - 130);
+    this.sunLight.position.set(
+      snappedX + sunDir.x * 195,
+      snappedY + Math.max(95, sunDir.y * 230),
+      snappedZ + sunDir.z * 195,
+    );
     this.sunLight.target.updateMatrixWorld();
   }
 
@@ -1739,6 +1812,55 @@ export class GameEngine {
       getStats() {
         return engine.lastMatchSummary;
       },
+      teleportToPOI(poiId: string) {
+        const poi = POIS.find((p) => p.id === poiId);
+        if (!poi) return false;
+        let offsetX = 0;
+        let offsetZ = 28;
+        if (poi.id === 'crystal_basin') {
+          offsetX = 8;
+          offsetZ = 10;
+        } else if (poi.id === 'skyline_spire') {
+          offsetX = -4;
+          offsetZ = 40;
+        } else if (poi.id === 'scorched_caldera') {
+          offsetX = -19;
+          offsetZ = 31;
+        } else if (poi.id === 'frostpeak_citadel') {
+          offsetX = 2;
+          offsetZ = 31;
+        } else if (poi.id === 'sunken_oasis') {
+          offsetX = 12;
+          offsetZ = 33;
+        }
+        let x = poi.x + offsetX;
+        let z = poi.z + offsetZ;
+        if (engine.terrain.isWater(x, z)) {
+          x = poi.x;
+          z = poi.z;
+        }
+        const y = engine.terrain.getHeightAt(x, z) + 0.4;
+        engine.playerController.teleport({ x, y, z });
+        engine.phase = engine.playerController.getPhase();
+        engine.uiManager.setPhase(engine.phase);
+        engine.pushHUDState(engine.stormSystem.isInStorm(x, z));
+        return true;
+      },
+      getWorldStats() {
+        return {
+          pois: POIS.length,
+          colliders: engine.worldBuildResult.colliders.length,
+          worldDrawGroups: engine.worldBuildResult.group.children.length,
+          props: engine.propsAndLoot.getProps().length,
+          chests: engine.propsAndLoot.getChests().length,
+          lootDrops: engine.propsAndLoot.getLootDrops().length,
+          launchPads: engine.worldInteractables.getLaunchPads().length,
+          ziplines: engine.worldInteractables.getZiplines().length,
+          instancedDetailMeshes: engine.environmentDetail.getInstancedMeshCount(),
+          birds: engine.environmentDetail.getBirdCount(),
+          fps: Math.round(engine.fps),
+        };
+      },
     };
   }
 
@@ -1769,6 +1891,8 @@ export class GameEngine {
     this.buildingSystem.dispose();
     this.vfxManager.dispose();
     this.propsAndLoot.dispose();
+    this.worldInteractables.dispose();
+    this.environmentDetail.dispose();
     this.worldBuilder.dispose();
     this.environmentFX.dispose();
     this.stormSystem.dispose();

@@ -12,7 +12,38 @@ export interface POIDef {
   biome: BiomeType;
 }
 
-export type PropKind = 'tree_pine' | 'tree_oak' | 'rock' | 'car' | 'crate' | 'fence';
+export type PropKind =
+  | 'tree_pine'
+  | 'tree_oak'
+  | 'tree_redwood'
+  | 'tree_snow_pine'
+  | 'tree_palm'
+  | 'cactus'
+  | 'rock'
+  | 'obsidian_crystal'
+  | 'cyber_pylon'
+  | 'car'
+  | 'shipping_container'
+  | 'crate'
+  | 'fence';
+
+export interface LaunchPadEntity {
+  id: string;
+  kind: 'launch_pad' | 'geyser';
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  boostVy: number;
+  boostForward: number;
+}
+
+export interface ZiplineEntity {
+  id: string;
+  start: Vec3Like;
+  end: Vec3Like;
+  speed: number;
+}
 
 export interface HarvestableProp {
   id: string;

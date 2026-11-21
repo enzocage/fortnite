@@ -12,6 +12,7 @@ import type {
   TerrainQuery,
   Vec3Like,
   WeaponId,
+  ZiplineEntity,
 } from '../types';
 import {
   BUILD_COST,
@@ -38,6 +39,7 @@ import type {
   PlayerInteractPrompt,
   PlayerMatchStats,
   PropsInteractionBridge,
+  WorldTraversalBridge,
 } from './GameplayTypes';
 import { InventorySystem } from './InventorySystem';
 import type { WeaponSystem } from './WeaponSystem';
@@ -52,8 +54,13 @@ export class PlayerController {
   private building: BuildingSystem;
   private weapons: WeaponSystem;
   private propsBridge: PropsInteractionBridge;
+  private traversalBridge: WorldTraversalBridge | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
+
+  private activeZipline: { zip: ZiplineEntity; t: number; dir: 1 | -1 } | null = null;
+  private ziplineCooldown = 0;
+  private launchPadCooldown = 0;
 
   private inventory = new InventorySystem();
 
@@ -182,6 +189,10 @@ export class PlayerController {
     this.settings = { ...settings };
   }
 
+  setTraversalBridge(bridge: WorldTraversalBridge): void {
+    this.traversalBridge = bridge;
+  }
+
   setPlayerName(name: string): void {
     this.playerName = name;
   }
@@ -204,6 +215,9 @@ export class PlayerController {
 
   setPhase(phase: GamePhase): void {
     this.phase = phase;
+    if (phase !== 'playing') {
+      this.activeZipline = null;
+    }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
       this.building.setPreviewVisible(false);
       this.building.cancelEdit();
@@ -329,6 +343,9 @@ export class PlayerController {
     this.healDuration = 0;
     this.healLabel = null;
     this.slurpHotRemaining = 0;
+    this.activeZipline = null;
+    this.ziplineCooldown = 0;
+    this.launchPadCooldown = 0;
 
     this.kills = 0;
     this.stats = {
@@ -802,6 +819,10 @@ export class PlayerController {
           this.isEmoting = false;
           this.activeEmote = null;
         }
+        if (this.activeZipline) {
+          this.detachZipline(true);
+          break;
+        }
         if (this.grounded) {
           this.isCrouching = false;
           this.velocity.y = 8.4;
@@ -1034,6 +1055,11 @@ export class PlayerController {
   private tryInteract(): void {
     if (this.phase !== 'playing') return;
 
+    if (this.activeZipline) {
+      this.detachZipline(true);
+      return;
+    }
+
     // 1. Check nearby unopened chests
     const chests = this.propsBridge.getChests();
     let bestChestId: string | null = null;
@@ -1098,6 +1124,15 @@ export class PlayerController {
     }
     if (bestDropId) {
       this.pickupLootDropById(bestDropId);
+      return;
+    }
+
+    // 4. Attach to nearby overhead Energy Zipline
+    if (this.ziplineCooldown <= 0) {
+      const nearestZip = this.findNearestZipline();
+      if (nearestZip) {
+        this.attachZipline(nearestZip.zip, nearestZip.t);
+      }
     }
   }
 
@@ -1157,6 +1192,11 @@ export class PlayerController {
     }
 
     // Find nearest interact prompt
+    if (this.activeZipline) {
+      this.interactPrompt = { label: 'Drop Zipline', key: 'SPACE', rarity: 'rare' };
+      return;
+    }
+
     let prompt: PlayerInteractPrompt | null = null;
     let bestDist = 3.2;
 
@@ -1209,6 +1249,10 @@ export class PlayerController {
       }
     }
 
+    if (!prompt && this.ziplineCooldown <= 0 && this.findNearestZipline()) {
+      prompt = { label: 'Ride Zipline', key: 'E', rarity: 'rare' };
+    }
+
     this.interactPrompt = prompt;
   }
 
@@ -1245,6 +1289,10 @@ export class PlayerController {
 
     if (this.fireCooldown > 0) this.fireCooldown = Math.max(0, this.fireCooldown - safeDt);
     if (this.buildCooldown > 0) this.buildCooldown = Math.max(0, this.buildCooldown - safeDt);
+    if (this.ziplineCooldown > 0) this.ziplineCooldown = Math.max(0, this.ziplineCooldown - safeDt);
+    if (this.launchPadCooldown > 0) {
+      this.launchPadCooldown = Math.max(0, this.launchPadCooldown - safeDt);
+    }
     if (this.recoilKick > 0) this.recoilKick = Math.max(0, this.recoilKick - safeDt * 6.5);
     if (this.harvestSwingTimer > 0) {
       this.harvestSwingTimer = Math.max(0, this.harvestSwingTimer - safeDt);
@@ -1272,7 +1320,11 @@ export class PlayerController {
     }
 
     if (this.phase === 'playing') {
-      this.updateGroundMovement(safeDt);
+      if (this.activeZipline) {
+        this.updateZiplineRide(safeDt);
+      } else {
+        this.updateGroundMovement(safeDt);
+      }
       this.updateCombatAndTimers(safeDt);
       this.updateAutoPickupAndPrompt();
       this.updateCamera(safeDt);
@@ -1304,12 +1356,20 @@ export class PlayerController {
     const targetVx = wishLen > 0 ? wishX * horizSpeed : isGliding ? fwdX * 8.0 : 0;
     const targetVz = wishLen > 0 ? wishZ * horizSpeed : isGliding ? fwdZ * 8.0 : 0;
 
-    this.velocity.x = damp(this.velocity.x, targetVx, 5.0, dt);
-    this.velocity.z = damp(this.velocity.z, targetVz, 5.0, dt);
+    // Preserve strong launch-pad vertical/horizontal impulse until past apex
+    if (isGliding && this.velocity.y > -2.5) {
+      const boostHoriz = Math.max(horizSpeed, Math.hypot(this.velocity.x, this.velocity.z));
+      this.velocity.x = wishLen > 0 ? damp(this.velocity.x, wishX * boostHoriz, 2.5, dt) : damp(this.velocity.x, this.velocity.x, 0.5, dt);
+      this.velocity.z = wishLen > 0 ? damp(this.velocity.z, wishZ * boostHoriz, 2.5, dt) : damp(this.velocity.z, this.velocity.z, 0.5, dt);
+      this.velocity.y -= 20.0 * dt;
+    } else {
+      this.velocity.x = damp(this.velocity.x, targetVx, 5.0, dt);
+      this.velocity.z = damp(this.velocity.z, targetVz, 5.0, dt);
 
-    const diveBoost = !isGliding && forwardInput > 0 && this.pitch < -0.25 ? 10.0 : 0;
-    const targetVy = isGliding ? -6.2 : -(22.5 + diveBoost);
-    this.velocity.y = damp(this.velocity.y, targetVy, 6.0, dt);
+      const diveBoost = !isGliding && forwardInput > 0 && this.pitch < -0.25 ? 10.0 : 0;
+      const targetVy = isGliding ? -6.2 : -(22.5 + diveBoost);
+      this.velocity.y = damp(this.velocity.y, targetVy, 6.0, dt);
+    }
 
     this.position.x = clamp(this.position.x + this.velocity.x * dt, -390, 390);
     this.position.z = clamp(this.position.z + this.velocity.z * dt, -390, 390);
@@ -1334,7 +1394,7 @@ export class PlayerController {
       this.eventBus.emit('sound:play', { id: 'glider_deploy' });
     }
 
-    if (this.position.y <= groundY + 0.12) {
+    if (this.velocity.y <= 0 && this.position.y <= groundY + 0.12) {
       this.position.y = groundY;
       this.velocity.y = 0;
       this.grounded = true;
@@ -1442,6 +1502,39 @@ export class PlayerController {
     this.position.x = clamp(this.position.x, -390, 390);
     this.position.z = clamp(this.position.z, -390, 390);
 
+    // Check Launch Pads & Volcanic Geysers
+    if (this.launchPadCooldown <= 0 && this.traversalBridge) {
+      const pads = this.traversalBridge.getLaunchPads();
+      for (let i = 0; i < pads.length; i++) {
+        const pad = pads[i];
+        const d2 = dist2D(this.position.x, this.position.z, pad.x, pad.z);
+        const dy = Math.abs(this.position.y - pad.y);
+        if (d2 <= pad.radius && dy <= 2.3) {
+          this.launchPadCooldown = 0.9;
+          this.isCrouching = false;
+          this.isBuildMode = false;
+          this.building.setPreviewVisible(false);
+          this.activeZipline = null;
+          this.grounded = false;
+          this.phase = 'gliding';
+          this.velocity.x = fwdX * pad.boostForward;
+          this.velocity.y = pad.boostVy;
+          this.velocity.z = fwdZ * pad.boostForward;
+          this.eventBus.emit('sound:play', {
+            id: 'glider_deploy',
+            position: { x: pad.x, y: pad.y, z: pad.z },
+            spatial: true,
+          });
+          this.eventBus.emit('vfx:build_pop', {
+            position: { x: pad.x, y: pad.y + 0.4, z: pad.z },
+            material: 'metal',
+            pieceType: 'floor',
+          });
+          return;
+        }
+      }
+    }
+
     if (!prevGrounded && this.grounded && prevVy < -6.0) {
       this.eventBus.emit('sound:play', {
         id: 'land',
@@ -1483,6 +1576,131 @@ export class PlayerController {
       const moveYaw = Math.atan2(this.velocity.x, this.velocity.z);
       this.characterYaw = lerpAngle(this.characterYaw, moveYaw, 1 - Math.exp(-10 * dt));
     }
+  }
+
+  private findNearestZipline(): { zip: ZiplineEntity; t: number } | null {
+    if (!this.traversalBridge) return null;
+    const ziplines = this.traversalBridge.getZiplines();
+    let best: { zip: ZiplineEntity; t: number } | null = null;
+    let bestScore = Infinity;
+
+    for (let i = 0; i < ziplines.length; i++) {
+      const zip = ziplines[i];
+      const dx = zip.end.x - zip.start.x;
+      const dz = zip.end.z - zip.start.z;
+      const lenSqXZ = dx * dx + dz * dz;
+      if (lenSqXZ < 1e-4) continue;
+      const t = clamp(
+        ((this.position.x - zip.start.x) * dx + (this.position.z - zip.start.z) * dz) / lenSqXZ,
+        0,
+        1,
+      );
+      const cx = zip.start.x + dx * t;
+      const cy = zip.start.y + (zip.end.y - zip.start.y) * t;
+      const cz = zip.start.z + dz * t;
+
+      const hx = Math.hypot(this.position.x - cx, this.position.z - cz);
+      const vDelta = cy - this.position.y;
+      if (hx <= 3.8 && vDelta >= -2.5 && vDelta <= 10.5) {
+        const score = hx + Math.abs(vDelta) * 0.25;
+        if (score < bestScore) {
+          bestScore = score;
+          best = { zip, t };
+        }
+      }
+    }
+
+    return best;
+  }
+
+  private attachZipline(zip: ZiplineEntity, t: number): void {
+    const dx = zip.end.x - zip.start.x;
+    const dz = zip.end.z - zip.start.z;
+    const lenXZ = Math.max(1e-4, Math.hypot(dx, dz));
+    const lookX = Math.sin(this.yaw);
+    const lookZ = Math.cos(this.yaw);
+    const dot = (lookX * dx + lookZ * dz) / lenXZ;
+
+    let dir: 1 | -1 = dot >= 0 ? 1 : -1;
+    if (t < 0.08) dir = 1;
+    else if (t > 0.92) dir = -1;
+
+    this.activeZipline = { zip, t, dir };
+    this.isCrouching = false;
+    this.healTimer = 0;
+    this.reloadTimer = 0;
+    this.grounded = false;
+    this.eventBus.emit('sound:play', {
+      id: 'ui_click',
+      position: { ...this.position },
+      spatial: true,
+    });
+  }
+
+  private detachZipline(withJumpBoost: boolean): void {
+    if (!this.activeZipline) return;
+    const { zip, dir } = this.activeZipline;
+    const dx = zip.end.x - zip.start.x;
+    const dz = zip.end.z - zip.start.z;
+    const lenXZ = Math.max(1e-4, Math.hypot(dx, dz));
+    this.activeZipline = null;
+    this.ziplineCooldown = 0.65;
+    this.grounded = false;
+
+    const fwdX = (dx / lenXZ) * dir;
+    const fwdZ = (dz / lenXZ) * dir;
+    this.velocity.x = fwdX * (withJumpBoost ? 9.5 : 8.5);
+    this.velocity.z = fwdZ * (withJumpBoost ? 9.5 : 8.5);
+    this.velocity.y = withJumpBoost ? 7.5 : 4.0;
+
+    this.eventBus.emit('sound:play', {
+      id: 'jump',
+      position: { ...this.position },
+      spatial: true,
+    });
+  }
+
+  private updateZiplineRide(dt: number): void {
+    const active = this.activeZipline;
+    if (!active) return;
+
+    const { zip, dir } = active;
+    const dx = zip.end.x - zip.start.x;
+    const dy = zip.end.y - zip.start.y;
+    const dz = zip.end.z - zip.start.z;
+    const segLen = Math.max(1.0, Math.hypot(dx, dy, dz));
+
+    active.t += (dir * zip.speed * dt) / segLen;
+    if (active.t >= 1.0 || active.t <= 0.0) {
+      active.t = clamp(active.t, 0, 1);
+      const ex = zip.start.x + dx * active.t;
+      const ey = zip.start.y + dy * active.t;
+      const ez = zip.start.z + dz * active.t;
+      const groundY = this.terrain.getHeightAt(ex, ez);
+      this.position = { x: ex, y: Math.max(groundY + 0.25, ey - 2.15), z: ez };
+      this.detachZipline(false);
+      return;
+    }
+
+    const cx = zip.start.x + dx * active.t;
+    const cy = zip.start.y + dy * active.t;
+    const cz = zip.start.z + dz * active.t;
+    const groundY = this.terrain.getHeightAt(cx, cz);
+
+    this.position = {
+      x: clamp(cx, -390, 390),
+      y: Math.max(groundY + 0.15, cy - 2.15),
+      z: clamp(cz, -390, 390),
+    };
+    this.velocity = {
+      x: (dx / segLen) * dir * zip.speed,
+      y: (dy / segLen) * dir * zip.speed,
+      z: (dz / segLen) * dir * zip.speed,
+    };
+    this.moveSpeed = zip.speed;
+    this.grounded = false;
+    this.isSprinting = false;
+    this.characterYaw = Math.atan2(dx * dir, dz * dir);
   }
 
   private updateCombatAndTimers(dt: number): void {

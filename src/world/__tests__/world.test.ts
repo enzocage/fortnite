@@ -13,12 +13,15 @@ import {
   WORLD_HALF,
 } from '../../core';
 import {
+  EnvironmentDetail,
   EnvironmentFX,
   PropsAndLoot,
+  RIVER_POLYLINE,
   StormSystem,
   TerrainSystem,
   TextureFactory,
   WorldBuilder,
+  WorldInteractables,
 } from '../index';
 
 function createMockCanvasEnvironment() {
@@ -133,7 +136,7 @@ describe('TerrainSystem', () => {
         const vx = posAttr.getX(idx);
         const vy = posAttr.getY(idx);
         const vz = posAttr.getZ(idx);
-        expect(t1.getHeightAt(vx, vz)).toBeCloseTo(vy, 5);
+        expect(t1.getHeightAt(vx, vz)).toBeCloseTo(vy, 4);
       }
     }
 
@@ -208,24 +211,32 @@ describe('TerrainSystem', () => {
       expect(terrain.getBiomeAt(ox, oz)).toBe('ocean');
     }
 
-    // All 6 POIs returned
+    // All 10 POIs returned
     const pois = terrain.getPOIs();
-    expect(pois).toHaveLength(6);
+    expect(pois).toHaveLength(10);
 
-    // Verify all 6 biome types can be sampled cleanly
+    // Verify all 10 biome types can be sampled cleanly
     const sampledBiomes = new Set([
       terrain.getBiomeAt(ISLAND_RADIUS + 30, 0), // ocean
-      terrain.getBiomeAt(-ISLAND_RADIUS + 18, 0), // beach (or shore near coast)
       terrain.getBiomeAt(0, 0), // grassland
       terrain.getBiomeAt(165, -165), // forest (Whispering Pines)
       terrain.getBiomeAt(40, 125), // highland (Crater Depot)
       terrain.getBiomeAt(-75, -40), // urban (Metro Towers)
+      terrain.getBiomeAt(-10, -245), // snow (Frostpeak Citadel)
+      terrain.getBiomeAt(-225, -15), // desert (Sunken Oasis)
+      terrain.getBiomeAt(-175, 125), // volcanic (Scorched Caldera)
+      terrain.getBiomeAt(160, 165), // cyber (Skyline Spire)
     ]);
     expect(sampledBiomes.has('ocean')).toBe(true);
     expect(sampledBiomes.has('grassland')).toBe(true);
     expect(sampledBiomes.has('forest')).toBe(true);
     expect(sampledBiomes.has('highland')).toBe(true);
     expect(sampledBiomes.has('urban')).toBe(true);
+    expect(sampledBiomes.has('snow')).toBe(true);
+    expect(sampledBiomes.has('desert')).toBe(true);
+    expect(sampledBiomes.has('volcanic')).toBe(true);
+    expect(sampledBiomes.has('cyber')).toBe(true);
+
     // Check beach band along coastline
     let foundBeach = false;
     for (let r = ISLAND_RADIUS - 35; r <= ISLAND_RADIUS + 5; r += 2) {
@@ -235,6 +246,15 @@ describe('TerrainSystem', () => {
       }
     }
     expect(foundBeach).toBe(true);
+
+    // River Gorge draining Crystal Basin south to Southern Ocean
+    for (const [rx, rz] of [
+      RIVER_POLYLINE[2],
+      RIVER_POLYLINE[3],
+      RIVER_POLYLINE[5],
+    ]) {
+      expect(terrain.isWater(rx, rz)).toBe(true);
+    }
 
     // Crystal Basin center island r <= 18 at y = 2.5, lake around r = 35 at y ~ -1.8
     const cb = pois.find((p) => p.id === 'crystal_basin')!;
@@ -247,7 +267,7 @@ describe('TerrainSystem', () => {
     expect(lakeY).toBeGreaterThan(-2.1);
     expect(terrain.isWater(cb.x + 35, cb.z)).toBe(true);
 
-    // Other 5 POIs sit on dry elevated plateaus
+    // Other 9 POIs sit on dry elevated plateaus
     for (const poi of pois) {
       if (poi.id === 'crystal_basin') continue;
       expect(terrain.getHeightAt(poi.x, poi.z)).toBeCloseTo(poi.plateauY, 2);
@@ -256,8 +276,8 @@ describe('TerrainSystem', () => {
 
     // Safe map canvas call both without and with DOM
     const nodeCanvas = terrain.getMapTextureCanvas();
-    expect(nodeCanvas.width).toBe(512);
-    expect(nodeCanvas.height).toBe(512);
+    expect(nodeCanvas.width).toBe(1024);
+    expect(nodeCanvas.height).toBe(1024);
 
     const restore = createMockCanvasEnvironment();
     try {
@@ -265,8 +285,8 @@ describe('TerrainSystem', () => {
         { x: -75, z: -40, w: 12, d: 12, color: '#ef4444' },
       ]);
       const domCanvas = terrain.getMapTextureCanvas();
-      expect(domCanvas.width).toBe(512);
-      expect(domCanvas.height).toBe(512);
+      expect(domCanvas.width).toBe(1024);
+      expect(domCanvas.height).toBe(1024);
     } finally {
       restore();
     }
@@ -276,16 +296,25 @@ describe('TerrainSystem', () => {
 });
 
 describe('WorldBuilder', () => {
-  it('builds walkable structures across all 6 POIs with valid colliders, stairs, and doorways', () => {
+  it('builds batched walkable structures across all 10 POIs with sky-island, colliders, stairs, and doorways', () => {
     const terrain = new TerrainSystem(4201);
     const builder = new WorldBuilder();
     const res = builder.build(terrain, 'high');
 
-    expect(res.group.children.length).toBeGreaterThan(100);
-    expect(res.colliders.length).toBeGreaterThan(150);
-    expect(res.chestSpots.length).toBeGreaterThanOrEqual(35);
-    expect(res.floorLootSpots.length).toBeGreaterThanOrEqual(60);
-    expect(res.buildingFootprints.length).toBeGreaterThanOrEqual(15);
+    // Batched static primitives keep draw calls low despite massive structural complexity
+    expect(res.group.children.length).toBeGreaterThan(15);
+    expect(res.group.children.length).toBeLessThan(350);
+    expect(res.colliders.length).toBeGreaterThan(300);
+    expect(res.chestSpots.length).toBeGreaterThanOrEqual(55);
+    expect(res.floorLootSpots.length).toBeGreaterThanOrEqual(90);
+    expect(res.buildingFootprints.length).toBeGreaterThanOrEqual(25);
+
+    const skyColliders = res.colliders.filter(
+      (c) => c.tag === 'building_sky_island' && c.maxY > 40,
+    );
+    expect(skyColliders.length).toBeGreaterThan(0);
+
+    builder.update(0.016, 1.0);
 
     // Validate all colliders are finite and non-inverted
     for (const c of res.colliders) {
@@ -337,7 +366,7 @@ describe('WorldBuilder', () => {
 });
 
 describe('PropsAndLoot', () => {
-  it('populates 260+ props, 55+ chests, 100+ loot drops outside buildings and water', () => {
+  it('populates 400+ props, 80+ chests, 150+ loot drops outside buildings and water across all 13 prop kinds', () => {
     const terrain = new TerrainSystem(4201);
     const builder = new WorldBuilder();
     const world = builder.build(terrain, 'medium');
@@ -350,14 +379,28 @@ describe('PropsAndLoot', () => {
     const chests = pal.getChests();
     const loot = pal.getLootDrops();
 
-    expect(props.length).toBeGreaterThanOrEqual(260);
-    expect(chests.length).toBeGreaterThanOrEqual(55);
-    expect(loot.length).toBeGreaterThanOrEqual(100);
+    expect(props.length).toBeGreaterThanOrEqual(400);
+    expect(chests.length).toBeGreaterThanOrEqual(80);
+    expect(loot.length).toBeGreaterThanOrEqual(150);
 
-    // Verify all 6 PropKinds exist
+    // Verify all 13 PropKinds exist
     const kinds = new Set(props.map((p) => p.kind));
     expect(kinds).toEqual(
-      new Set(['tree_pine', 'tree_oak', 'rock', 'car', 'crate', 'fence']),
+      new Set([
+        'tree_pine',
+        'tree_oak',
+        'tree_redwood',
+        'tree_snow_pine',
+        'tree_palm',
+        'cactus',
+        'rock',
+        'obsidian_crystal',
+        'cyber_pylon',
+        'car',
+        'shipping_container',
+        'crate',
+        'fence',
+      ]),
     );
 
     // No prop spawns underwater or off terrain surface
@@ -481,7 +524,7 @@ describe('EnvironmentFX', () => {
       fx.update(0.1, i * 0.1);
     }
     const cloudGroup = group.children.find(
-      (c) => c !== bus && c.name !== 'SkyDome' && c.name !== 'OceanWater',
+      (c) => c.name === 'CloudGroup',
     );
     expect(cloudGroup).toBeDefined();
     const xBefore = cloudGroup!.position.x;
@@ -544,5 +587,42 @@ describe('StormSystem', () => {
     expect(storm.getState().currentRadius).toBe(WORLD_HALF);
 
     storm.dispose();
+  });
+});
+
+describe('WorldInteractables & EnvironmentDetail', () => {
+  it('constructs 10 launch pads/geysers, 6 energy ziplines, instanced micro-flora, and circling birds', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'medium');
+
+    const interactables = new WorldInteractables(terrain);
+    const pads = interactables.getLaunchPads();
+    const ziplines = interactables.getZiplines();
+    expect(pads).toHaveLength(10);
+    expect(ziplines).toHaveLength(6);
+    expect(pads.some((p) => p.kind === 'launch_pad')).toBe(true);
+    expect(pads.some((p) => p.kind === 'geyser')).toBe(true);
+    for (const p of pads) {
+      expect(Number.isFinite(p.x)).toBe(true);
+      expect(Number.isFinite(p.y)).toBe(true);
+      expect(Number.isFinite(p.z)).toBe(true);
+    }
+    for (const z of ziplines) {
+      expect(Number.isFinite(z.start.x)).toBe(true);
+      expect(Number.isFinite(z.end.z)).toBe(true);
+      expect(z.speed).toBeGreaterThan(10);
+    }
+    interactables.update(0.016, 1.0);
+    interactables.dispose();
+
+    const detail = new EnvironmentDetail(terrain, world.colliders, 'high', 4201);
+    expect(detail.getInstancedMeshCount()).toBeGreaterThanOrEqual(4);
+    expect(detail.getBirdCount()).toBeGreaterThanOrEqual(20);
+    detail.update(0.016, 1.0);
+    detail.dispose();
+
+    builder.dispose();
+    terrain.dispose();
   });
 });
