@@ -68,26 +68,27 @@ export class StormSystem {
         varying vec2 vUv;
         varying vec3 vLocalPos;
         void main() {
-          float angle = vUv.x * 6.2831853 * 10.0;
-          float heightWave = vUv.y * 18.0;
+          float angle = vUv.x * 6.2831853 * 16.0;
+          float heightWave = vUv.y * 24.0;
 
-          float swirl1 = sin(angle + heightWave - uTime * 2.4);
-          float swirl2 = cos(angle * 1.5 - heightWave * 0.8 + uTime * 1.9);
-          float bands = 0.5 + 0.5 * (swirl1 * 0.55 + swirl2 * 0.45);
+          float wave1 = sin(angle * 0.5 + heightWave * 0.45 - uTime * 2.1);
+          float wave2 = cos(angle * 0.75 - heightWave * 0.3 + uTime * 1.4);
+          float bands = 0.5 + 0.5 * (wave1 * 0.55 + wave2 * 0.45);
 
-          // Hexagonal / electric grid sparkle
-          float grid = smoothstep(0.72, 0.98, abs(sin(angle * 2.0 + uTime)) * abs(cos(heightWave * 2.0 - uTime * 1.5)));
+          // Fine diagonal storm rain / energy streaks instead of large dots
+          float streakPhase = sin(vUv.x * 6.2831853 * 48.0 + vUv.y * 28.0 + uTime * 6.5);
+          float streaks = pow(max(0.0, streakPhase), 10.0) * 0.22;
 
-          vec3 basePurple = vec3(0.45, 0.08, 0.82);
-          vec3 brightMagenta = vec3(0.86, 0.28, 0.98);
-          vec3 col = mix(basePurple, brightMagenta, bands * 0.75 + grid * 0.35);
+          vec3 basePurple = vec3(0.42, 0.08, 0.78);
+          vec3 brightMagenta = vec3(0.84, 0.28, 0.98);
+          vec3 col = mix(basePurple, brightMagenta, bands * 0.55 + streaks);
 
-          // Stronger glowing ground rim, softer fade toward top
-          float groundRim = 1.0 - smoothstep(0.0, 0.16, vUv.y);
-          float topFade = 1.0 - smoothstep(0.78, 1.0, vUv.y);
-          float alpha = (0.24 + bands * 0.14 + groundRim * 0.28 + grid * 0.12) * topFade;
+          // Stronger glowing ground rim, smooth fade toward top
+          float groundRim = 1.0 - smoothstep(0.0, 0.14, vUv.y);
+          float topFade = 1.0 - smoothstep(0.68, 1.0, vUv.y);
+          float alpha = (0.16 + bands * 0.08 + groundRim * 0.24 + streaks * 0.14) * topFade;
 
-          gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.72));
+          gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.52));
         }
       `,
     });

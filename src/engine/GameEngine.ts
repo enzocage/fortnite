@@ -219,10 +219,14 @@ export class GameEngine {
       1900,
     );
 
-    this.hemiLight = new THREE.HemisphereLight(0x8ed6ff, 0x4e7c3e, 0.92);
+    this.hemiLight = new THREE.HemisphereLight(0xa5e4ff, 0x5c8a47, 1.18);
     this.scene.add(this.hemiLight);
 
-    this.sunLight = new THREE.DirectionalLight(0xfff5dc, 1.5);
+    const fillLight = new THREE.DirectionalLight(0xdbeafe, 0.58);
+    fillLight.position.set(-90, 75, 130);
+    this.scene.add(fillLight);
+
+    this.sunLight = new THREE.DirectionalLight(0xfff5dc, 1.6);
     this.sunLight.position.set(110, 145, -130);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
@@ -364,7 +368,7 @@ export class GameEngine {
   private findLobbyPedestalSpot(): Vec3Like {
     const x = -18;
     const z = 148;
-    const y = this.terrain.getHeightAt(x, z) + 0.15;
+    const y = this.terrain.getHeightAt(x, z) + 0.42;
     return { x, y, z };
   }
 
@@ -372,14 +376,14 @@ export class GameEngine {
     const grp = new THREE.Group();
     grp.name = 'LobbyPedestal';
 
-    const baseGeo = new THREE.CylinderGeometry(1.75, 2.05, 0.35, 32);
+    const baseGeo = new THREE.CylinderGeometry(1.78, 2.22, 1.4, 32);
     const baseMat = new THREE.MeshStandardMaterial({
       color: '#1e293b',
       roughness: 0.45,
       metalness: 0.55,
     });
     const base = new THREE.Mesh(baseGeo, baseMat);
-    base.position.y = -0.175;
+    base.position.y = -0.7;
     base.receiveShadow = true;
     grp.add(base);
 

@@ -1073,10 +1073,7 @@ export class HUDManager {
       !this.emoteWheelOpen &&
       !state.editMode.active &&
       !state.pointerLocked &&
-      (state.phase === 'bus' ||
-        state.phase === 'skydiving' ||
-        state.phase === 'gliding' ||
-        state.phase === 'playing');
+      state.phase === 'playing';
     if (shouldShow === this.lastPointerPromptVisible) return;
     this.lastPointerPromptVisible = shouldShow;
     this.pointerPromptEl.classList.toggle('fdr-hidden', !shouldShow);

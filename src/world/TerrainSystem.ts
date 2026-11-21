@@ -336,8 +336,8 @@ export class TerrainSystem implements TerrainQuery {
       }
     }
 
-    // Northeast pine forest region
-    if (x > 55 && z < -25) {
+    // Organic northeast pine forest biome surrounding Whispering Pines
+    if (Math.hypot((x - 155) * 0.85, (z + 150) * 0.95) < 128) {
       return 'forest';
     }
 

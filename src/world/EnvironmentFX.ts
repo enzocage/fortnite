@@ -74,8 +74,8 @@ export class EnvironmentFX {
     this.skyMesh.name = 'SkyDome';
     this.group.add(this.skyMesh);
 
-    // 2. Animated Shimmering Turquoise Ocean Plane
-    const oceanGeo = new THREE.PlaneGeometry(2400, 2400, 64, 64);
+    // 2. Animated Shimmering Turquoise Ocean Plane (circular with smooth horizon blend)
+    const oceanGeo = new THREE.CircleGeometry(2200, 96);
     oceanGeo.rotateX(-Math.PI * 0.5);
     this.geometries.push(oceanGeo);
 
@@ -110,7 +110,7 @@ export class EnvironmentFX {
           float basinMix = 1.0 - smoothstep(42.0, 68.0, basinDist);
           float coastal = clamp(max(shallowMix, basinMix), 0.0, 1.0);
 
-          vec3 deepBlue = vec3(0.04, 0.31, 0.62);
+          vec3 deepBlue = vec3(0.05, 0.34, 0.68);
           vec3 turquoise = vec3(0.11, 0.75, 0.85);
           vec3 col = mix(deepBlue, turquoise, coastal);
 
@@ -118,14 +118,20 @@ export class EnvironmentFX {
           float rippleA = sin(vWorldPos.x * 0.28 + vWorldPos.z * 0.22 + uTime * 2.1);
           float rippleB = cos(vWorldPos.x * 0.19 - vWorldPos.z * 0.31 + uTime * 1.7);
           float glint = smoothstep(0.62, 0.98, (rippleA + rippleB) * 0.5);
-          col += vec3(0.55, 0.88, 0.96) * glint * 0.18;
+          col += vec3(0.55, 0.88, 0.96) * glint * 0.18 * (1.0 - smoothstep(420.0, 900.0, r));
 
           // Subtle foam ring near coastline
           float coastRing = smoothstep(14.0, 0.0, abs(r - uIslandRadius));
           float foamWave = 0.5 + 0.5 * sin(r * 0.4 - uTime * 2.4);
           col = mix(col, vec3(0.86, 0.97, 1.0), coastRing * foamWave * 0.22);
 
-          gl_FragColor = vec4(col, 0.86);
+          // Smooth atmospheric horizon blend so ocean melts seamlessly into sky
+          float horizonFog = smoothstep(520.0, 1550.0, r);
+          vec3 skyHorizon = vec3(0.76, 0.93, 1.0);
+          col = mix(col, skyHorizon, horizonFog * 0.92);
+          float edgeAlpha = mix(0.88, 0.0, smoothstep(1700.0, 2180.0, r));
+
+          gl_FragColor = vec4(col, edgeAlpha);
         }
       `,
     });
@@ -202,17 +208,23 @@ export class EnvironmentFX {
     busGroup.name = 'BattleBus';
 
     const royalBlue = new THREE.MeshStandardMaterial({
-      color: '#1d4ed8',
-      roughness: 0.35,
-      metalness: 0.35,
+      color: '#2563eb',
+      emissive: '#1e40af',
+      emissiveIntensity: 0.32,
+      roughness: 0.38,
+      metalness: 0.25,
     });
     const stripeYellow = new THREE.MeshStandardMaterial({
       color: '#facc15',
+      emissive: '#ca8a04',
+      emissiveIntensity: 0.28,
       roughness: 0.4,
       metalness: 0.2,
     });
     const purpleMat = new THREE.MeshStandardMaterial({
-      color: '#7c3aed',
+      color: '#8b5cf6',
+      emissive: '#5b21b6',
+      emissiveIntensity: 0.28,
       roughness: 0.45,
       metalness: 0.2,
     });
