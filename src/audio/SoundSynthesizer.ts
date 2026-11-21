@@ -188,6 +188,35 @@ export class SoundSynthesizer {
         return this.playUiPlay(t, targetNode, vol, pitch);
       case 'victory_fanfare':
         return this.playVictoryFanfare(t, targetNode, vol, pitch);
+      case 'shot_heavy_shotgun':
+        return this.playShotTac(t, targetNode, vol, pitch);
+      case 'shot_mythic_rifle':
+        return this.playShotAR(t, targetNode, vol, pitch);
+      case 'build_repair':
+        return this.playBuildMetal(t, targetNode, vol, pitch);
+      case 'kill_streak':
+        return this.playElimination(t, targetNode, vol, pitch);
+      case 'launch_pad':
+        return this.playGliderDeploy(t, targetNode, vol, pitch);
+      case 'zipline_attach':
+      case 'zipline_loop':
+      case 'slide_loop':
+      case 'mantle_climb':
+      case 'grenade_bounce':
+      case 'splash_heal':
+      case 'fall_damage':
+      case 'lava_burn':
+      case 'poi_discover':
+        return this.playUiClick(t, targetNode, vol, pitch);
+      case 'shockwave_blast':
+        return this.playExplosion(t, targetNode, vol, pitch);
+      case 'footstep_wood':
+      case 'footstep_stone':
+      case 'footstep_metal':
+      case 'footstep_snow':
+      case 'footstep_water':
+      case 'footstep_sand':
+        return this.playFootstep(t, targetNode, vol, pitch);
       default: {
         const exhaustive: never = id;
         return exhaustive;

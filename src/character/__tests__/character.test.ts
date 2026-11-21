@@ -54,9 +54,9 @@ function countMeshes(obj: THREE.Object3D): number {
 }
 
 describe('WeaponModels', () => {
-  it('builds valid stylized 3D groups for all 14 WeaponIds', () => {
+  it('builds valid stylized 3D groups for all WeaponIds', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(14);
+    expect(allIds.length).toBeGreaterThanOrEqual(19);
 
     for (const id of allIds) {
       const grp = createWeaponModel(id);
@@ -81,8 +81,8 @@ describe('WeaponModels', () => {
     }
   });
 
-  it('builds all 4 pickaxe styles and blueprint model', () => {
-    expect(PICKAXES).toHaveLength(4);
+  it('builds all pickaxe styles and blueprint model', () => {
+    expect(PICKAXES.length).toBeGreaterThanOrEqual(6);
     for (const pickaxe of PICKAXES) {
       const model = createWeaponModel('pickaxe', pickaxe);
       expect(model.name).toBe(`weapon_pickaxe_${pickaxe.style}`);

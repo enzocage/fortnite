@@ -4,7 +4,7 @@ export interface Vec3Like {
   z: number;
 }
 
-export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythic';
 
 export type MaterialType = 'wood' | 'brick' | 'metal';
 

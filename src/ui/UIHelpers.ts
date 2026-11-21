@@ -77,6 +77,15 @@ const RARITY_VISUALS: Record<Rarity, RarityVisualMeta> = {
     border: '#fde047',
     glow: 'rgba(255, 170, 29, 0.58)',
   },
+  mythic: {
+    rarity: 'mythic',
+    label: 'MYTHIC',
+    accent: RARITY_COLORS.mythic,
+    bgTop: '#fde047',
+    bgBottom: '#ca8a04',
+    border: '#fef9c3',
+    glow: 'rgba(255, 223, 64, 0.72)',
+  },
 };
 
 export function getRarityMeta(rarity: Rarity): RarityVisualMeta {

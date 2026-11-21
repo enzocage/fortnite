@@ -11,6 +11,10 @@ export type AnimState =
   | 'crouch_walk'
   | 'jump'
   | 'fall'
+  | 'slide'
+  | 'mantle'
+  | 'swim'
+  | 'zipline'
   | 'skydive'
   | 'glide'
   | 'harvest'
@@ -23,7 +27,9 @@ export type EmoteId =
   | 'victory_groove'
   | 'floss_wave'
   | 'take_w_hop'
-  | 'robot_boogie';
+  | 'robot_boogie'
+  | 'electro_shuffle'
+  | 'star_salute';
 
 export type HeadgearStyle =
   | 'none'
@@ -93,4 +99,9 @@ export interface CharacterRenderState {
   shield: number;
   recoilKick: number;
   harvestSwingTimer: number;
+  isSliding?: boolean;
+  isZiplining?: boolean;
+  isSwimming?: boolean;
+  velocityY?: number;
+  leanAngle?: number;
 }

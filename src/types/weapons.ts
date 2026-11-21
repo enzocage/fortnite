@@ -6,10 +6,15 @@ export type WeaponId =
   | 'burst_ar'
   | 'pump_shotgun'
   | 'tac_shotgun'
+  | 'heavy_shotgun'
   | 'smg'
   | 'sniper'
   | 'pistol'
   | 'rocket_launcher'
+  | 'mythic_blade_rifle'
+  | 'shockwave_grenade'
+  | 'frag_grenade'
+  | 'chug_splash'
   | 'mini_shield'
   | 'shield_potion'
   | 'bandages'
@@ -24,6 +29,7 @@ export type WeaponCategory =
   | 'sniper'
   | 'pistol'
   | 'launcher'
+  | 'throwable'
   | 'consumable';
 
 export interface WeaponDef {
@@ -65,6 +71,10 @@ export interface WeaponDef {
   consumeTime?: number;
   maxStack: number;
   hotOverTime?: number; // seconds for slurp HoT
+  isThrowable?: boolean;
+  fuseTime?: number;
+  impulseStrength?: number;
+  splashHealAmount?: number;
   allowedRarities: Rarity[];
 }
 
@@ -107,4 +117,8 @@ export interface ProjectileState {
   age: number;
   maxAge: number;
   alive: boolean;
+  bouncesRemaining?: number;
+  fuseRemaining?: number;
+  isShockwave?: boolean;
+  isSplashHeal?: boolean;
 }

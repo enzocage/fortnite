@@ -88,6 +88,17 @@ export interface LootDrop {
   age: number;
 }
 
+export interface LootLlamaEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  hp: number;
+  maxHp: number;
+  opened: boolean;
+}
+
 export interface SupplyDrop {
   id: string;
   x: number;

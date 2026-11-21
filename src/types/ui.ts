@@ -1,9 +1,11 @@
 import type {
+  AmmoType,
+  BiomeType,
   Difficulty,
   GamePhase,
   MaterialType,
+  Rarity,
   Vec3Like,
-  AmmoType,
 } from './common';
 import type { BuildPieceType, EditModeState } from './building';
 import type { EmoteId } from './character';
@@ -55,7 +57,7 @@ export interface HUDState {
   interactPrompt: {
     label: string;
     key: string;
-    rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+    rarity?: Rarity;
   } | null;
   reloadProgress: number | null;
   healProgress: number | null;
@@ -80,6 +82,19 @@ export interface HUDState {
   damageDirection: DamageDirectionFeedback | null;
   audioBlips: MinimapBlip[];
   inStorm: boolean;
+  isSliding?: boolean;
+  isZiplining?: boolean;
+  isSwimming?: boolean;
+  currentBiome?: BiomeType;
+  currentPoiName?: string | null;
+  killStreak?: number;
+  siphonFlashAt?: number;
+  lowHealthPulse?: number;
+  stormDistance?: number;
+  canRepairBuild?: boolean;
+  showSpeedLines?: boolean;
+  careerXp?: number;
+  careerLevel?: number;
 }
 
 export interface DamageNumberEvent {

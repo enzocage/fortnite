@@ -40,4 +40,6 @@ export interface BotSummary {
   alive: boolean;
   kills: number;
   position: Vec3Like;
+  isBoss?: boolean;
+  bossPoiId?: string;
 }

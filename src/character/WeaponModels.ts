@@ -7,10 +7,12 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'burst_ar',
   'pump_shotgun',
   'tac_shotgun',
+  'heavy_shotgun',
   'smg',
   'sniper',
   'pistol',
   'rocket_launcher',
+  'mythic_blade_rifle',
 ]);
 
 export function isRangedWeapon(weaponId: WeaponId): boolean {
@@ -501,6 +503,8 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildPumpShotgun();
     case 'tac_shotgun':
       return buildTacShotgun();
+    case 'heavy_shotgun':
+      return buildTacShotgun();
     case 'smg':
       return buildSMG();
     case 'sniper':
@@ -509,6 +513,12 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildPistol();
     case 'rocket_launcher':
       return buildRocketLauncher();
+    case 'mythic_blade_rifle':
+      return buildAssaultRifle();
+    case 'shockwave_grenade':
+    case 'frag_grenade':
+    case 'chug_splash':
+      return buildSlurpJuice();
     case 'mini_shield':
       return buildMiniShield();
     case 'shield_potion':

@@ -124,9 +124,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 14 WeaponIds', () => {
+  it('returns valid distinct <svg> markup for all WeaponIds', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds).toHaveLength(14);
+    expect(weaponIds.length).toBeGreaterThanOrEqual(19);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {

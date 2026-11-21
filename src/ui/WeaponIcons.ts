@@ -116,6 +116,12 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <circle cx="36" cy="39" r="2" fill="#ecfeff"/>
     <circle cx="33" cy="48" r="1.8" fill="#ecfeff"/>
   </svg>`,
+
+  heavy_shotgun: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="10" y="28" width="44" height="10" rx="2" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/></svg>`,
+  mythic_blade_rifle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="8" y="27" width="48" height="11" rx="2" fill="#facc15" stroke="#0f172a" stroke-width="2"/></svg>`,
+  shockwave_grenade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="34" r="14" fill="#a855f7" stroke="#0f172a" stroke-width="2"/></svg>`,
+  frag_grenade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="34" r="14" fill="#15803d" stroke="#0f172a" stroke-width="2"/></svg>`,
+  chug_splash: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="20" y="18" width="24" height="30" rx="5" fill="#38bdf8" stroke="#0f172a" stroke-width="2"/></svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {

@@ -1,5 +1,6 @@
 import type {
   BannerMessage,
+  BiomeType,
   BuildPieceType,
   DamageEvent,
   DamageNumberEvent,
@@ -51,6 +52,31 @@ export interface GameEventMap {
     position: Vec3Like;
     normal: Vec3Like;
     active: boolean;
+  };
+  'vfx:shockwave': {
+    position: Vec3Like;
+    radius: number;
+  };
+  'vfx:splash_heal': {
+    position: Vec3Like;
+    radius: number;
+  };
+  'vfx:slide_dust': {
+    position: Vec3Like;
+    biome: BiomeType;
+  };
+  'vfx:camera_shake': {
+    intensity: number;
+    duration: number;
+  };
+  'combat:siphon': {
+    amount: number;
+    healthAdded: number;
+    shieldAdded: number;
+  };
+  'ui:poi_discover': {
+    poiName: string;
+    subtitle: string;
   };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
