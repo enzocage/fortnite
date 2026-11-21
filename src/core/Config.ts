@@ -1,5 +1,6 @@
 import type {
   EmoteDef,
+  GameModeId,
   GameSettings,
   GliderDef,
   KeybindMap,
@@ -10,6 +11,7 @@ import type {
   SkinDef,
   WeaponDef,
   WeaponId,
+  WeaponWrapDef,
 } from '../types';
 
 export const WORLD_SIZE = 800;
@@ -1258,6 +1260,111 @@ export const EMOTES: EmoteDef[] = [
   },
 ];
 
+export const GAME_MODES: ReadonlyArray<{
+  id: GameModeId;
+  name: string;
+  subtitle: string;
+  badge: string;
+}> = [
+  {
+    id: 'solo',
+    name: 'SOLO ROYALE',
+    subtitle: 'Classic building & 10-biome island combat',
+    badge: 'STANDARD',
+  },
+  {
+    id: 'zero_build',
+    name: 'ZERO BUILD',
+    subtitle: 'Pure tactical aim, cover & +50 Overshield',
+    badge: 'OVERSHIELD',
+  },
+  {
+    id: 'blitz',
+    name: 'BLITZ',
+    subtitle: 'Fast storm cycles, starter mats & hot drops',
+    badge: '2X PACE',
+  },
+];
+
+export const UPGRADE_COSTS: Record<'common' | 'uncommon' | 'rare' | 'epic', number> = {
+  common: 50,
+  uncommon: 100,
+  rare: 150,
+  epic: 200,
+};
+
+export const WEAPON_WRAPS: WeaponWrapDef[] = [
+  {
+    id: 'factory_matte',
+    name: 'Tactical Matte',
+    rarity: 'common',
+    primaryColor: '#334155',
+    secondaryColor: '#1e293b',
+    accentColor: '#94a3b8',
+    metalness: 0.38,
+    roughness: 0.65,
+    pattern: 'solid',
+  },
+  {
+    id: 'neon_cyber',
+    name: 'Neon Gridline',
+    rarity: 'epic',
+    primaryColor: '#0f172a',
+    secondaryColor: '#1e1b4b',
+    accentColor: '#22d3ee',
+    emissiveColor: '#06b6d4',
+    metalness: 0.65,
+    roughness: 0.3,
+    pattern: 'neon_grid',
+  },
+  {
+    id: 'arctic_camo',
+    name: 'Frostpeak Camo',
+    rarity: 'rare',
+    primaryColor: '#e2e8f0',
+    secondaryColor: '#94a3b8',
+    accentColor: '#38bdf8',
+    metalness: 0.28,
+    roughness: 0.55,
+    pattern: 'camo',
+  },
+  {
+    id: 'magma_rift',
+    name: 'Volcanic Rift',
+    rarity: 'legendary',
+    primaryColor: '#1c1917',
+    secondaryColor: '#7c2d12',
+    accentColor: '#fb923c',
+    emissiveColor: '#ea580c',
+    metalness: 0.55,
+    roughness: 0.35,
+    pattern: 'magma',
+  },
+  {
+    id: 'carbon_stealth',
+    name: 'Stealth Carbon',
+    rarity: 'rare',
+    primaryColor: '#111827',
+    secondaryColor: '#1f2937',
+    accentColor: '#a855f7',
+    metalness: 0.72,
+    roughness: 0.34,
+    pattern: 'carbon',
+  },
+  {
+    id: 'midas_gold',
+    name: 'Crown Aureate',
+    rarity: 'mythic',
+    primaryColor: '#eab308',
+    secondaryColor: '#a16207',
+    accentColor: '#fef08a',
+    emissiveColor: '#ca8a04',
+    metalness: 0.88,
+    roughness: 0.22,
+    pattern: 'gold_foil',
+  },
+];
+
 export const DEFAULT_KEYBINDS: KeybindMap = {
   buildWall: 'KeyZ',
   buildFloor: 'KeyX',
@@ -1281,5 +1388,6 @@ export const DEFAULT_SETTINGS: GameSettings = {
   graphicsQuality: 'high',
   showFps: false,
   invertY: false,
+  visualAudio: true,
   keybinds: { ...DEFAULT_KEYBINDS },
 };

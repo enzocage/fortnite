@@ -5,8 +5,10 @@ import type {
   DamageEvent,
   DamageNumberEvent,
   KillFeedEntry,
+  MatchQuest,
   MaterialType,
   MusicTrackId,
+  Rarity,
   SoundEventPayload,
   Vec3Like,
   WeaponId,
@@ -100,6 +102,20 @@ export interface GameEventMap {
     title: string;
     targetName: string;
     tone: 'start' | 'complete' | 'expired';
+  };
+  'vfx:weapon_upgrade': {
+    position: Vec3Like;
+    rarity: Rarity;
+  };
+  'vfx:slurp_burst': {
+    position: Vec3Like;
+    radius: number;
+  };
+  'vfx:campfire_heal': {
+    position: Vec3Like;
+  };
+  'ui:quest_complete': {
+    quest: MatchQuest;
   };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {

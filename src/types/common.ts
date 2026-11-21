@@ -21,6 +21,8 @@ export type GamePhase =
 
 export type Difficulty = 'casual' | 'standard' | 'sweaty';
 
+export type GameModeId = 'solo' | 'zero_build' | 'blitz';
+
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
 export type BiomeType =
@@ -58,5 +60,6 @@ export interface GameSettings {
   graphicsQuality: GraphicsQuality;
   showFps: boolean;
   invertY: boolean;
+  visualAudio?: boolean;
   keybinds?: Partial<KeybindMap>;
 }

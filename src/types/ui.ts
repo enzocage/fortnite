@@ -2,6 +2,7 @@ import type {
   AmmoType,
   BiomeType,
   Difficulty,
+  GameModeId,
   GamePhase,
   MaterialType,
   Rarity,
@@ -127,6 +128,28 @@ export interface HUDState {
   } | null;
   activeVaultKeys?: number;
   grapplerCharges?: number | null;
+  gameMode?: GameModeId;
+  overshield?: number;
+  maxOvershield?: number;
+  activeQuests?: MatchQuest[];
+  visualSoundCues?: VisualSoundCue[];
+  nearCampfireHealing?: boolean;
+}
+
+export interface MatchQuest {
+  id: string;
+  title: string;
+  progress: number;
+  target: number;
+  completed: boolean;
+  xpReward: number;
+}
+
+export interface VisualSoundCue {
+  id: string;
+  angleRad: number;
+  kind: 'footstep' | 'gunfire' | 'chest' | 'vehicle' | 'glider';
+  intensity: number;
 }
 
 export interface DamageNumberEvent {
@@ -149,6 +172,8 @@ export interface LobbyConfig {
   pickaxeId: string;
   gliderId: string;
   selectedEmote: EmoteId;
+  gameMode?: GameModeId;
+  weaponWrapId?: string;
 }
 
 export interface MatchSummary {
@@ -165,6 +190,9 @@ export interface MatchSummary {
   chestsOpened: number;
   survivalTimeSec: number;
   eliminatedBy?: string;
+  gameMode?: GameModeId;
+  questsCompleted?: number;
+  bonusXp?: number;
 }
 
 export interface BannerMessage {

@@ -208,6 +208,18 @@ export class SoundSynthesizer {
         return this.playWeatherThunder(t, targetNode, vol, pitch);
       case 'bounty_alert':
         return this.playBountyAlert(t, targetNode, vol, pitch);
+      case 'upgrade_weapon':
+        return this.playVaultUnlock(t, targetNode, vol, pitch);
+      case 'campfire_ignite':
+        return this.playLavaBurn(t, targetNode, vol, pitch);
+      case 'campfire_heal':
+        return this.playHealFinish(t, targetNode, vol, pitch);
+      case 'slurp_barrel_break':
+        return this.playSplashHeal(t, targetNode, vol, pitch);
+      case 'quest_complete':
+        return this.playPoiDiscover(t, targetNode, vol, pitch);
+      case 'overshield_recharge':
+        return this.playShieldHit(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
         return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':

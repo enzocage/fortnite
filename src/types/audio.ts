@@ -72,7 +72,13 @@ export type SoundEventId =
   | 'shield_bubble_deploy'
   | 'vault_unlock'
   | 'weather_thunder'
-  | 'bounty_alert';
+  | 'bounty_alert'
+  | 'upgrade_weapon'
+  | 'campfire_ignite'
+  | 'campfire_heal'
+  | 'slurp_barrel_break'
+  | 'quest_complete'
+  | 'overshield_recharge';
 
 export type MusicTrackId =
   | 'none'

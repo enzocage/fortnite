@@ -142,6 +142,39 @@ export interface VaultEntity {
   opened: boolean;
 }
 
+export interface UpgradeBenchEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+}
+
+export interface CampfireEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  lit: boolean;
+  remainingSec: number;
+  maxDurationSec: number;
+  healPerSec: number;
+  radius: number;
+}
+
+export interface SlurpBarrelEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  hp: number;
+  maxHp: number;
+  shieldAmount: number;
+  destroyed: boolean;
+}
+
 export interface SupplyDrop {
   id: string;
   x: number;

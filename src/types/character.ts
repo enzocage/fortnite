@@ -84,12 +84,26 @@ export interface EmoteDef {
   musicId: MusicTrackId;
 }
 
+export interface WeaponWrapDef {
+  id: string;
+  name: string;
+  rarity: Rarity;
+  primaryColor: string;
+  secondaryColor: string;
+  accentColor: string;
+  emissiveColor?: string;
+  metalness: number;
+  roughness: number;
+  pattern: 'solid' | 'camo' | 'neon_grid' | 'carbon' | 'magma' | 'gold_foil';
+}
+
 export interface CharacterRenderState {
   position: Vec3Like;
   yaw: number;
   pitch: number;
   animState: AnimState;
   weaponId: WeaponId;
+  weaponWrapId?: string;
   isAiming: boolean;
   isFiring: boolean;
   isBuilding: boolean;
