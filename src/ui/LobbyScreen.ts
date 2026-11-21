@@ -613,7 +613,7 @@ export class LobbyScreen {
         <div class="fdr-controls-box">
           <h4>BUILDING &amp; EDITING</h4>
           <div class="fdr-key-row"><span>Toggle Build Mode</span><span class="fdr-keycap">Q</span></div>
-          <div class="fdr-key-row"><span>Wall / Floor / Ramp / Roof</span><span class="fdr-keycap">Z / X / C / V</span></div>
+          <div class="fdr-key-row"><span>Wall / Floor / Ramp / Roof</span><span class="fdr-keycap">Z / X / V / F</span></div>
           <div class="fdr-key-row"><span>Switch Material (Wood/Brick/Metal)</span><span class="fdr-keycap">RIGHT CLICK</span></div>
           <div class="fdr-key-row"><span>Rotate Piece / Edit Structure</span><span class="fdr-keycap">R / G</span></div>
         </div>

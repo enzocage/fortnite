@@ -1,0 +1,1779 @@
+import * as THREE from 'three';
+import {
+  BUS_HEIGHT,
+  EMOTES,
+  EventBus,
+  GLIDERS,
+  PICKAXES,
+  POIS,
+  SKINS,
+  WEAPONS,
+  WORLD_SIZE,
+  clamp,
+  dist2D,
+  dist3D,
+  lerp,
+} from '../core';
+import type {
+  AmmoType,
+  BuildPieceType,
+  CharacterRenderState,
+  DamageEvent,
+  EmoteId,
+  GamePhase,
+  GameSettings,
+  HUDState,
+  KillFeedEntry,
+  LobbyConfig,
+  MaterialType,
+  MatchSummary,
+  MinimapBlip,
+  Vec3Like,
+  WeaponId,
+} from '../types';
+import {
+  EnvironmentFX,
+  PropsAndLoot,
+  StormSystem,
+  TerrainSystem,
+  WorldBuilder,
+  type WorldBuildResult,
+} from '../world';
+import {
+  CharacterAnimator,
+  CharacterRig,
+  VFXManager,
+} from '../character';
+import {
+  BuildingSystem,
+  CollisionSystem,
+  PlayerController,
+  WeaponSystem,
+  type CombatActor,
+} from '../gameplay';
+import {
+  BotManager,
+  type BotEntity,
+  type BotRenderState,
+  type BotWorldContext,
+} from '../ai';
+import { AudioEngine } from '../audio';
+import { UIManager } from '../ui';
+
+interface ActiveBotVisual {
+  id: string;
+  rig: CharacterRig;
+  skinId: string;
+  pickaxeId: string;
+  gliderId: string;
+}
+
+export interface FortdropDebugAPI {
+  getState(): Record<string, unknown>;
+  forceStartMatch(): void;
+  jumpFromBus(): boolean;
+  teleportPlayer(x: number, y: number, z: number): void;
+  giveLoadout(): void;
+  enterBuildMode(piece?: BuildPieceType): void;
+  placeBuild(): boolean;
+  enterEditMode(): boolean;
+  toggleEditTile(idx: number): boolean;
+  confirmEdit(): boolean;
+  triggerEmote(id?: EmoteId): void;
+  toggleMap(force?: boolean): boolean;
+  setWaypoint(x: number, z: number): void;
+  spawnNearbyBot(distance?: number): boolean;
+  triggerVictory(): void;
+  getStats(): MatchSummary | null;
+}
+
+declare global {
+  interface Window {
+    __GAME__?: FortdropDebugAPI;
+  }
+}
+
+export class GameEngine {
+  private readonly canvasContainer: HTMLElement;
+  private readonly uiRoot: HTMLElement;
+  private readonly eventBus = new EventBus();
+
+  private renderer: THREE.WebGLRenderer;
+  private scene: THREE.Scene;
+  private camera: THREE.PerspectiveCamera;
+  private hemiLight: THREE.HemisphereLight;
+  private sunLight: THREE.DirectionalLight;
+  private fog: THREE.Fog;
+  private shadowMapSize = 2048;
+
+  private terrain: TerrainSystem;
+  private worldBuilder: WorldBuilder;
+  private worldBuildResult: WorldBuildResult;
+  private environmentFX: EnvironmentFX;
+  private propsAndLoot: PropsAndLoot;
+  private stormSystem: StormSystem;
+
+  private collision: CollisionSystem;
+  private buildingSystem: BuildingSystem;
+  private weaponSystem: WeaponSystem;
+  private vfxManager: VFXManager;
+  private audioEngine: AudioEngine;
+  private uiManager: UIManager;
+  private playerController: PlayerController;
+  private botManager: BotManager;
+
+  private playerRig: CharacterRig;
+  private characterAnimator = new CharacterAnimator();
+  private botVisuals = new Map<string, ActiveBotVisual>();
+
+  private lobbyPedestal: THREE.Group;
+  private lobbyPos: Vec3Like;
+  private lobbyCharacterYaw = 0.25;
+  private lobbyDragging = false;
+  private lobbyDragLastX = 0;
+  private lobbyEmoteTimer = 0;
+  private lobbyActiveEmote: EmoteId | null = null;
+  private lobbyMusicStarted = false;
+
+  private waypointBeam: THREE.Group;
+  private waypointRing: THREE.Mesh;
+  private mapWaypoint: { x: number; z: number } | null = null;
+
+  private lobbyConfig: LobbyConfig;
+  private settings: GameSettings;
+  private phase: GamePhase = 'lobby';
+  private paused = false;
+  private matchSeed = 4201;
+  private matchElapsed = 0;
+  private survivalTimeSec = 0;
+  private totalPlayers = 26;
+  private stormTickAccum = 0;
+  private nextSupplyDropTime = 45;
+  private playerGliderFactor = 0;
+  private victoryTimer = 0;
+  private victoryPendingSummary = false;
+  private matchSummaryShown = false;
+  private lastMatchSummary: MatchSummary | null = null;
+  private lastPlayerDamageEvent: DamageEvent | null = null;
+  private lastPlayerDamageAt = 0;
+  private lastStormDamageAt = 0;
+  private activeEmoteMusic: EmoteId | null = null;
+
+  private busStart: Vec3Like = { x: -340, y: BUS_HEIGHT, z: -200 };
+  private busEnd: Vec3Like = { x: 340, y: BUS_HEIGHT, z: 200 };
+  private busPos: Vec3Like = { x: -340, y: BUS_HEIGHT, z: -200 };
+  private busYaw = 0;
+  private busDuration = 22;
+  private busProgress = 0;
+
+  private audioBlips: MinimapBlip[] = [];
+  private blipSeq = 1;
+  private killFeedSeq = 1;
+
+  private rafId: number | null = null;
+  private lastFrameTime = 0;
+  private totalElapsed = 0;
+  private fps = 60;
+  private fpsAccum = 0;
+  private fpsFrames = 0;
+  private disposed = false;
+
+  private projVec = new THREE.Vector3();
+  private unsubscribers: Array<() => void> = [];
+
+  private onResizeBound = () => this.handleResize();
+  private onKeyDownBound = (e: KeyboardEvent) => this.handleGlobalKeyDown(e);
+  private onFirstGestureBound = () => this.handleFirstGesture();
+  private onLobbyPointerDownBound = (e: PointerEvent) => this.handleLobbyPointerDown(e);
+  private onLobbyPointerMoveBound = (e: PointerEvent) => this.handleLobbyPointerMove(e);
+  private onLobbyPointerUpBound = () => {
+    this.lobbyDragging = false;
+  };
+
+  constructor(canvasContainer: HTMLElement, uiRoot: HTMLElement) {
+    this.canvasContainer = canvasContainer;
+    this.uiRoot = uiRoot;
+
+    // 1. Renderer
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.canvasContainer.appendChild(this.renderer.domElement);
+
+    // 2. Scene, Camera, Lighting, Fog
+    this.scene = new THREE.Scene();
+    this.fog = new THREE.Fog(0x96d7ff, 180, 620);
+    this.scene.fog = this.fog;
+
+    this.camera = new THREE.PerspectiveCamera(
+      80,
+      window.innerWidth / Math.max(1, window.innerHeight),
+      0.15,
+      1900,
+    );
+
+    this.hemiLight = new THREE.HemisphereLight(0x8ed6ff, 0x4e7c3e, 0.92);
+    this.scene.add(this.hemiLight);
+
+    this.sunLight = new THREE.DirectionalLight(0xfff5dc, 1.5);
+    this.sunLight.position.set(110, 145, -130);
+    this.sunLight.castShadow = true;
+    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.camera.near = 10;
+    this.sunLight.shadow.camera.far = 380;
+    this.sunLight.shadow.camera.left = -90;
+    this.sunLight.shadow.camera.right = 90;
+    this.sunLight.shadow.camera.top = 90;
+    this.sunLight.shadow.camera.bottom = -90;
+    this.sunLight.shadow.bias = -0.00045;
+    this.scene.add(this.sunLight);
+    this.scene.add(this.sunLight.target);
+
+    // 3. Register Damage Number 3D -> 2D Screen Projection BEFORE UIManager subscribes
+    this.unsubscribers.push(
+      this.eventBus.on('ui:damage_number', (ev) => {
+        this.projectDamageNumberToScreen(ev);
+      }),
+    );
+
+    // 4. World, Environment, Props, Storm
+    this.terrain = new TerrainSystem(4201);
+    this.worldBuilder = new WorldBuilder();
+    this.worldBuildResult = this.worldBuilder.build(this.terrain, 'high');
+    this.terrain.setBuildingFootprints(this.worldBuildResult.buildingFootprints);
+
+    this.scene.add(this.terrain.getMesh());
+    this.scene.add(this.worldBuildResult.group);
+
+    this.environmentFX = new EnvironmentFX(4201);
+    this.scene.add(this.environmentFX.getGroup());
+
+    this.propsAndLoot = new PropsAndLoot(this.terrain, this.eventBus, 4201);
+    this.propsAndLoot.populate(
+      this.worldBuildResult.chestSpots,
+      this.worldBuildResult.floorLootSpots,
+      this.worldBuildResult.colliders,
+    );
+    this.scene.add(this.propsAndLoot.getGroup());
+
+    this.stormSystem = new StormSystem(4201);
+    this.scene.add(this.stormSystem.getMesh());
+
+    // 5. Waypoint Beam + Lobby Pedestal
+    const { group: wpGroup, ring: wpRing } = this.createWaypointBeam();
+    this.waypointBeam = wpGroup;
+    this.waypointRing = wpRing;
+    this.waypointBeam.visible = false;
+    this.scene.add(this.waypointBeam);
+
+    this.lobbyPos = this.findLobbyPedestalSpot();
+    this.lobbyPedestal = this.createLobbyPedestal();
+    this.lobbyPedestal.position.set(this.lobbyPos.x, this.lobbyPos.y, this.lobbyPos.z);
+    this.scene.add(this.lobbyPedestal);
+
+    // 6. UI Manager (loads persisted config & settings)
+    this.uiManager = new UIManager(this.uiRoot, this.eventBus, {
+      onStartMatch: (cfg) => this.startMatch(cfg),
+      onCosmeticChange: (cosmetics) => this.applyCosmetics(cosmetics),
+      onSettingsChange: (s) => this.applySettings(s),
+      onEmoteSelect: (emoteId) => this.triggerInGameEmote(emoteId),
+      onWaypointChange: (wp) => this.setWaypoint(wp),
+      onResume: () => this.setPaused(false),
+      onPlayAgain: () => this.startMatch(this.uiManager.getLobbyConfig()),
+      onReturnLobby: () => this.enterLobby(),
+      onEditTileToggle: (idx) => this.buildingSystem.toggleEditTile(idx),
+      onEditConfirm: () => this.buildingSystem.confirmEdit(),
+      onEditReset: () => this.buildingSystem.resetEditTiles(),
+      onPreviewEmote: (emoteId) => this.previewLobbyEmote(emoteId),
+    });
+    this.uiManager.setTerrainMapCanvas(this.terrain.getMapTextureCanvas());
+
+    this.lobbyConfig = this.uiManager.getLobbyConfig();
+    this.settings = this.uiManager.getSettings();
+
+    // 7. Audio Engine
+    this.audioEngine = new AudioEngine(this.eventBus, this.settings);
+
+    // 8. Collision, Building, Weapons, Player, VFX
+    this.collision = new CollisionSystem(this.terrain);
+    this.collision.setStaticColliders(this.worldBuildResult.colliders);
+    this.collision.setPropColliders(this.propsAndLoot.getActivePropColliders());
+
+    this.buildingSystem = new BuildingSystem(this.scene, this.terrain, this.eventBus);
+    this.collision.setBuildPiecesProvider(() => this.buildingSystem.getPieces());
+
+    this.weaponSystem = new WeaponSystem(
+      this.collision,
+      this.buildingSystem,
+      this.propsAndLoot,
+      this.eventBus,
+    );
+    this.vfxManager = new VFXManager(this.scene, this.eventBus);
+
+    this.playerController = new PlayerController(
+      this.camera,
+      this.terrain,
+      this.collision,
+      this.buildingSystem,
+      this.weaponSystem,
+      this.propsAndLoot,
+      this.eventBus,
+      this.settings,
+    );
+    this.playerController.attachInputListeners(this.renderer.domElement);
+
+    // 9. Player Character Rig
+    this.playerRig = this.createCharacterRigFromConfig(this.lobbyConfig);
+    this.scene.add(this.playerRig.getGroup());
+
+    // 10. AI Bot Manager
+    this.botManager = new BotManager(
+      this.createBotWorldContext(),
+      this.lobbyConfig.difficulty,
+      9001,
+    );
+
+    // Register all combat actors (Player + Alive Bots)
+    this.weaponSystem.registerActorsProvider(() => this.gatherCombatActors());
+
+    // 11. EventBus Match Events & Quality Settings
+    this.bindMatchEvents();
+    this.applySettings(this.settings);
+    this.bindDOMEvents();
+    this.exposeDebugAPI();
+
+    // 12. Start in Lobby
+    this.enterLobby();
+    this.startLoop();
+  }
+
+  private createCharacterRigFromConfig(cfg: LobbyConfig): CharacterRig {
+    const skin = SKINS.find((s) => s.id === cfg.skinId) ?? SKINS[0];
+    const pickaxe = PICKAXES.find((p) => p.id === cfg.pickaxeId) ?? PICKAXES[0];
+    const glider = GLIDERS.find((g) => g.id === cfg.gliderId) ?? GLIDERS[0];
+    return new CharacterRig(skin, pickaxe, glider);
+  }
+
+  private findLobbyPedestalSpot(): Vec3Like {
+    const x = -18;
+    const z = 148;
+    const y = this.terrain.getHeightAt(x, z) + 0.15;
+    return { x, y, z };
+  }
+
+  private createLobbyPedestal(): THREE.Group {
+    const grp = new THREE.Group();
+    grp.name = 'LobbyPedestal';
+
+    const baseGeo = new THREE.CylinderGeometry(1.75, 2.05, 0.35, 32);
+    const baseMat = new THREE.MeshStandardMaterial({
+      color: '#1e293b',
+      roughness: 0.45,
+      metalness: 0.55,
+    });
+    const base = new THREE.Mesh(baseGeo, baseMat);
+    base.position.y = -0.175;
+    base.receiveShadow = true;
+    grp.add(base);
+
+    const ringGeo = new THREE.TorusGeometry(1.72, 0.05, 10, 40);
+    ringGeo.rotateX(Math.PI * 0.5);
+    const ringMat = new THREE.MeshBasicMaterial({ color: '#38bdf8' });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.y = 0.02;
+    grp.add(ring);
+
+    const discGeo = new THREE.CylinderGeometry(1.58, 1.58, 0.04, 32);
+    const discMat = new THREE.MeshStandardMaterial({
+      color: '#0f172a',
+      emissive: '#0284c7',
+      emissiveIntensity: 0.35,
+      roughness: 0.3,
+    });
+    const disc = new THREE.Mesh(discGeo, discMat);
+    disc.position.y = 0.01;
+    disc.receiveShadow = true;
+    grp.add(disc);
+
+    return grp;
+  }
+
+  private createWaypointBeam(): { group: THREE.Group; ring: THREE.Mesh } {
+    const group = new THREE.Group();
+    group.name = 'WaypointBeam';
+
+    const beamGeo = new THREE.CylinderGeometry(0.32, 0.55, 240, 12, 1, true);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: '#22d3ee',
+      transparent: true,
+      opacity: 0.38,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.y = 120;
+    group.add(beam);
+
+    const ringGeo = new THREE.RingGeometry(1.2, 1.65, 24);
+    ringGeo.rotateX(-Math.PI * 0.5);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: '#67e8f9',
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.y = 0.25;
+    group.add(ring);
+
+    return { group, ring };
+  }
+
+  private createBotWorldContext(): BotWorldContext {
+    const self = this;
+    return {
+      terrain: this.terrain,
+      get storm() {
+        return self.stormSystem.getState();
+      },
+      getChests: () => this.propsAndLoot.getChests(),
+      openChest: (chestId: string) => this.propsAndLoot.openChest(chestId),
+      getLootDrops: () => this.propsAndLoot.getLootDrops(),
+      pickupLootDrop: (dropId: string) => this.propsAndLoot.removeLootDrop(dropId),
+      getProps: () => this.propsAndLoot.getProps(),
+      damageProp: (propId: string, amount: number, hitPoint: Vec3Like) =>
+        this.propsAndLoot.damageProp(propId, amount, hitPoint, true),
+      resolveMovement: (pos, vel, radius, height, dt) =>
+        this.collision.resolveCharacterMovement(pos, vel, radius, height, dt),
+      hasLineOfSight: (from, to) => {
+        const d = dist3D(from, to);
+        if (d <= 0.15) return true;
+        const dir = {
+          x: (to.x - from.x) / d,
+          y: (to.y - from.y) / d,
+          z: (to.z - from.z) / d,
+        };
+        const hit = this.collision.raycastWorld(from, dir, d - 0.15, {
+          checkBuilds: true,
+          checkProps: true,
+          props: this.propsAndLoot.getProps(),
+        });
+        return !hit.hit;
+      },
+      placeBuildPiece: (ownerId, type, material, gx, gy, gz, dir, rotation) =>
+        this.buildingSystem.placePieceForEntity(
+          ownerId,
+          type,
+          material,
+          gx,
+          gy,
+          gz,
+          dir,
+          rotation,
+        ),
+      fireWeapon: (bot, item, origin, aimDir, spreadRad) => {
+        const visual = this.botVisuals.get(bot.id);
+        let muzzlePos = origin;
+        if (visual && visual.rig.getGroup().visible) {
+          const mv = visual.rig.getMuzzleWorldPosition();
+          if (Number.isFinite(mv.x) && Number.isFinite(mv.y) && Number.isFinite(mv.z)) {
+            muzzlePos = { x: mv.x, y: mv.y, z: mv.z };
+          }
+        }
+        return this.weaponSystem.fireWeapon({
+          actor: this.botToCombatActor(bot),
+          item,
+          origin,
+          aimDir,
+          muzzlePos,
+          spreadRad,
+          isPlayer: false,
+          onAmmoConsumed: () => {
+            if (item.magAmmo > 0) item.magAmmo -= 1;
+          },
+        });
+      },
+      getCombatTargets: () => {
+        const targets = [];
+        const pPhase = this.playerController.getPhase();
+        if (
+          this.playerController.isAlive() &&
+          pPhase !== 'lobby' &&
+          pPhase !== 'bus'
+        ) {
+          const pActor = this.playerController.getCombatActor();
+          targets.push({
+            id: pActor.id,
+            name: pActor.name,
+            position: pActor.position,
+            eyePos: pActor.eyePos,
+            hp: pActor.hp,
+            shield: pActor.shield,
+            alive: pActor.alive,
+            isPlayer: true,
+            radius: pActor.radius,
+            height: pActor.height,
+          });
+        }
+        for (const bot of this.botManager.getAliveBots()) {
+          if (bot.state === 'bus') continue;
+          targets.push({
+            id: bot.id,
+            name: bot.name,
+            position: { ...bot.position },
+            eyePos: {
+              x: bot.position.x,
+              y: bot.position.y + (bot.isCrouching ? 1.05 : 1.55),
+              z: bot.position.z,
+            },
+            hp: bot.hp,
+            shield: bot.shield,
+            alive: bot.alive,
+            isPlayer: false,
+            radius: bot.radius,
+            height: bot.height,
+          });
+        }
+        return targets;
+      },
+      dropBotLoot: (bot) => this.dropBotLoot(bot),
+      eventBus: this.eventBus,
+    };
+  }
+
+  private botToCombatActor(bot: BotEntity): CombatActor {
+    return {
+      id: bot.id,
+      name: bot.name,
+      position: { ...bot.position },
+      eyePos: {
+        x: bot.position.x,
+        y: bot.position.y + (bot.isCrouching ? 1.05 : 1.55),
+        z: bot.position.z,
+      },
+      hp: bot.hp,
+      shield: bot.shield,
+      radius: bot.radius,
+      height: bot.height,
+      alive: bot.alive,
+      onDamage: (ev) => {
+        this.botManager.onBotDamaged(bot.id, ev, this.matchElapsed);
+      },
+    };
+  }
+
+  private gatherCombatActors(): CombatActor[] {
+    const list: CombatActor[] = [];
+    const pPhase = this.playerController.getPhase();
+    if (
+      this.playerController.isAlive() &&
+      pPhase !== 'lobby' &&
+      pPhase !== 'bus'
+    ) {
+      list.push(this.playerController.getCombatActor());
+    }
+    for (const bot of this.botManager.getAliveBots()) {
+      if (bot.state === 'bus') continue;
+      list.push(this.botToCombatActor(bot));
+    }
+    return list;
+  }
+
+  private dropBotLoot(bot: BotEntity): void {
+    const items = bot.inventory.items.filter(
+      (it, idx) => idx > 0 && it !== null,
+    );
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]!;
+      const ang = (i / Math.max(1, items.length)) * Math.PI * 2;
+      this.propsAndLoot.spawnLootDrop(
+        { x: bot.position.x, y: bot.position.y + 0.8, z: bot.position.z },
+        { item: { ...it } },
+        { x: Math.cos(ang) * 2.4, y: 4.3, z: Math.sin(ang) * 2.4 },
+      );
+    }
+
+    (Object.keys(bot.inventory.ammo) as AmmoType[]).forEach((ammoType) => {
+      const amt = bot.inventory.ammo[ammoType];
+      if (amt > 0) {
+        this.propsAndLoot.spawnLootDrop(
+          { x: bot.position.x, y: bot.position.y + 0.8, z: bot.position.z },
+          { ammo: { type: ammoType, amount: amt } },
+          { x: (Math.random() - 0.5) * 3, y: 3.8, z: (Math.random() - 0.5) * 3 },
+        );
+      }
+    });
+
+    (Object.keys(bot.inventory.materials) as MaterialType[]).forEach((mat) => {
+      const amt = bot.inventory.materials[mat];
+      if (amt > 0) {
+        this.propsAndLoot.spawnLootDrop(
+          { x: bot.position.x, y: bot.position.y + 0.8, z: bot.position.z },
+          { materials: { type: mat, amount: Math.min(150, amt) } },
+          { x: (Math.random() - 0.5) * 3, y: 3.8, z: (Math.random() - 0.5) * 3 },
+        );
+      }
+    });
+  }
+
+  private bindMatchEvents(): void {
+    this.unsubscribers.push(
+      this.eventBus.on('combat:damage', (ev) => {
+        if (ev.targetId === 'player') {
+          this.lastPlayerDamageEvent = ev;
+          this.lastPlayerDamageAt = this.matchElapsed;
+        }
+        if (ev.attackerId === 'player' && ev.targetId !== 'player') {
+          if (ev.isElimination) {
+            this.playerController.addKill();
+            const victim = this.botManager.getBotById(ev.targetId);
+            this.eventBus.emit('ui:banner', {
+              id: `elim_${Date.now()}`,
+              title: `ELIMINATED ${victim?.name ?? 'OPPONENT'}`,
+              subtitle: ev.isHeadshot
+                ? `HEADSHOT • ${Math.round(ev.distance)}m`
+                : `${WEAPONS[ev.weaponId].shortName} • ${Math.round(ev.distance)}m`,
+              tone: 'elim',
+              durationMs: 2600,
+            });
+          }
+        } else if (
+          ev.attackerId !== 'player' &&
+          ev.isElimination &&
+          ev.targetId !== 'player'
+        ) {
+          const killerBot = this.botManager.getBotById(ev.attackerId);
+          if (killerBot) {
+            killerBot.damageDealt += ev.damage;
+          }
+        }
+      }),
+      this.eventBus.on('audio:noise', (payload) => {
+        if (payload.kind === 'gunfire' && payload.sourceId !== 'player') {
+          this.audioBlips.push({
+            id: `blip_${this.blipSeq++}`,
+            x: payload.position.x,
+            z: payload.position.z,
+            kind: 'gunfire',
+            age: 0,
+            maxAge: 2.2,
+          });
+          if (this.audioBlips.length > 32) {
+            this.audioBlips.shift();
+          }
+        }
+      }),
+    );
+  }
+
+  private bindDOMEvents(): void {
+    window.addEventListener('resize', this.onResizeBound);
+    window.addEventListener('keydown', this.onKeyDownBound);
+    window.addEventListener('pointerdown', this.onFirstGestureBound, { passive: true });
+    window.addEventListener('keydown', this.onFirstGestureBound, { passive: true });
+
+    const dom = this.renderer.domElement;
+    dom.addEventListener('pointerdown', this.onLobbyPointerDownBound);
+    window.addEventListener('pointermove', this.onLobbyPointerMoveBound);
+    window.addEventListener('pointerup', this.onLobbyPointerUpBound);
+  }
+
+  private handleFirstGesture(): void {
+    this.audioEngine.unlock();
+    if (this.phase === 'lobby' && !this.lobbyMusicStarted) {
+      this.lobbyMusicStarted = true;
+      this.eventBus.emit('music:set', { track: 'lobby' });
+    }
+  }
+
+  private handleLobbyPointerDown(e: PointerEvent): void {
+    if (this.phase !== 'lobby') return;
+    this.lobbyDragging = true;
+    this.lobbyDragLastX = e.clientX;
+  }
+
+  private handleLobbyPointerMove(e: PointerEvent): void {
+    if (this.phase !== 'lobby' || !this.lobbyDragging) return;
+    const dx = e.clientX - this.lobbyDragLastX;
+    this.lobbyDragLastX = e.clientX;
+    this.lobbyCharacterYaw += dx * 0.012;
+  }
+
+  private handleResize(): void {
+    const w = window.innerWidth;
+    const h = Math.max(1, window.innerHeight);
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w, h);
+  }
+
+  private handleGlobalKeyDown(e: KeyboardEvent): void {
+    if (this.phase === 'lobby' || this.phase === 'victory' || this.phase === 'eliminated') {
+      return;
+    }
+    if (e.repeat) return;
+
+    if (e.code === 'KeyM') {
+      e.preventDefault();
+      const opened = this.uiManager.toggleFullMap();
+      if (opened) this.releasePointerLock();
+      return;
+    }
+
+    if (e.code === 'KeyB') {
+      e.preventDefault();
+      const opened = this.uiManager.toggleEmoteWheel();
+      if (opened) this.releasePointerLock();
+      return;
+    }
+
+    if (e.code === 'KeyP') {
+      e.preventDefault();
+      const nextPaused = this.uiManager.togglePauseMenu();
+      this.setPaused(nextPaused);
+      if (nextPaused) this.releasePointerLock();
+      return;
+    }
+
+    if (e.code === 'Escape') {
+      // Allow PlayerController to cancel active Edit or Build mode cleanly first
+      const snap = this.playerController.getHudSnapshot();
+      if (snap.editMode.active || snap.isBuildMode) {
+        return;
+      }
+      if (this.uiManager.isOverlayOpen()) {
+        this.uiManager.toggleFullMap(false);
+        this.uiManager.toggleEmoteWheel(false);
+        this.uiManager.togglePauseMenu(false);
+        this.setPaused(false);
+        return;
+      }
+      const nextPaused = this.uiManager.togglePauseMenu(true);
+      this.setPaused(nextPaused);
+      if (nextPaused) this.releasePointerLock();
+    }
+  }
+
+  private releasePointerLock(): void {
+    if (typeof document !== 'undefined' && document.pointerLockElement) {
+      try {
+        document.exitPointerLock();
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  private setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
+  private applyCosmetics(
+    cosmetics: Pick<LobbyConfig, 'skinId' | 'pickaxeId' | 'gliderId' | 'selectedEmote'>,
+  ): void {
+    this.lobbyConfig = { ...this.lobbyConfig, ...cosmetics };
+    const skin = SKINS.find((s) => s.id === cosmetics.skinId) ?? SKINS[0];
+    const pickaxe = PICKAXES.find((p) => p.id === cosmetics.pickaxeId) ?? PICKAXES[0];
+    const glider = GLIDERS.find((g) => g.id === cosmetics.gliderId) ?? GLIDERS[0];
+
+    this.playerRig.setSkin(skin);
+    this.playerRig.setPickaxe(pickaxe);
+    this.playerRig.setGlider(glider);
+    this.playerController.setSelectedEmote(cosmetics.selectedEmote);
+  }
+
+  private applySettings(next: GameSettings): void {
+    this.settings = { ...next };
+    this.playerController.setSettings(this.settings);
+    this.audioEngine.updateSettings(this.settings);
+
+    const baseDpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    let maxDpr = 2;
+    let nextShadowSize = 2048;
+    if (this.settings.graphicsQuality === 'low') {
+      maxDpr = 1;
+      nextShadowSize = 1024;
+    } else if (this.settings.graphicsQuality === 'medium') {
+      maxDpr = 1.5;
+      nextShadowSize = 2048;
+    }
+    this.renderer.setPixelRatio(Math.min(baseDpr, maxDpr));
+
+    if (nextShadowSize !== this.shadowMapSize) {
+      this.shadowMapSize = nextShadowSize;
+      this.sunLight.shadow.mapSize.set(nextShadowSize, nextShadowSize);
+      if (this.sunLight.shadow.map) {
+        this.sunLight.shadow.map.dispose();
+        this.sunLight.shadow.map = null;
+      }
+    }
+
+    if (this.phase === 'lobby') {
+      this.camera.fov = 52;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  private previewLobbyEmote(emoteId: EmoteId): void {
+    if (this.phase !== 'lobby') return;
+    this.lobbyActiveEmote = emoteId;
+    this.lobbyEmoteTimer = 5.5;
+    const emote = EMOTES.find((e) => e.id === emoteId);
+    if (emote) {
+      this.eventBus.emit('music:set', { track: emote.musicId });
+    }
+  }
+
+  private triggerInGameEmote(emoteId: EmoteId): void {
+    this.playerController.enterTestEmote(emoteId);
+    const emote = EMOTES.find((e) => e.id === emoteId);
+    if (emote) {
+      this.activeEmoteMusic = emote.musicId ? emoteId : null;
+      this.eventBus.emit('music:set', { track: emote.musicId });
+    }
+  }
+
+  private setWaypoint(wp: { x: number; z: number } | null): void {
+    this.mapWaypoint = wp;
+    if (wp) {
+      const y = this.terrain.getHeightAt(wp.x, wp.z);
+      this.waypointBeam.position.set(wp.x, y, wp.z);
+      this.waypointBeam.visible = true;
+    } else {
+      this.waypointBeam.visible = false;
+    }
+  }
+
+  private projectDamageNumberToScreen(ev: {
+    worldPos: Vec3Like;
+    screenX?: number;
+    screenY?: number;
+    visible?: boolean;
+  }): void {
+    this.projVec.set(ev.worldPos.x, ev.worldPos.y + 0.15, ev.worldPos.z);
+    this.projVec.project(this.camera);
+    const visible = this.projVec.z >= -1 && this.projVec.z <= 1;
+    const w = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const h = typeof window !== 'undefined' ? window.innerHeight : 720;
+    ev.screenX = (this.projVec.x * 0.5 + 0.5) * w;
+    ev.screenY = (-this.projVec.y * 0.5 + 0.5) * h;
+    ev.visible = visible;
+  }
+
+  public enterLobby(): void {
+    this.releasePointerLock();
+    this.paused = false;
+    this.phase = 'lobby';
+    this.victoryPendingSummary = false;
+    this.matchSummaryShown = false;
+    this.activeEmoteMusic = null;
+    this.setWaypoint(null);
+
+    this.buildingSystem.clearAll();
+    this.weaponSystem.clear();
+    this.vfxManager.clear();
+    this.clearBotVisuals();
+    this.botManager.reset();
+    this.audioBlips = [];
+
+    this.lobbyPedestal.visible = true;
+    this.playerRig.setVisible(true);
+    this.playerRig.setGliderOpen(false, 0);
+    this.playerRig.equipWeapon('pickaxe', false);
+
+    // Scenic Battle Bus cruising far in the lobby sky backdrop
+    this.environmentFX.setBusTransform({ x: 35, y: 125, z: -90 }, 0.72, true);
+    this.stormSystem.reset(4201);
+    this.stormSystem.getMesh().visible = false;
+
+    this.playerController.setPhase('lobby');
+    this.uiManager.setPhase('lobby');
+    this.camera.fov = 52;
+    this.camera.updateProjectionMatrix();
+
+    if (this.lobbyMusicStarted) {
+      this.eventBus.emit('music:set', { track: 'lobby' });
+    }
+  }
+
+  public startMatch(config: LobbyConfig): void {
+    this.lobbyConfig = { ...config };
+    this.applyCosmetics(config);
+    this.paused = false;
+    this.lobbyActiveEmote = null;
+    this.lobbyEmoteTimer = 0;
+    this.activeEmoteMusic = null;
+
+    this.matchSeed = (this.matchSeed + 137) >>> 0;
+    this.matchElapsed = 0;
+    this.survivalTimeSec = 0;
+    this.stormTickAccum = 0;
+    this.nextSupplyDropTime = 45;
+    this.playerGliderFactor = 0;
+    this.victoryTimer = 0;
+    this.victoryPendingSummary = false;
+    this.matchSummaryShown = false;
+    this.lastMatchSummary = null;
+    this.lastPlayerDamageEvent = null;
+    this.lastPlayerDamageAt = 0;
+    this.lastStormDamageAt = 0;
+    this.audioBlips = [];
+    this.setWaypoint(null);
+
+    // Reset world entities
+    this.buildingSystem.clearAll();
+    this.weaponSystem.clear();
+    this.vfxManager.clear();
+    this.propsAndLoot.reset(
+      this.worldBuildResult.chestSpots,
+      this.worldBuildResult.floorLootSpots,
+      this.worldBuildResult.colliders,
+    );
+    this.collision.setPropColliders(this.propsAndLoot.getActivePropColliders());
+
+    this.stormSystem.reset(this.matchSeed);
+    this.stormSystem.getMesh().visible = true;
+
+    this.lobbyPedestal.visible = false;
+
+    // Randomize Battle Bus trajectory crossing near central POIs
+    const angle = ((this.matchSeed % 360) * Math.PI) / 180;
+    const crossDist = 375;
+    const lateralOffset = (((this.matchSeed * 31) % 100) / 100 - 0.5) * 80;
+    const perpX = -Math.sin(angle) * lateralOffset;
+    const perpZ = Math.cos(angle) * lateralOffset;
+    this.busStart = {
+      x: -Math.cos(angle) * crossDist + perpX,
+      y: BUS_HEIGHT,
+      z: -Math.sin(angle) * crossDist + perpZ,
+    };
+    this.busEnd = {
+      x: Math.cos(angle) * crossDist + perpX,
+      y: BUS_HEIGHT,
+      z: Math.sin(angle) * crossDist + perpZ,
+    };
+    this.busPos = { ...this.busStart };
+    this.busYaw = Math.atan2(
+      this.busEnd.x - this.busStart.x,
+      this.busEnd.z - this.busStart.z,
+    );
+    this.busDuration = 22;
+    this.busProgress = 0;
+    this.environmentFX.setBusTransform(this.busPos, this.busYaw, true);
+
+    // Spawn AI bots
+    this.clearBotVisuals();
+    this.botManager.setDifficulty(config.difficulty);
+    this.botManager.spawnBots(config.botCount, this.busDuration);
+    this.createBotVisuals();
+    this.totalPlayers = config.botCount + 1;
+
+    // Reset player controller
+    this.playerController.resetForMatch(this.busStart, config.playerName);
+    this.playerController.setSelectedEmote(config.selectedEmote);
+    this.phase = 'bus';
+    this.uiManager.setPhase('bus');
+
+    this.camera.fov = this.settings.fov;
+    this.camera.updateProjectionMatrix();
+
+    this.audioEngine.unlock();
+    this.eventBus.emit('sound:play', { id: 'bus_horn' });
+    this.eventBus.emit('music:set', { track: 'bus' });
+    this.eventBus.emit('ui:banner', {
+      id: 'bus_drop',
+      title: 'BATTLE BUS DEPLOYED',
+      subtitle: 'PICK A LANDING SPOT & PRESS [SPACE] TO DROP',
+      tone: 'info',
+      durationMs: 3600,
+    });
+  }
+
+  private createBotVisuals(): void {
+    for (const bot of this.botManager.getBots()) {
+      const skin = SKINS.find((s) => s.id === bot.skinId) ?? SKINS[0];
+      const pickaxe = PICKAXES.find((p) => p.id === bot.pickaxeId) ?? PICKAXES[0];
+      const glider = GLIDERS.find((g) => g.id === bot.gliderId) ?? GLIDERS[0];
+      const rig = new CharacterRig(skin, pickaxe, glider);
+      rig.setVisible(false);
+      this.scene.add(rig.getGroup());
+      this.botVisuals.set(bot.id, {
+        id: bot.id,
+        rig,
+        skinId: bot.skinId,
+        pickaxeId: bot.pickaxeId,
+        gliderId: bot.gliderId,
+      });
+    }
+  }
+
+  private clearBotVisuals(): void {
+    for (const entry of this.botVisuals.values()) {
+      this.scene.remove(entry.rig.getGroup());
+      entry.rig.dispose();
+    }
+    this.botVisuals.clear();
+  }
+
+  private startLoop(): void {
+    this.lastFrameTime = performance.now();
+    const tick = (now: number) => {
+      if (this.disposed) return;
+      const rawDt = Math.min(0.05, Math.max(0.001, (now - this.lastFrameTime) / 1000));
+      this.lastFrameTime = now;
+      this.step(rawDt);
+      this.renderer.render(this.scene, this.camera);
+      this.rafId = requestAnimationFrame(tick);
+    };
+    this.rafId = requestAnimationFrame(tick);
+  }
+
+  private step(rawDt: number): void {
+    this.totalElapsed += rawDt;
+
+    // FPS tracking
+    this.fpsAccum += rawDt;
+    this.fpsFrames += 1;
+    if (this.fpsAccum >= 0.4) {
+      this.fps = this.fpsFrames / this.fpsAccum;
+      this.fpsAccum = 0;
+      this.fpsFrames = 0;
+    }
+
+    if (this.phase === 'lobby') {
+      this.stepLobby(rawDt);
+      return;
+    }
+
+    if (this.paused) {
+      this.environmentFX.update(rawDt * 0.2, this.totalElapsed);
+      return;
+    }
+
+    // Slow-motion polish during Victory celebration!
+    const dt =
+      this.phase === 'victory' && this.victoryPendingSummary
+        ? rawDt * 0.45
+        : rawDt;
+
+    this.matchElapsed += dt;
+    if (
+      this.phase === 'bus' ||
+      this.phase === 'skydiving' ||
+      this.phase === 'gliding' ||
+      this.phase === 'playing'
+    ) {
+      this.survivalTimeSec += rawDt;
+    }
+
+    // 1. Update Battle Bus flight
+    if (this.busProgress < 1) {
+      this.busProgress = clamp(this.matchElapsed / this.busDuration, 0, 1);
+      this.busPos = {
+        x: lerp(this.busStart.x, this.busEnd.x, this.busProgress),
+        y: BUS_HEIGHT,
+        z: lerp(this.busStart.z, this.busEnd.z, this.busProgress),
+      };
+      this.environmentFX.setBusTransform(this.busPos, this.busYaw, true);
+
+      if (this.playerController.getPhase() === 'bus' && this.busProgress >= 0.94) {
+        this.playerController.jumpFromBus();
+      }
+    } else {
+      this.environmentFX.setBusTransform(this.busPos, this.busYaw, false);
+    }
+
+    // 2. Environment, Props/Loot, Supply Drops
+    this.environmentFX.update(dt, this.totalElapsed);
+    this.propsAndLoot.update(dt, this.totalElapsed);
+    this.collision.setPropColliders(this.propsAndLoot.getActivePropColliders());
+
+    if (this.matchElapsed >= this.nextSupplyDropTime) {
+      this.nextSupplyDropTime += 55;
+      const st = this.stormSystem.getState();
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.random() * Math.max(12, st.currentRadius * 0.55);
+      const sx = st.currentCenterX + Math.cos(ang) * rad;
+      const sz = st.currentCenterZ + Math.sin(ang) * rad;
+      if (!this.terrain.isWater(sx, sz)) {
+        this.propsAndLoot.spawnSupplyDrop(sx, sz);
+        this.eventBus.emit('ui:banner', {
+          id: `sd_${Date.now()}`,
+          title: 'SUPPLY DROP INBOUND',
+          subtitle: 'CHECK YOUR MINIMAP FOR THE BLUE BEACON',
+          tone: 'info',
+          durationMs: 3000,
+        });
+      }
+    }
+
+    // 3. Storm update + Player storm damage
+    const stormRes = this.stormSystem.update(dt);
+    if (stormRes.shrinkStarted) {
+      this.eventBus.emit('sound:play', { id: 'storm_warning' });
+      this.eventBus.emit('ui:banner', {
+        id: `storm_shrink_${Date.now()}`,
+        title: 'STORM EYE SHRINKING!',
+        subtitle: 'MOVE INTO THE SAFE ZONE',
+        tone: 'storm',
+        durationMs: 3200,
+      });
+    } else if (stormRes.phaseChanged) {
+      this.eventBus.emit('ui:banner', {
+        id: `storm_phase_${Date.now()}`,
+        title: `STORM PHASE ${this.stormSystem.getState().phase}`,
+        subtitle: 'NEW SAFE ZONE MARKED ON MAP',
+        tone: 'storm',
+        durationMs: 2800,
+      });
+    }
+
+    // 4. Player update + character rig sync
+    const prevPlayerPhase = this.playerController.getPhase();
+    this.playerController.update(dt, this.totalElapsed, this.busPos, this.busYaw);
+    const currPlayerPhase = this.playerController.getPhase();
+
+    if (prevPlayerPhase === 'bus' && currPlayerPhase !== 'bus') {
+      // Stop bus music cleanly on drop
+      this.eventBus.emit('music:set', { track: 'none' });
+    }
+    if (currPlayerPhase !== this.phase && this.phase !== 'victory' && this.phase !== 'eliminated') {
+      this.phase = currPlayerPhase;
+      this.uiManager.setPhase(this.phase);
+    }
+
+    const pRender = this.playerController.getCharacterRenderState();
+    this.syncPlayerRig(pRender, dt);
+
+    // Player Storm DPS tick
+    const inStorm =
+      currPlayerPhase !== 'bus' &&
+      currPlayerPhase !== 'victory' &&
+      currPlayerPhase !== 'eliminated' &&
+      this.stormSystem.isInStorm(pRender.position.x, pRender.position.z);
+
+    if (inStorm && this.playerController.isAlive()) {
+      this.stormTickAccum += dt;
+      if (this.stormTickAccum >= 1.0) {
+        this.stormTickAccum -= 1.0;
+        this.lastStormDamageAt = this.matchElapsed;
+        this.playerController.applyStormDamage(this.stormSystem.getState().dps);
+        this.eventBus.emit('sound:play', { id: 'storm_tick', volume: 0.65 });
+      }
+    } else {
+      this.stormTickAccum = 0;
+    }
+
+    // Stop emote music automatically if player moved/stopped emoting
+    if (this.activeEmoteMusic && pRender.animState !== 'emote' && this.phase !== 'victory') {
+      this.activeEmoteMusic = null;
+      this.eventBus.emit('music:set', { track: 'none' });
+    }
+
+    // 5. AI Bots update + rigs
+    this.botManager.update(dt, this.matchElapsed, this.busPos, pRender.position);
+    this.botManager.applyStormDamage(dt);
+    this.syncBotRigs(dt);
+
+    // 6. Weapons, Building, VFX
+    this.weaponSystem.update(dt);
+    this.buildingSystem.update(dt, this.totalElapsed);
+    this.vfxManager.update(dt);
+
+    // 7. Audio 3D listener + Chest Hum Loops
+    this.updateSpatialAudio(pRender.position);
+
+    // 8. Waypoint ring spin & Minimap Blips
+    if (this.waypointBeam.visible) {
+      this.waypointRing.rotation.z += dt * 1.8;
+    }
+    this.updateBlips(dt);
+
+    // 9. Atmospheric Storm Fog + Sun Shadow Tracking
+    this.updateAtmosphereAndShadows(pRender.position, inStorm, dt);
+
+    // 10. Check Win / Elimination transitions
+    this.checkMatchOutcome(rawDt);
+
+    // 11. Sync HUD
+    this.pushHUDState(inStorm);
+  }
+
+  private stepLobby(dt: number): void {
+    this.environmentFX.update(dt, this.totalElapsed);
+
+    // Gentle Lobby Bus cruise bob
+    this.environmentFX.setBusTransform(
+      {
+        x: 35 + Math.sin(this.totalElapsed * 0.25) * 16,
+        y: 122 + Math.sin(this.totalElapsed * 0.6) * 1.5,
+        z: -95 + Math.cos(this.totalElapsed * 0.25) * 12,
+      },
+      0.85,
+      true,
+    );
+
+    if (this.lobbyEmoteTimer > 0) {
+      this.lobbyEmoteTimer -= dt;
+      if (this.lobbyEmoteTimer <= 0) {
+        this.lobbyActiveEmote = null;
+        if (this.lobbyMusicStarted) {
+          this.eventBus.emit('music:set', { track: 'lobby' });
+        }
+      }
+    }
+
+    const lobbyState: CharacterRenderState = {
+      position: { ...this.lobbyPos },
+      yaw: this.lobbyCharacterYaw,
+      pitch: 0,
+      animState: this.lobbyActiveEmote ? 'emote' : 'idle',
+      weaponId: 'pickaxe',
+      isAiming: false,
+      isFiring: false,
+      isBuilding: false,
+      emoteId: this.lobbyActiveEmote,
+      moveSpeed: 0,
+      grounded: true,
+      health: 100,
+      shield: 0,
+      recoilKick: 0,
+      harvestSwingTimer: 0,
+    };
+
+    this.playerRig.setVisible(true);
+    this.playerRig.setGliderOpen(false, 0);
+    this.playerRig.equipWeapon('pickaxe', false);
+    this.characterAnimator.update(this.playerRig, lobbyState, dt);
+
+    // Frame character cleanly in center with scenic island behind
+    const camPos = {
+      x: this.lobbyPos.x + 0.2,
+      y: this.lobbyPos.y + 1.48,
+      z: this.lobbyPos.z + 3.85,
+    };
+    this.camera.position.set(camPos.x, camPos.y, camPos.z);
+    this.camera.lookAt(this.lobbyPos.x, this.lobbyPos.y + 1.05, this.lobbyPos.z - 4.0);
+
+    this.updateAtmosphereAndShadows(this.lobbyPos, false, dt);
+  }
+
+  private syncPlayerRig(state: CharacterRenderState, dt: number): void {
+    const visible = this.phase !== 'bus';
+    this.playerRig.setVisible(visible);
+    if (!visible) return;
+
+    this.playerRig.equipWeapon(state.weaponId, state.isBuilding);
+    const targetGlider = state.animState === 'glide' ? 1 : 0;
+    this.playerGliderFactor = lerp(
+      this.playerGliderFactor,
+      targetGlider,
+      1 - Math.exp(-10 * dt),
+    );
+    this.playerRig.setGliderOpen(
+      this.playerGliderFactor > 0.02,
+      this.playerGliderFactor,
+    );
+    this.characterAnimator.update(this.playerRig, state, dt);
+
+    const muzzle = this.playerRig.getMuzzleWorldPosition();
+    this.playerController.setMuzzleWorldPosition({
+      x: muzzle.x,
+      y: muzzle.y,
+      z: muzzle.z,
+    });
+  }
+
+  private syncBotRigs(dt: number): void {
+    const states: BotRenderState[] = this.botManager.getRenderStates();
+    for (let i = 0; i < states.length; i++) {
+      const bs = states[i];
+      const visual = this.botVisuals.get(bs.id);
+      if (!visual) continue;
+
+      if (bs.isHiddenInBus || !bs.alive) {
+        visual.rig.setVisible(false);
+        continue;
+      }
+
+      visual.rig.setVisible(true);
+      visual.rig.equipWeapon(bs.weaponId, bs.isBuilding);
+      visual.rig.setGliderOpen(bs.gliderOpen, bs.gliderFactor);
+      this.characterAnimator.update(visual.rig, bs, dt);
+    }
+  }
+
+  private updateSpatialAudio(playerPos: Vec3Like): void {
+    const camDir = new THREE.Vector3();
+    this.camera.getWorldDirection(camDir);
+    const camUp = this.camera.up;
+
+    this.audioEngine.updateListener(
+      {
+        x: this.camera.position.x,
+        y: this.camera.position.y,
+        z: this.camera.position.z,
+      },
+      { x: camDir.x, y: camDir.y, z: camDir.z },
+      { x: camUp.x, y: camUp.y, z: camUp.z },
+    );
+    this.audioEngine.updateChestLoops(playerPos, this.propsAndLoot.getChests());
+  }
+
+  private updateBlips(dt: number): void {
+    for (let i = this.audioBlips.length - 1; i >= 0; i--) {
+      this.audioBlips[i].age += dt;
+      if (this.audioBlips[i].age >= this.audioBlips[i].maxAge) {
+        this.audioBlips.splice(i, 1);
+      }
+    }
+  }
+
+  private updateAtmosphereAndShadows(
+    focusPos: Vec3Like,
+    inStorm: boolean,
+    dt: number,
+  ): void {
+    // 1. Fog transition when inside Storm
+    const targetColorHex = inStorm ? 0x4b1d8c : 0x96d7ff;
+    const targetNear = inStorm ? 25 : 180;
+    const targetFar = inStorm ? 165 : 620;
+    const t = 1 - Math.exp(-5 * dt);
+
+    const tmpCol = new THREE.Color(targetColorHex);
+    this.fog.color.lerp(tmpCol, t);
+    this.fog.near = lerp(this.fog.near, targetNear, t);
+    this.fog.far = lerp(this.fog.far, targetFar, t);
+
+    // 2. Snap DirectionalLight shadow frustum to texel increments to prevent shimmer
+    const worldSpan = 180; // -90..90
+    const texelSize = worldSpan / this.shadowMapSize;
+    const snappedX = Math.round(focusPos.x / texelSize) * texelSize;
+    const snappedZ = Math.round(focusPos.z / texelSize) * texelSize;
+    const snappedY = Math.round(focusPos.y / texelSize) * texelSize;
+
+    this.sunLight.target.position.set(snappedX, snappedY, snappedZ);
+    this.sunLight.position.set(snappedX + 110, snappedY + 145, snappedZ - 130);
+    this.sunLight.target.updateMatrixWorld();
+  }
+
+  private checkMatchOutcome(rawDt: number): void {
+    const aliveBots = this.botManager.getAliveCount();
+    const playerAlive = this.playerController.isAlive();
+
+    if (!playerAlive && this.phase !== 'eliminated' && this.phase !== 'victory') {
+      this.phase = 'eliminated';
+      this.playerController.setPhase('eliminated');
+      this.uiManager.setPhase('eliminated');
+      this.releasePointerLock();
+
+      const lastDmg = this.lastPlayerDamageEvent;
+      const isStormDeath =
+        this.lastStormDamageAt >= this.lastPlayerDamageAt &&
+        this.lastStormDamageAt > 0;
+
+      const kf: KillFeedEntry = {
+        id: `kf_player_${this.killFeedSeq++}`,
+        killerId: isStormDeath ? 'storm' : (lastDmg?.attackerId ?? 'storm'),
+        killerName: isStormDeath ? 'The Storm' : (lastDmg?.attackerName ?? 'The Storm'),
+        victimId: 'player',
+        victimName: this.lobbyConfig.playerName,
+        weaponId: lastDmg?.weaponId ?? 'pistol',
+        rarity: lastDmg?.rarity ?? 'common',
+        isHeadshot: isStormDeath ? false : (lastDmg?.isHeadshot ?? false),
+        isStorm: isStormDeath,
+        distance: isStormDeath ? 0 : lastDmg ? Math.round(lastDmg.distance) : 0,
+        timestamp: this.matchElapsed,
+        involvesPlayer: true,
+      };
+      this.eventBus.emit('combat:killfeed', kf);
+
+      this.presentMatchSummary(
+        false,
+        aliveBots + 1,
+        isStormDeath ? 'The Storm' : (lastDmg?.attackerName ?? 'The Storm'),
+      );
+      return;
+    }
+
+    if (
+      playerAlive &&
+      aliveBots === 0 &&
+      this.totalPlayers > 1 &&
+      this.phase !== 'victory' &&
+      this.phase !== 'eliminated'
+    ) {
+      this.triggerVictoryFlow(false);
+    }
+
+    if (this.phase === 'victory' && this.victoryPendingSummary && !this.matchSummaryShown) {
+      this.victoryTimer -= rawDt;
+      if (this.victoryTimer <= 0) {
+        this.victoryPendingSummary = false;
+        this.presentMatchSummary(true, 1);
+      }
+    }
+  }
+
+  private triggerVictoryFlow(immediateSummary: boolean): void {
+    this.phase = 'victory';
+    this.playerController.setPhase('victory');
+    this.playerController.enterTestEmote(this.lobbyConfig.selectedEmote);
+    this.uiManager.setPhase('victory');
+    this.releasePointerLock();
+
+    this.eventBus.emit('sound:play', { id: 'victory_fanfare' });
+    this.eventBus.emit('music:set', { track: 'victory' });
+    this.eventBus.emit('ui:banner', {
+      id: 'victory_banner',
+      title: '#1 VICTORY ROYALE!',
+      subtitle: `${this.playerController.getKills()} ELIMINATIONS`,
+      tone: 'victory',
+      durationMs: 4500,
+    });
+
+    if (immediateSummary) {
+      this.victoryPendingSummary = false;
+      this.presentMatchSummary(true, 1);
+    } else {
+      this.victoryPendingSummary = true;
+      this.victoryTimer = 1.4;
+    }
+  }
+
+  private presentMatchSummary(
+    victory: boolean,
+    placement: number,
+    eliminatedBy?: string,
+  ): void {
+    if (this.matchSummaryShown) return;
+    this.matchSummaryShown = true;
+
+    const stats = this.playerController.getStats();
+    const accuracy =
+      stats.shotsFired > 0
+        ? Math.round((stats.shotsHit / stats.shotsFired) * 100)
+        : 0;
+
+    const summary: MatchSummary = {
+      victory,
+      placement,
+      totalPlayers: this.totalPlayers,
+      kills: this.playerController.getKills(),
+      damageDealt: Math.round(stats.damageDealt),
+      shotsFired: stats.shotsFired,
+      shotsHit: stats.shotsHit,
+      accuracy,
+      headshots: stats.headshots,
+      structuresBuilt: stats.structuresBuilt,
+      chestsOpened: stats.chestsOpened,
+      survivalTimeSec: Math.round(this.survivalTimeSec),
+      eliminatedBy,
+    };
+    this.lastMatchSummary = summary;
+    this.uiManager.showMatchSummary(summary);
+  }
+
+  private pushHUDState(inStorm: boolean): void {
+    const snap = this.playerController.getHudSnapshot();
+    const inv = this.playerController.getInventory();
+    const aliveCount =
+      this.botManager.getAliveCount() + (this.playerController.isAlive() ? 1 : 0);
+
+    // Combine audio blips + landed/descending supply drops for radar
+    const blips: MinimapBlip[] = [...this.audioBlips];
+    for (const sd of this.propsAndLoot.getSupplyDrops()) {
+      if (sd.state !== 'opened') {
+        blips.push({
+          id: sd.id,
+          x: sd.x,
+          z: sd.z,
+          kind: 'supply_drop',
+          age: 0,
+          maxAge: 1,
+        });
+      }
+    }
+
+    const hudState: HUDState = {
+      phase: snap.phase,
+      health: snap.health,
+      maxHealth: snap.maxHealth,
+      shield: snap.shield,
+      maxShield: snap.maxShield,
+      stamina: snap.stamina,
+      isSprinting: snap.isSprinting,
+      isCrouching: snap.isCrouching,
+      isAiming: snap.isAiming,
+      isScoped: snap.isScoped,
+      isBuildMode: snap.isBuildMode,
+      activeBuildType: snap.activeBuildType,
+      activeMaterial: snap.activeMaterial,
+      buildRotation: snap.buildRotation,
+      editMode: snap.editMode,
+      slots: inv.getSlots(),
+      activeSlot: inv.getActiveSlotIndex(),
+      ammo: inv.getAllAmmo(),
+      materials: inv.getMaterials(),
+      activeWeaponSpread: snap.activeWeaponSpread,
+      interactPrompt: snap.interactPrompt,
+      reloadProgress: snap.reloadProgress,
+      healProgress: snap.healProgress,
+      healLabel: snap.healLabel,
+      aliveCount,
+      totalPlayers: this.totalPlayers,
+      kills: snap.kills,
+      stormState: this.stormSystem.getState(),
+      busProgress: this.busProgress,
+      busStart: this.busStart,
+      busEnd: this.busEnd,
+      busPos: this.busPos,
+      playerPos: snap.playerPos,
+      playerYaw: snap.playerYaw,
+      mapWaypoint: this.mapWaypoint,
+      compassHeading: snap.compassHeading,
+      fps: this.fps,
+      pointerLocked: snap.pointerLocked,
+      canDeployGlider: snap.canDeployGlider,
+      canJumpBus: snap.canJumpBus,
+      hitmarker: snap.hitmarker,
+      damageDirection: snap.damageDirection,
+      audioBlips: blips,
+      inStorm,
+    };
+
+    this.uiManager.updateHUD(hudState);
+  }
+
+  private exposeDebugAPI(): void {
+    const engine = this;
+    window.__GAME__ = {
+      getState() {
+        const snap = engine.playerController.getHudSnapshot();
+        const inv = engine.playerController.getInventory();
+        return {
+          phase: engine.phase,
+          playerPhase: snap.phase,
+          playerPos: snap.playerPos,
+          playerYaw: snap.playerYaw,
+          health: snap.health,
+          shield: snap.shield,
+          kills: snap.kills,
+          aliveCount:
+            engine.botManager.getAliveCount() +
+            (engine.playerController.isAlive() ? 1 : 0),
+          botCount: engine.botManager.getBots().length,
+          storm: engine.stormSystem.getState(),
+          inventory: {
+            activeSlot: inv.getActiveSlotIndex(),
+            slots: inv.getSlots(),
+            ammo: inv.getAllAmmo(),
+            materials: inv.getMaterials(),
+          },
+          isBuildMode: snap.isBuildMode,
+          activeBuildType: snap.activeBuildType,
+          activeMaterial: snap.activeMaterial,
+          buildCount: engine.buildingSystem.getPieces().length,
+          editMode: snap.editMode,
+          mapWaypoint: engine.mapWaypoint,
+          stats: engine.playerController.getStats(),
+          lobbyConfig: engine.lobbyConfig,
+          pois: POIS.map((p) => ({ id: p.id, name: p.name, x: p.x, z: p.z })),
+        };
+      },
+      forceStartMatch() {
+        engine.startMatch(engine.uiManager.getLobbyConfig());
+      },
+      jumpFromBus() {
+        const ok = engine.playerController.jumpFromBus();
+        engine.phase = engine.playerController.getPhase();
+        engine.uiManager.setPhase(engine.phase);
+        return ok;
+      },
+      teleportPlayer(x: number, y: number, z: number) {
+        engine.playerController.teleport({ x, y, z });
+        engine.phase = engine.playerController.getPhase();
+        engine.uiManager.setPhase(engine.phase);
+        engine.pushHUDState(
+          engine.stormSystem.isInStorm(x, z),
+        );
+      },
+      giveLoadout() {
+        const inv = engine.playerController.getInventory();
+        const loadout: Array<{ id: WeaponId; rarity: 'epic' | 'legendary' | 'rare' | 'uncommon'; stack: number }> = [
+          { id: 'ar', rarity: 'legendary', stack: 1 },
+          { id: 'pump_shotgun', rarity: 'epic', stack: 1 },
+          { id: 'sniper', rarity: 'legendary', stack: 1 },
+          { id: 'mini_shield', rarity: 'uncommon', stack: 4 },
+          { id: 'medkit', rarity: 'uncommon', stack: 2 },
+        ];
+        loadout.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('medium', 240);
+        inv.addAmmo('shells', 48);
+        inv.addAmmo('heavy', 25);
+        inv.addAmmo('light', 180);
+        inv.addMaterial('wood', 300);
+        inv.addMaterial('brick', 250);
+        inv.addMaterial('metal', 200);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
+      enterBuildMode(piece: BuildPieceType = 'wall') {
+        engine.playerController.selectBuildPiece(piece);
+        engine.pushHUDState(false);
+      },
+      placeBuild() {
+        const snap = engine.playerController.getHudSnapshot();
+        const inv = engine.playerController.getInventory();
+        const mat = snap.activeMaterial;
+        if (inv.getMaterials()[mat] < 10) inv.addMaterial(mat, 50);
+        const p = engine.playerController.getPosition();
+        const yaw = engine.playerController.getYaw();
+        const preview = engine.buildingSystem.computePreview(
+          { x: p.x, y: p.y + 1.5, z: p.z },
+          { x: Math.sin(yaw), y: -0.1, z: Math.cos(yaw) },
+          snap.activeBuildType,
+          mat,
+          snap.buildRotation,
+          true,
+        );
+        if (!preview.valid) return false;
+        inv.spendMaterial(mat, preview.cost);
+        const placed = engine.buildingSystem.placePieceFromPreview(preview, 'player');
+        engine.pushHUDState(false);
+        return Boolean(placed);
+      },
+      enterEditMode() {
+        if (engine.playerController.enterEditMode()) {
+          engine.pushHUDState(false);
+          return true;
+        }
+        // Fallback for QA: target closest friendly piece within 8m
+        const pPos = engine.playerController.getPosition();
+        const friendly = engine.buildingSystem
+          .getPieces()
+          .filter((p) => p.ownerId === 'player');
+        if (friendly.length === 0) return false;
+        let best = friendly[0];
+        let bestD = Infinity;
+        for (const f of friendly) {
+          const d = dist2D(pPos.x, pPos.z, (f.gx + 0.5) * 4, (f.gz + 0.5) * 4);
+          if (d < bestD) {
+            bestD = d;
+            best = f;
+          }
+        }
+        engine.buildingSystem.beginEdit(best.id);
+        engine.pushHUDState(false);
+        return true;
+      },
+      toggleEditTile(idx: number) {
+        engine.buildingSystem.toggleEditTile(idx);
+        engine.pushHUDState(false);
+        return true;
+      },
+      confirmEdit() {
+        const res = engine.buildingSystem.confirmEdit();
+        engine.pushHUDState(false);
+        return res.success;
+      },
+      triggerEmote(id: EmoteId = 'victory_groove') {
+        engine.triggerInGameEmote(id);
+      },
+      toggleMap(force?: boolean) {
+        return engine.uiManager.toggleFullMap(force);
+      },
+      setWaypoint(x: number, z: number) {
+        engine.setWaypoint({ x, z });
+      },
+      spawnNearbyBot(distance = 14) {
+        const bots = engine.botManager.getAliveBots();
+        if (bots.length === 0) return false;
+        const bot = bots[0];
+        const pPos = engine.playerController.getPosition();
+        const yaw = engine.playerController.getYaw();
+        const bx = pPos.x + Math.sin(yaw) * distance;
+        const bz = pPos.z + Math.cos(yaw) * distance;
+        const by = engine.terrain.getHeightAt(bx, bz);
+        bot.position = { x: bx, y: by, z: bz };
+        bot.velocity = { x: 0, y: 0, z: 0 };
+        bot.grounded = true;
+        bot.gliderOpen = false;
+        bot.gliderFactor = 0;
+        bot.state = 'combat';
+        bot.inventory.items[1] = {
+          uid: `qa_bot_gun`,
+          weaponId: 'ar',
+          rarity: 'rare',
+          magAmmo: 30,
+          stackCount: 1,
+        };
+        bot.inventory.activeSlot = 1;
+        bot.inventory.materials.wood = 120;
+        return true;
+      },
+      triggerVictory() {
+        engine.triggerVictoryFlow(true);
+      },
+      getStats() {
+        return engine.lastMatchSummary;
+      },
+    };
+  }
+
+  public dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+
+    window.removeEventListener('resize', this.onResizeBound);
+    window.removeEventListener('keydown', this.onKeyDownBound);
+    window.removeEventListener('pointerdown', this.onFirstGestureBound);
+    window.removeEventListener('keydown', this.onFirstGestureBound);
+    this.renderer.domElement.removeEventListener('pointerdown', this.onLobbyPointerDownBound);
+    window.removeEventListener('pointermove', this.onLobbyPointerMoveBound);
+    window.removeEventListener('pointerup', this.onLobbyPointerUpBound);
+
+    for (const unsub of this.unsubscribers) unsub();
+    this.unsubscribers = [];
+
+    this.playerController.dispose();
+    this.botManager.dispose();
+    this.clearBotVisuals();
+    this.playerRig.dispose();
+    this.buildingSystem.dispose();
+    this.vfxManager.dispose();
+    this.propsAndLoot.dispose();
+    this.worldBuilder.dispose();
+    this.environmentFX.dispose();
+    this.stormSystem.dispose();
+    this.terrain.dispose();
+    this.audioEngine.dispose();
+    this.uiManager.dispose();
+
+    this.renderer.dispose();
+    this.renderer.domElement.remove();
+    delete window.__GAME__;
+  }
+}

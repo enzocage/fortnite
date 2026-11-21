@@ -770,8 +770,8 @@ export class PlayerController {
       case 'F3':
         this.selectBuildPiece('ramp');
         break;
+      case 'KeyF':
       case 'KeyT':
-      case 'KeyB':
       case 'F4':
         this.selectBuildPiece('roof');
         break;

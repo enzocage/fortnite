@@ -50,8 +50,8 @@ interface ActiveKillFeedItem {
 const BUILD_PIECES: Array<{ type: BuildPieceType; key: string }> = [
   { type: 'wall', key: 'Z' },
   { type: 'floor', key: 'X' },
-  { type: 'ramp', key: 'C' },
-  { type: 'roof', key: 'V' },
+  { type: 'ramp', key: 'V' },
+  { type: 'roof', key: 'F' },
 ];
 
 const MATERIALS: MaterialType[] = ['wood', 'brick', 'metal'];

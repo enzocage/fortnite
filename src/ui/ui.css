@@ -1628,6 +1628,7 @@
   border-radius: 6px;
   text-align: center;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
 }
 
 .fdr-pointer-prompt > div {
