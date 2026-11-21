@@ -99,6 +99,49 @@ export interface LootLlamaEntity {
   opened: boolean;
 }
 
+export type VehicleKind = 'hover_atv' | 'cyber_bike';
+
+export interface VehicleEntity {
+  id: string;
+  kind: VehicleKind;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  roll: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  hp: number;
+  maxHp: number;
+  boostCharge: number;
+  isBoosting: boolean;
+  driverId: string | null;
+  destroyed: boolean;
+}
+
+export type WeatherKind = 'clear' | 'golden_hour' | 'overcast' | 'rain' | 'storm_front';
+
+export interface WeatherState {
+  kind: WeatherKind;
+  intensity: number;
+  sunElevation: number;
+  windX: number;
+  windZ: number;
+}
+
+export interface VaultEntity {
+  id: string;
+  poiId: string;
+  bossName: string;
+  x: number;
+  y: number;
+  z: number;
+  unlocked: boolean;
+  opened: boolean;
+}
+
 export interface SupplyDrop {
   id: string;
   x: number;

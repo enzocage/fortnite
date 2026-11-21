@@ -15,6 +15,8 @@ export type WeaponId =
   | 'shockwave_grenade'
   | 'frag_grenade'
   | 'chug_splash'
+  | 'grappler'
+  | 'shield_bubble'
   | 'mini_shield'
   | 'shield_potion'
   | 'bandages'
@@ -75,6 +77,8 @@ export interface WeaponDef {
   fuseTime?: number;
   impulseStrength?: number;
   splashHealAmount?: number;
+  isGrappler?: boolean;
+  isShieldBubble?: boolean;
   allowedRarities: Rarity[];
 }
 
@@ -121,4 +125,5 @@ export interface ProjectileState {
   fuseRemaining?: number;
   isShockwave?: boolean;
   isSplashHeal?: boolean;
+  isShieldBubble?: boolean;
 }

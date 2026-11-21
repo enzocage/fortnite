@@ -63,7 +63,16 @@ export type SoundEventId =
   | 'ui_click'
   | 'ui_hover'
   | 'ui_play'
-  | 'victory_fanfare';
+  | 'victory_fanfare'
+  | 'vehicle_boost'
+  | 'vehicle_horn'
+  | 'vehicle_crash'
+  | 'grappler_fire'
+  | 'grappler_reel'
+  | 'shield_bubble_deploy'
+  | 'vault_unlock'
+  | 'weather_thunder'
+  | 'bounty_alert';
 
 export type MusicTrackId =
   | 'none'

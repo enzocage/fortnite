@@ -15,6 +15,7 @@ export type AnimState =
   | 'mantle'
   | 'swim'
   | 'zipline'
+  | 'drive'
   | 'skydive'
   | 'glide'
   | 'harvest'
@@ -104,4 +105,8 @@ export interface CharacterRenderState {
   isSwimming?: boolean;
   velocityY?: number;
   leanAngle?: number;
+  isBoss?: boolean;
+  bossName?: string;
+  bossMaxHp?: number;
+  bossMaxShield?: number;
 }

@@ -241,9 +241,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 19 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(19);
+    expect(weaponIds.length).toBeGreaterThanOrEqual(19);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {

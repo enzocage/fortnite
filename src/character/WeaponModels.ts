@@ -13,12 +13,14 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'pistol',
   'rocket_launcher',
   'mythic_blade_rifle',
+  'grappler',
 ]);
 
 const THROWABLE_WEAPONS = new Set<WeaponId>([
   'shockwave_grenade',
   'frag_grenade',
   'chug_splash',
+  'shield_bubble',
 ]);
 
 export function isRangedWeapon(weaponId: WeaponId): boolean {
@@ -794,6 +796,17 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildFragGrenade();
     case 'chug_splash':
       return buildChugSplash();
+    case 'grappler': {
+      const g = buildPistol();
+      g.name = 'weapon_grappler_stub';
+      return g;
+    }
+    case 'shield_bubble': {
+      const sb = buildSlurpJuice();
+      sb.name = 'weapon_shield_bubble_stub';
+      sb.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.28);
+      return sb;
+    }
     case 'mini_shield':
       return buildMiniShield();
     case 'shield_potion':

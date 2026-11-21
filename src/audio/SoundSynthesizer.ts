@@ -188,6 +188,19 @@ export class SoundSynthesizer {
         return this.playUiPlay(t, targetNode, vol, pitch);
       case 'victory_fanfare':
         return this.playVictoryFanfare(t, targetNode, vol, pitch);
+      case 'vehicle_boost':
+      case 'launch_pad':
+        return this.playLaunchPad(t, targetNode, vol, pitch);
+      case 'vehicle_horn':
+      case 'grappler_fire':
+      case 'grappler_reel':
+      case 'shield_bubble_deploy':
+      case 'vault_unlock':
+      case 'bounty_alert':
+        return this.playUiClick(t, targetNode, vol, pitch);
+      case 'vehicle_crash':
+      case 'weather_thunder':
+        return this.playExplosion(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
         return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':
@@ -196,8 +209,6 @@ export class SoundSynthesizer {
         return this.playBuildRepair(t, targetNode, vol, pitch);
       case 'kill_streak':
         return this.playKillStreak(t, targetNode, vol, pitch);
-      case 'launch_pad':
-        return this.playLaunchPad(t, targetNode, vol, pitch);
       case 'zipline_attach':
         return this.playZiplineAttach(t, targetNode, vol, pitch);
       case 'zipline_loop':

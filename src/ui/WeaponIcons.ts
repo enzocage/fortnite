@@ -176,6 +176,9 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <path d="M32 27V52M14 37H50" stroke="#075985" stroke-width="2"/>
     <path d="M26 36H38M32 30V42" stroke="#e0f2fe" stroke-width="2.8" stroke-linecap="round"/>
   </svg>`,
+
+  grappler: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="12" y="28" width="38" height="12" rx="3" fill="#22d3ee" stroke="#0f172a" stroke-width="2"/></svg>`,
+  shield_bubble: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="32" r="18" fill="#38bdf8" stroke="#0f172a" stroke-width="2"/></svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {

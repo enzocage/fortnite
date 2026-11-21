@@ -78,6 +78,15 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   ui_hover: true,
   ui_play: true,
   victory_fanfare: true,
+  vehicle_boost: true,
+  vehicle_horn: true,
+  vehicle_crash: true,
+  grappler_fire: true,
+  grappler_reel: true,
+  shield_bubble_deploy: true,
+  vault_unlock: true,
+  weather_thunder: true,
+  bounty_alert: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];

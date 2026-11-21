@@ -35,6 +35,19 @@ export type BiomeType =
   | 'volcanic'
   | 'cyber';
 
+export interface KeybindMap {
+  buildWall: string;
+  buildFloor: string;
+  buildRamp: string;
+  buildRoof: string;
+  edit: string;
+  repair: string;
+  interact: string;
+  map: string;
+  emote: string;
+  crouchSlide: string;
+}
+
 export interface GameSettings {
   sensitivity: number;
   adsSensitivity: number;
@@ -45,4 +58,5 @@ export interface GameSettings {
   graphicsQuality: GraphicsQuality;
   showFps: boolean;
   invertY: boolean;
+  keybinds?: Partial<KeybindMap>;
 }

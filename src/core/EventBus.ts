@@ -78,6 +78,29 @@ export interface GameEventMap {
     poiName: string;
     subtitle: string;
   };
+  'vfx:grapple_line': {
+    from: Vec3Like;
+    to: Vec3Like;
+    duration: number;
+  };
+  'vfx:shield_bubble': {
+    id: string;
+    position: Vec3Like;
+    radius: number;
+    duration: number;
+  };
+  'vfx:vehicle_boost': {
+    position: Vec3Like;
+    direction: Vec3Like;
+  };
+  'vfx:lightning_flash': {
+    intensity: number;
+  };
+  'ui:bounty': {
+    title: string;
+    targetName: string;
+    tone: 'start' | 'complete' | 'expired';
+  };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

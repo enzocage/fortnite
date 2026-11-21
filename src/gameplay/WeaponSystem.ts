@@ -42,6 +42,8 @@ const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   shockwave_grenade: 'pickaxe_swing',
   frag_grenade: 'pickaxe_swing',
   chug_splash: 'pickaxe_swing',
+  grappler: 'grappler_fire',
+  shield_bubble: 'pickaxe_swing',
   mini_shield: 'ui_click',
   shield_potion: 'ui_click',
   bandages: 'ui_click',

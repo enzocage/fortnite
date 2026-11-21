@@ -10,7 +10,7 @@ import type {
 import type { BuildPieceType, EditModeState } from './building';
 import type { EmoteId } from './character';
 import type { ItemInstance } from './weapons';
-import type { StormState } from './world';
+import type { StormState, VehicleKind, WeatherKind } from './world';
 
 export interface MinimapBlip {
   id: string;
@@ -95,6 +95,38 @@ export interface HUDState {
   showSpeedLines?: boolean;
   careerXp?: number;
   careerLevel?: number;
+  vehicle?: {
+    kind: VehicleKind;
+    speedKmh: number;
+    hp: number;
+    maxHp: number;
+    boostCharge: number;
+    isBoosting: boolean;
+  } | null;
+  weather?: WeatherKind;
+  spectating?: {
+    targetName: string;
+    targetHp: number;
+    targetShield: number;
+    targetKills: number;
+    aliveCount: number;
+  } | null;
+  nearbyBoss?: {
+    name: string;
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    distance: number;
+  } | null;
+  activeBounty?: {
+    targetName: string;
+    distance: number;
+    timeRemaining: number;
+    rewardLabel: string;
+  } | null;
+  activeVaultKeys?: number;
+  grapplerCharges?: number | null;
 }
 
 export interface DamageNumberEvent {
