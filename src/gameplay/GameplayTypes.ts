@@ -11,6 +11,7 @@ import type {
   DroppedMedallionEntity,
   EditModeState,
   ExplosiveBarrelEntity,
+  FishingHoleEntity,
   FlareBeaconEntity,
   ForecastTowerEntity,
   GameModeId,
@@ -31,6 +32,7 @@ import type {
   RebootVanEntity,
   RiftEntity,
   ShieldMushroomEntity,
+  SkyBalloonEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
   StealthBushEntity,
@@ -39,6 +41,7 @@ import type {
   ItemInstance,
   TeamId,
   TrapKind,
+  TurretEntity,
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
@@ -262,6 +265,32 @@ export interface WorldTideBridge {
   } | null;
 }
 
+export type FishingRewardKind = 'thermal_flopper' | 'epic_weapon' | 'gold_cache';
+
+export interface FishingCastResult {
+  ok: boolean;
+  reward: FishingRewardKind;
+  position: Vec3Like;
+}
+
+export interface WorldOverlordBridge {
+  getFishingHoles(): FishingHoleEntity[];
+  findNearbyFishingHole(pos: Vec3Like, radius?: number): FishingHoleEntity | null;
+  consumeFishingCast(id: string): FishingCastResult | null;
+  getSkyBalloons(): SkyBalloonEntity[];
+  findNearbySkyBalloon(pos: Vec3Like, radius?: number): SkyBalloonEntity | null;
+}
+
+export interface ChugHealReport {
+  healerId: string;
+  isPlayer: boolean;
+  position: Vec3Like;
+  actorsHealed: number;
+  totalHpAdded: number;
+  totalShieldAdded: number;
+  totalHealed: number;
+}
+
 export interface EmpDetonationReport {
   attackerId: string;
   isPlayer: boolean;
@@ -418,6 +447,8 @@ export interface FireWeaponParams {
   onFlameDamage?: (damage: number) => void;
   onFlareBurst?: (beacon: FlareBeaconEntity) => void;
   onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
+  onTurretDeployed?: (turret: TurretEntity) => void;
+  onChugHeal?: (report: ChugHealReport) => void;
 }
 
 export interface FireWeaponResult {
@@ -461,6 +492,9 @@ export interface PlayerMatchStats {
   flaresFired?: number;
   boarsHunted?: number;
   mushroomsEaten?: number;
+  turretsDeployed?: number;
+  fishCaught?: number;
+  chugHeals?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -567,4 +601,8 @@ export interface PlayerHudSnapshot {
   hammerCharges?: { charges: number; maxCharges: number; regenProgress: number } | null;
   flareScanMarkedCount?: number;
   flareBeacons?: Array<{ x: number; z: number; radius: number; remainingSec: number }>;
+  activeTurretRemainingSec?: number | null;
+  thermalVisionRemainingSec?: number | null;
+  fishingProgress?: number | null;
+  deployedTurrets?: Array<{ x: number; z: number; isFriendly: boolean }>;
 }

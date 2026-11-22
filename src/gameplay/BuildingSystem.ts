@@ -12,6 +12,7 @@ import type {
   TerrainQuery,
   TrapEntity,
   TrapKind,
+  TurretEntity,
   Vec3Like,
   WallDir,
 } from '../types';
@@ -24,6 +25,11 @@ import {
   GRID_Y,
   MATERIAL_STATS,
   SPIKE_TRAP_DAMAGE,
+  TURRET_DAMAGE,
+  TURRET_DURATION_SEC,
+  TURRET_FIRE_RATE,
+  TURRET_MAX_HP,
+  TURRET_RANGE,
   canonicalizeWall,
   clamp,
   dist3D,
@@ -237,6 +243,19 @@ interface TrapVisual {
   spikeExtend: number;
 }
 
+interface TurretVisual {
+  turret: TurretEntity;
+  group: THREE.Group;
+  headGroup: THREE.Group;
+  barrelsGroup: THREE.Group;
+  ledMat: THREE.MeshStandardMaterial;
+  bodyMat: THREE.MeshStandardMaterial;
+  hitFlashTimer: number;
+  recoilTimer: number;
+  muzzleFlashTimer: number;
+  muzzleFlashMesh: THREE.Mesh;
+}
+
 export class BuildingSystem {
   private scene: THREE.Scene;
   private terrain: TerrainQuery;
@@ -244,6 +263,7 @@ export class BuildingSystem {
 
   private rootGroup = new THREE.Group();
   private trapGroup = new THREE.Group();
+  private turretGroup = new THREE.Group();
   private previewGroup = new THREE.Group();
   private editGridGroup = new THREE.Group();
 
@@ -267,6 +287,24 @@ export class BuildingSystem {
   private trapSpikeMat: THREE.MeshStandardMaterial | null = null;
   private trapSpikeGeo: THREE.BufferGeometry | null = null;
   private trapBouncerRingGeo: THREE.BufferGeometry | null = null;
+
+  private turrets: TurretEntity[] = [];
+  private turretsById = new Map<string, TurretEntity>();
+  private turretVisuals = new Map<string, TurretVisual>();
+  private nextTurretSeq = 1;
+  private turretDmgSeq = 1;
+  private turretAnimElapsed = 0;
+  private turretSharedGeos: THREE.BufferGeometry[] = [];
+  private turretSharedMats: THREE.Material[] = [];
+  private turretBaseGeo: THREE.BufferGeometry | null = null;
+  private turretLegGeo: THREE.BufferGeometry | null = null;
+  private turretColumnGeo: THREE.BufferGeometry | null = null;
+  private turretBarrelGeo: THREE.BufferGeometry | null = null;
+  private turretRingGeo: THREE.BufferGeometry | null = null;
+  private turretMuzzleGeo: THREE.BufferGeometry | null = null;
+  private turretDarkMetalMat: THREE.MeshStandardMaterial | null = null;
+  private turretTrimMetalMat: THREE.MeshStandardMaterial | null = null;
+  private turretFlashMat: THREE.MeshBasicMaterial | null = null;
 
   private unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
   private previewTileGeo = new THREE.PlaneGeometry(1, 1);
@@ -304,6 +342,7 @@ export class BuildingSystem {
 
     this.rootGroup.name = 'BuildingSystemRoot';
     this.trapGroup.name = 'BuildingTrapRoot';
+    this.turretGroup.name = 'BuildingTurretRoot';
     this.previewGroup.name = 'BuildingPreview';
     this.editGridGroup.name = 'BuildingEditGrid';
     this.previewGroup.visible = false;
@@ -311,6 +350,7 @@ export class BuildingSystem {
 
     this.scene.add(this.rootGroup);
     this.scene.add(this.trapGroup);
+    this.scene.add(this.turretGroup);
     this.scene.add(this.previewGroup);
     this.scene.add(this.editGridGroup);
 
@@ -1251,6 +1291,7 @@ export class BuildingSystem {
     }
 
     this.updateTraps(dt);
+    this.updateTurretVisuals(dt, elapsed);
   }
 
   private ensureTrapSharedAssets(): void {
@@ -1739,6 +1780,475 @@ export class BuildingSystem {
     return triggerCount;
   }
 
+  private ensureTurretSharedAssets(): void {
+    if (!this.turretBaseGeo) {
+      this.turretBaseGeo = new THREE.CylinderGeometry(0.32, 0.44, 0.16, 8);
+      this.turretSharedGeos.push(this.turretBaseGeo);
+    }
+    if (!this.turretLegGeo) {
+      this.turretLegGeo = new THREE.BoxGeometry(0.11, 0.12, 0.62);
+      this.turretSharedGeos.push(this.turretLegGeo);
+    }
+    if (!this.turretColumnGeo) {
+      this.turretColumnGeo = new THREE.CylinderGeometry(0.12, 0.16, 0.68, 8);
+      this.turretSharedGeos.push(this.turretColumnGeo);
+    }
+    if (!this.turretBarrelGeo) {
+      this.turretBarrelGeo = new THREE.CylinderGeometry(0.038, 0.044, 0.68, 8);
+      this.turretBarrelGeo.rotateX(Math.PI * 0.5);
+      this.turretSharedGeos.push(this.turretBarrelGeo);
+    }
+    if (!this.turretRingGeo) {
+      this.turretRingGeo = new THREE.TorusGeometry(0.46, 0.036, 8, 24);
+      this.turretRingGeo.rotateX(Math.PI * 0.5);
+      this.turretSharedGeos.push(this.turretRingGeo);
+    }
+    if (!this.turretMuzzleGeo) {
+      this.turretMuzzleGeo = new THREE.SphereGeometry(0.09, 8, 8);
+      this.turretSharedGeos.push(this.turretMuzzleGeo);
+    }
+    if (!this.turretDarkMetalMat) {
+      this.turretDarkMetalMat = new THREE.MeshStandardMaterial({
+        color: 0x1e293b,
+        roughness: 0.36,
+        metalness: 0.78,
+      });
+      this.turretSharedMats.push(this.turretDarkMetalMat);
+    }
+    if (!this.turretTrimMetalMat) {
+      this.turretTrimMetalMat = new THREE.MeshStandardMaterial({
+        color: 0x64748b,
+        roughness: 0.28,
+        metalness: 0.86,
+      });
+      this.turretSharedMats.push(this.turretTrimMetalMat);
+    }
+    if (!this.turretFlashMat) {
+      this.turretFlashMat = new THREE.MeshBasicMaterial({
+        color: 0x67e8f9,
+        transparent: true,
+        opacity: 0.9,
+      });
+      this.turretSharedMats.push(this.turretFlashMat);
+    }
+  }
+
+  private createTurretVisual(turret: TurretEntity): void {
+    this.ensureTurretSharedAssets();
+    const isFriendlyAccent = turret.ownerId === 'player';
+    const ledHex = isFriendlyAccent ? 0x22d3ee : 0xf97316;
+
+    const group = new THREE.Group();
+    group.name = `AutoTurret_${turret.id}`;
+    group.position.set(turret.x, turret.y, turret.z);
+
+    const ledMat = new THREE.MeshStandardMaterial({
+      color: ledHex,
+      emissive: ledHex,
+      emissiveIntensity: 1.5,
+      roughness: 0.2,
+    });
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      roughness: 0.32,
+      metalness: 0.72,
+    });
+
+    const baseHub = new THREE.Mesh(this.turretBaseGeo!, this.turretDarkMetalMat!);
+    baseHub.position.y = 0.08;
+    baseHub.castShadow = true;
+    baseHub.receiveShadow = true;
+    group.add(baseHub);
+
+    for (let k = 0; k < 3; k++) {
+      const ang = (k * Math.PI * 2) / 3;
+      const leg = new THREE.Mesh(this.turretLegGeo!, this.turretTrimMetalMat!);
+      leg.position.set(Math.sin(ang) * 0.42, 0.1, Math.cos(ang) * 0.42);
+      leg.rotation.y = ang;
+      leg.rotation.x = 0.24;
+      leg.castShadow = true;
+      group.add(leg);
+    }
+
+    const baseRing = new THREE.Mesh(this.turretRingGeo!, ledMat);
+    baseRing.position.y = 0.06;
+    group.add(baseRing);
+
+    const column = new THREE.Mesh(this.turretColumnGeo!, this.turretDarkMetalMat!);
+    column.position.y = 0.48;
+    column.castShadow = true;
+    group.add(column);
+
+    const headGroup = new THREE.Group();
+    headGroup.position.y = 0.88;
+    headGroup.rotation.y = turret.yaw;
+
+    const housing = new THREE.Mesh(this.unitBoxGeo, bodyMat);
+    housing.scale.set(0.56, 0.34, 0.62);
+    housing.castShadow = true;
+    headGroup.add(housing);
+
+    const visor = new THREE.Mesh(this.unitBoxGeo, ledMat);
+    visor.scale.set(0.38, 0.09, 0.12);
+    visor.position.set(0, 0.18, 0.2);
+    headGroup.add(visor);
+
+    const drum = new THREE.Mesh(this.unitBoxGeo, this.turretTrimMetalMat!);
+    drum.scale.set(0.42, 0.2, 0.26);
+    drum.position.set(0, -0.04, -0.34);
+    headGroup.add(drum);
+
+    const barrelsGroup = new THREE.Group();
+    for (const side of [-0.14, 0.14]) {
+      const barrel = new THREE.Mesh(this.turretBarrelGeo!, this.turretTrimMetalMat!);
+      barrel.position.set(side, 0.01, 0.5);
+      barrel.castShadow = true;
+      barrelsGroup.add(barrel);
+
+      const collar = new THREE.Mesh(this.unitBoxGeo, ledMat);
+      collar.scale.set(0.08, 0.08, 0.08);
+      collar.position.set(side, 0.01, 0.78);
+      barrelsGroup.add(collar);
+    }
+
+    const muzzleFlashMesh = new THREE.Mesh(this.turretMuzzleGeo!, this.turretFlashMat!);
+    muzzleFlashMesh.position.set(0, 0.01, 0.88);
+    muzzleFlashMesh.visible = false;
+    barrelsGroup.add(muzzleFlashMesh);
+
+    headGroup.add(barrelsGroup);
+    group.add(headGroup);
+
+    this.turretGroup.add(group);
+    this.turretVisuals.set(turret.id, {
+      turret,
+      group,
+      headGroup,
+      barrelsGroup,
+      ledMat,
+      bodyMat,
+      hitFlashTimer: 0,
+      recoilTimer: 0,
+      muzzleFlashTimer: 0,
+      muzzleFlashMesh,
+    });
+  }
+
+  private removeTurretInternal(turretId: string): void {
+    const turret = this.turretsById.get(turretId);
+    if (turret) {
+      this.turretsById.delete(turretId);
+      const idx = this.turrets.indexOf(turret);
+      if (idx !== -1) {
+        this.turrets.splice(idx, 1);
+      }
+    }
+    const visual = this.turretVisuals.get(turretId);
+    if (visual) {
+      this.turretGroup.remove(visual.group);
+      visual.ledMat.dispose();
+      visual.bodyMat.dispose();
+      this.turretVisuals.delete(turretId);
+    }
+  }
+
+  private updateTurretVisuals(dt: number, elapsed: number): void {
+    const safeDt = Math.max(0, Number.isFinite(dt) ? dt : 0);
+    this.turretAnimElapsed = Number.isFinite(elapsed)
+      ? elapsed
+      : this.turretAnimElapsed + safeDt;
+
+    for (const visual of this.turretVisuals.values()) {
+      const t = visual.turret;
+      visual.headGroup.rotation.y = t.yaw;
+
+      if (visual.hitFlashTimer > 0) {
+        visual.hitFlashTimer = Math.max(0, visual.hitFlashTimer - safeDt);
+        visual.bodyMat.color.setHex(0xffffff);
+      } else {
+        visual.bodyMat.color.setHex(0x334155);
+      }
+
+      if (visual.recoilTimer > 0) {
+        visual.recoilTimer = Math.max(0, visual.recoilTimer - safeDt);
+        visual.barrelsGroup.position.z = -0.09 * (visual.recoilTimer / 0.09);
+      } else {
+        visual.barrelsGroup.position.z = 0;
+      }
+
+      if (visual.muzzleFlashTimer > 0) {
+        visual.muzzleFlashTimer = Math.max(0, visual.muzzleFlashTimer - safeDt);
+        visual.muzzleFlashMesh.visible = visual.muzzleFlashTimer > 0;
+      } else {
+        visual.muzzleFlashMesh.visible = false;
+      }
+
+      visual.ledMat.emissiveIntensity =
+        1.25 + Math.sin(this.turretAnimElapsed * 5.2) * 0.35;
+    }
+  }
+
+  private isFriendlyTurretActor(
+    turret: TurretEntity,
+    actor: CombatActor,
+  ): boolean {
+    if (actor.id === turret.ownerId) return true;
+    if (
+      turret.squadId &&
+      (actor.squadId === turret.squadId || actor.teamId === turret.squadId)
+    ) {
+      return true;
+    }
+    if (
+      turret.teamId &&
+      (actor.teamId === turret.teamId || actor.squadId === turret.teamId)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  deployAutoTurret(
+    pos: Vec3Like,
+    ownerId: string,
+    squadId?: string,
+    teamId?: TeamId,
+  ): TurretEntity {
+    const x = Number.isFinite(pos.x) ? pos.x : 0;
+    const z = Number.isFinite(pos.z) ? pos.z : 0;
+    const y = Number.isFinite(pos.y) ? pos.y : this.terrain.getHeightAt(x, z);
+
+    const turret: TurretEntity = {
+      id: `turret_${this.nextTurretSeq++}`,
+      ownerId,
+      ...(squadId !== undefined ? { squadId } : {}),
+      ...(teamId !== undefined ? { teamId } : {}),
+      x,
+      y,
+      z,
+      yaw: 0,
+      hp: TURRET_MAX_HP,
+      maxHp: TURRET_MAX_HP,
+      remainingSec: TURRET_DURATION_SEC,
+      fireCooldown: 0,
+      alive: true,
+    };
+
+    this.turrets.push(turret);
+    this.turretsById.set(turret.id, turret);
+    this.createTurretVisual(turret);
+
+    const fxPos: Vec3Like = { x, y, z };
+    this.eventBus.emit('vfx:turret_deploy', { position: fxPos });
+    this.eventBus.emit('sound:play', {
+      id: 'turret_deploy',
+      position: fxPos,
+      spatial: true,
+    });
+
+    return turret;
+  }
+
+  getTurrets(): TurretEntity[] {
+    return [...this.turrets];
+  }
+
+  damageTurret(id: string, dmg: number): boolean {
+    const turret = this.turretsById.get(id);
+    if (
+      !turret ||
+      !turret.alive ||
+      turret.hp <= 0 ||
+      !Number.isFinite(dmg) ||
+      dmg <= 0
+    ) {
+      return false;
+    }
+
+    turret.hp = Math.max(0, turret.hp - dmg);
+    const pos: Vec3Like = { x: turret.x, y: turret.y + 0.65, z: turret.z };
+    const visual = this.turretVisuals.get(id);
+    if (visual) {
+      visual.hitFlashTimer = 0.1;
+    }
+
+    this.eventBus.emit('sound:play', {
+      id: 'hit_metal',
+      position: pos,
+      spatial: true,
+    });
+
+    if (turret.hp <= 0) {
+      turret.hp = 0;
+      turret.alive = false;
+      this.removeTurretInternal(id);
+      this.eventBus.emit('sound:play', {
+        id: 'turret_destroy',
+        position: pos,
+        spatial: true,
+      });
+      return true;
+    }
+
+    return false;
+  }
+
+  updateTurrets(
+    dt: number,
+    actors: CombatActor[],
+    hasLos?: (from: Vec3Like, to: Vec3Like) => boolean,
+  ): void {
+    const safeDt = Math.max(0, Number.isFinite(dt) ? dt : 0);
+    const fireInterval = 1 / Math.max(0.1, TURRET_FIRE_RATE);
+
+    for (let i = this.turrets.length - 1; i >= 0; i--) {
+      const turret = this.turrets[i];
+      if (!turret.alive || turret.hp <= 0) {
+        turret.alive = false;
+        this.removeTurretInternal(turret.id);
+        continue;
+      }
+
+      turret.remainingSec -= safeDt;
+      if (turret.remainingSec <= 0) {
+        turret.remainingSec = 0;
+        turret.alive = false;
+        this.removeTurretInternal(turret.id);
+        continue;
+      }
+
+      turret.fireCooldown = Math.max(0, turret.fireCooldown - safeDt);
+
+      const turretBase: Vec3Like = { x: turret.x, y: turret.y, z: turret.z };
+      const turretOrigin: Vec3Like = {
+        x: turret.x,
+        y: turret.y + 0.9,
+        z: turret.z,
+      };
+
+      let bestActor: CombatActor | null = null;
+      let bestPoint: Vec3Like | null = null;
+      let bestDist = Infinity;
+
+      for (let a = 0; a < actors.length; a++) {
+        const actor = actors[a];
+        if (!actor || !actor.alive || actor.isKnocked || actor.hp <= 0) continue;
+        if (this.isFriendlyTurretActor(turret, actor)) continue;
+
+        const targetPoint: Vec3Like = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.55,
+          z: actor.position.z,
+        };
+        const minDist = Math.min(
+          dist3D(turretBase, actor.position),
+          dist3D(turretOrigin, targetPoint),
+        );
+        if (minDist > TURRET_RANGE || minDist >= bestDist) continue;
+        if (hasLos && !hasLos(turretOrigin, targetPoint)) continue;
+
+        bestDist = minDist;
+        bestActor = actor;
+        bestPoint = targetPoint;
+      }
+
+      const visual = this.turretVisuals.get(turret.id);
+      if (bestActor && bestPoint) {
+        turret.yaw = Math.atan2(bestPoint.x - turret.x, bestPoint.z - turret.z);
+        if (visual) {
+          visual.headGroup.rotation.y = turret.yaw;
+        }
+
+        if (turret.fireCooldown <= 1e-6) {
+          turret.fireCooldown = fireInterval;
+
+          const dmg = TURRET_DAMAGE;
+          const overshieldBefore = Math.max(0, bestActor.overshield ?? 0);
+          const overshieldDmg = Math.min(overshieldBefore, dmg);
+          const afterOs = dmg - overshieldDmg;
+          const shieldBefore = Math.max(0, bestActor.shield);
+          const shieldDmg = Math.min(shieldBefore, afterOs);
+          const remaining = afterOs - shieldDmg;
+          const hpDmg = Math.min(Math.max(0, bestActor.hp), remaining);
+          const isElimination = bestActor.hp - hpDmg <= 0;
+
+          if (bestActor.overshield !== undefined) {
+            bestActor.overshield = Math.max(0, bestActor.overshield - overshieldDmg);
+          }
+          bestActor.shield = Math.max(0, bestActor.shield - shieldDmg);
+          bestActor.hp = Math.max(0, bestActor.hp - hpDmg);
+          if (bestActor.hp <= 0) {
+            bestActor.alive = false;
+          }
+
+          const ev: DamageEvent = {
+            targetId: bestActor.id,
+            attackerId: turret.ownerId,
+            attackerName:
+              turret.ownerId === 'player' ? 'Auto-Turret' : 'Enemy Auto-Turret',
+            weaponId: 'auto_turret',
+            rarity: 'epic',
+            damage: dmg,
+            hpDamage: hpDmg,
+            shieldDamage: shieldDmg,
+            isHeadshot: false,
+            isElimination,
+            hitPoint: { ...bestPoint },
+            distance: bestDist,
+          };
+          bestActor.onDamage?.(ev);
+          this.eventBus.emit('combat:damage', ev);
+
+          if (turret.ownerId === 'player' && bestActor.id !== 'player') {
+            const hitShield = shieldDmg > 0 || overshieldDmg > 0;
+            this.eventBus.emit('combat:hitmarker', {
+              attackerId: 'player',
+              isHeadshot: false,
+              isShield: hitShield,
+              isElimination,
+            });
+            this.eventBus.emit('ui:damage_number', {
+              id: `turret_dmg_${this.turretDmgSeq++}`,
+              worldPos: ev.hitPoint,
+              amount: dmg,
+              isShield: hitShield && hpDmg === 0,
+              isHeadshot: false,
+              timestamp: Date.now(),
+            });
+          }
+
+          const barrelTip: Vec3Like = {
+            x: turret.x + Math.sin(turret.yaw) * 0.68,
+            y: turret.y + 0.9,
+            z: turret.z + Math.cos(turret.yaw) * 0.68,
+          };
+          this.eventBus.emit('vfx:turret_laser', {
+            from: barrelTip,
+            to: { ...bestPoint },
+          });
+          this.eventBus.emit('sound:play', {
+            id: 'turret_fire',
+            position: barrelTip,
+            spatial: true,
+          });
+
+          if (visual) {
+            visual.recoilTimer = 0.09;
+            visual.muzzleFlashTimer = 0.05;
+            visual.muzzleFlashMesh.visible = true;
+          }
+        }
+      } else if (safeDt > 0) {
+        turret.yaw = (turret.yaw + safeDt * 0.65) % (Math.PI * 2);
+        if (visual) {
+          visual.headGroup.rotation.y = turret.yaw;
+        }
+      }
+    }
+
+    this.updateTurretVisuals(safeDt, this.turretAnimElapsed + safeDt);
+  }
+
   getPieces(): BuildPiece[] {
     return this.piecesArray;
   }
@@ -2146,6 +2656,16 @@ export class BuildingSystem {
     this.trapsById.clear();
     this.bouncerActorCooldowns.clear();
 
+    for (const tv of this.turretVisuals.values()) {
+      this.turretGroup.remove(tv.group);
+      tv.ledMat.dispose();
+      tv.bodyMat.dispose();
+    }
+    this.turretGroup.clear();
+    this.turretVisuals.clear();
+    this.turrets = [];
+    this.turretsById.clear();
+
     this.setPreviewVisible(false);
   }
 
@@ -2171,6 +2691,24 @@ export class BuildingSystem {
     this.trapSpikeGeo = null;
     this.trapBouncerRingGeo = null;
 
+    for (let i = 0; i < this.turretSharedGeos.length; i++) {
+      this.turretSharedGeos[i].dispose();
+    }
+    this.turretSharedGeos = [];
+    for (let i = 0; i < this.turretSharedMats.length; i++) {
+      this.turretSharedMats[i].dispose();
+    }
+    this.turretSharedMats = [];
+    this.turretBaseGeo = null;
+    this.turretLegGeo = null;
+    this.turretColumnGeo = null;
+    this.turretBarrelGeo = null;
+    this.turretRingGeo = null;
+    this.turretMuzzleGeo = null;
+    this.turretDarkMetalMat = null;
+    this.turretTrimMetalMat = null;
+    this.turretFlashMat = null;
+
     this.previewMeshMatValid.dispose();
     this.previewMeshMatInvalid.dispose();
     this.previewWireMatValid.dispose();
@@ -2180,6 +2718,7 @@ export class BuildingSystem {
     }
     this.scene.remove(this.rootGroup);
     this.scene.remove(this.trapGroup);
+    this.scene.remove(this.turretGroup);
     this.scene.remove(this.previewGroup);
     this.scene.remove(this.editGridGroup);
   }

@@ -9,6 +9,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   EmoteId,
+  FishingHoleEntity,
   ForecastTowerEntity,
   GamePhase,
   GameSettings,
@@ -26,6 +27,7 @@ import type {
   RebootVanEntity,
   RiftEntity,
   ShieldMushroomEntity,
+  SkyBalloonEntity,
   SlurpTankerEntity,
   SupplyDroneEntity,
   UpgradeBenchEntity,
@@ -46,11 +48,13 @@ import {
   resolveChapterOverlayArgs,
   resolveFrontierOverlayArgs,
   resolveOverdriveOverlayArgs,
+  resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
   resolveTideOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
+  type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
   type WorldTideOverlay,
 } from './UIHelpers';
@@ -310,6 +314,29 @@ export class UIManager {
     const resolved = resolveTideOverlayArgs(boarsOrOverlay, mushrooms);
     this.fullMap.setWorldTideOverlay(resolved.boars, resolved.mushrooms);
     this.hud.setWorldTideOverlay(resolved.boars, resolved.mushrooms);
+  }
+
+  setWorldOverlordOverlay(
+    fishingHoles: FishingHoleEntity[],
+    skyBalloons: SkyBalloonEntity[],
+  ): void;
+  setWorldOverlordOverlay(overlay: WorldOverlordOverlay): void;
+  setWorldOverlordOverlay(
+    fishingHolesOrOverlay: FishingHoleEntity[] | WorldOverlordOverlay,
+    skyBalloons?: SkyBalloonEntity[],
+  ): void {
+    const resolved = resolveOverlordOverlayArgs(
+      fishingHolesOrOverlay,
+      skyBalloons,
+    );
+    this.fullMap.setWorldOverlordOverlay(
+      resolved.fishingHoles,
+      resolved.skyBalloons,
+    );
+    this.hud.setWorldOverlordOverlay(
+      resolved.fishingHoles,
+      resolved.skyBalloons,
+    );
   }
 
   setPhase(phase: GamePhase): void {

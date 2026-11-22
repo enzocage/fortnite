@@ -342,6 +342,29 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <circle cx="56" cy="27.5" r="3.6" fill="#ef4444" stroke="#fde047" stroke-width="1.4"/>
     <path d="M56 17V21M56 34V38M61 27.5H58" stroke="#fde047" stroke-width="2" stroke-linecap="round"/>
   </svg>`,
+
+  auto_turret: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M32 39L14 54M32 39L50 54M32 39V56" stroke="#94a3b8" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="22" y="34" width="20" height="7" rx="2.5" fill="#334155" stroke="#0f172a" stroke-width="1.8"/>
+    <rect x="15" y="16" width="28" height="16" rx="4" fill="#1e293b" stroke="#22d3ee" stroke-width="2"/>
+    <rect x="43" y="19" width="14" height="4" rx="1.2" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="43" y="25" width="14" height="4" rx="1.2" fill="#94a3b8" stroke="#0f172a" stroke-width="1.4"/>
+    <circle cx="26" cy="24" r="4.8" fill="#083344" stroke="#22d3ee" stroke-width="1.8"/>
+    <circle cx="26" cy="24" r="2.1" fill="#67e8f9"/>
+    <path d="M23 11H35L33 16H25L23 11Z" fill="#0284c7" stroke="#0f172a" stroke-width="1.4" stroke-linejoin="round"/>
+    <circle cx="58" cy="21" r="2.2" fill="#fbbf24"/>
+  </svg>`,
+
+  chug_cannon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M7 34L17 29H43V39H31L28 49H21L23 39H14L8 43L7 34Z" fill="#0284c7" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="19" y="16" width="22" height="13" rx="5.5" fill="#22d3ee" stroke="#0f172a" stroke-width="1.9"/>
+    <rect x="23" y="19" width="14" height="7" rx="3" fill="#a5f3fc"/>
+    <path d="M30 20V25M27.5 22.5H32.5" stroke="#0284c7" stroke-width="2" stroke-linecap="round"/>
+    <path d="M43 26H54L57 24V38L54 36H43V26Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <circle cx="58" cy="31" r="4" fill="#67e8f9" stroke="#e0f2fe" stroke-width="1.4"/>
+    <rect x="24" y="31" width="16" height="4" rx="1.4" fill="#fbbf24" stroke="#0f172a" stroke-width="1.2"/>
+    <circle cx="15" cy="22" r="2.6" fill="#34d399" stroke="#ecfdf5" stroke-width="1.2"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {
@@ -944,5 +967,45 @@ export function getFlareScanSvg(): string {
     <circle cx="12" cy="12" r="5.5" stroke="#ef4444" stroke-width="1.6"/>
     <circle cx="12" cy="12" r="2.6" fill="#fef08a" stroke="#dc2626" stroke-width="1.2"/>
     <path d="M12 2V5M12 19V22M2 12H5M19 12H22" stroke="#fca5a5" stroke-width="1.6" stroke-linecap="round"/>
+  </svg>`;
+}
+
+export function getFishingHoleSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <ellipse cx="16" cy="22" rx="11.5" ry="5" fill="rgba(14,165,233,0.28)" stroke="#38bdf8" stroke-width="1.7"/>
+    <ellipse cx="16" cy="22" rx="7" ry="2.8" stroke="#bae6fd" stroke-width="1.3" stroke-dasharray="3 2"/>
+    <path d="M11 16C13.5 11.5 19.5 11.5 22 15.5C19.5 19 13.5 19 11 16Z" fill="#22d3ee" stroke="#0c4a6e" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M10.5 16L6.5 13.5V18.5L10.5 16Z" fill="#38bdf8" stroke="#0c4a6e" stroke-width="1.3" stroke-linejoin="round"/>
+    <circle cx="18.5" cy="15.2" r="1.2" fill="#0f172a"/>
+    <path d="M16 5V10M12.5 7L14 9.5M19.5 7L18 9.5" stroke="#e0f2fe" stroke-width="1.6" stroke-linecap="round"/>
+  </svg>`;
+}
+
+export function getSkyBalloonSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M16 4C10.5 4 7 8 7 13C7 17.5 11 20.5 13 22.5H19C21 20.5 25 17.5 25 13C25 8 21.5 4 16 4Z" fill="#f59e0b" stroke="#0f172a" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M16 4C13.2 7 13.2 18 14.5 22.5M16 4C18.8 7 18.8 18 17.5 22.5" stroke="#fef08a" stroke-width="1.6"/>
+    <path d="M8 12.5H24" stroke="#22d3ee" stroke-width="2.2"/>
+    <path d="M13 22.5L14 26M19 22.5L18 26" stroke="#cbd5e1" stroke-width="1.5" stroke-linecap="round"/>
+    <rect x="13" y="25.5" width="6" height="4" rx="1" fill="#334155" stroke="#e2e8f0" stroke-width="1.3"/>
+  </svg>`;
+}
+
+export function getTurretIconSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M16 20L8 28M16 20L24 28M16 20V29" stroke="#cbd5e1" stroke-width="2.2" stroke-linecap="round"/>
+    <rect x="7" y="9" width="14" height="10" rx="3" fill="#0f172a" stroke="#22d3ee" stroke-width="1.8"/>
+    <rect x="21" y="11" width="7" height="2.6" rx="1" fill="#e2e8f0"/>
+    <rect x="21" y="15" width="7" height="2.6" rx="1" fill="#94a3b8"/>
+    <circle cx="13.5" cy="14" r="3" fill="#22d3ee" stroke="#e0f2fe" stroke-width="1.1"/>
+    <circle cx="13.5" cy="14" r="1.2" fill="#083344"/>
+  </svg>`;
+}
+
+export function getThermalVisionSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+    <path d="M2.5 12C5 7.5 8.5 5.5 12 5.5C15.5 5.5 19 7.5 21.5 12C19 16.5 15.5 18.5 12 18.5C8.5 18.5 5 16.5 2.5 12Z" fill="rgba(146,64,14,0.85)" stroke="#fbbf24" stroke-width="1.8" stroke-linejoin="round"/>
+    <circle cx="12" cy="12" r="4" fill="#f97316" stroke="#fef08a" stroke-width="1.4"/>
+    <circle cx="12" cy="12" r="1.6" fill="#fef08a"/>
   </svg>`;
 }

@@ -1283,6 +1283,81 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     maxStack: 1,
     allowedRarities: ['rare', 'epic'],
   },
+  auto_turret: {
+    id: 'auto_turret',
+    name: 'Sentry Auto-Turret',
+    shortName: 'AUTO TURRET',
+    category: 'throwable',
+    ammoType: null,
+    isConsumable: false,
+    isThrowable: true,
+    isAutoTurret: true,
+    isProjectile: true,
+    projectileSpeed: 20,
+    projectileGravity: 22,
+    splashRadius: 0,
+    baseDamage: 14,
+    structureDamage: 18,
+    headshotMultiplier: 1.0,
+    fireRate: 1.0,
+    pellets: 0,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0.005,
+    adsSpread: 0.002,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 34,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0.01,
+    recoilYaw: 0,
+    maxStack: 2,
+    allowedRarities: ['epic', 'legendary'],
+  },
+  chug_cannon: {
+    id: 'chug_cannon',
+    name: 'Exotic Chug Cannon',
+    shortName: 'CHUG CANNON',
+    category: 'launcher',
+    ammoType: null,
+    isConsumable: false,
+    isChugCannon: true,
+    chugRegenSec: 8,
+    isProjectile: true,
+    projectileSpeed: 34,
+    projectileGravity: 11,
+    splashRadius: 4.5,
+    baseDamage: 0,
+    structureDamage: 0,
+    headshotMultiplier: 1.0,
+    fireRate: 1.1,
+    pellets: 1,
+    magSize: 5,
+    reloadTime: 0,
+    baseSpread: 0.01,
+    adsSpread: 0.006,
+    crouchSpreadMult: 0.85,
+    moveSpreadAdd: 0.005,
+    bloomPerShot: 0,
+    bloomMax: 0.01,
+    bloomRecovery: 0.08,
+    healAmount: 20,
+    healTarget: 'both',
+    healCap: 100,
+    range: 65,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0.018,
+    recoilYaw: 0,
+    maxStack: 1,
+    allowedRarities: ['mythic'],
+  },
 };
 
 export const POIS: POIDef[] = [
@@ -1994,6 +2069,15 @@ export const WILD_BOAR_MAX_HP = 110;
 export const FLARE_SCAN_DURATION_SEC = 12;
 export const HAMMER_BOUNCE_IMPULSE_Y = 18.5;
 export const HAMMER_BOUNCE_IMPULSE_FWD = 17.5;
+
+export const TURRET_MAX_HP = 200;
+export const TURRET_RANGE = 34;
+export const TURRET_FIRE_RATE = 3.5;
+export const TURRET_DAMAGE = 14;
+export const TURRET_DURATION_SEC = 40;
+export const FISHING_CAST_SEC = 1.8;
+export const THERMAL_FLOPPER_DURATION_SEC = 12;
+export const SKY_BALLOON_HEIGHT = 38;
 
 export const WEAPON_MODS: readonly WeaponModDef[] = [
   {

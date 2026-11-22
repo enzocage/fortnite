@@ -33,7 +33,9 @@ export type WeaponId =
   | 'jetpack'
   | 'plasma_flamethrower'
   | 'shockwave_hammer'
-  | 'flare_gun';
+  | 'flare_gun'
+  | 'auto_turret'
+  | 'chug_cannon';
 
 export type WeaponCategory =
   | 'pickaxe'
@@ -124,6 +126,9 @@ export interface WeaponDef {
   flareScanRadius?: number;
   hammerMaxCharges?: number;
   hammerChargeRegenSec?: number;
+  isAutoTurret?: boolean;
+  isChugCannon?: boolean;
+  chugRegenSec?: number;
   allowedRarities: Rarity[];
 }
 
@@ -177,4 +182,6 @@ export interface ProjectileState {
   isEmpGrenade?: boolean;
   isFlare?: boolean;
   flareScanRadius?: number;
+  isAutoTurret?: boolean;
+  isChugOrb?: boolean;
 }

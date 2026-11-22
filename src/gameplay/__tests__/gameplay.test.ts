@@ -43,6 +43,9 @@ import type {
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
+  FishingHoleEntity,
+  SkyBalloonEntity,
+  TurretEntity,
   VehicleEntity,
   VendingMachineEntity,
   WeaponBunkerEntity,
@@ -77,13 +80,21 @@ import {
   PLAYER_RADIUS,
   RARITY_MULTIPLIER,
   REBOOT_DURATION_SEC,
+  FISHING_CAST_SEC,
   REVIVE_DURATION_SEC,
   SHIELD_MUSHROOM_AMOUNT,
+  SKY_BALLOON_HEIGHT,
   SPIKE_TRAP_DAMAGE,
   STARTING_GOLD_BARS,
   TEAM_RUMBLE_RESPAWN_SEC,
   TEAM_RUMBLE_TARGET_SCORE,
+  THERMAL_FLOPPER_DURATION_SEC,
   TRAIN_HACK_DURATION_SEC,
+  TURRET_DAMAGE,
+  TURRET_DURATION_SEC,
+  TURRET_FIRE_RATE,
+  TURRET_MAX_HP,
+  TURRET_RANGE,
   UPGRADE_COSTS,
   WEAPONS,
   WEAPON_MODS,
@@ -121,8 +132,12 @@ import {
   type VehicleBridge,
   type WorldChapterBridge,
   type WorldEconomyBridge,
+  type ChugHealReport,
+  type FishingCastResult,
+  type FishingRewardKind,
   type WorldFrontierBridge,
   type WorldOverdriveBridge,
+  type WorldOverlordBridge,
   type WorldRiftCaptureBridge,
   type WorldSkyforgeBridge,
   type WorldStationBridge,
@@ -7382,6 +7397,624 @@ describe('Wave 10 Gameplay Systems (Shockwave Hammer, Recon Flare Gun, Shield Mu
     expect(player.getStats().hammerSlams).toBe(0);
     expect(player.getStats().flaresFired).toBe(0);
     expect(player.getFlareBeacons()).toEqual([]);
+  });
+});
+
+describe('Wave 11 Gameplay Systems (Auto-Turret, Chug Cannon, Fishing, Sky Balloons)', () => {
+  function setupWave11Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave11Tester');
+    player.setPhase('playing');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockOverlordBridge(
+    fishingHoles: FishingHoleEntity[] = [],
+    skyBalloons: SkyBalloonEntity[] = [],
+    rewardProvider: () => FishingRewardKind = () => 'thermal_flopper',
+  ): WorldOverlordBridge {
+    return {
+      getFishingHoles: () => fishingHoles,
+      findNearbyFishingHole: (pos, radius = 4.2) =>
+        fishingHoles.find(
+          (h) =>
+            !h.depleted &&
+            h.castsRemaining > 0 &&
+            dist3D(pos, { x: h.x, y: h.y, z: h.z }) <= radius,
+        ) ?? null,
+      consumeFishingCast: (id) => {
+        const hole = fishingHoles.find((h) => h.id === id);
+        if (!hole || hole.depleted || hole.castsRemaining <= 0) return null;
+        hole.castsRemaining = Math.max(0, hole.castsRemaining - 1);
+        if (hole.castsRemaining === 0) {
+          hole.depleted = true;
+        }
+        return {
+          ok: true,
+          reward: rewardProvider(),
+          position: { x: hole.x, y: hole.y, z: hole.z },
+        };
+      },
+      getSkyBalloons: () => skyBalloons,
+      findNearbySkyBalloon: (pos, radius = 3.8) =>
+        skyBalloons.find(
+          (b) => Math.hypot(pos.x - b.x, pos.z - b.z) <= radius && pos.y <= b.baseY + 4.5,
+        ) ?? null,
+    };
+  }
+
+  it('deploys 3D Auto-Turrets via throwable projectile, targets nearest hostile LOS actor with immunity, supports enemy turret destruction & expiry', () => {
+    expect(TURRET_MAX_HP).toBe(200);
+    expect(TURRET_RANGE).toBe(34);
+    expect(TURRET_FIRE_RATE).toBe(3.5);
+    expect(TURRET_DAMAGE).toBe(14);
+    expect(TURRET_DURATION_SEC).toBe(40);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(35);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+    expect(WEAPON_SOUND_MAP.auto_turret).toBe('turret_deploy');
+    expect(WEAPON_SOUND_MAP.chug_cannon).toBe('chug_cannon_fire');
+
+    const { bus, building, weapons, player } = setupWave11Harness();
+    const sounds: SoundEventId[] = [];
+    const deployVfx: Array<{ position: Vec3Like }> = [];
+    const laserVfx: Array<{ from: Vec3Like; to: Vec3Like }> = [];
+    const deployedCallbacks: TurretEntity[] = [];
+
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:turret_deploy', (ev) => deployVfx.push(ev));
+    bus.on('vfx:turret_laser', (ev) => laserVfx.push(ev));
+    player.setOnTurretDeployed((t) => deployedCallbacks.push(t));
+
+    // Equip throwable Auto-Turret (stack 2) in slot 2
+    const turretItem: ItemInstance = {
+      uid: 'turret_stack_1',
+      weaponId: 'auto_turret',
+      rarity: 'legendary',
+      magAmmo: 1,
+      stackCount: 2,
+    };
+    player.getInventory().addItem(turretItem);
+    player.pressKey('Digit2');
+    player.releaseKey('Digit2');
+
+    // Aim slightly forward/down and throw turret
+    player.setLook(Math.PI, -0.35);
+    player.setMouseButton(0, true);
+    let t = 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(weapons.getProjectiles().length).toBe(1);
+    expect(player.getInventory().getSlot(1)?.stackCount).toBe(1);
+
+    for (let i = 0; i < 40; i++) {
+      t += 0.05;
+      weapons.update(0.05);
+      player.update(0.05, t);
+      if (building.getTurrets().length > 0) break;
+    }
+
+    expect(deployedCallbacks.length).toBe(1);
+    expect(building.getTurrets().length).toBe(1);
+    const thrownTurret = building.getTurrets()[0];
+    expect(thrownTurret.hp).toBe(TURRET_MAX_HP);
+    expect(thrownTurret.maxHp).toBe(TURRET_MAX_HP);
+    expect(thrownTurret.remainingSec).toBeGreaterThan(38);
+    expect(thrownTurret.alive).toBe(true);
+    expect(thrownTurret.ownerId).toBe('player');
+    expect(deployVfx.length).toBe(1);
+    expect(sounds).toContain('turret_deploy');
+    expect(player.getStats().turretsDeployed).toBe(1);
+
+    const hudWithTurret = player.getHudSnapshot();
+    expect(hudWithTurret.activeTurretRemainingSec).toBeGreaterThan(38);
+    expect(hudWithTurret.deployedTurrets?.length).toBe(1);
+
+    // Friendly shooter cannot damage own deployed turret via AR raycast
+    const arItem: ItemInstance = {
+      uid: 'ar_turret_tester',
+      weaponId: 'ar',
+      rarity: 'epic',
+      magAmmo: 30,
+      stackCount: 1,
+    };
+    player.getInventory().addItem(arItem);
+    player.getInventory().addAmmo('medium', 90);
+    player.pressKey('Digit3');
+    player.releaseKey('Digit3');
+
+    const ownDir = {
+      x: thrownTurret.x - player.getPosition().x,
+      y: thrownTurret.y + 0.65 - (player.getPosition().y + 1.6),
+      z: thrownTurret.z - player.getPosition().z,
+    };
+    const ownLen = Math.hypot(ownDir.x, ownDir.y, ownDir.z);
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arItem,
+      origin: {
+        x: player.getPosition().x,
+        y: player.getPosition().y + 1.6,
+        z: player.getPosition().z,
+      },
+      aimDir: { x: ownDir.x / ownLen, y: ownDir.y / ownLen, z: ownDir.z / ownLen },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(building.getTurrets()[0].hp).toBe(TURRET_MAX_HP);
+
+    // Enemy deployed turret at (8, 0, -6) takes AR raycast hits and destroys cleanly at <= 0
+    const enemyTurret = building.deployAutoTurret(
+      { x: 8, y: 0, z: -6 },
+      'enemy_bot',
+      'enemy_sq',
+      'team_red',
+    );
+    expect(building.getTurrets().length).toBe(2);
+
+    player.teleport({ x: 8, y: 0, z: 0 });
+    player.setLook(Math.PI, -0.16);
+    for (let i = 0; i < 14; i++) {
+      player.setMouseButton(0, true);
+      t += 0.05;
+      player.update(0.05, t);
+      player.setMouseButton(0, false);
+      for (let w = 0; w < 4; w++) {
+        t += 0.05;
+        player.update(0.05, t);
+      }
+      if (!building.getTurrets().some((tr) => tr.id === enemyTurret.id)) break;
+    }
+    expect(building.getTurrets().some((tr) => tr.id === enemyTurret.id)).toBe(false);
+    expect(sounds).toContain('turret_destroy');
+
+    // Direct damageTurret returns false while alive and true when HP reaches <= 0
+    expect(building.damageTurret(thrownTurret.id, 50)).toBe(false);
+    expect(building.getTurrets()[0].hp).toBe(150);
+    expect(building.damageTurret(thrownTurret.id, 150)).toBe(true);
+    expect(building.getTurrets().length).toBe(0);
+
+    // Auto-Turret targeting, immunity, LOS check, fire rate, yaw tracking, and expiry
+    const turret = building.deployAutoTurret(
+      { x: 0, y: 0, z: -8 },
+      'owner_1',
+      'sq_alpha',
+      'team_blue',
+    );
+    const dmgCounts: Record<string, number> = {};
+    const makeActor = (
+      id: string,
+      pos: Vec3Like,
+      opts: Partial<CombatActor> = {},
+    ): CombatActor => ({
+      id,
+      name: id,
+      position: { ...pos },
+      eyePos: { x: pos.x, y: pos.y + 1.5, z: pos.z },
+      hp: 100,
+      maxHp: 100,
+      shield: 0,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      onDamage: (ev) => {
+        dmgCounts[id] = (dmgCounts[id] ?? 0) + ev.damage;
+      },
+      ...opts,
+    });
+
+    const actors: CombatActor[] = [
+      makeActor('owner_1', { x: 0, y: 0, z: -5 }),
+      makeActor('ally_squad', { x: 1, y: 0, z: -5 }, { squadId: 'sq_alpha' }),
+      makeActor('ally_team', { x: -1, y: 0, z: -5 }, { teamId: 'team_blue' }),
+      makeActor('enemy_knocked', { x: 0, y: 0, z: -4 }, { isKnocked: true }),
+      makeActor('enemy_far', { x: 0, y: 0, z: -45 }), // 37m > 34m range
+      makeActor('enemy_los_blocked', { x: 3, y: 0, z: -8 }), // 3m away, LOS blocked
+      makeActor('enemy_target', { x: 8, y: 0, z: -8 }), // 8m away along +X, valid LOS
+    ];
+    const hasLos = (_from: Vec3Like, to: Vec3Like) => !(Math.abs(to.x - 3) < 0.1 && Math.abs(to.z + 8) < 0.1);
+
+    const laserCountBefore = laserVfx.length;
+    for (let i = 0; i < 20; i++) {
+      building.updateTurrets(0.05, actors, hasLos);
+    }
+
+    // Fired ~3.5 shots/sec * 1.0s => 4 shots (first shot at t=0 + 3 shots at 0.2857, 0.5714, 0.8571)
+    expect(dmgCounts.enemy_target).toBe(TURRET_DAMAGE * 4);
+    expect(dmgCounts.owner_1 ?? 0).toBe(0);
+    expect(dmgCounts.ally_squad ?? 0).toBe(0);
+    expect(dmgCounts.ally_team ?? 0).toBe(0);
+    expect(dmgCounts.enemy_knocked ?? 0).toBe(0);
+    expect(dmgCounts.enemy_far ?? 0).toBe(0);
+    expect(dmgCounts.enemy_los_blocked ?? 0).toBe(0);
+    expect(laserVfx.length - laserCountBefore).toBe(4);
+    expect(sounds).toContain('turret_fire');
+    // Yaw rotated smoothly toward +X enemy_target (~Math.PI / 2)
+    expect(Math.abs(turret.yaw - Math.PI / 2)).toBeLessThan(0.25);
+
+    // Expire turret after remaining 39s
+    for (let i = 0; i < 40; i++) {
+      building.updateTurrets(1.0, []);
+    }
+    expect(building.getTurrets().length).toBe(0);
+
+    // clearAll() & dispose() clean up all active turrets
+    building.deployAutoTurret({ x: 2, y: 0, z: 2 }, 'p1');
+    expect(building.getTurrets().length).toBe(1);
+    building.clearAll();
+    expect(building.getTurrets().length).toBe(0);
+
+    building.deployAutoTurret({ x: 4, y: 0, z: 4 }, 'p1');
+    expect(building.getTurrets().length).toBe(1);
+    building.dispose();
+    expect(building.getTurrets().length).toBe(0);
+  });
+
+  it('fires Exotic Chug Cannon to heal owner & friendly allies within 4.5m (+20 HP/Shield), isolates enemies & out-of-range targets, and regens +1 charge every 8s', () => {
+    const { bus, weapons, player } = setupWave11Harness();
+    player.setGameMode('duos'); // Sets player combat actor squadId: 'player_squad'
+    const sounds: SoundEventId[] = [];
+    const slurpVfx: Array<{ position: Vec3Like; radius: number }> = [];
+    const chugReports: ChugHealReport[] = [];
+
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:slurp_orb', (ev) => slurpVfx.push(ev));
+    player.setOnChugHeal((r) => chugReports.push(r));
+
+    const chugItem: ItemInstance = {
+      uid: 'chug_cannon_1',
+      weaponId: 'chug_cannon',
+      rarity: 'mythic',
+      magAmmo: 5,
+      stackCount: 1,
+    };
+    const arItem: ItemInstance = {
+      uid: 'ar_holster_test',
+      weaponId: 'ar',
+      rarity: 'rare',
+      magAmmo: 30,
+      stackCount: 1,
+    };
+    player.getInventory().addItem(chugItem);
+    player.getInventory().addItem(arItem);
+
+    // Lower player HP to 85 (0 shield) so +20 heal restores 15 HP -> 100 and 5 Shield -> 5
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Bot1',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 15,
+      hpDamage: 15,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1, z: 0 },
+      distance: 10,
+    });
+    expect(player.getHealth()).toBe(85);
+    expect(player.getShield()).toBe(0);
+
+    let allyHp = 90;
+    let allyShield = 20;
+    let farAllyHeals = 0;
+    let enemyHeals = 0;
+
+    const allyNear: CombatActor = {
+      id: 'ally_near',
+      name: 'AllyNear',
+      position: { x: 2.0, y: 0, z: -2.0 },
+      eyePos: { x: 2.0, y: 1.6, z: -2.0 },
+      hp: allyHp,
+      maxHp: 100,
+      shield: allyShield,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      squadId: 'player_squad',
+      onHeal: (hpAdded, shieldAdded) => {
+        allyHp = Math.min(100, allyHp + hpAdded);
+        allyShield = Math.min(100, allyShield + shieldAdded);
+        allyNear.hp = allyHp;
+        allyNear.shield = allyShield;
+      },
+    };
+    const allyFar: CombatActor = {
+      id: 'ally_far',
+      name: 'AllyFar',
+      position: { x: 10, y: 0, z: -2.0 },
+      eyePos: { x: 10, y: 1.6, z: -2.0 },
+      hp: 50,
+      maxHp: 100,
+      shield: 0,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      squadId: 'player_squad',
+      onHeal: () => {
+        farAllyHeals += 1;
+      },
+    };
+    const enemyNear: CombatActor = {
+      id: 'enemy_near',
+      name: 'EnemyNear',
+      position: { x: -1.5, y: 0, z: -2.0 },
+      eyePos: { x: -1.5, y: 1.6, z: -2.0 },
+      hp: 50,
+      maxHp: 100,
+      shield: 0,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_squad',
+      onHeal: () => {
+        enemyHeals += 1;
+      },
+    };
+
+    const actors = [player.getCombatActor(), allyNear, allyFar, enemyNear];
+    weapons.registerActorsProvider(() => actors);
+
+    // Select Chug Cannon (slot 2) and fire downward at ground ~2m ahead (0, 0, -2)
+    player.pressKey('Digit2');
+    player.releaseKey('Digit2');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, -0.7);
+    player.setMouseButton(0, true);
+    let t = 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(player.getInventory().getSlot(1)?.magAmmo).toBe(4);
+    expect(sounds).toContain('chug_cannon_fire');
+    expect(weapons.getProjectiles().length).toBe(1);
+
+    for (let i = 0; i < 30; i++) {
+      t += 0.05;
+      weapons.update(0.05);
+      player.update(0.05, t);
+      if (slurpVfx.length > 0) break;
+    }
+
+    expect(slurpVfx.length).toBe(1);
+    expect(slurpVfx[0].radius).toBe(4.5);
+    expect(sounds).toContain('chug_cannon_splash');
+    expect(chugReports.length).toBe(1);
+    expect(player.getStats().chugHeals).toBe(2);
+
+    // Owner healed +15 HP (to 100) + 5 Shield (overflow); near ally healed +10 HP (to 100) + 10 Shield (to 30)
+    expect(player.getHealth()).toBe(100);
+    expect(player.getShield()).toBe(5);
+    expect(allyHp).toBe(100);
+    expect(allyShield).toBe(30);
+    // Out-of-range ally & enemy in splash zone receive zero healing
+    expect(farAllyHeals).toBe(0);
+    expect(enemyHeals).toBe(0);
+
+    // Deplete remaining 4 charges and verify dryfire at 0 with no reload
+    for (let shot = 0; shot < 4; shot++) {
+      for (let w = 0; w < 22; w++) {
+        t += 0.05;
+        player.update(0.05, t);
+        weapons.update(0.05);
+      }
+      player.setMouseButton(0, true);
+      t += 0.05;
+      player.update(0.05, t);
+      player.setMouseButton(0, false);
+    }
+    expect(player.getInventory().getSlot(1)?.magAmmo).toBe(0);
+
+    // Wait cooldown then try reload & dryfire
+    for (let w = 0; w < 22; w++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.pressKey('KeyR');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyR');
+    expect(player.getInventory().getSlot(1)?.magAmmo).toBe(0);
+
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+    expect(sounds).toContain('dryfire');
+    expect(player.getInventory().getSlot(1)?.magAmmo).toBe(0);
+
+    // Holster Chug Cannon (switch to AR in slot 3) & verify 8.0s passive charge regen up to cap 5
+    player.pressKey('Digit3');
+    player.releaseKey('Digit3');
+
+    for (let i = 0; i < 162; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 8.1s
+    }
+    expect(player.getInventory().getSlot(1)?.magAmmo).toBe(1);
+
+    for (let i = 0; i < 660; i++) {
+      t += 0.05;
+      player.update(0.05, t); // +33s -> caps cleanly at 5
+    }
+    expect(player.getInventory().getSlot(1)?.magAmmo).toBe(5);
+  });
+
+  it('channels Fishing Holes (1.8s, Thermal Flopper +40 HP/Shield & 12s thermal vision), launches via Sky-Ascent Balloons (38m glide boost), and resets cleanly', () => {
+    expect(FISHING_CAST_SEC).toBe(1.8);
+    expect(THERMAL_FLOPPER_DURATION_SEC).toBe(12);
+    expect(SKY_BALLOON_HEIGHT).toBe(38);
+
+    const { bus, player } = setupWave11Harness();
+    const sounds: SoundEventId[] = [];
+    const fishingSplashVfx: Array<{ position: Vec3Like }> = [];
+    const fishingRewards: FishingCastResult[] = [];
+
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:fishing_splash', (ev) => fishingSplashVfx.push(ev));
+    player.setOnFishingReward((r) => fishingRewards.push(r));
+
+    const fishingHoles: FishingHoleEntity[] = [
+      { id: 'hole_1', x: 0, y: 0, z: -2, castsRemaining: 2, depleted: false },
+      { id: 'hole_empty', x: 20, y: 0, z: 0, castsRemaining: 0, depleted: true },
+    ];
+    const skyBalloons: SkyBalloonEntity[] = [
+      { id: 'balloon_1', poiId: 'sky_citadel', x: 0, baseY: 0, topY: SKY_BALLOON_HEIGHT, z: 12 },
+    ];
+    let nextReward: FishingRewardKind = 'thermal_flopper';
+    const bridge = createMockOverlordBridge(fishingHoles, skyBalloons, () => nextReward);
+    player.setOverlordBridge(bridge);
+    expect(player.getOverlordBridge()).toBe(bridge);
+
+    // Depleted fishing hole gives no interact prompt
+    player.teleport({ x: 20, y: 0, z: 0 });
+    let t = 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()).toBeNull();
+
+    // Damage player to 45 HP so Thermal Flopper +40 restores HP -> 85 and sets 12s thermal vision
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Bot1',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 55,
+      hpDamage: 55,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 20, y: 1, z: 0 },
+      distance: 10,
+    });
+    expect(player.getHealth()).toBe(45);
+
+    // Approach active fishing hole -> prompt appears -> press [E] to start 1.8s channel
+    player.teleport({ x: 0, y: 0, z: 0 });
+    t += 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()?.label.toUpperCase()).toContain('FISH');
+
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(sounds).toContain('fishing_cast');
+
+    // Halfway through channel (~0.9s total elapsed)
+    for (let i = 0; i < 17; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const midProgress = player.getHudSnapshot().fishingProgress ?? 0;
+    expect(midProgress).toBeGreaterThan(0.35);
+    expect(midProgress).toBeLessThan(0.8);
+
+    // Finish remaining channel time (>= 1.8s total)
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+
+    expect(fishingRewards.length).toBe(1);
+    expect(fishingRewards[0].reward).toBe('thermal_flopper');
+    expect(player.getStats().fishCaught).toBe(1);
+    expect(player.getHealth()).toBe(85);
+    expect(player.getHudSnapshot().thermalVisionRemainingSec).toBeCloseTo(12, 0);
+    expect(player.getHudSnapshot().fishingProgress || 0).toBe(0);
+    expect(fishingSplashVfx.length).toBeGreaterThanOrEqual(1);
+    expect(sounds).toContain('fishing_catch');
+
+    // Thermal vision timer decays smoothly & supports setThermalVisionTimer
+    for (let i = 0; i < 120; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 6.0s
+    }
+    expect(player.getHudSnapshot().thermalVisionRemainingSec).toBeCloseTo(6, 0);
+
+    player.setThermalVisionTimer(2.5);
+    expect(player.getHudSnapshot().thermalVisionRemainingSec).toBeCloseTo(2.5, 2);
+    for (let i = 0; i < 52; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().thermalVisionRemainingSec).toBeNull();
+
+    // Cast #2 yields Gold Cache -> increments fishCaught & gold bars, depletes fishing hole
+    const goldBefore = player.getGoldBars();
+    nextReward = 'gold_cache';
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+
+    for (let i = 0; i < 38; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getStats().fishCaught).toBe(2);
+    expect(player.getGoldBars()).toBeGreaterThan(goldBefore);
+    expect(fishingHoles[0].depleted).toBe(true);
+    expect(fishingHoles[0].castsRemaining).toBe(0);
+
+    // Sky-Ascent Balloon [E] launches player to balloon.topY (38m), deploys glider, & grants fall immunity
+    player.teleport({ x: 0, y: 0, z: 12.2 });
+    t += 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()?.label.toUpperCase()).toContain('BALLOON');
+
+    const healthBeforeLaunch = player.getHealth();
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+
+    expect(sounds).toContain('balloon_ascend');
+    expect(player.getPosition().y).toBeGreaterThanOrEqual(SKY_BALLOON_HEIGHT - 1);
+    expect(player.getPhase()).toBe('gliding');
+
+    // Glide safely back down to ground with zero fall damage
+    for (let i = 0; i < 250; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      if (player.getPhase() === 'playing') break;
+    }
+    expect(player.getPhase()).toBe('playing');
+    expect(player.getHealth()).toBe(healthBeforeLaunch);
+
+    // Match reset clears Wave-11 timers & stats cleanly
+    player.setThermalVisionTimer(9);
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave11Reset');
+    player.setPhase('playing');
+    expect(player.getStats().turretsDeployed).toBe(0);
+    expect(player.getStats().fishCaught).toBe(0);
+    expect(player.getStats().chugHeals).toBe(0);
+    expect(player.getHudSnapshot().thermalVisionRemainingSec).toBeNull();
+    expect(player.getHudSnapshot().activeTurretRemainingSec).toBeNull();
+    expect(player.getHudSnapshot().deployedTurrets ?? []).toEqual([]);
   });
 });
 

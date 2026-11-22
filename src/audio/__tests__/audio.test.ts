@@ -153,6 +153,14 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   mushroom_eat: true,
   boar_grunt: true,
   water_splash_wake: true,
+  turret_deploy: true,
+  turret_fire: true,
+  turret_destroy: true,
+  chug_cannon_fire: true,
+  chug_cannon_splash: true,
+  fishing_cast: true,
+  fishing_catch: true,
+  balloon_ascend: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -483,14 +491,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 136 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 144 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(136);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(144);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -1584,6 +1592,151 @@ describe('SoundSynthesizer', () => {
     const sparseDest = sparseFilterCtx.createGain();
     const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
     for (const id of wave10Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 11 SFX with strictly positive ramps >= 0.0001 across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave11Ids: SoundEventId[] = [
+      'turret_deploy',
+      'turret_fire',
+      'turret_destroy',
+      'chug_cannon_fire',
+      'chug_cannon_splash',
+      'fishing_cast',
+      'fishing_catch',
+      'balloon_ascend',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave11Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (
+        id === 'turret_deploy' ||
+        id === 'turret_destroy' ||
+        id === 'chug_cannon_splash' ||
+        id === 'fishing_catch' ||
+        id === 'balloon_ascend'
+      ) {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.turret_fire).toBeGreaterThan(0.12);
+    expect(durations.turret_fire).toBeLessThan(0.25);
+    expect(durations.chug_cannon_fire).toBeGreaterThan(0.3);
+    expect(durations.fishing_cast).toBeGreaterThan(0.4);
+    expect(durations.chug_cannon_splash).toBeGreaterThan(0.42);
+    expect(durations.fishing_catch).toBeGreaterThan(0.48);
+    expect(durations.turret_deploy).toBeGreaterThan(0.55);
+    expect(durations.balloon_ascend).toBeGreaterThan(0.6);
+    expect(durations.turret_destroy).toBeGreaterThan(0.65);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave11Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave11Ids) {
       expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
     }
     sparseSynth.dispose();
@@ -3593,6 +3746,78 @@ describe('AudioEngine', () => {
     // Polyphony stays bounded under rapid Wave-10 SFX bursts
     for (let i = 0; i < 30; i++) {
       engine.playSound({ id: 'hammer_slam' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+
+    engine.dispose();
+  });
+
+  it('assigns explicit Wave-11 priorities, max hear distances, spatial culling, and bounds polyphony', async () => {
+    expect(getSoundPriority('turret_deploy')).toBe(3);
+    expect(getSoundPriority('turret_destroy')).toBe(3);
+    expect(getSoundPriority('balloon_ascend')).toBe(3);
+    expect(getSoundPriority('turret_fire')).toBe(2);
+    expect(getSoundPriority('chug_cannon_fire')).toBe(2);
+    expect(getSoundPriority('chug_cannon_splash')).toBe(2);
+    expect(getSoundPriority('fishing_catch')).toBe(2);
+    expect(getSoundPriority('fishing_cast')).toBe(1);
+
+    expect(getMaxHearDistance('fishing_cast')).toBe(65);
+    expect(getMaxHearDistance('fishing_catch')).toBe(85);
+    expect(getMaxHearDistance('chug_cannon_splash')).toBe(110);
+    expect(getMaxHearDistance('chug_cannon_fire')).toBe(150);
+    expect(getMaxHearDistance('turret_deploy')).toBe(160);
+    expect(getMaxHearDistance('turret_fire')).toBe(170);
+    expect(getMaxHearDistance('turret_destroy')).toBe(215);
+    expect(getMaxHearDistance('balloon_ascend')).toBe(225);
+
+    const bus = new EventBus();
+
+    // 1. Headless safety across all 8 Wave-11 SFX
+    const headless = new AudioEngine(bus);
+    expect(() => headless.playSound({ id: 'turret_deploy' })).not.toThrow();
+    expect(() => headless.playSound({ id: 'balloon_ascend', spatial: true, position: { x: 10, y: 0, z: 0 } })).not.toThrow();
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    // 2. Spatial culling for all 8 Wave-11 SoundEventIds
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'fishing_cast', position: { x: 60, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'fishing_catch', position: { x: 80, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'chug_cannon_splash', position: { x: 105, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'chug_cannon_fire', position: { x: 145, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'turret_deploy', position: { x: 155, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'turret_fire', position: { x: 165, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'turret_destroy', position: { x: 210, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'balloon_ascend', position: { x: 220, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'fishing_cast', position: { x: 75, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'fishing_catch', position: { x: 95, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'chug_cannon_splash', position: { x: 120, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'chug_cannon_fire', position: { x: 160, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'turret_deploy', position: { x: 170, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'turret_fire', position: { x: 180, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'turret_destroy', position: { x: 225, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'balloon_ascend', position: { x: 235, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // EventBus routing triggers Wave-11 SFX cleanly
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    bus.emit('sound:play', { id: 'turret_deploy', position: { x: 12, y: 0, z: 0 }, spatial: true });
+    bus.emit('sound:play', { id: 'chug_cannon_splash', position: { x: 8, y: 0, z: 0 }, spatial: true });
+    expect(engine.getActiveVoiceCount()).toBe(2);
+
+    // Polyphony stays bounded under rapid Wave-11 SFX bursts
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'turret_fire' });
     }
     expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
 

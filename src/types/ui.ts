@@ -228,6 +228,10 @@ export interface HUDState {
   hammerCharges?: { charges: number; maxCharges: number; regenProgress: number } | null;
   flareScanMarkedCount?: number;
   flareBeacons?: Array<{ x: number; z: number; radius: number; remainingSec: number }>;
+  activeTurretRemainingSec?: number | null;
+  thermalVisionRemainingSec?: number | null;
+  fishingProgress?: number | null;
+  deployedTurrets?: Array<{ x: number; z: number; isFriendly: boolean }>;
 }
 
 export interface MatchQuest {
@@ -314,6 +318,9 @@ export interface MatchSummary {
   flaresFired?: number;
   boarsHunted?: number;
   mushroomsEaten?: number;
+  turretsDeployed?: number;
+  fishCaught?: number;
+  chugHeals?: number;
 }
 
 export interface BannerMessage {

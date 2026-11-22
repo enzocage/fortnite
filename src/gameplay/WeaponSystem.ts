@@ -13,6 +13,7 @@ import type {
   SoundEventId,
   SupplyDroneEntity,
   TeamId,
+  TurretEntity,
   Vec3Like,
   VehicleEntity,
   WeaponId,
@@ -35,6 +36,7 @@ import type { BuildingSystem } from './BuildingSystem';
 import type { CollisionSystem } from './CollisionSystem';
 import type {
   BunkerDeploymentReport,
+  ChugHealReport,
   CombatActor,
   EmpDetonationReport,
   FireWeaponParams,
@@ -80,6 +82,8 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   emp_grenade: 'emp_blast',
   jetpack: 'jetpack_ignite',
   plasma_flamethrower: 'flame_burst',
+  auto_turret: 'turret_deploy',
+  chug_cannon: 'chug_cannon_fire',
   mini_shield: 'ui_click',
   shield_potion: 'ui_click',
   bandages: 'ui_click',
@@ -263,6 +267,8 @@ interface ActiveProjectile extends ProjectileState {
   onEmpHit?: (report: EmpDetonationReport) => void;
   onFlareBurst?: (beacon: FlareBeaconEntity) => void;
   onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
+  onTurretDeployed?: (turret: TurretEntity) => void;
+  onChugHeal?: (report: ChugHealReport) => void;
 }
 
 interface PendingBurst {
@@ -315,9 +321,15 @@ export class WeaponSystem {
   private onBoarEliminated:
     | ((pos: Vec3Like, attackerId: string) => void)
     | null = null;
+  private onTurretDeployed: ((turret: TurretEntity) => void) | null = null;
+  private onChugHeal: ((report: ChugHealReport) => void) | null = null;
   private playerTideObserver: {
     onFlareBurst?: (beacon: FlareBeaconEntity) => void;
     onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
+  } | null = null;
+  private playerOverlordObserver: {
+    onTurretDeployed?: (turret: TurretEntity) => void;
+    onChugHeal?: (report: ChugHealReport) => void;
   } | null = null;
   private projectiles: ActiveProjectile[] = [];
   private pendingBursts: PendingBurst[] = [];
@@ -430,6 +442,23 @@ export class WeaponSystem {
     } | null,
   ): void {
     this.playerTideObserver = observer;
+  }
+
+  setOnTurretDeployed(cb: ((turret: TurretEntity) => void) | null): void {
+    this.onTurretDeployed = cb;
+  }
+
+  setOnChugHeal(cb: ((report: ChugHealReport) => void) | null): void {
+    this.onChugHeal = cb;
+  }
+
+  setPlayerOverlordObserver(
+    observer: {
+      onTurretDeployed?: (turret: TurretEntity) => void;
+      onChugHeal?: (report: ChugHealReport) => void;
+    } | null,
+  ): void {
+    this.playerOverlordObserver = observer;
   }
 
   getFlareBeacons(): FlareBeaconEntity[] {
@@ -1000,6 +1029,177 @@ export class WeaponSystem {
     return { hit: true, eliminated: res.eliminated, damage: safeDmg };
   }
 
+  private isFriendlyTurret(
+    attackerId: string,
+    attackerSquadId: string | undefined,
+    attackerTeamId: TeamId | undefined,
+    turret: TurretEntity,
+  ): boolean {
+    if (turret.ownerId === attackerId) return true;
+    if (
+      attackerSquadId &&
+      (turret.squadId === attackerSquadId || turret.teamId === attackerSquadId)
+    ) {
+      return true;
+    }
+    if (
+      attackerTeamId &&
+      (turret.teamId === attackerTeamId || turret.squadId === attackerTeamId)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  private raycastTurrets(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+    attackerId?: string,
+    attackerSquadId?: string,
+    attackerTeamId?: TeamId,
+  ): {
+    turret: TurretEntity;
+    distance: number;
+    point: Vec3Like;
+    normal: Vec3Like;
+  } | null {
+    const turrets = this.building.getTurrets();
+    if (!turrets || turrets.length === 0) return null;
+
+    const r = 0.72;
+    let bestDist = maxDist;
+    let best: {
+      turret: TurretEntity;
+      distance: number;
+      point: Vec3Like;
+      normal: Vec3Like;
+    } | null = null;
+
+    for (let i = 0; i < turrets.length; i++) {
+      const turret = turrets[i];
+      if (!turret.alive || turret.hp <= 0) continue;
+      if (
+        attackerId &&
+        this.isFriendlyTurret(attackerId, attackerSquadId, attackerTeamId, turret)
+      ) {
+        continue;
+      }
+      const hit = this.intersectRayAABB(
+        origin,
+        dir,
+        turret.x - r,
+        turret.y - 0.05,
+        turret.z - r,
+        turret.x + r,
+        turret.y + 1.35,
+        turret.z + r,
+        bestDist,
+      );
+      if (hit) {
+        bestDist = hit.distance;
+        best = { turret, ...hit };
+      }
+    }
+
+    return best;
+  }
+
+  private applyTurretHit(
+    turretId: string,
+    dmg: number,
+    hitPoint: Vec3Like,
+    normal: Vec3Like,
+    attackerId: string,
+    isPlayer: boolean,
+  ): { hit: boolean; destroyed: boolean; damage: number } {
+    const safeDmg = Math.max(1, Math.round(dmg));
+    const live = this.building.getTurrets().some((t) => t.id === turretId && t.alive && t.hp > 0);
+    if (!live) {
+      return { hit: false, destroyed: false, damage: 0 };
+    }
+    const destroyed = this.building.damageTurret(turretId, safeDmg);
+    this.eventBus.emit('vfx:impact', {
+      position: hitPoint,
+      normal,
+      material: 'metal',
+    });
+    if (isPlayer) {
+      this.eventBus.emit('combat:hitmarker', {
+        attackerId,
+        isHeadshot: false,
+        isShield: false,
+        isElimination: destroyed,
+      });
+      this.eventBus.emit('ui:damage_number', {
+        id: `dmg_${this.dmgNumSeq++}`,
+        worldPos: hitPoint,
+        amount: safeDmg,
+        isShield: false,
+        isHeadshot: false,
+        timestamp: Date.now(),
+      });
+      if (!destroyed) {
+        this.eventBus.emit('sound:play', { id: 'hitmarker' });
+      }
+    }
+    return { hit: true, destroyed, damage: safeDmg };
+  }
+
+  private raycastFriendlyAllyForChug(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+    ownerId: string,
+    ownerSquadId?: string,
+    ownerTeamId?: TeamId,
+  ): { actor: CombatActor; distance: number; point: Vec3Like } | null {
+    if (!this.actorsProvider) return null;
+    const actors = this.actorsProvider();
+    let best: { actor: CombatActor; distance: number; point: Vec3Like } | null = null;
+    let bestDist = maxDist;
+
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (!actor.alive || actor.isKnocked || actor.id === ownerId) continue;
+      if (!isFriendlyCombatActor(ownerId, ownerSquadId, ownerTeamId, actor)) {
+        continue;
+      }
+      const bodyR = actor.radius * 1.15;
+      const a = dir.x * dir.x + dir.z * dir.z;
+      if (a > 1e-8) {
+        const ox = origin.x - actor.position.x;
+        const oz = origin.z - actor.position.z;
+        const b = 2 * (ox * dir.x + oz * dir.z);
+        const c = ox * ox + oz * oz - bodyR * bodyR;
+        const disc = b * b - 4 * a * c;
+        if (disc >= 0) {
+          const sqrtDisc = Math.sqrt(disc);
+          const t0 = (-b - sqrtDisc) / (2 * a);
+          const t1 = (-b + sqrtDisc) / (2 * a);
+          const t = t0 >= 0 ? t0 : t1 >= 0 ? t1 : -1;
+          if (t >= 0 && t < bestDist) {
+            const hitY = origin.y + dir.y * t;
+            if (hitY >= actor.position.y - 0.05 && hitY <= actor.position.y + actor.height) {
+              bestDist = t;
+              best = {
+                actor,
+                distance: t,
+                point: {
+                  x: origin.x + dir.x * t,
+                  y: hitY,
+                  z: origin.z + dir.z * t,
+                },
+              };
+            }
+          }
+        }
+      }
+    }
+
+    return best;
+  }
+
   private getBuildPieceCenter(p: BuildPiece): Vec3Like {
     if (p.type === 'wall') {
       return p.dir === 'N'
@@ -1034,6 +1234,8 @@ export class WeaponSystem {
     structureDamage: number;
     boarDamage: number;
     ownerId: string;
+    ownerSquadId?: string;
+    ownerTeamId?: TeamId;
     attacker: CombatActor | null;
     isPlayer: boolean;
     tideBridge?: WorldTideBridge | null;
@@ -1203,6 +1405,36 @@ export class WeaponSystem {
           );
           if (res.hit) hits += 1;
         }
+      }
+    }
+
+    const turrets = this.building.getTurrets();
+    for (let i = 0; i < turrets.length; i++) {
+      const turret = turrets[i];
+      if (!turret.alive || turret.hp <= 0) continue;
+      if (
+        this.isFriendlyTurret(
+          ownerId,
+          opts.ownerSquadId ?? attackerStub.squadId,
+          opts.ownerTeamId ?? attackerStub.teamId,
+          turret,
+        )
+      ) {
+        continue;
+      }
+      const center = { x: turret.x, y: turret.y + 0.65, z: turret.z };
+      const d = dist3D(impactPos, center);
+      if (d <= radius + 0.8 && !this.isBlockedByShieldBubble(impactPos, center)) {
+        const falloff = clamp(1 - (d / (radius + 0.8)) * 0.5, 0.4, 1.0);
+        const res = this.applyTurretHit(
+          turret.id,
+          Math.max(1, Math.round(structureDamage * falloff)),
+          center,
+          { x: 0, y: 1, z: 0 },
+          ownerId,
+          isPlayer,
+        );
+        if (res.hit) hits += 1;
       }
     }
 
@@ -1905,11 +2137,20 @@ export class WeaponSystem {
       def.range,
       chBridge,
     );
+    const turretHit = this.raycastTurrets(
+      params.origin,
+      aimDir,
+      def.range,
+      params.actor.id,
+      params.actor.squadId,
+      params.actorTeamId ?? params.actor.teamId,
+    );
 
     if (
       actorHit &&
       (!worldHit.hit || actorHit.distance <= worldHit.distance) &&
       (!boarHit || actorHit.distance <= boarHit.distance) &&
+      (!turretHit || actorHit.distance <= turretHit.distance) &&
       (!llamaHit || actorHit.distance <= llamaHit.distance) &&
       (!vehicleHit || actorHit.distance <= vehicleHit.distance) &&
       (!barrelHit || actorHit.distance <= barrelHit.distance) &&
@@ -2038,6 +2279,31 @@ export class WeaponSystem {
         shotsHit: 1,
         headshots: 0,
         damageDealt: structDmg,
+      };
+    }
+
+    if (
+      turretHit &&
+      (!worldHit.hit || turretHit.distance <= worldHit.distance) &&
+      (!llamaHit || turretHit.distance <= llamaHit.distance) &&
+      (!vehicleHit || turretHit.distance <= vehicleHit.distance) &&
+      (!barrelHit || turretHit.distance <= barrelHit.distance) &&
+      (!expBarrelHit || turretHit.distance <= expBarrelHit.distance) &&
+      (!tankerHit || turretHit.distance <= tankerHit.distance)
+    ) {
+      const res = this.applyTurretHit(
+        turretHit.turret.id,
+        structDmg,
+        turretHit.point,
+        turretHit.normal,
+        params.actor.id,
+        params.isPlayer,
+      );
+      return {
+        fired: true,
+        shotsHit: res.hit ? 1 : 0,
+        headshots: 0,
+        damageDealt: res.damage,
       };
     }
 
@@ -2324,6 +2590,14 @@ export class WeaponSystem {
         chBridge,
       );
       const llamaHit = this.raycastLlamas(rayOrigin, rayDir, entityMax);
+      const turretHit = this.raycastTurrets(
+        rayOrigin,
+        rayDir,
+        entityMax,
+        params.actor.id,
+        params.actor.squadId,
+        params.actorTeamId ?? params.actor.teamId,
+      );
       const vehicleHit = this.raycastVehicles(
         rayOrigin,
         rayDir,
@@ -2336,6 +2610,7 @@ export class WeaponSystem {
         | 'exp_barrel'
         | 'barrel'
         | 'tanker'
+        | 'turret'
         | 'llama'
         | 'vehicle'
         | 'world'
@@ -2371,6 +2646,10 @@ export class WeaponSystem {
       ) {
         chosen = 'tanker';
         chosenDist = tankerHit.distance;
+      }
+      if (turretHit && turretHit.distance <= chosenDist) {
+        chosen = 'turret';
+        chosenDist = turretHit.distance;
       }
       if (llamaHit && llamaHit.distance <= chosenDist) {
         chosen = 'llama';
@@ -2425,6 +2704,23 @@ export class WeaponSystem {
           );
           shotsHit += 1;
           structDamageDealt += structDmg;
+        }
+      } else if (chosen === 'turret' && turretHit) {
+        const key = `turret:${turretHit.turret.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          const res = this.applyTurretHit(
+            turretHit.turret.id,
+            structDmg,
+            turretHit.point,
+            turretHit.normal,
+            params.actor.id,
+            params.isPlayer,
+          );
+          if (res.hit) {
+            shotsHit += 1;
+            structDamageDealt += res.damage;
+          }
         }
       } else if (chosen === 'llama' && llamaHit) {
         const key = `llama:${llamaHit.llama.id}`;
@@ -2807,6 +3103,37 @@ export class WeaponSystem {
       }
     }
 
+    const turrets = this.building.getTurrets();
+    for (let i = 0; i < turrets.length; i++) {
+      const turret = turrets[i];
+      if (!turret.alive || turret.hp <= 0) continue;
+      if (
+        this.isFriendlyTurret(
+          params.actor.id,
+          params.actor.squadId,
+          params.actor.teamId,
+          turret,
+        )
+      ) {
+        continue;
+      }
+      const center = { x: turret.x, y: turret.y + 0.65, z: turret.z };
+      if (distPointToSegment(center, params.from, params.to).dist <= dashRadius) {
+        const res = this.applyTurretHit(
+          turret.id,
+          structDmg,
+          center,
+          { x: 0, y: 1, z: 0 },
+          params.actor.id,
+          params.isPlayer,
+        );
+        if (res.hit) {
+          shotsHit += 1;
+          structDamageDealt += res.damage;
+        }
+      }
+    }
+
     return {
       fired: true,
       shotsHit,
@@ -2970,13 +3297,15 @@ export class WeaponSystem {
       }
     }
 
-    // 3. Damage props, barrels, tankers, llamas, vehicles, and wild boars in AoE
+    // 3. Damage props, barrels, tankers, llamas, vehicles, wild boars, and enemy turrets in AoE
     const envHits = this.applySplashEnvironmentDamage({
       impactPos: slamPos,
       radius,
       structureDamage: structDmg,
       boarDamage: actorDmg,
       ownerId: params.actor.id,
+      ownerSquadId: params.actor.squadId,
+      ownerTeamId: slamTeamId,
       attacker: params.actor,
       isPlayer: params.isPlayer,
       tideBridge: params.tideBridge,
@@ -3119,6 +3448,7 @@ export class WeaponSystem {
       hasFirstAssault &&
       magCap > 0 &&
       !def.isGrappler &&
+      !def.isChugCannon &&
       params.item.magAmmo === magCap;
     params.onAmmoConsumed?.();
 
@@ -3133,7 +3463,7 @@ export class WeaponSystem {
 
     if (def.isThrowable) {
       const throwSound: SoundEventId =
-        def.isPortABunker || def.isEmpGrenade
+        def.isPortABunker || def.isEmpGrenade || def.isAutoTurret
           ? 'pickaxe_swing'
           : SHOT_SOUND_MAP[params.item.weaponId];
       this.eventBus.emit('sound:play', {
@@ -3186,8 +3516,14 @@ export class WeaponSystem {
     const isFlare = Boolean(
       def.isFlareGun || params.item.weaponId === 'flare_gun',
     );
+    const isAutoTurret = Boolean(
+      def.isAutoTurret || params.item.weaponId === 'auto_turret',
+    );
+    const isChugOrb = Boolean(
+      def.isChugCannon || params.item.weaponId === 'chug_cannon',
+    );
     const flareScanRadius = isFlare ? (def.flareScanRadius ?? 75) : undefined;
-    const effectiveRarityMult = isFlare ? 1.0 : rarityMult;
+    const effectiveRarityMult = isFlare || isChugOrb ? 1.0 : rarityMult;
     const isBoomArrow = Boolean(def.isBow || params.item.weaponId === 'boom_bow');
     const bowCharge = isBoomArrow ? clamp(params.bowCharge ?? 1.0, 0, 1) : 1.0;
     const bowSpeedMult = isBoomArrow ? lerp(0.35, 1.0, bowCharge) : 1.0;
@@ -3253,6 +3589,8 @@ export class WeaponSystem {
       isEmpGrenade,
       isFlare,
       flareScanRadius,
+      isAutoTurret,
+      isChugOrb,
       settled: false,
       bounceSoundCooldown: 0,
       demolisherActive: hasDemolisher,
@@ -3266,6 +3604,8 @@ export class WeaponSystem {
       onEmpHit: params.onEmpHit,
       onFlareBurst: params.onFlareBurst,
       onBoarEliminated: params.onBoarEliminated,
+      onTurretDeployed: params.onTurretDeployed,
+      onChugHeal: params.onChugHeal,
     };
 
     this.projectiles.push(proj);
@@ -3405,6 +3745,15 @@ export class WeaponSystem {
         normal: Vec3Like;
       }
     >();
+    const turretAccum = new Map<
+      string,
+      {
+        turretId: string;
+        totalDamage: number;
+        hitPoint: Vec3Like;
+        normal: Vec3Like;
+      }
+    >();
 
     let shotsHit = 0;
     let headshots = 0;
@@ -3482,6 +3831,14 @@ export class WeaponSystem {
           odBridge,
         );
         const llamaHit = this.raycastLlamas(params.origin, rayDir, entityMaxDist);
+        const turretHit = this.raycastTurrets(
+          params.origin,
+          rayDir,
+          entityMaxDist,
+          params.actor.id,
+          params.actor.squadId,
+          params.actorTeamId ?? params.actor.teamId,
+        );
         const vehicleHit = this.raycastVehicles(
           params.origin,
           rayDir,
@@ -3512,6 +3869,7 @@ export class WeaponSystem {
           | 'actor'
           | 'boar'
           | 'drone'
+          | 'turret'
           | 'llama'
           | 'vehicle'
           | 'barrel'
@@ -3557,6 +3915,10 @@ export class WeaponSystem {
           chosenType = 'vehicle';
           chosenDist = vehicleHit.distance;
         }
+        if (turretHit && turretHit.distance <= chosenDist) {
+          chosenType = 'turret';
+          chosenDist = turretHit.distance;
+        }
         if (llamaHit && llamaHit.distance <= chosenDist) {
           chosenType = 'llama';
           chosenDist = llamaHit.distance;
@@ -3598,8 +3960,10 @@ export class WeaponSystem {
               ? boarHit!.point
               : chosenType === 'drone'
                 ? droneHit!.point
-                : chosenType === 'llama'
-                  ? llamaHit!.point
+                : chosenType === 'turret'
+                  ? turretHit!.point
+                  : chosenType === 'llama'
+                    ? llamaHit!.point
                   : chosenType === 'vehicle'
                     ? vehicleHit!.point
                     : chosenType === 'exp_barrel'
@@ -3721,6 +4085,18 @@ export class WeaponSystem {
             tankerHit.point,
             tankerHit.normal,
           );
+        } else if (chosenType === 'turret' && turretHit) {
+          const existing = turretAccum.get(turretHit.turret.id);
+          if (existing) {
+            existing.totalDamage += structDmg;
+          } else {
+            turretAccum.set(turretHit.turret.id, {
+              turretId: turretHit.turret.id,
+              totalDamage: structDmg,
+              hitPoint: turretHit.point,
+              normal: turretHit.normal,
+            });
+          }
         } else if (chosenType === 'llama' && llamaHit) {
           this.propsBridge.damageLlama?.(llamaHit.llama.id, structDmg, llamaHit.point);
           this.eventBus.emit('vfx:impact', {
@@ -3804,6 +4180,22 @@ export class WeaponSystem {
           shotsHit += 1;
           totalDamageDealt += res.damage;
         }
+      }
+    }
+
+    for (const entry of turretAccum.values()) {
+      const dmgRounded = Math.max(1, Math.round(entry.totalDamage));
+      const res = this.applyTurretHit(
+        entry.turretId,
+        dmgRounded,
+        entry.hitPoint,
+        entry.normal,
+        params.actor.id,
+        params.isPlayer,
+      );
+      if (res.hit) {
+        shotsHit += 1;
+        totalDamageDealt += res.damage;
       }
     }
 
@@ -3989,6 +4381,14 @@ export class WeaponSystem {
         odBridge,
       );
       const llamaHit = this.raycastLlamas(params.origin, rayDir, entityMaxDist);
+      const turretHit = this.raycastTurrets(
+        params.origin,
+        rayDir,
+        entityMaxDist,
+        params.actor.id,
+        params.actor.squadId,
+        actorTeamId,
+      );
       const vehicleHit = this.raycastVehicles(
         params.origin,
         rayDir,
@@ -4019,6 +4419,7 @@ export class WeaponSystem {
         | 'actor'
         | 'boar'
         | 'drone'
+        | 'turret'
         | 'llama'
         | 'vehicle'
         | 'barrel'
@@ -4063,6 +4464,10 @@ export class WeaponSystem {
       if (vehicleHit && vehicleHit.distance <= chosenDist) {
         chosenType = 'vehicle';
         chosenDist = vehicleHit.distance;
+      }
+      if (turretHit && turretHit.distance <= chosenDist) {
+        chosenType = 'turret';
+        chosenDist = turretHit.distance;
       }
       if (llamaHit && llamaHit.distance <= chosenDist) {
         chosenType = 'llama';
@@ -4198,6 +4603,23 @@ export class WeaponSystem {
             tankerHit.point,
             tankerHit.normal,
           );
+        }
+      } else if (chosenType === 'turret' && turretHit) {
+        const key = `turret:${turretHit.turret.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          const res = this.applyTurretHit(
+            turretHit.turret.id,
+            baseStructDmg,
+            turretHit.point,
+            turretHit.normal,
+            params.actor.id,
+            params.isPlayer,
+          );
+          if (res.hit) {
+            shotsHit += 1;
+            totalDamageDealt += res.damage;
+          }
         }
       } else if (chosenType === 'llama' && llamaHit) {
         const key = `llama:${llamaHit.llama.id}`;
@@ -4444,6 +4866,8 @@ export class WeaponSystem {
       structureDamage: proj.structureDamage,
       boarDamage: proj.damage,
       ownerId: proj.ownerId,
+      ownerSquadId: proj.actorSquadId,
+      ownerTeamId: proj.actorTeamId,
       attacker: attackerStub,
       isPlayer: proj.isPlayer,
       tideBridge: proj.tideBridge,
@@ -4555,13 +4979,15 @@ export class WeaponSystem {
       }
     }
 
-    // 2. Damage environment props, vehicles, barrels, tankers, and wild boars
+    // 2. Damage environment props, vehicles, barrels, tankers, wild boars, and enemy turrets
     this.applySplashEnvironmentDamage({
       impactPos,
       radius: splashRadius,
       structureDamage: proj.structureDamage,
       boarDamage: proj.damage,
       ownerId: proj.ownerId,
+      ownerSquadId: proj.actorSquadId,
+      ownerTeamId: proj.actorTeamId,
       attacker: attackerStub,
       isPlayer: proj.isPlayer,
       tideBridge: proj.tideBridge,
@@ -4759,6 +5185,119 @@ export class WeaponSystem {
           actor.onHeal?.(hpAdded, shieldAdded);
         }
       }
+    }
+  }
+
+  private deployAutoTurretFromProjectile(
+    proj: ActiveProjectile,
+    deployPos: Vec3Like,
+  ): void {
+    const turret = this.building.deployAutoTurret(
+      deployPos,
+      proj.ownerId,
+      proj.actorSquadId,
+      proj.actorTeamId,
+    );
+    proj.onTurretDeployed?.(turret);
+    if (this.onTurretDeployed && this.onTurretDeployed !== proj.onTurretDeployed) {
+      this.onTurretDeployed(turret);
+    }
+    if (
+      proj.ownerId === 'player' &&
+      this.playerOverlordObserver?.onTurretDeployed &&
+      this.playerOverlordObserver.onTurretDeployed !== proj.onTurretDeployed &&
+      this.playerOverlordObserver.onTurretDeployed !== this.onTurretDeployed
+    ) {
+      this.playerOverlordObserver.onTurretDeployed(turret);
+    }
+  }
+
+  private detonateChugCannon(proj: ActiveProjectile, impactPos: Vec3Like): void {
+    const splashRadius =
+      proj.splashRadius > 0
+        ? proj.splashRadius
+        : WEAPONS.chug_cannon.splashRadius || 4.5;
+    const healAmount = WEAPONS.chug_cannon.healAmount ?? 20;
+
+    this.eventBus.emit('vfx:slurp_orb', {
+      position: { ...impactPos },
+      radius: splashRadius,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'chug_cannon_splash',
+      position: { ...impactPos },
+      spatial: true,
+    });
+
+    let actorsHealed = 0;
+    let totalHpAdded = 0;
+    let totalShieldAdded = 0;
+
+    if (this.actorsProvider) {
+      const actors = this.actorsProvider();
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (!actor.alive || actor.isKnocked) continue;
+        if (
+          !isFriendlyCombatActor(
+            proj.ownerId,
+            proj.actorSquadId,
+            proj.actorTeamId,
+            actor,
+          )
+        ) {
+          continue;
+        }
+        const center = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.5,
+          z: actor.position.z,
+        };
+        const minDist = Math.min(
+          dist3D(impactPos, actor.position),
+          dist3D(impactPos, center),
+        );
+        if (minDist <= splashRadius) {
+          const maxHp = actor.maxHp ?? 100;
+          const maxShield = actor.maxShield ?? 100;
+          const hpAdded = Math.min(healAmount, Math.max(0, maxHp - actor.hp));
+          const leftover = healAmount - hpAdded;
+          const shieldAdded = Math.min(
+            leftover,
+            Math.max(0, maxShield - actor.shield),
+          );
+          actor.hp = Math.min(maxHp, actor.hp + hpAdded);
+          actor.shield = Math.min(maxShield, actor.shield + shieldAdded);
+          actor.onHeal?.(hpAdded, shieldAdded);
+          if (hpAdded + shieldAdded > 0) {
+            actorsHealed += 1;
+            totalHpAdded += hpAdded;
+            totalShieldAdded += shieldAdded;
+          }
+        }
+      }
+    }
+
+    const report: ChugHealReport = {
+      healerId: proj.ownerId,
+      isPlayer: proj.isPlayer,
+      position: { ...impactPos },
+      actorsHealed,
+      totalHpAdded,
+      totalShieldAdded,
+      totalHealed: totalHpAdded + totalShieldAdded,
+    };
+    proj.onChugHeal?.(report);
+    if (this.onChugHeal && this.onChugHeal !== proj.onChugHeal) {
+      this.onChugHeal(report);
+    }
+    if (
+      proj.ownerId === 'player' &&
+      this.playerOverlordObserver?.onChugHeal &&
+      this.playerOverlordObserver.onChugHeal !== proj.onChugHeal &&
+      this.playerOverlordObserver.onChugHeal !== this.onChugHeal
+    ) {
+      this.playerOverlordObserver.onChugHeal(report);
     }
   }
 
@@ -4995,6 +5534,9 @@ export class WeaponSystem {
         if (proj.isFlare) {
           this.detonateFlare(proj, proj.position);
           proj.alive = false;
+        } else if (proj.isChugOrb) {
+          this.detonateChugCannon(proj, proj.position);
+          proj.alive = false;
         }
         this.projectiles.splice(i, 1);
         continue;
@@ -5058,6 +5600,24 @@ export class WeaponSystem {
           entityMaxDist,
           activeTideBridge,
         );
+        const chugAllyHit = proj.isChugOrb
+          ? this.raycastFriendlyAllyForChug(
+              prevPos,
+              stepDir,
+              entityMaxDist,
+              proj.ownerId,
+              proj.actorSquadId,
+              proj.actorTeamId,
+            )
+          : null;
+        const turretHit = this.raycastTurrets(
+          prevPos,
+          stepDir,
+          entityMaxDist,
+          proj.ownerId,
+          proj.actorSquadId,
+          proj.actorTeamId,
+        );
         const vehicleHit = this.raycastVehicles(
           prevPos,
           stepDir,
@@ -5086,7 +5646,9 @@ export class WeaponSystem {
 
         let hitType:
           | 'actor'
+          | 'chug_ally'
           | 'boar'
+          | 'turret'
           | 'vehicle'
           | 'barrel'
           | 'exp_barrel'
@@ -5131,9 +5693,17 @@ export class WeaponSystem {
           hitType = 'vehicle';
           chosenDist = vehicleHit.distance;
         }
+        if (turretHit && turretHit.distance <= chosenDist) {
+          hitType = 'turret';
+          chosenDist = turretHit.distance;
+        }
         if (boarHit && boarHit.distance <= chosenDist) {
           hitType = 'boar';
           chosenDist = boarHit.distance;
+        }
+        if (chugAllyHit && chugAllyHit.distance <= chosenDist) {
+          hitType = 'chug_ally';
+          chosenDist = chugAllyHit.distance;
         }
         if (actorHit && actorHit.distance <= chosenDist) {
           hitType = 'actor';
@@ -5146,54 +5716,64 @@ export class WeaponSystem {
         const nextPos =
           hitType === 'actor'
             ? actorHit!.point
-            : hitType === 'boar'
-              ? boarHit!.point
-              : hitType === 'vehicle'
-                ? vehicleHit!.point
-                : hitType === 'exp_barrel'
-                  ? expBarrelHit!.point
-                  : hitType === 'barrel'
-                    ? barrelHit!.point
-                    : hitType === 'tanker'
-                      ? tankerHit!.point
-                      : hitType === 'world'
-                        ? worldHit.point
-                        : hitType === 'bubble'
-                          ? bubbleHit!.point
-                          : {
-                              x: prevPos.x + stepDx,
-                              y: prevPos.y + stepDy,
-                              z: prevPos.z + stepDz,
-                            };
+            : hitType === 'chug_ally'
+              ? chugAllyHit!.point
+              : hitType === 'boar'
+                ? boarHit!.point
+                : hitType === 'turret'
+                  ? turretHit!.point
+                  : hitType === 'vehicle'
+                    ? vehicleHit!.point
+                    : hitType === 'exp_barrel'
+                      ? expBarrelHit!.point
+                      : hitType === 'barrel'
+                        ? barrelHit!.point
+                        : hitType === 'tanker'
+                          ? tankerHit!.point
+                          : hitType === 'world'
+                            ? worldHit.point
+                            : hitType === 'bubble'
+                              ? bubbleHit!.point
+                              : {
+                                  x: prevPos.x + stepDx,
+                                  y: prevPos.y + stepDy,
+                                  z: prevPos.z + stepDz,
+                                };
 
         const tracerColor =
-          proj.isFlare
-            ? 0xff6b2b
-            : proj.isBoomArrow
-              ? 0xfbbf24
-              : proj.weaponId === 'rocket_launcher'
-                ? 0xff5a2a
-                : proj.isShieldBubble || proj.isPortABunker
-                  ? 0x38bdf8
-                  : proj.isEmpGrenade
-                    ? 0x22d3ee
-                    : proj.isShockwave
-                      ? 0xa855f7
-                      : proj.isSplashHeal
+          proj.isChugOrb
+            ? 0x22d3ee
+            : proj.isAutoTurret
+              ? 0x38bdf8
+              : proj.isFlare
+                ? 0xff6b2b
+                : proj.isBoomArrow
+                  ? 0xfbbf24
+                  : proj.weaponId === 'rocket_launcher'
+                    ? 0xff5a2a
+                    : proj.isShieldBubble || proj.isPortABunker
+                      ? 0x38bdf8
+                      : proj.isEmpGrenade
                         ? 0x22d3ee
-                        : proj.isThrowable
-                          ? 0xf59e0b
-                          : 0xfff3b0;
+                        : proj.isShockwave
+                          ? 0xa855f7
+                          : proj.isSplashHeal
+                            ? 0x22d3ee
+                            : proj.isThrowable
+                              ? 0xf59e0b
+                              : 0xfff3b0;
         const tracerWidth =
           proj.weaponId === 'rocket_launcher'
             ? 0.14
-            : proj.isFlare
-              ? 0.11
-              : proj.isBoomArrow
-                ? 0.09
-                : proj.isThrowable
-                  ? 0.08
-                  : 0.06;
+            : proj.isChugOrb
+              ? 0.13
+              : proj.isFlare
+                ? 0.11
+                : proj.isBoomArrow || proj.isAutoTurret
+                  ? 0.09
+                  : proj.isThrowable
+                    ? 0.08
+                    : 0.06;
 
         this.eventBus.emit('vfx:tracer', {
           from: prevPos,
@@ -5212,11 +5792,13 @@ export class WeaponSystem {
                 ? actorHit!.normal
                 : hitType === 'boar'
                   ? boarHit!.normal
-                  : hitType === 'vehicle'
-                    ? vehicleHit!.normal
-                    : hitType === 'bubble'
-                      ? bubbleHit!.normal
-                      : worldHit.normal;
+                  : hitType === 'turret'
+                    ? turretHit!.normal
+                    : hitType === 'vehicle'
+                      ? vehicleHit!.normal
+                      : hitType === 'bubble'
+                        ? bubbleHit!.normal
+                        : worldHit.normal;
             const vn = proj.velocity.x * n.x + proj.velocity.y * n.y + proj.velocity.z * n.z;
             if (vn < 0) {
               const restitution = 0.35;
@@ -5245,6 +5827,22 @@ export class WeaponSystem {
               proj.velocity = { x: 0, y: 0, z: 0 };
               proj.settled = true;
             }
+          } else if (proj.isAutoTurret) {
+            const deployPos: Vec3Like =
+              hitType === 'world'
+                ? { ...nextPos }
+                : {
+                    x: nextPos.x,
+                    y: this.collision.getFloorHeightAt(nextPos.x, nextPos.z, nextPos.y + 0.5, 0.5),
+                    z: nextPos.z,
+                  };
+            this.deployAutoTurretFromProjectile(proj, deployPos);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
+          } else if (proj.isChugOrb) {
+            this.detonateChugCannon(proj, nextPos);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
           } else if (proj.isPortABunker) {
             const yaw =
               proj.ownerYaw ??
@@ -5420,6 +6018,15 @@ export class WeaponSystem {
                 proj.structureDamage,
                 tankerHit.point,
                 tankerHit.normal,
+              );
+            } else if (hitType === 'turret' && turretHit) {
+              this.applyTurretHit(
+                turretHit.turret.id,
+                proj.structureDamage,
+                turretHit.point,
+                turretHit.normal,
+                proj.ownerId,
+                proj.isPlayer,
               );
             } else if (hitType === 'vehicle' && vehicleHit) {
               this.vehicleBridge?.damageVehicle(

@@ -22,6 +22,7 @@ import type {
   CrosshairStyle,
   DroppedCrownEntity,
   DroppedMedallionEntity,
+  FishingHoleEntity,
   ForecastTowerEntity,
   FutureStormRing,
   GameModeId,
@@ -38,6 +39,7 @@ import type {
   Rarity,
   RebootVanEntity,
   ShieldMushroomEntity,
+  SkyBalloonEntity,
   SlurpTankerEntity,
   StormState,
   SupplyDroneEntity,
@@ -1194,7 +1196,12 @@ function classifyHighlightTone(
   ) {
     return 'gold';
   }
-  if (label.includes('TRAP') || label.includes('MEDIC') || label.includes('SURVIVOR')) {
+  if (
+    label.includes('TRAP') ||
+    label.includes('MEDIC') ||
+    label.includes('SURVIVOR') ||
+    label.includes('ANGLER')
+  ) {
     return 'emerald';
   }
   if (
@@ -1258,6 +1265,12 @@ export function deriveMatchHighlightBadges(
   }
   if ((summary.flaresFired ?? 0) >= 1) {
     pushBadge('RECON ACE', 'crimson');
+  }
+  if ((summary.turretsDeployed ?? 0) >= 1) {
+    pushBadge('TURRET ENGINEER', 'cyan');
+  }
+  if ((summary.fishCaught ?? 0) >= 1) {
+    pushBadge('MASTER ANGLER', 'emerald');
   }
   if ((summary.reboots ?? 0) >= 1) {
     pushBadge('REBOOT HERO', 'cyan');
@@ -1974,6 +1987,227 @@ export function drawTideMapOverlay(
         vehicle.yaw,
         vehicle.driverId !== null,
       );
+    }
+  }
+}
+
+export interface WorldOverlordOverlay {
+  fishingHoles: FishingHoleEntity[];
+  skyBalloons: SkyBalloonEntity[];
+}
+
+export function resolveOverlordOverlayArgs(
+  fishingHolesOrOverlay: FishingHoleEntity[] | Partial<WorldOverlordOverlay> = [],
+  skyBalloons: SkyBalloonEntity[] = [],
+): WorldOverlordOverlay {
+  if (Array.isArray(fishingHolesOrOverlay)) {
+    return {
+      fishingHoles: fishingHolesOrOverlay,
+      skyBalloons: Array.isArray(skyBalloons) ? skyBalloons : [],
+    };
+  }
+  const ov = fishingHolesOrOverlay ?? {};
+  return {
+    fishingHoles: Array.isArray(ov.fishingHoles) ? ov.fishingHoles : [],
+    skyBalloons: Array.isArray(ov.skyBalloons) ? ov.skyBalloons : [],
+  };
+}
+
+/**
+ * Draws Wave-11 Overlord overlay items (active Sky Balloons, Fishing Holes,
+ * and Deployed Auto-Turrets) without fillText, strokeText, or ellipse (Node test mock safe).
+ */
+export function drawOverlordMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  overlay: WorldOverlordOverlay,
+  deployedTurrets?: HUDState['deployedTurrets'],
+  nowMs = performance.now(),
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.006);
+
+  // 1. Active Fishing Holes (rippling cyan water spots)
+  const holes = Array.isArray(overlay?.fishingHoles) ? overlay.fishingHoles : [];
+  for (const hole of holes) {
+    if (
+      !hole ||
+      hole.depleted ||
+      (typeof hole.castsRemaining === 'number' && hole.castsRemaining <= 0) ||
+      !Number.isFinite(hole.x) ||
+      !Number.isFinite(hole.z)
+    ) {
+      continue;
+    }
+    const fp = toPx(hole.x, hole.z);
+    if (fp.x < -14 || fp.x > size + 14 || fp.y < -14 || fp.y > size + 14) {
+      continue;
+    }
+    ctx.save();
+    ctx.translate(fp.x, fp.y);
+
+    // Outer water ripple pulse ring
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.4 + pulse * 1.6, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.72)';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    // Inner water pool disc
+    ctx.beginPath();
+    ctx.arc(0, 0, 5.4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(8, 51, 68, 0.9)';
+    ctx.fill();
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    // Inner dashed splash ripple + fish/bobber diamond
+    ctx.setLineDash?.([2.4, 2.0]);
+    ctx.beginPath();
+    ctx.arc(0, 0, 3.4, 0, Math.PI * 2);
+    ctx.strokeStyle = '#bae6fd';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+    ctx.setLineDash?.([]);
+
+    ctx.beginPath();
+    ctx.moveTo(0, -2.2);
+    ctx.lineTo(2.4, 0);
+    ctx.lineTo(0, 2.2);
+    ctx.lineTo(-2.4, 0);
+    ctx.closePath();
+    ctx.fillStyle = '#67e8f9';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 2. Active Sky Balloons (amber/cyan aerial ascent markers)
+  const balloons = Array.isArray(overlay?.skyBalloons) ? overlay.skyBalloons : [];
+  for (const balloon of balloons) {
+    if (!balloon || !Number.isFinite(balloon.x) || !Number.isFinite(balloon.z)) {
+      continue;
+    }
+    const bp = toPx(balloon.x, balloon.z);
+    if (bp.x < -16 || bp.x > size + 16 || bp.y < -16 || bp.y > size + 16) {
+      continue;
+    }
+    ctx.save();
+    ctx.translate(bp.x, bp.y);
+
+    // Dashed ascent halo
+    ctx.setLineDash?.([3.2, 2.6]);
+    ctx.beginPath();
+    ctx.arc(0, 0, 8.8 + pulse * 1.4, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(251, 191, 36, 0.72)';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+    ctx.setLineDash?.([]);
+
+    // Backdrop disc
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+    ctx.fill();
+    ctx.strokeStyle = '#fbbf24';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Balloon canopy circle + cyan equator stripe + basket
+    ctx.beginPath();
+    ctx.arc(0, -0.9, 4.0, 0, Math.PI * 2);
+    ctx.fillStyle = '#f59e0b';
+    ctx.fill();
+    ctx.strokeStyle = '#fef08a';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    ctx.fillStyle = '#22d3ee';
+    ctx.fillRect(-3.6, -1.6, 7.2, 1.4);
+
+    ctx.fillStyle = '#e2e8f0';
+    ctx.fillRect(-1.8, 3.2, 3.6, 2.0);
+
+    ctx.restore();
+  }
+
+  // 3. Deployed Auto-Turrets (cyan friendly / crimson hostile + subtle detection perimeter)
+  if (Array.isArray(deployedTurrets) && deployedTurrets.length > 0) {
+    for (const turret of deployedTurrets) {
+      if (!turret || !Number.isFinite(turret.x) || !Number.isFinite(turret.z)) {
+        continue;
+      }
+      const tp = toPx(turret.x, turret.z);
+      const rangeRad = Math.max(10, 34 * pxPerMeter);
+      const pad = Math.max(18, rangeRad + 8);
+      if (
+        tp.x + pad < 0 ||
+        tp.x - pad > size ||
+        tp.y + pad < 0 ||
+        tp.y - pad > size
+      ) {
+        continue;
+      }
+      const friendly = Boolean(turret.isFriendly);
+      const accent = friendly ? '#22d3ee' : '#ef4444';
+      const inner = friendly ? '#67e8f9' : '#fca5a5';
+      const bg = friendly ? 'rgba(8, 51, 68, 0.94)' : 'rgba(69, 10, 10, 0.94)';
+
+      ctx.save();
+      ctx.translate(tp.x, tp.y);
+
+      // Subtle dashed sentry range ring
+      ctx.setLineDash?.([4, 4]);
+      ctx.beginPath();
+      ctx.arc(0, 0, rangeRad, 0, Math.PI * 2);
+      ctx.strokeStyle = friendly
+        ? 'rgba(34, 211, 238, 0.36)'
+        : 'rgba(239, 68, 68, 0.38)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.setLineDash?.([]);
+
+      // Pulsing turret lock halo
+      ctx.beginPath();
+      ctx.arc(0, 0, 7.2 + pulse * 1.4, 0, Math.PI * 2);
+      ctx.strokeStyle = friendly
+        ? 'rgba(34, 211, 238, 0.72)'
+        : 'rgba(248, 113, 113, 0.76)';
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+
+      // Turret housing disc
+      ctx.beginPath();
+      ctx.arc(0, 0, 6.0, 0, Math.PI * 2);
+      ctx.fillStyle = bg;
+      ctx.fill();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      // Tripod struts & dual gun barrels
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-3.8, 3.8);
+      ctx.moveTo(0, 0);
+      ctx.lineTo(3.8, 3.8);
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -4.4);
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.fillStyle = accent;
+      ctx.fillRect(-3.0, -2.6, 6.0, 4.0);
+
+      ctx.beginPath();
+      ctx.arc(0, -0.6, 1.6, 0, Math.PI * 2);
+      ctx.fillStyle = inner;
+      ctx.fill();
+
+      ctx.restore();
     }
   }
 }

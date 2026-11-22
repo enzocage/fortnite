@@ -194,6 +194,10 @@ export interface GameEventMap {
   'vfx:hammer_bounce': { position: Vec3Like };
   'vfx:flare_trail': { origin: Vec3Like; target: Vec3Like; radius: number };
   'vfx:water_wake': { position: Vec3Like; yaw: number; speed: number };
+  'vfx:turret_deploy': { position: Vec3Like };
+  'vfx:turret_laser': { from: Vec3Like; to: Vec3Like };
+  'vfx:slurp_orb': { position: Vec3Like; radius: number };
+  'vfx:fishing_splash': { position: Vec3Like };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

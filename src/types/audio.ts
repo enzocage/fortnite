@@ -136,7 +136,15 @@ export type SoundEventId =
   | 'boat_boost'
   | 'mushroom_eat'
   | 'boar_grunt'
-  | 'water_splash_wake';
+  | 'water_splash_wake'
+  | 'turret_deploy'
+  | 'turret_fire'
+  | 'turret_destroy'
+  | 'chug_cannon_fire'
+  | 'chug_cannon_splash'
+  | 'fishing_cast'
+  | 'fishing_catch'
+  | 'balloon_ascend';
 
 export type MusicTrackId =
   | 'none'

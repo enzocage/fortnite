@@ -99,6 +99,8 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'plasma_flamethrower',
   'shockwave_hammer',
   'flare_gun',
+  'auto_turret',
+  'chug_cannon',
 ];
 
 const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
@@ -122,6 +124,8 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'plasma_flamethrower',
   'shockwave_hammer',
   'flare_gun',
+  'auto_turret',
+  'chug_cannon',
 ];
 
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
@@ -142,6 +146,8 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'plasma_flamethrower',
   'shockwave_hammer',
   'flare_gun',
+  'auto_turret',
+  'chug_cannon',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
@@ -165,6 +171,7 @@ const THROWABLE_POOL: Array<{ id: WeaponId; stack: number }> = [
   { id: 'shield_bubble', stack: 1 },
   { id: 'port_a_bunker', stack: 1 },
   { id: 'emp_grenade', stack: 2 },
+  { id: 'auto_turret', stack: 1 },
 ];
 
 const AMMO_CHEST_AMOUNTS: Record<AmmoType, number> = {
@@ -2095,6 +2102,115 @@ export class PropsAndLoot {
         ember.position.set(0, 0.04, 0.48);
         flareGroup.add(frame, barrel, bell, grip, ember);
         itemMesh = flareGroup;
+      } else if (def.isAutoTurret) {
+        const turretGroup = new THREE.Group();
+        const darkMetalMat = this.getMat('loot_turret_metal', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#1e293b',
+            roughness: 0.34,
+            metalness: 0.82,
+          }),
+        );
+        const opticGlowMat = this.getMat('loot_turret_optic', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#22d3ee',
+            emissive: '#06b6d4',
+            emissiveIntensity: 1.65,
+            roughness: 0.16,
+            metalness: 0.25,
+          }),
+        );
+        const podBase = new THREE.Mesh(
+          this.getGeo('loot_turret_base', () => new THREE.BoxGeometry(0.36, 0.14, 0.3)),
+          darkMetalMat,
+        );
+        podBase.position.y = -0.1;
+        const collar = new THREE.Mesh(
+          this.getGeo('loot_turret_collar', () => new THREE.CylinderGeometry(0.11, 0.15, 0.1, 8)),
+          itemMat,
+        );
+        collar.position.y = 0.02;
+        const head = new THREE.Mesh(
+          this.getGeo('loot_turret_head', () => new THREE.BoxGeometry(0.24, 0.16, 0.26)),
+          itemMat,
+        );
+        head.position.y = 0.14;
+        const barrelGeo = this.getGeo('loot_turret_barrel', () => {
+          const g = new THREE.CylinderGeometry(0.032, 0.032, 0.36, 8);
+          g.rotateX(Math.PI * 0.5);
+          return g;
+        });
+        const barrelL = new THREE.Mesh(barrelGeo, darkMetalMat);
+        barrelL.position.set(-0.06, 0.14, 0.24);
+        const barrelR = new THREE.Mesh(barrelGeo, darkMetalMat);
+        barrelR.position.set(0.06, 0.14, 0.24);
+        const optic = new THREE.Mesh(
+          this.getGeo('loot_turret_optic_geo', () => new THREE.SphereGeometry(0.055, 8, 6)),
+          opticGlowMat,
+        );
+        optic.position.set(0, 0.24, 0.04);
+        turretGroup.add(podBase, collar, head, barrelL, barrelR, optic);
+        itemMesh = turretGroup;
+      } else if (def.isChugCannon) {
+        const chugGroup = new THREE.Group();
+        const slurpTankMat = this.getMat('loot_chug_slurp', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#22d3ee',
+            emissive: '#0ea5e9',
+            emissiveIntensity: 1.5,
+            roughness: 0.16,
+            metalness: 0.25,
+            transparent: true,
+            opacity: 0.9,
+          }),
+        );
+        const rimGlowMat = this.getMat('loot_chug_rim', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#67e8f9',
+            emissive: '#22d3ee',
+            emissiveIntensity: 1.75,
+            roughness: 0.15,
+          }),
+        );
+        const chassis = new THREE.Mesh(
+          this.getGeo('loot_chug_chassis', () => new THREE.BoxGeometry(0.18, 0.2, 0.54)),
+          itemMat,
+        );
+        const nozzle = new THREE.Mesh(
+          this.getGeo('loot_chug_nozzle', () => {
+            const g = new THREE.CylinderGeometry(0.135, 0.09, 0.24, 10);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          itemMat,
+        );
+        nozzle.position.set(0, 0.02, 0.36);
+        const slurpTank = new THREE.Mesh(
+          this.getGeo('loot_chug_tank', () => {
+            const g = new THREE.CylinderGeometry(0.088, 0.088, 0.34, 10);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          slurpTankMat,
+        );
+        slurpTank.position.set(0, 0.17, -0.02);
+        const glowRing = new THREE.Mesh(
+          this.getGeo('loot_chug_ring', () => new THREE.TorusGeometry(0.125, 0.024, 6, 14)),
+          rimGlowMat,
+        );
+        glowRing.position.set(0, 0.02, 0.45);
+        const carryHandle = new THREE.Mesh(
+          this.getGeo('loot_chug_handle', () => new THREE.BoxGeometry(0.06, 0.06, 0.28)),
+          itemMat,
+        );
+        carryHandle.position.set(0, 0.29, -0.02);
+        const grip = new THREE.Mesh(
+          this.getGeo('loot_gun_grip', () => new THREE.BoxGeometry(0.12, 0.22, 0.14)),
+          itemMat,
+        );
+        grip.position.set(0, -0.15, -0.14);
+        chugGroup.add(chassis, nozzle, slurpTank, glowRing, carryHandle, grip);
+        itemMesh = chugGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),

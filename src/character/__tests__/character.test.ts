@@ -85,9 +85,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 33 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 35 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(33);
+    expect(allIds).toHaveLength(35);
 
     const seenNames = new Set<string>();
 
@@ -4038,6 +4038,338 @@ describe('Wave-10 Titan Shockwave Hammer, Recon Flare Gun, Stances & VFX Channel
     expect(vfx.getActiveHammerBounceCount()).toBe(0);
     expect(vfx.getActiveFlareTrailCount()).toBe(0);
     expect(vfx.getActiveWaterWakeCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-11 Sentry Auto-Turret, Exotic Chug Cannon, Launcher Stance & VFX Channels', () => {
+  it('builds bespoke Sentry Auto-Turret briefcase and Exotic Chug Cannon launcher models with wrap rules, translucent canisters, and zero casing ejection', () => {
+    const turret = createWeaponModel('auto_turret');
+    expect(turret.name).toBe('weapon_auto_turret');
+    expect(turret.userData.wrapDisabled).toBe(true);
+    expect(isRangedWeapon('auto_turret')).toBe(false);
+    expect(isThrowableWeapon('auto_turret')).toBe(true);
+    expect(hasMuzzleOffset('auto_turret')).toBe(true);
+    expect(countMeshes(turret)).toBeGreaterThanOrEqual(14);
+    const turretMuzzle = turret.userData.muzzleOffset as THREE.Vector3;
+    expect(turretMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(turretMuzzle.z).toBeGreaterThan(0.15);
+
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    let hasCyanLockRing = false;
+    let barrelCylinders = 0;
+    turret.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (
+        child.geometry instanceof THREE.TorusGeometry &&
+        child.material instanceof THREE.MeshStandardMaterial &&
+        child.material.emissive.getHex() === cyanHex
+      ) {
+        hasCyanLockRing = true;
+      }
+      if (child.geometry instanceof THREE.CylinderGeometry) {
+        barrelCylinders++;
+      }
+    });
+    expect(hasCyanLockRing).toBe(true);
+    expect(barrelCylinders).toBeGreaterThanOrEqual(4);
+    assertFiniteBox(turret);
+    disposeObject3D(turret);
+
+    const cannon = createWeaponModel('chug_cannon');
+    expect(cannon.name).toBe('weapon_chug_cannon');
+    expect(isRangedWeapon('chug_cannon')).toBe(true);
+    expect(isThrowableWeapon('chug_cannon')).toBe(false);
+    expect(hasMuzzleOffset('chug_cannon')).toBe(true);
+    expect(countMeshes(cannon)).toBeGreaterThanOrEqual(20);
+    const cannonMuzzle = cannon.userData.muzzleOffset as THREE.Vector3;
+    expect(cannonMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(cannonMuzzle.z).toBeGreaterThan(0.45);
+
+    let translucentCanisters = 0;
+    let hasCyanGlow = false;
+    let wrapTargets = 0;
+    cannon.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) wrapTargets++;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.transparent && child.material.opacity < 0.9) {
+          translucentCanisters++;
+        }
+        if (child.material.emissive.getHex() === cyanHex) {
+          hasCyanGlow = true;
+        }
+      }
+    });
+    expect(translucentCanisters).toBeGreaterThanOrEqual(2);
+    expect(hasCyanGlow).toBe(true);
+    expect(wrapTargets).toBeGreaterThanOrEqual(2);
+
+    applyWeaponWrap(cannon, 'neon_cyber');
+    const neonMat = getWeaponWrapMaterial('neon_cyber');
+    let wrappedCount = 0;
+    cannon.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) {
+        expect(child.material).toBe(neonMat);
+        wrappedCount++;
+      } else {
+        expect(child.material).not.toBe(neonMat);
+      }
+    });
+    expect(wrappedCount).toBe(wrapTargets);
+    assertFiniteBox(cannon);
+    disposeObject3D(cannon);
+
+    // Muzzle flashes emit cyan energy without ejecting brass bullet casings
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.5, z: 0.6 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'chug_cannon',
+    });
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.3 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'auto_turret',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(2);
+    vfx.dispose();
+  });
+
+  it('animates Chug Cannon heavy shoulder-mounted launcher stance and Auto-Turret throwable briefcase stance cleanly', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    // 1. Chug Cannon heavy shoulder-mounted launcher stance (idle + aiming + sprint + pitch tracking)
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'chug_cannon',
+        animState: 'idle',
+        isAiming: false,
+        isFiring: false,
+        pitch: 0,
+      }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('chug_cannon');
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.rightElbow.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.rightHand.rotation.x).toBeGreaterThan(0.2);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.leftShoulder.rotation.y).toBeLessThan(-0.4);
+    const levelMuzzleY = rig.getMuzzleWorldPosition(new THREE.Vector3()).y;
+    assertFiniteBox(rig.getGroup());
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'chug_cannon',
+        animState: 'idle',
+        isAiming: true,
+        pitch: 0.55,
+      }),
+      0,
+    );
+    const aimUpMuzzleY = rig.getMuzzleWorldPosition(new THREE.Vector3()).y;
+    expect(aimUpMuzzleY).toBeGreaterThan(levelMuzzleY);
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'chug_cannon',
+        animState: 'idle',
+        isAiming: true,
+        pitch: -0.55,
+      }),
+      0,
+    );
+    const aimDownMuzzleY = rig.getMuzzleWorldPosition(new THREE.Vector3()).y;
+    expect(levelMuzzleY).toBeGreaterThan(aimDownMuzzleY);
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'chug_cannon',
+        animState: 'sprint',
+        moveSpeed: 8.5,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.8);
+    expect(rig.joints.rightElbow.rotation.x).toBeLessThan(-0.9);
+    assertFiniteBox(rig.getGroup());
+
+    // 2. Auto-Turret throwable briefcase stance (idle hold + overhand throw wind-up + sprint)
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'auto_turret',
+        animState: 'idle',
+        isAiming: false,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('auto_turret');
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.4);
+    expect(rig.joints.rightShoulder.rotation.x).toBeGreaterThan(-1.2);
+    assertFiniteBox(rig.getGroup());
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'auto_turret',
+        animState: 'idle',
+        isAiming: true,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.5);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.9);
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'auto_turret',
+        animState: 'sprint',
+        moveSpeed: 8.5,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.3);
+    assertFiniteBox(rig.getGroup());
+
+    rig.dispose();
+  });
+
+  it('spawns, updates, expires, guards NaN/range, clears, and disposes all 4 Wave-11 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:turret_deploy
+    bus.emit('vfx:turret_deploy', { position: { x: 4, y: 0, z: -5 } });
+    expect(vfx.getActiveTurretDeployCount()).toBe(1);
+
+    // 2. vfx:turret_laser
+    bus.emit('vfx:turret_laser', {
+      from: { x: 4, y: 1.2, z: -5 },
+      to: { x: 18, y: 1.4, z: 9 },
+    });
+    expect(vfx.getActiveTurretLaserCount()).toBe(1);
+
+    // 3. vfx:slurp_orb
+    bus.emit('vfx:slurp_orb', { position: { x: -6, y: 0.5, z: 7 }, radius: 4.5 });
+    expect(vfx.getActiveSlurpOrbCount()).toBe(1);
+
+    // 4. vfx:fishing_splash
+    bus.emit('vfx:fishing_splash', { position: { x: 22, y: -1.5, z: -18 } });
+    expect(vfx.getActiveFishingSplashCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    // Advance 0.10s -> all 4 remain active with strictly finite transforms
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveTurretDeployCount()).toBe(1);
+    expect(vfx.getActiveTurretLaserCount()).toBe(1);
+    expect(vfx.getActiveSlurpOrbCount()).toBe(1);
+    expect(vfx.getActiveFishingSplashCount()).toBe(1);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Advance past 0.20s -> turret_laser (0.18s) expires
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveTurretLaserCount()).toBe(0);
+    expect(vfx.getActiveFishingSplashCount()).toBe(1);
+    expect(vfx.getActiveSlurpOrbCount()).toBe(1);
+    expect(vfx.getActiveTurretDeployCount()).toBe(1);
+
+    // Advance to 0.70s -> fishing_splash (0.68s) expires while slurp_orb (0.75s) & turret_deploy (0.76s) stay active
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveFishingSplashCount()).toBe(0);
+    expect(vfx.getActiveSlurpOrbCount()).toBe(1);
+    expect(vfx.getActiveTurretDeployCount()).toBe(1);
+
+    // Advance past 0.80s -> all Wave-11 channels expire cleanly back to pool
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveSlurpOrbCount()).toBe(0);
+    expect(vfx.getActiveTurretDeployCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Strict NaN / Infinity / zero-length laser guards
+    bus.emit('vfx:turret_deploy', { position: { x: Number.NaN, y: 0, z: 0 } });
+    bus.emit('vfx:turret_laser', {
+      from: { x: 0, y: Number.POSITIVE_INFINITY, z: 0 },
+      to: { x: 5, y: 1, z: 5 },
+    });
+    bus.emit('vfx:turret_laser', {
+      from: { x: 2, y: 1, z: 2 },
+      to: { x: 2, y: 1, z: 2 },
+    });
+    bus.emit('vfx:slurp_orb', {
+      position: { x: 0, y: 0, z: Number.NEGATIVE_INFINITY },
+      radius: 4.5,
+    });
+    bus.emit('vfx:fishing_splash', { position: { x: Number.NaN, y: -1, z: 2 } });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Extreme distance laser & negative/NaN Slurp orb radius clamped cleanly without NaN transforms
+    bus.emit('vfx:turret_laser', {
+      from: { x: 0, y: 1, z: 0 },
+      to: { x: 0, y: 1, z: 5000 },
+    });
+    bus.emit('vfx:slurp_orb', { position: { x: 2, y: 0.5, z: 2 }, radius: -12 });
+    bus.emit('vfx:slurp_orb', { position: { x: 4, y: 0.5, z: 4 }, radius: Number.NaN });
+    expect(vfx.getActiveTurretLaserCount()).toBe(1);
+    expect(vfx.getActiveSlurpOrbCount()).toBe(2);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 4 Wave-11 pools immediately
+    bus.emit('vfx:turret_deploy', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:fishing_splash', { position: { x: 3, y: -1, z: 3 } });
+    expect(vfx.getActiveEffectCount()).toBe(5);
+    vfx.clear();
+    expect(vfx.getActiveTurretDeployCount()).toBe(0);
+    expect(vfx.getActiveTurretLaserCount()).toBe(0);
+    expect(vfx.getActiveSlurpOrbCount()).toBe(0);
+    expect(vfx.getActiveFishingSplashCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 4 Wave-11 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:turret_deploy', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:turret_laser', { from: { x: 0, y: 1, z: 0 }, to: { x: 0, y: 1, z: 12 } });
+    bus.emit('vfx:slurp_orb', { position: { x: 0, y: 0, z: 0 }, radius: 4.5 });
+    bus.emit('vfx:fishing_splash', { position: { x: 0, y: -1, z: 0 } });
+    expect(vfx.getActiveTurretDeployCount()).toBe(0);
+    expect(vfx.getActiveTurretLaserCount()).toBe(0);
+    expect(vfx.getActiveSlurpOrbCount()).toBe(0);
+    expect(vfx.getActiveFishingSplashCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

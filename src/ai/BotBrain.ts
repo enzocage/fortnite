@@ -15,6 +15,7 @@ import type {
   RiftEntity,
   SlurpBarrelEntity,
   StormState,
+  TurretEntity,
   Vec3Like,
   VehicleEntity,
   WeaponId,
@@ -31,6 +32,7 @@ import {
   RARITY_MULTIPLIER,
   RARITY_ORDER,
   REVIVE_DURATION_SEC,
+  TURRET_RANGE,
   WATER_LEVEL,
   WEAPONS,
   WORLD_HALF,
@@ -185,7 +187,13 @@ export function clampOutsideVolcanoLava(
 }
 
 function isHealingItem(weaponId: WeaponId): boolean {
-  return WEAPONS[weaponId].isConsumable || weaponId === 'chug_splash';
+  const def = WEAPONS[weaponId];
+  return Boolean(
+    def?.isConsumable ||
+      def?.isChugCannon ||
+      weaponId === 'chug_splash' ||
+      weaponId === 'chug_cannon',
+  );
 }
 
 function isUtilityOnlyItem(weaponId: WeaponId): boolean {
@@ -262,7 +270,8 @@ function isOffensiveThrowable(weaponId: WeaponId): boolean {
   return (
     weaponId === 'frag_grenade' ||
     weaponId === 'shockwave_grenade' ||
-    weaponId === 'emp_grenade'
+    weaponId === 'emp_grenade' ||
+    weaponId === 'auto_turret'
   );
 }
 
@@ -416,6 +425,10 @@ function scoreWeaponForDistance(
 
   if (def.isThrowable) {
     if (item.stackCount <= 0) return -1;
+    if (item.weaponId === 'auto_turret' || def.isAutoTurret) {
+      if (!Number.isFinite(distance) || distance < 10 || distance > 32) return -1;
+      return 24;
+    }
     if (distance < 8 || distance > 52) return -1;
     if (item.weaponId === 'emp_grenade' || def.isEmpGrenade) return 18;
     return item.weaponId === 'frag_grenade' ? 20 : 14;
@@ -596,12 +609,12 @@ export function selectBestWeaponForRange(
 export interface ThrowableDecision {
   slotIndex: number;
   item: ItemInstance;
-  reason: 'clustered' | 'boxed';
+  reason: 'clustered' | 'boxed' | 'tactical';
 }
 
 /**
- * Evaluates whether a bot should throw a `frag_grenade` or `shockwave_grenade`
- * against clustered enemies or a boxed/occluded target.
+ * Evaluates whether a bot should throw a `frag_grenade`, `shockwave_grenade`,
+ * `emp_grenade`, or deploy an `auto_turret` in combat.
  */
 export function selectThrowableForCombat(
   bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'> & {
@@ -616,18 +629,9 @@ export function selectThrowableForCombat(
   buildPieces?: BuildPiece[],
   squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
   gameMode?: GameModeId,
+  activeTurrets?: ReadonlyArray<TurretEntity>,
 ): ThrowableDecision | null {
   if ((bot.throwCooldown ?? 0) > 0) return null;
-  if (
-    allTargets.some(
-      (other) =>
-        other.alive &&
-        isFriendlyTarget(bot, other, squadmates, gameMode) &&
-        dist3D(other.position, target.position) <= 9.0,
-    )
-  ) {
-    return null;
-  }
 
   const horizDist = dist2D(
     bot.position.x,
@@ -640,14 +644,41 @@ export function selectThrowableForCombat(
   let fragSlot = -1;
   let shockwaveSlot = -1;
   let empSlot = -1;
+  let autoTurretSlot = -1;
   for (let i = 0; i < bot.inventory.items.length; i++) {
     const it = bot.inventory.items[i];
     if (!it || it.stackCount <= 0) continue;
     if (it.weaponId === 'frag_grenade' && fragSlot < 0) fragSlot = i;
     if (it.weaponId === 'shockwave_grenade' && shockwaveSlot < 0) shockwaveSlot = i;
     if (it.weaponId === 'emp_grenade' && empSlot < 0) empSlot = i;
+    if (it.weaponId === 'auto_turret' && autoTurretSlot < 0) autoTurretSlot = i;
   }
-  if (fragSlot < 0 && shockwaveSlot < 0 && empSlot < 0) return null;
+  if (fragSlot < 0 && shockwaveSlot < 0 && empSlot < 0 && autoTurretSlot < 0) {
+    return null;
+  }
+
+  const friendlyNearTarget = allTargets.some(
+    (other) =>
+      other.alive &&
+      isFriendlyTarget(bot, other, squadmates, gameMode) &&
+      dist3D(other.position, target.position) <= 9.0,
+  );
+
+  const hasFriendlyTurretNearby =
+    activeTurrets?.some(
+      (t) =>
+        t.alive &&
+        t.hp > 0 &&
+        t.remainingSec > 0 &&
+        isFriendlyTurret(bot, t, squadmates, gameMode) &&
+        dist3D(bot.position, t) <= 24.0,
+    ) ?? false;
+
+  const canDeployAutoTurret =
+    autoTurretSlot >= 0 &&
+    horizDist >= 10 &&
+    horizDist <= 32 &&
+    !hasFriendlyTurretNearby;
 
   const isClustered = allTargets.some(
     (other) =>
@@ -670,20 +701,29 @@ export function selectThrowableForCombat(
 
   const isBoxed = !hasLOS || hasNearbyBuild;
 
-  if (!isClustered && !isBoxed) return null;
+  if (!friendlyNearTarget) {
+    if (isClustered && (fragSlot >= 0 || shockwaveSlot >= 0 || empSlot >= 0)) {
+      const slotIndex =
+        fragSlot >= 0 ? fragSlot : shockwaveSlot >= 0 ? shockwaveSlot : empSlot;
+      const item = bot.inventory.items[slotIndex];
+      if (item) return { slotIndex, item, reason: 'clustered' };
+    }
 
-  if (isClustered) {
-    const slotIndex =
-      fragSlot >= 0 ? fragSlot : shockwaveSlot >= 0 ? shockwaveSlot : empSlot;
-    const item = bot.inventory.items[slotIndex];
-    return item ? { slotIndex, item, reason: 'clustered' } : null;
+    if (isBoxed && (shockwaveSlot >= 0 || fragSlot >= 0 || empSlot >= 0)) {
+      // Boxed target: prefer shockwave to shatter builds/displace, or frag/emp grenade to pressure box
+      const slotIndex =
+        shockwaveSlot >= 0 ? shockwaveSlot : fragSlot >= 0 ? fragSlot : empSlot;
+      const item = bot.inventory.items[slotIndex];
+      if (item) return { slotIndex, item, reason: 'boxed' };
+    }
   }
 
-  // Boxed target: prefer shockwave to shatter builds/displace, or frag/emp grenade to pressure box
-  const slotIndex =
-    shockwaveSlot >= 0 ? shockwaveSlot : fragSlot >= 0 ? fragSlot : empSlot;
-  const item = bot.inventory.items[slotIndex];
-  return item ? { slotIndex, item, reason: 'boxed' } : null;
+  if (canDeployAutoTurret) {
+    const item = bot.inventory.items[autoTurretSlot];
+    return item ? { slotIndex: autoTurretSlot, item, reason: 'tactical' } : null;
+  }
+
+  return null;
 }
 
 /**
@@ -915,8 +955,123 @@ export function findIncomingVehicleThreat(
   return closestThreat;
 }
 
+export interface HostileTurretHazard {
+  turret: TurretEntity;
+  distance: number;
+  strafeDirX: number;
+  strafeDirZ: number;
+}
+
 /**
- * Selects the optimal usable healing item (consumable or `chug_splash`) respecting
+ * Returns `true` when `turret` belongs to `bot`, its squad/team, or the player's allied side.
+ */
+export function isFriendlyTurret(
+  bot: Pick<
+    BotEntity,
+    'id' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+  >,
+  turret: Pick<TurretEntity, 'ownerId' | 'squadId' | 'teamId'>,
+  squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+  gameMode?: GameModeId,
+): boolean {
+  if (turret.ownerId === bot.id) return true;
+  if (bot.teamId && turret.teamId && bot.teamId === turret.teamId) {
+    return true;
+  }
+  if (bot.squadId && turret.squadId && bot.squadId === turret.squadId) {
+    return true;
+  }
+  if (squadmates && squadmates.some((m) => m.id === turret.ownerId)) {
+    return true;
+  }
+
+  const botIsBlueTeam =
+    bot.teamId === 'team_blue' ||
+    (gameMode === 'team_rumble' && bot.squadId === 'team_blue');
+  const botInPlayerSquad =
+    Boolean(bot.isAlly) ||
+    Boolean(bot.isDuoPartner) ||
+    bot.squadId === 'player_squad' ||
+    botIsBlueTeam;
+  if (botInPlayerSquad) {
+    if (turret.teamId === 'team_red') {
+      return false;
+    }
+    if (
+      turret.ownerId === 'player' ||
+      turret.ownerId === 'duo_partner' ||
+      turret.squadId === 'player_squad' ||
+      turret.teamId === 'team_blue' ||
+      (gameMode === 'team_rumble' && turret.squadId === 'team_blue')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Finds the nearest active hostile `TurretEntity` within `maxRange` (default `34m`),
+ * returning the turret, distance, and a perpendicular lateral strafe vector.
+ */
+export function findHostileTurretHazard(
+  bot: Pick<
+    BotEntity,
+    'id' | 'position' | 'strafeDir' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+  >,
+  turrets: ReadonlyArray<TurretEntity>,
+  maxRange = TURRET_RANGE,
+  squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+  gameMode?: GameModeId,
+): HostileTurretHazard | null {
+  if (!turrets || turrets.length === 0 || !Number.isFinite(maxRange) || maxRange <= 0) {
+    return null;
+  }
+
+  let closest: TurretEntity | null = null;
+  let closestDist = Infinity;
+
+  for (const t of turrets) {
+    if (!t.alive || t.hp <= 0 || t.remainingSec <= 0) continue;
+    if (!Number.isFinite(t.x) || !Number.isFinite(t.y) || !Number.isFinite(t.z)) {
+      continue;
+    }
+    if (isFriendlyTurret(bot, t, squadmates, gameMode)) continue;
+
+    const d = dist3D(bot.position, t);
+    if (d > maxRange || d >= closestDist) continue;
+    closestDist = d;
+    closest = t;
+  }
+
+  if (!closest) return null;
+
+  const dx = closest.x - bot.position.x;
+  const dz = closest.z - bot.position.z;
+  const horiz = Math.hypot(dx, dz);
+  const dirSign = bot.strafeDir === -1 ? -1 : 1;
+  let strafeDirX: number;
+  let strafeDirZ: number;
+  if (horiz > 1e-4) {
+    const fwdX = dx / horiz;
+    const fwdZ = dz / horiz;
+    strafeDirX = -fwdZ * dirSign;
+    strafeDirZ = fwdX * dirSign;
+  } else {
+    strafeDirX = dirSign;
+    strafeDirZ = 0;
+  }
+
+  return {
+    turret: closest,
+    distance: closestDist,
+    strafeDirX,
+    strafeDirZ,
+  };
+}
+
+/**
+ * Selects the optimal usable healing item (consumable, `chug_splash`, or `chug_cannon`) respecting
  * Fortnite's heal caps (mini shields cap at 50 shield, bandages cap at 75 HP)
  * and mini-before-big shield priority.
  */
@@ -932,12 +1087,30 @@ export function selectHealingItem(
   let bestScore = -1;
 
   const hpCritical = hp < maxHp * 0.5;
+  const hpChugThreshold = Math.min(maxHp, 75 * (maxHp / 100));
+  const shieldChugThreshold = Math.min(maxShield, 75 * (maxShield / 100));
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (!item || item.stackCount <= 0) continue;
     const def = WEAPONS[item.weaponId];
     if (!def || !isHealingItem(item.weaponId)) continue;
+
+    if (item.weaponId === 'chug_cannon' || def.isChugCannon) {
+      if (item.magAmmo <= 0) continue;
+      if (hp >= hpChugThreshold && shield >= shieldChugThreshold) continue;
+      let score = 101;
+      if (hpCritical) score = 113;
+      else if (hp < hpChugThreshold && shield < shieldChugThreshold) score = 107;
+      else if (hp < hpChugThreshold) score = 103;
+      else if (shield < 50) score = 97; // let mini_shield (105) top up 0..50 first if present
+      if (score > bestScore) {
+        bestScore = score;
+        bestSlot = i;
+        bestItem = item;
+      }
+      continue;
+    }
 
     if (item.weaponId === 'chug_splash') {
       const canUseSplash = hp < maxHp || shield < maxShield;
@@ -1021,6 +1194,7 @@ export function shouldBotBuildDefense(
   threatDistance = 30,
   roll?: number,
   gameMode: GameModeId = 'solo',
+  hasTurretHazard = false,
 ): boolean {
   if (gameMode === 'zero_build') {
     return false;
@@ -1055,17 +1229,17 @@ export function shouldBotBuildDefense(
     bot.state === 'combat' &&
     threatDistance < 45;
 
-  if (!recentlyDamaged && !lowHpThreat && !underAmbush && !builderEngaged) {
+  if (!recentlyDamaged && !lowHpThreat && !underAmbush && !builderEngaged && !hasTurretHazard) {
     return false;
   }
 
   if (roll !== undefined) {
-    const bonus = bot.personality === 'builder' ? 0.15 : 0;
+    const bonus = (bot.personality === 'builder' ? 0.15 : 0) + (hasTurretHazard ? 0.25 : 0);
     return roll < clamp(profile.buildChance + bonus, 0, 1);
   }
 
   if (difficulty === 'casual') {
-    return effectiveHp < 70 * scale || bot.personality === 'builder';
+    return effectiveHp < 70 * scale || bot.personality === 'builder' || hasTurretHazard;
   }
   return true;
 }
@@ -1284,13 +1458,20 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
   }
 
   // Upgrade existing same-weapon slot in-place; skip equal/worse duplicates
-  if (!def.isConsumable && !def.isThrowable) {
+  if (!isHealingItem(candidate.weaponId) && !def.isConsumable && !def.isThrowable) {
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
       if (slot && slot.weaponId === candidate.weaponId) {
         const candRarity = RARITY_ORDER.indexOf(candidate.rarity);
         const slotRarity = RARITY_ORDER.indexOf(slot.rarity);
         return candRarity > slotRarity ? i : -1;
+      }
+    }
+  } else if (candidate.weaponId === 'chug_cannon' || def.isChugCannon) {
+    for (let i = 1; i < bot.inventory.items.length; i++) {
+      const slot = bot.inventory.items[i];
+      if (slot && (slot.weaponId === 'chug_cannon' || WEAPONS[slot.weaponId].isChugCannon)) {
+        return -1;
       }
     }
   }
@@ -1303,7 +1484,7 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
   }
 
   // Replace existing same-weapon with higher rarity or strictly better weapon
-  if (!def.isConsumable && !def.isThrowable) {
+  if (!isHealingItem(candidate.weaponId) && !def.isConsumable && !def.isThrowable) {
     const candValue = getWeaponOverallValue(candidate);
     let worstSlot = -1;
     let worstDiff = 0;
@@ -2340,7 +2521,17 @@ function stepHealingState(
   safeDt: number,
 ): MoveIntent {
   const item = bot.inventory.items[bot.healSlot];
-  if (!item || !isHealingItem(item.weaponId) || item.stackCount <= 0) {
+  const rawDef = item ? WEAPONS[item.weaponId] : undefined;
+  const isChugCannonItem = Boolean(
+    item && (item.weaponId === 'chug_cannon' || rawDef?.isChugCannon),
+  );
+  if (
+    !item ||
+    !rawDef ||
+    !isHealingItem(item.weaponId) ||
+    item.stackCount <= 0 ||
+    (isChugCannonItem && item.magAmmo <= 0)
+  ) {
     bot.healTimer = 0;
     bot.retreatTimer = 0;
     bot.isCrouching = false;
@@ -2348,12 +2539,12 @@ function stepHealingState(
     return emptyMoveIntent();
   }
 
-  const def = WEAPONS[item.weaponId];
+  const def = rawDef;
   const isSplash = item.weaponId === 'chug_splash';
   const threatPos = combatMatch?.target.position ?? bot.lastKnownEnemyPos;
   let moveIntent = emptyMoveIntent();
 
-  // Brief tactical retreat away from threat before channeling shields/meds (or while tossing Chug Splash)
+  // Brief tactical retreat away from threat before channeling shields/meds (or while tossing Chug Splash / Chug Cannon)
   if ((bot.retreatTimer ?? 0) > 0 && threatPos) {
     bot.retreatTimer = Math.max(0, (bot.retreatTimer ?? 0) - safeDt);
     const awayX = bot.position.x - threatPos.x;
@@ -2371,11 +2562,11 @@ function stepHealingState(
       wantsJump: false,
     };
     bot.inventory.activeSlot = bot.healSlot;
-    if (!isSplash) {
+    if (!isSplash && !isChugCannonItem) {
       return moveIntent;
     }
   } else {
-    bot.isCrouching = !isSplash;
+    bot.isCrouching = !isSplash && !isChugCannonItem;
     bot.isSprinting = false;
   }
 
@@ -2403,6 +2594,34 @@ function stepHealingState(
     };
     ctx.fireWeapon(bot, item, eye, throwDir, 0.01);
     bot.isFiring = true;
+
+    item.stackCount -= 1;
+    if (item.stackCount <= 0) {
+      bot.inventory.items[bot.healSlot] = null;
+    }
+  } else if (isChugCannonItem) {
+    const chugAmt = def.healAmount ?? 20;
+    const chugCap = def.healCap ?? 100;
+    const maxTargetHp = Math.min(bot.maxHp, chugCap);
+    const maxTargetShield = Math.min(bot.maxShield, chugCap);
+    const hpGain = Math.min(chugAmt, Math.max(0, maxTargetHp - bot.hp));
+    const shieldGain = Math.min(
+      chugAmt - hpGain,
+      Math.max(0, maxTargetShield - bot.shield),
+    );
+    bot.hp = Math.min(maxTargetHp, bot.hp + hpGain);
+    bot.shield = Math.min(maxTargetShield, bot.shield + shieldGain);
+
+    const eye = getBotEyePos(bot);
+    const throwDir = {
+      x: Math.sin(bot.yaw) * 0.25,
+      y: -0.94,
+      z: Math.cos(bot.yaw) * 0.25,
+    };
+    ctx.fireWeapon(bot, item, eye, throwDir, 0.01);
+    bot.isFiring = true;
+    // Exotic Chug Cannon consumes rechargeable magAmmo charges rather than stackCount
+    item.magAmmo = Math.max(0, item.magAmmo - 1);
   } else {
     const amt = def.healAmount ?? 25;
     const cap = def.healCap ?? 100;
@@ -2414,12 +2633,13 @@ function stepHealingState(
       bot.hp = Math.min(bot.maxHp, cap, bot.hp + amt);
       bot.shield = Math.min(bot.maxShield, cap, bot.shield + amt);
     }
+
+    item.stackCount -= 1;
+    if (item.stackCount <= 0) {
+      bot.inventory.items[bot.healSlot] = null;
+    }
   }
 
-  item.stackCount -= 1;
-  if (item.stackCount <= 0) {
-    bot.inventory.items[bot.healSlot] = null;
-  }
   bot.healTimer = 0;
 
   const nextHeal = selectHealingItem(
@@ -2436,9 +2656,12 @@ function stepHealingState(
   ) {
     bot.healSlot = nextHeal.slotIndex;
     bot.inventory.activeSlot = nextHeal.slotIndex;
+    const nextIsChugCannon =
+      nextHeal.item.weaponId === 'chug_cannon' ||
+      Boolean(WEAPONS[nextHeal.item.weaponId].isChugCannon);
     bot.healTimer =
       WEAPONS[nextHeal.item.weaponId].consumeTime ??
-      (nextHeal.item.weaponId === 'chug_splash' ? 0.55 : 2.5);
+      (nextHeal.item.weaponId === 'chug_splash' || nextIsChugCannon ? 0.55 : 2.5);
   } else {
     bot.isCrouching = false;
     bot.retreatTimer = 0;
@@ -2871,7 +3094,7 @@ function stepCombatState(
     handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
   } else {
     const buildPieces = ctx.getBuildPieces?.();
-    // Check tactical throwables (`frag_grenade` / `shockwave_grenade`) against clustered or boxed enemies
+    // Check tactical throwables (`frag_grenade` / `shockwave_grenade` / `emp_grenade` / `auto_turret`)
     const throwDecision =
       !isFarLOD && bot.reloadTimer <= 0 && bot.burstQueue <= 0
         ? selectThrowableForCombat(
@@ -2882,6 +3105,7 @@ function stepCombatState(
             buildPieces,
             squadmates,
             ctx.gameMode,
+            ctx.getTurrets?.(),
           )
         : null;
 
@@ -3070,7 +3294,12 @@ function scanLootingTargets(
 
     let bonus = 0;
     if (drop.item && canUpgradeOrTakeItem(bot, drop.item) >= 1) {
-      bonus = isHealingItem(drop.item.weaponId) ? 18 : 32;
+      bonus =
+        drop.item.weaponId === 'chug_cannon'
+          ? 28
+          : isHealingItem(drop.item.weaponId)
+            ? 18
+            : 32;
     } else if (drop.ammo) {
       bonus = 6;
     } else if (drop.materials && getTotalMaterials(bot) < 400) {
@@ -5007,6 +5236,68 @@ function stepSquadmateRevive(
   return true;
 }
 
+function applyTurretHazardStrafe(
+  bot: BotEntity,
+  hazard: HostileTurretHazard,
+  intent: MoveIntent,
+  needRotateStorm: boolean,
+  hasCombatTarget: boolean,
+  safeDt: number,
+): MoveIntent {
+  if (!hasCombatTarget) {
+    bot.strafeTimer -= safeDt;
+    if (bot.strafeTimer <= 0) {
+      bot.strafeDir = nextBotRand(bot) < 0.5 ? -1 : 1;
+      bot.strafeTimer = 0.65 + nextBotRand(bot) * 1.1;
+    }
+  }
+
+  const dirSign = bot.strafeDir === -1 ? -1 : 1;
+  const dx = hazard.turret.x - bot.position.x;
+  const dz = hazard.turret.z - bot.position.z;
+  const horiz = Math.hypot(dx, dz);
+  const fwdX = horiz > 1e-4 ? dx / horiz : 0;
+  const fwdZ = horiz > 1e-4 ? dz / horiz : 1;
+  const strafeX = horiz > 1e-4 ? -fwdZ * dirSign : dirSign;
+  const strafeZ = horiz > 1e-4 ? fwdX * dirSign : 0;
+
+  if (!hasCombatTarget && horiz > 0.25) {
+    bot.yaw = lerpAngle(bot.yaw, Math.atan2(fwdX, fwdZ), clamp(8 * safeDt, 0, 1));
+  }
+
+  const awayBias = hazard.distance < 20 ? 0.35 : 0.14;
+  const stormBias = needRotateStorm && intent.speed > 0.5 ? 0.45 : 0;
+  const combX =
+    strafeX * 0.92 -
+    fwdX * awayBias +
+    (stormBias > 0 ? intent.dirX * stormBias : hasCombatTarget ? intent.dirX * 0.45 : 0);
+  const combZ =
+    strafeZ * 0.92 -
+    fwdZ * awayBias +
+    (stormBias > 0 ? intent.dirZ * stormBias : hasCombatTarget ? intent.dirZ * 0.45 : 0);
+  const len = Math.hypot(combX, combZ) || 1;
+  const dirX = combX / len;
+  const dirZ = combZ / len;
+
+  bot.isCrouching = false;
+  const sprintNow = needRotateStorm || hazard.distance < 22 || bot.isSprinting;
+  bot.isSprinting = sprintNow;
+
+  const wantsJump =
+    intent.wantsJump ||
+    (bot.grounded &&
+      bot.jumpCooldown <= 0 &&
+      hazard.distance < 18 &&
+      nextBotRand(bot) < 0.35);
+
+  return {
+    dirX,
+    dirZ,
+    speed: sprintNow ? SPRINT_SPEED : Math.max(intent.speed, RUN_SPEED),
+    wantsJump,
+  };
+}
+
 /**
  * Advances a single bot's state machine, physics, perception, combat, building, and animations.
  */
@@ -5138,6 +5429,26 @@ export function updateBot(
 
   // Grounded states
   handleReloading(bot, safeDt);
+  const chugRegenSec = WEAPONS.chug_cannon.chugRegenSec ?? 8;
+  const chugMaxMag = WEAPONS.chug_cannon.magSize || 5;
+  let hasChargingChugCannon = false;
+  for (let i = 1; i < bot.inventory.items.length; i++) {
+    const it = bot.inventory.items[i];
+    if (it && (it.weaponId === 'chug_cannon' || WEAPONS[it.weaponId].isChugCannon)) {
+      if (it.magAmmo < chugMaxMag) {
+        hasChargingChugCannon = true;
+        bot.chugCannonRegenTimer = (bot.chugCannonRegenTimer ?? 0) + safeDt;
+        if (bot.chugCannonRegenTimer >= chugRegenSec) {
+          bot.chugCannonRegenTimer -= chugRegenSec;
+          it.magAmmo = Math.min(chugMaxMag, it.magAmmo + 1);
+        }
+      }
+      break;
+    }
+  }
+  if (!hasChargingChugCannon) {
+    bot.chugCannonRegenTimer = 0;
+  }
   if (isPlayerCompanion && effectivePlayerPos) {
     const dist2dToPlayer = dist2D(
       bot.position.x,
@@ -5288,6 +5599,17 @@ export function updateBot(
     }
   }
 
+  const turretHazard =
+    !isFarLOD && ctx.getTurrets
+      ? findHostileTurretHazard(
+          bot,
+          ctx.getTurrets(),
+          TURRET_RANGE,
+          effectiveSquadmates,
+          effectiveMode,
+        )
+      : null;
+
   if (effectiveMode === 'zero_build' || bot.isAlly) {
     bot.isBuilding = false;
     bot.buildAnimTimer = 0;
@@ -5296,19 +5618,29 @@ export function updateBot(
       bot,
       difficulty,
       elapsed,
-      combatMatch ? combatMatch.distance : 30,
+      Math.min(
+        combatMatch ? combatMatch.distance : Infinity,
+        turretHazard ? turretHazard.distance : Infinity,
+      ),
       undefined,
       effectiveMode,
+      Boolean(turretHazard),
     )
   ) {
     const threatPos =
-      combatMatch?.target.position ??
-      bot.lastKnownEnemyPos ??
-      bot.lastHeardNoisePos ?? {
-        x: bot.position.x + Math.sin(bot.yaw) * 15,
-        y: bot.position.y,
-        z: bot.position.z + Math.cos(bot.yaw) * 15,
-      };
+      turretHazard && (!combatMatch || turretHazard.distance <= combatMatch.distance)
+        ? {
+            x: turretHazard.turret.x,
+            y: turretHazard.turret.y,
+            z: turretHazard.turret.z,
+          }
+        : combatMatch?.target.position ??
+          bot.lastKnownEnemyPos ??
+          bot.lastHeardNoisePos ?? {
+            x: bot.position.x + Math.sin(bot.yaw) * 15,
+            y: bot.position.y,
+            z: bot.position.z + Math.cos(bot.yaw) * 15,
+          };
     tryBuildCover(bot, ctx, difficulty, threatPos, elapsed);
   }
 
@@ -5355,11 +5687,17 @@ export function updateBot(
   );
   const closeThreat = combatMatch !== null && combatMatch.hasLOS && combatMatch.distance < 18;
   const activeHealItem = bot.inventory.items[bot.healSlot];
+  const activeHealIsChugCannon = Boolean(
+    activeHealItem &&
+      (activeHealItem.weaponId === 'chug_cannon' ||
+        WEAPONS[activeHealItem.weaponId].isChugCannon),
+  );
   if (
     !riftIntent &&
     bot.state === 'healing' &&
     bot.stateTimer > 1.1 &&
     activeHealItem?.weaponId !== 'chug_splash' &&
+    !activeHealIsChugCannon &&
     bot.hp >= 35 * (bot.maxHp / 100) &&
     bot.lastDamageTime >= 0 &&
     elapsed - bot.lastDamageTime < 0.25 &&
@@ -5371,11 +5709,19 @@ export function updateBot(
   }
 
   const hpScale = bot.maxHp / 100;
+  const shieldScale = bot.maxShield / 100;
+  const healChoiceIsChugCannon = Boolean(
+    healChoice &&
+      (healChoice.item.weaponId === 'chug_cannon' ||
+        WEAPONS[healChoice.item.weaponId].isChugCannon),
+  );
   const lowHpForHeal =
     bot.hp < profile.healThresholdHp * hpScale ||
     (bot.hp + bot.shield < 85 * hpScale &&
       (healChoice?.item.weaponId === 'chug_splash' ||
-        healChoice?.item.weaponId === 'mini_shield'));
+        healChoice?.item.weaponId === 'mini_shield')) ||
+    (healChoiceIsChugCannon &&
+      (bot.hp < 75 * hpScale || bot.shield < 75 * shieldScale));
   const wantsCriticalHeal =
     healChoice !== null &&
     lowHpForHeal &&
@@ -5384,6 +5730,7 @@ export function updateBot(
       bot.buildCooldown > 0 ||
       getTotalMaterials(bot) < BUILD_COST ||
       healChoice.item.weaponId === 'chug_splash' ||
+      healChoiceIsChugCannon ||
       healChoice.item.weaponId === 'mini_shield');
   const wantsSafeTopOff =
     healChoice !== null &&
@@ -5397,7 +5744,7 @@ export function updateBot(
     bot.inventory.activeSlot = healChoice.slotIndex;
     bot.healTimer =
       WEAPONS[healChoice.item.weaponId].consumeTime ??
-      (healChoice.item.weaponId === 'chug_splash' ? 0.55 : 3.0);
+      (healChoice.item.weaponId === 'chug_splash' || healChoiceIsChugCannon ? 0.55 : 3.0);
     bot.retreatTimer = !isPlayerCompanion && combatMatch ? 0.75 : 0;
     bot.stateTimer = 0;
   }
@@ -5596,6 +5943,20 @@ export function updateBot(
     }
   }
 
+  if (turretHazard && !isFarLOD) {
+    intent = applyTurretHazardStrafe(
+      bot,
+      turretHazard,
+      intent,
+      needRotateStorm,
+      Boolean(combatMatch),
+      safeDt,
+    );
+    if (isPlayerCompanion && effectivePlayerPos && (bot.state === 'combat' || bot.state === 'healing')) {
+      intent = enforceAllyCombatLeash(bot, effectivePlayerPos, intent);
+    }
+  }
+
   if (!isFarLOD && ctx.getVehicles) {
     const incomingVehicle = findIncomingVehicleThreat(
       bot.position,
@@ -5733,6 +6094,7 @@ export class BotBrain {
     buildPieces?: BuildPiece[],
     squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
     gameMode?: GameModeId,
+    activeTurrets?: ReadonlyArray<TurretEntity>,
   ): ThrowableDecision | null {
     return selectThrowableForCombat(
       bot,
@@ -5742,7 +6104,33 @@ export class BotBrain {
       buildPieces,
       squadmates,
       gameMode,
+      activeTurrets,
     );
+  }
+
+  isFriendlyTurret(
+    bot: Pick<
+      BotEntity,
+      'id' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+    >,
+    turret: Pick<TurretEntity, 'ownerId' | 'squadId' | 'teamId'>,
+    squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+    gameMode?: GameModeId,
+  ): boolean {
+    return isFriendlyTurret(bot, turret, squadmates, gameMode);
+  }
+
+  findHostileTurretHazard(
+    bot: Pick<
+      BotEntity,
+      'id' | 'position' | 'strafeDir' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+    >,
+    turrets: ReadonlyArray<TurretEntity>,
+    maxRange = TURRET_RANGE,
+    squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+    gameMode?: GameModeId,
+  ): HostileTurretHazard | null {
+    return findHostileTurretHazard(bot, turrets, maxRange, squadmates, gameMode);
   }
 
   segmentIntersectsSphere(
@@ -5877,14 +6265,23 @@ export class BotBrain {
       | 'buildCooldown'
       | 'lastDamageTime'
       | 'state'
-    > & { maxHp?: number; reactionTimer?: number },
+    > & { maxHp?: number; reactionTimer?: number; isGrinding?: boolean },
     difficulty: Difficulty,
     nowSec: number,
     threatDistance?: number,
     roll?: number,
     gameMode: GameModeId = 'solo',
+    hasTurretHazard = false,
   ): boolean {
-    return shouldBotBuildDefense(bot, difficulty, nowSec, threatDistance, roll, gameMode);
+    return shouldBotBuildDefense(
+      bot,
+      difficulty,
+      nowSec,
+      threatDistance,
+      roll,
+      gameMode,
+      hasTurretHazard,
+    );
   }
 
   computeBotSpread(

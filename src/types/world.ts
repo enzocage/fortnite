@@ -5,6 +5,7 @@ import type {
   MedallionId,
   Rarity,
   SpecialistRole,
+  TeamId,
   Vec3Like,
 } from './common';
 import type { ItemInstance, WeaponId } from './weapons';
@@ -430,6 +431,40 @@ export interface FlareBeaconEntity {
   radius: number;
   remainingSec: number;
   ownerId: string;
+}
+
+export interface FishingHoleEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  castsRemaining: number;
+  depleted: boolean;
+}
+
+export interface SkyBalloonEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  baseY: number;
+  topY: number;
+  z: number;
+}
+
+export interface TurretEntity {
+  id: string;
+  ownerId: string;
+  squadId?: string;
+  teamId?: TeamId;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  hp: number;
+  maxHp: number;
+  remainingSec: number;
+  fireCooldown: number;
+  alive: boolean;
 }
 
 export interface SupplyDrop {

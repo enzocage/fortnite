@@ -25,6 +25,7 @@ import type {
   TerrainQuery,
   TrapEntity,
   TrapKind,
+  TurretEntity,
   Vec3Like,
   VendingMachineEntity,
   WeaponId,
@@ -37,6 +38,7 @@ import {
   DBNO_MAX_HP,
   DEFAULT_KEYBINDS,
   EventBus,
+  FISHING_CAST_SEC,
   GLIDER_FORCE_HEIGHT,
   GRID_XZ,
   GRID_Y,
@@ -59,6 +61,7 @@ import {
   REVIVE_DURATION_SEC,
   SHIELD_MUSHROOM_AMOUNT,
   STARTING_GOLD_BARS,
+  THERMAL_FLOPPER_DURATION_SEC,
   UPGRADE_COSTS,
   WATER_LEVEL,
   WEAPONS,
@@ -77,10 +80,12 @@ import { AugmentManager } from './AugmentManager';
 import type { BuildingSystem } from './BuildingSystem';
 import type { CollisionSystem } from './CollisionSystem';
 import type {
+  ChugHealReport,
   CombatActor,
   DuoRebootBridge,
   DuoReviveBridge,
   FireWeaponResult,
+  FishingCastResult,
   NearbyGrindRailMatch,
   PlayerHudSnapshot,
   PlayerInteractPrompt,
@@ -94,6 +99,7 @@ import type {
   WorldEconomyBridge,
   WorldFrontierBridge,
   WorldOverdriveBridge,
+  WorldOverlordBridge,
   WorldRiftCaptureBridge,
   WorldSkyforgeBridge,
   WorldStationBridge,
@@ -132,6 +138,7 @@ export class PlayerController {
   private frontierBridge: WorldFrontierBridge | null = null;
   private skyforgeBridge: WorldSkyforgeBridge | null = null;
   private tideBridge: WorldTideBridge | null = null;
+  private overlordBridge: WorldOverlordBridge | null = null;
   private duoReviveBridge: DuoReviveBridge | null = null;
   private duoRebootBridge: DuoRebootBridge | null = null;
   private augmentManager: AugmentManager;
@@ -147,6 +154,9 @@ export class PlayerController {
   private onBoarEliminated:
     | ((pos: Vec3Like, attackerId: string) => void)
     | null = null;
+  private onFishingReward: ((result: FishingCastResult) => void) | null = null;
+  private onTurretDeployed: ((turret: TurretEntity) => void) | null = null;
+  private onChugHeal: ((report: ChugHealReport) => void) | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
 
@@ -216,6 +226,12 @@ export class PlayerController {
   private lowGravityTimer = 0;
   private isHackingTrainChest = false;
   private trainHackProgress: number | null = null;
+  private thermalVisionTimer = 0;
+  private isFishing = false;
+  private fishingTimer = 0;
+  private fishingProgress: number | null = null;
+  private activeFishingHoleId: string | null = null;
+  private chugRegenTimers = new Map<string, number>();
 
   private gameMode: GameModeId = 'solo';
   private overshield = 0;
@@ -363,6 +379,9 @@ export class PlayerController {
     flaresFired: 0,
     boarsHunted: 0,
     mushroomsEaten: 0,
+    turretsDeployed: 0,
+    fishCaught: 0,
+    chugHeals: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -415,6 +434,7 @@ export class PlayerController {
       frontierBridge?: WorldFrontierBridge | null;
       skyforgeBridge?: WorldSkyforgeBridge | null;
       tideBridge?: WorldTideBridge | null;
+      overlordBridge?: WorldOverlordBridge | null;
       duoReviveBridge?: DuoReviveBridge | null;
       duoRebootBridge?: DuoRebootBridge | null;
       augmentManager?: AugmentManager | null;
@@ -429,6 +449,9 @@ export class PlayerController {
       onTrainChestHacked?: ((lootPos: Vec3Like) => void) | null;
       onFlareBurst?: ((beacon: FlareBeaconEntity) => void) | null;
       onBoarEliminated?: ((pos: Vec3Like, attackerId: string) => void) | null;
+      onFishingReward?: ((result: FishingCastResult) => void) | null;
+      onTurretDeployed?: ((turret: TurretEntity) => void) | null;
+      onChugHeal?: ((report: ChugHealReport) => void) | null;
     },
   ) {
     this.camera = camera;
@@ -475,6 +498,9 @@ export class PlayerController {
     if (options?.tideBridge !== undefined) {
       this.setTideBridge(options.tideBridge);
     }
+    if (options?.overlordBridge !== undefined) {
+      this.setOverlordBridge(options.overlordBridge);
+    }
     if (options?.duoReviveBridge !== undefined) {
       this.setDuoReviveBridge(options.duoReviveBridge);
     }
@@ -514,6 +540,15 @@ export class PlayerController {
     if (options?.onBoarEliminated !== undefined) {
       this.setOnBoarEliminated(options.onBoarEliminated);
     }
+    if (options?.onFishingReward !== undefined) {
+      this.setOnFishingReward(options.onFishingReward);
+    }
+    if (options?.onTurretDeployed !== undefined) {
+      this.setOnTurretDeployed(options.onTurretDeployed);
+    }
+    if (options?.onChugHeal !== undefined) {
+      this.setOnChugHeal(options.onChugHeal);
+    }
 
     this.weapons.setPlayerTideObserver({
       onFlareBurst: (beacon) => {
@@ -525,6 +560,18 @@ export class PlayerController {
           this.stats.boarsHunted = (this.stats.boarsHunted ?? 0) + 1;
         }
         this.onBoarEliminated?.(pos, attackerId);
+      },
+    });
+    this.weapons.setPlayerOverlordObserver({
+      onTurretDeployed: (turret) => {
+        this.stats.turretsDeployed = (this.stats.turretsDeployed ?? 0) + 1;
+        this.onTurretDeployed?.(turret);
+      },
+      onChugHeal: (report) => {
+        if (report.actorsHealed > 0) {
+          this.stats.chugHeals = (this.stats.chugHeals ?? 0) + report.actorsHealed;
+        }
+        this.onChugHeal?.(report);
       },
     });
 
@@ -695,6 +742,34 @@ export class PlayerController {
     this.onBoarEliminated = cb;
   }
 
+  setOverlordBridge(bridge: WorldOverlordBridge | null): void {
+    this.overlordBridge = bridge;
+    if (!bridge) {
+      this.cancelFishingChannel();
+    }
+  }
+
+  getOverlordBridge(): WorldOverlordBridge | null {
+    return this.overlordBridge;
+  }
+
+  setOnFishingReward(cb: ((result: FishingCastResult) => void) | null): void {
+    this.onFishingReward = cb;
+  }
+
+  setOnTurretDeployed(cb: ((turret: TurretEntity) => void) | null): void {
+    this.onTurretDeployed = cb;
+  }
+
+  setOnChugHeal(cb: ((report: ChugHealReport) => void) | null): void {
+    this.onChugHeal = cb;
+  }
+
+  setThermalVisionTimer(sec: number): void {
+    if (!Number.isFinite(sec)) return;
+    this.thermalVisionTimer = Math.max(0, sec);
+  }
+
   setFlareScanStatus(
     beacons: ReadonlyArray<{
       id?: string;
@@ -822,7 +897,8 @@ export class PlayerController {
       def.isGrappler ||
       def.isKineticBlade ||
       def.isShockwaveHammer ||
-      def.isJetpack
+      def.isJetpack ||
+      def.isChugCannon
     ) {
       return false;
     }
@@ -943,8 +1019,8 @@ export class PlayerController {
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
+    this.cancelFishingChannel();
     this.isJetpackThrusting = false;
-    this.cancelTrainChestHack();
     this.clearHeldInputs();
     this.weapons.clearActorBurn('player');
 
@@ -973,6 +1049,7 @@ export class PlayerController {
     this.jetpackDryLock = false;
     this.jetpackVfxTimer = 0;
     this.lowGravityTimer = 0;
+    this.thermalVisionTimer = 0;
     this.hammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
     this.hammerRechargeTimer = 0;
     this.isSliding = false;
@@ -1209,6 +1286,7 @@ export class PlayerController {
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
+    this.cancelFishingChannel();
     this.isJetpackThrusting = false;
     this.isAiming = false;
     this.isScoped = false;
@@ -1649,6 +1727,7 @@ export class PlayerController {
       this.cancelPartnerRevive();
       this.cancelPartnerReboot();
       this.cancelTrainChestHack();
+      this.cancelFishingChannel();
       this.isJetpackThrusting = false;
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
@@ -2013,7 +2092,10 @@ export class PlayerController {
     this.jetpackDryLock = false;
     this.jetpackVfxTimer = 0;
     this.lowGravityTimer = 0;
+    this.thermalVisionTimer = 0;
     this.cancelTrainChestHack();
+    this.cancelFishingChannel();
+    this.chugRegenTimers.clear();
     this.weapons.clearActorBurn('player');
     this.stats = {
       damageDealt: 0,
@@ -2039,6 +2121,9 @@ export class PlayerController {
       flaresFired: 0,
       boarsHunted: 0,
       mushroomsEaten: 0,
+      turretsDeployed: 0,
+      fishCaught: 0,
+      chugHeals: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -2331,9 +2416,12 @@ export class PlayerController {
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
+    this.cancelFishingChannel();
     this.isJetpackThrusting = false;
     this.jetpackDryLock = false;
     this.lowGravityTimer = 0;
+    this.thermalVisionTimer = 0;
+    this.chugRegenTimers.clear();
     this.flareBeacons = [];
     this.flareScanMarkedCount = 0;
     this.weapons.clearActorBurn('player');
@@ -2441,6 +2529,7 @@ export class PlayerController {
   dispose(): void {
     this.detachInputListeners();
     this.weapons.setPlayerTideObserver(null);
+    this.weapons.setPlayerOverlordObserver(null);
     this.unsubHitmarker?.();
     this.unsubHitmarker = null;
     this.unsubDamage?.();
@@ -2509,6 +2598,7 @@ export class PlayerController {
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
+    this.cancelFishingChannel();
     this.isJetpackThrusting = false;
     this.lastDraggedEditTile = -1;
   }
@@ -3058,6 +3148,7 @@ export class PlayerController {
     this.railgunChargeElapsed = 0;
     this.railgunCharge = 0;
     this.minigunSpinTimer = 0;
+    this.cancelFishingChannel();
   }
 
   private cancelPartnerRevive(): void {
@@ -3077,6 +3168,13 @@ export class PlayerController {
   private cancelTrainChestHack(): void {
     this.isHackingTrainChest = false;
     this.trainHackProgress = null;
+  }
+
+  private cancelFishingChannel(): void {
+    this.isFishing = false;
+    this.fishingTimer = 0;
+    this.fishingProgress = null;
+    this.activeFishingHoleId = null;
   }
 
   private cycleBuildMaterial(): void {
@@ -3206,7 +3304,8 @@ export class PlayerController {
       !def.isShockwaveHammer &&
       !def.isGrappler &&
       !def.isThrowable &&
-      !def.isJetpack
+      !def.isJetpack &&
+      !def.isChugCannon
     ) {
       this.stats.shotsFired += 1;
       if (res.shotsHit > 0) this.stats.shotsHit += 1;
@@ -3251,7 +3350,8 @@ export class PlayerController {
       def.magSize > 0 &&
       item.magAmmo <= 0 &&
       !def.isGrappler &&
-      !def.isFlareGun
+      !def.isFlareGun &&
+      !def.isChugCannon
     ) {
       this.startReload();
     }
@@ -3262,7 +3362,8 @@ export class PlayerController {
       this.isKnocked ||
       this.isRevivingPartner ||
       this.isRebootingPartner ||
-      this.isHackingTrainChest
+      this.isHackingTrainChest ||
+      this.isFishing
     ) {
       return;
     }
@@ -3324,7 +3425,7 @@ export class PlayerController {
         if (isInitialPress) {
           this.eventBus.emit('sound:play', { id: 'dryfire' });
         }
-        if (!def.isGrappler && !def.isFlareGun) {
+        if (!def.isGrappler && !def.isFlareGun && !def.isChugCannon) {
           this.startReload();
         }
         return;
@@ -4093,7 +4194,9 @@ export class PlayerController {
       | 'npc_specialist'
       | 'mod_bench'
       | 'forecast_tower'
-      | 'shield_mushroom';
+      | 'shield_mushroom'
+      | 'fishing_hole'
+      | 'sky_balloon';
     id: string;
     prompt: PlayerInteractPrompt;
   } | null {
@@ -4166,7 +4269,9 @@ export class PlayerController {
         | 'npc_specialist'
         | 'mod_bench'
         | 'forecast_tower'
-        | 'shield_mushroom';
+        | 'shield_mushroom'
+        | 'fishing_hole'
+        | 'sky_balloon';
       id: string;
       prompt: PlayerInteractPrompt;
     } | null = null;
@@ -4448,6 +4553,52 @@ export class PlayerController {
               label: `EAT SHIELD MUSHROOM (+${SHIELD_MUSHROOM_AMOUNT} SHIELD)`,
               key: interactKey,
               rarity: 'uncommon',
+            },
+          };
+        }
+      }
+    }
+
+    if (this.overlordBridge) {
+      const hole = this.overlordBridge.findNearbyFishingHole(this.position);
+      if (hole && !hole.depleted && hole.castsRemaining > 0) {
+        const d = Math.min(
+          3.5,
+          dist3D(this.position, { x: hole.x, y: hole.y, z: hole.z }),
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'fishing_hole',
+            id: hole.id,
+            prompt: {
+              label: `CAST FISHING LINE (${hole.castsRemaining} LEFT)`,
+              key: interactKey,
+              rarity: 'rare',
+            },
+          };
+        }
+      }
+
+      const balloon = this.overlordBridge.findNearbySkyBalloon(this.position);
+      if (balloon) {
+        const d = Math.min(
+          3.0,
+          dist3D(this.position, {
+            x: balloon.x,
+            y: balloon.baseY,
+            z: balloon.z,
+          }),
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'sky_balloon',
+            id: balloon.id,
+            prompt: {
+              label: 'ASCEND SKY BALLOON',
+              key: interactKey,
+              rarity: 'epic',
             },
           };
         }
@@ -5231,6 +5382,102 @@ export class PlayerController {
         this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
         return;
       }
+
+      if (candidate.kind === 'fishing_hole' && this.overlordBridge) {
+        if (this.isFishing) return;
+        const hole =
+          this.overlordBridge
+            .getFishingHoles()
+            .find((h) => h.id === candidate.id) ??
+          this.overlordBridge.findNearbyFishingHole(this.position);
+        if (!hole || hole.depleted || hole.castsRemaining <= 0) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        this.reloadTimer = 0;
+        this.healTimer = 0;
+        this.healLabel = null;
+        this.isDrawingBow = false;
+        this.bowDrawElapsed = 0;
+        this.bowCharge = 0;
+        this.isChargingRailgun = false;
+        this.railgunChargeElapsed = 0;
+        this.railgunCharge = 0;
+        this.isFishing = true;
+        this.fishingTimer = 0;
+        this.fishingProgress = 0;
+        this.activeFishingHoleId = hole.id;
+        this.eventBus.emit('sound:play', {
+          id: 'fishing_cast',
+          position: { x: hole.x, y: hole.y, z: hole.z },
+          spatial: true,
+        });
+        return;
+      }
+
+      if (candidate.kind === 'sky_balloon' && this.overlordBridge) {
+        const balloon =
+          this.overlordBridge
+            .getSkyBalloons()
+            .find((b) => b.id === candidate.id) ??
+          this.overlordBridge.findNearbySkyBalloon(this.position);
+        if (!balloon) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        if (this.activeVehicleId !== null) {
+          this.exitActiveVehicle(false);
+        }
+        this.activeZipline = null;
+        this.activeGrindRail = null;
+        this.cancelPartnerRevive();
+        this.cancelPartnerReboot();
+        this.cancelTrainChestHack();
+        this.cancelFishingChannel();
+        this.isCrouching = false;
+        this.isSliding = false;
+        this.isMantling = false;
+        this.isSwimming = false;
+        this.isBuildMode = false;
+        this.building.setPreviewVisible(false);
+        this.building.cancelEdit();
+        this.cancelActionsOnModeChange();
+
+        const launchPos: Vec3Like = {
+          x: balloon.x,
+          y: balloon.baseY,
+          z: balloon.z,
+        };
+        const fwdX = Math.sin(this.yaw);
+        const fwdZ = Math.cos(this.yaw);
+        this.position = { x: balloon.x, y: balloon.topY, z: balloon.z };
+        this.velocity = {
+          x: fwdX * 14,
+          y: 10.5,
+          z: fwdZ * 14,
+        };
+        this.grounded = false;
+        this.wasAirborne = true;
+        this.fallPeakY = balloon.topY;
+        this.fallImmune = true;
+        this.phase = 'gliding';
+        this.interactPrompt = null;
+
+        this.eventBus.emit('sound:play', {
+          id: 'balloon_ascend',
+          position: launchPos,
+          spatial: true,
+        });
+        return;
+      }
     }
 
     // Fallback: Attach to nearby Grind Rail or overhead Energy Zipline
@@ -5735,8 +5982,14 @@ export class PlayerController {
       this.isStealthed = false;
       this.currentBushId = null;
       this.isJetpackThrusting = false;
-    } else if (this.lowGravityTimer > 0) {
-      this.lowGravityTimer = Math.max(0, this.lowGravityTimer - safeDt);
+      this.thermalVisionTimer = 0;
+    } else {
+      if (this.lowGravityTimer > 0) {
+        this.lowGravityTimer = Math.max(0, this.lowGravityTimer - safeDt);
+      }
+      if (this.thermalVisionTimer > 0) {
+        this.thermalVisionTimer = Math.max(0, this.thermalVisionTimer - safeDt);
+      }
     }
 
     const activeItem = this.inventory.getActiveItem();
@@ -5814,6 +6067,36 @@ export class PlayerController {
         }
         if (this.flareBeacons.length === 0) {
           this.flareScanMarkedCount = 0;
+        }
+      }
+      if (this.isAlive() && !this.isKnocked) {
+        const slots = this.inventory.getSlots();
+        const chugMax = WEAPONS.chug_cannon.magSize > 0 ? WEAPONS.chug_cannon.magSize : 5;
+        const chugRegenSec = WEAPONS.chug_cannon.chugRegenSec ?? 8;
+        const activeChugUids = new Set<string>();
+        for (let i = 1; i < slots.length; i++) {
+          const slotItem = slots[i];
+          if (!slotItem || slotItem.weaponId !== 'chug_cannon') continue;
+          activeChugUids.add(slotItem.uid);
+          if (slotItem.magAmmo < chugMax) {
+            let timer = (this.chugRegenTimers.get(slotItem.uid) ?? 0) + safeDt;
+            while (timer >= chugRegenSec - 1e-6 && slotItem.magAmmo < chugMax) {
+              slotItem.magAmmo += 1;
+              timer = Math.max(0, timer - chugRegenSec);
+            }
+            if (slotItem.magAmmo >= chugMax) {
+              this.chugRegenTimers.delete(slotItem.uid);
+            } else {
+              this.chugRegenTimers.set(slotItem.uid, timer);
+            }
+          } else {
+            this.chugRegenTimers.delete(slotItem.uid);
+          }
+        }
+        for (const uid of this.chugRegenTimers.keys()) {
+          if (!activeChugUids.has(uid)) {
+            this.chugRegenTimers.delete(uid);
+          }
         }
       }
       if (this.activeVehicleId !== null) {
@@ -7402,6 +7685,98 @@ export class PlayerController {
       }
     }
 
+    // Fishing Hole 1.8s cast channel
+    if (this.isFishing) {
+      const hole =
+        this.activeFishingHoleId && this.overlordBridge
+          ? this.overlordBridge
+              .getFishingHoles()
+              .find((h) => h.id === this.activeFishingHoleId) ?? null
+          : null;
+      const inRange = hole
+        ? dist3D(this.position, { x: hole.x, y: hole.y, z: hole.z }) <= 7.5
+        : false;
+      if (
+        !this.overlordBridge ||
+        !this.isAlive() ||
+        this.isKnocked ||
+        this.activeVehicleId !== null ||
+        this.activeZipline !== null ||
+        this.activeGrindRail !== null ||
+        this.isBuildMode ||
+        this.isSliding ||
+        this.isMantling ||
+        this.moveSpeed > 2.2 ||
+        !hole ||
+        hole.depleted ||
+        hole.castsRemaining <= 0 ||
+        !inRange
+      ) {
+        this.cancelFishingChannel();
+      } else {
+        this.reloadTimer = 0;
+        this.healTimer = 0;
+        this.healLabel = null;
+        this.isDrawingBow = false;
+        this.bowDrawElapsed = 0;
+        this.bowCharge = 0;
+        this.isChargingRailgun = false;
+        this.railgunChargeElapsed = 0;
+        this.railgunCharge = 0;
+
+        this.fishingTimer += dt;
+        this.fishingProgress = clamp(this.fishingTimer / FISHING_CAST_SEC, 0, 1);
+
+        if (this.fishingTimer >= FISHING_CAST_SEC - 1e-6) {
+          const holeId = hole.id;
+          let emittedCatchSfx = false;
+          let emittedSplashVfx = false;
+          const unsubSfx = this.eventBus.on('sound:play', (ev) => {
+            if (ev.id === 'fishing_catch') emittedCatchSfx = true;
+          });
+          const unsubVfx = this.eventBus.on('vfx:fishing_splash', () => {
+            emittedSplashVfx = true;
+          });
+          const castRes = this.overlordBridge.consumeFishingCast(holeId);
+          unsubSfx();
+          unsubVfx();
+
+          this.cancelFishingChannel();
+
+          if (castRes && castRes.ok) {
+            this.stats.fishCaught = (this.stats.fishCaught ?? 0) + 1;
+            const fxPos: Vec3Like = { ...castRes.position };
+            if (!emittedSplashVfx) {
+              this.eventBus.emit('vfx:fishing_splash', { position: fxPos });
+            }
+            if (!emittedCatchSfx) {
+              this.eventBus.emit('sound:play', {
+                id: 'fishing_catch',
+                position: fxPos,
+                spatial: true,
+              });
+            }
+            if (castRes.reward === 'thermal_flopper') {
+              this.applySplashHeal(40);
+              this.thermalVisionTimer = THERMAL_FLOPPER_DURATION_SEC;
+            } else if (castRes.reward === 'gold_cache') {
+              this.addGoldBars(100, fxPos);
+            }
+            this.onFishingReward?.({
+              ...castRes,
+              position: { ...castRes.position },
+            });
+            this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+          }
+        }
+
+        this.building.setPreviewVisible(false);
+        this.lastBuildPreview = null;
+        this.isFiring = false;
+        return;
+      }
+    }
+
     // Healing timer (cancelled if moving > 0.7 m/s or jumping)
     if (this.healTimer > 0) {
       if (this.moveSpeed > 0.75 || !this.grounded) {
@@ -7882,6 +8257,38 @@ export class PlayerController {
     const maxHammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
     const hammerRegenSec = WEAPONS.shockwave_hammer.hammerChargeRegenSec ?? 12;
 
+    const playerTeamId = this.gameMode === 'team_rumble' ? 'team_blue' : undefined;
+    const playerSquadId =
+      this.gameMode === 'duos'
+        ? 'player_squad'
+        : this.gameMode === 'team_rumble'
+          ? 'team_blue'
+          : undefined;
+    const turrets = this.building.getTurrets();
+    let maxPlayerTurretSec = 0;
+    const deployedTurrets: Array<{ x: number; z: number; isFriendly: boolean }> = [];
+    for (let i = 0; i < turrets.length; i++) {
+      const t = turrets[i];
+      if (!t.alive || t.hp <= 0 || t.remainingSec <= 0) continue;
+      if (t.ownerId === 'player' && t.remainingSec > maxPlayerTurretSec) {
+        maxPlayerTurretSec = t.remainingSec;
+      }
+      const isFriendly =
+        t.ownerId === 'player' ||
+        Boolean(
+          playerSquadId &&
+            (t.squadId === playerSquadId || t.teamId === playerSquadId),
+        ) ||
+        Boolean(
+          playerTeamId && (t.teamId === playerTeamId || t.squadId === playerTeamId),
+        );
+      deployedTurrets.push({
+        x: t.x,
+        z: t.z,
+        isFriendly,
+      });
+    }
+
     return {
       phase: this.phase,
       health: Math.ceil(this.health),
@@ -8030,6 +8437,15 @@ export class PlayerController {
         radius: b.radius,
         remainingSec: b.remainingSec,
       })),
+      activeTurretRemainingSec:
+        maxPlayerTurretSec > 0 ? maxPlayerTurretSec : null,
+      thermalVisionRemainingSec:
+        this.thermalVisionTimer > 0 ? this.thermalVisionTimer : null,
+      fishingProgress:
+        this.isFishing && this.fishingProgress !== null
+          ? clamp(this.fishingProgress, 0, 1)
+          : null,
+      deployedTurrets,
     };
   }
 }

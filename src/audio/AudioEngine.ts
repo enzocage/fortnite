@@ -395,6 +395,9 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'hammer_slam':
     case 'hammer_bounce':
     case 'flare_burst':
+    case 'turret_deploy':
+    case 'turret_destroy':
+    case 'balloon_ascend':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -428,6 +431,7 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'low_g_jump':
     case 'boar_grunt':
     case 'water_splash_wake':
+    case 'fishing_cast':
       return 1;
     case 'augment_select':
     case 'tactical_ping':
@@ -450,6 +454,10 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'flare_fire':
     case 'boat_boost':
     case 'mushroom_eat':
+    case 'turret_fire':
+    case 'chug_cannon_fire':
+    case 'chug_cannon_splash':
+    case 'fishing_catch':
     default:
       return 2;
   }
@@ -480,6 +488,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 60;
     case 'overshield_recharge':
     case 'bow_draw':
+    case 'fishing_cast':
       return 65;
     case 'railgun_charge':
       return 70;
@@ -504,6 +513,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'zipline_loop':
     case 'revive_complete':
     case 'mod_install':
+    case 'fishing_catch':
       return 85;
     case 'upgrade_weapon':
     case 'campfire_ignite':
@@ -520,6 +530,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'minigun_overheat':
       return 105;
     case 'grappler_reel':
+    case 'chug_cannon_splash':
       return 110;
     case 'medallion_pickup':
     case 'trap_snap':
@@ -538,14 +549,18 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 145;
     case 'tactical_ping':
     case 'rumble_respawn':
+    case 'chug_cannon_fire':
       return 150;
     case 'bow_release':
       return 155;
     case 'kinetic_dash':
+    case 'turret_deploy':
       return 160;
     case 'jetpack_ignite':
     case 'hammer_bounce':
       return 165;
+    case 'turret_fire':
+      return 170;
     case 'shot_combat_smg':
       return 175;
     case 'vehicle_horn':
@@ -564,12 +579,16 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'bouncer_launch':
     case 'hammer_slam':
       return 210;
+    case 'turret_destroy':
+      return 215;
     case 'vehicle_crash':
     case 'vault_unlock':
     case 'flag_captured':
     case 'forecast_scan':
     case 'train_hack_complete':
       return 220;
+    case 'balloon_ascend':
+      return 225;
     case 'drone_explode':
       return 230;
     case 'shot_sniper':

@@ -27,6 +27,7 @@ import type {
   StormState,
   TeamId,
   TerrainQuery,
+  TurretEntity,
   Vec3Like,
   VehicleEntity,
   WallDir,
@@ -334,6 +335,7 @@ export interface BotEntity {
   bowCharge?: number;
   craterTargetId?: string | null;
   craterDwellTimer?: number;
+  chugCannonRegenTimer?: number;
 }
 
 export interface BotWorldContext {
@@ -418,6 +420,7 @@ export interface BotWorldContext {
   ) => { exploded: boolean; position: Vec3Like; blastRadius: number; blastDamage: number } | null;
   getTrainState?: () => ApexTrainState | null;
   getMeteorCraters?: () => MeteorCraterEntity[];
+  getTurrets?: () => TurretEntity[];
   onAllySupportEvent?: (event: AllySupportEvent) => void;
   gameMode?: GameModeId;
   playerKnocked?: boolean;

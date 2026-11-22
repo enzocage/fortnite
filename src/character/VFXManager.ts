@@ -1097,6 +1097,98 @@ interface WaterWakeSlot {
   droplets: WaterWakeDroplet[];
 }
 
+interface TurretDeploySpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface TurretDeploySlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  baseRingMesh: THREE.Mesh;
+  baseRingMat: THREE.MeshBasicMaterial;
+  lockRingMesh: THREE.Mesh;
+  lockRingMat: THREE.MeshBasicMaterial;
+  holoDomeMesh: THREE.Mesh;
+  holoDomeMat: THREE.MeshBasicMaterial;
+  sparks: TurretDeploySpark[];
+}
+
+interface TurretLaserSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  beamLength: number;
+  group: THREE.Group;
+  beamGroup: THREE.Group;
+  outerBeamMesh: THREE.Mesh;
+  outerBeamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  muzzleFlashMesh: THREE.Mesh;
+  muzzleFlashMat: THREE.MeshBasicMaterial;
+  impactRingMesh: THREE.Mesh;
+  impactRingMat: THREE.MeshBasicMaterial;
+  impactFlashMesh: THREE.Mesh;
+  impactFlashMat: THREE.MeshBasicMaterial;
+}
+
+interface SlurpOrbDroplet {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface SlurpOrbSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  tiltRingMesh: THREE.Mesh;
+  tiltRingMat: THREE.MeshBasicMaterial;
+  droplets: SlurpOrbDroplet[];
+}
+
+interface FishingSplashDroplet {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface FishingSplashSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  innerRingMesh: THREE.Mesh;
+  innerRingMat: THREE.MeshBasicMaterial;
+  plumeMesh: THREE.Mesh;
+  plumeMat: THREE.MeshBasicMaterial;
+  droplets: FishingSplashDroplet[];
+}
+
 function getWeaponModColor(modId: WeaponModId): string {
   const found = WEAPON_MODS.find((m) => m.id === modId);
   return found?.accentColor ?? '#38bdf8';
@@ -1258,6 +1350,13 @@ const FLARE_TRAIL_POOL_SIZE = 8;
 const FLARE_TRAIL_SPARK_COUNT = 14;
 const WATER_WAKE_POOL_SIZE = 32;
 const WATER_WAKE_DROPLET_COUNT = 8;
+const TURRET_DEPLOY_POOL_SIZE = 8;
+const TURRET_DEPLOY_SPARK_COUNT = 12;
+const TURRET_LASER_POOL_SIZE = 24;
+const SLURP_ORB_POOL_SIZE = 10;
+const SLURP_ORB_DROPLET_COUNT = 16;
+const FISHING_SPLASH_POOL_SIZE = 12;
+const FISHING_SPLASH_DROPLET_COUNT = 14;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -1342,6 +1441,10 @@ export class VFXManager {
   private readonly hammerBounces: HammerBounceSlot[] = [];
   private readonly flareTrails: FlareTrailSlot[] = [];
   private readonly waterWakes: WaterWakeSlot[] = [];
+  private readonly turretDeploys: TurretDeploySlot[] = [];
+  private readonly turretLasers: TurretLaserSlot[] = [];
+  private readonly slurpOrbs: SlurpOrbSlot[] = [];
+  private readonly fishingSplashes: FishingSplashSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -1406,6 +1509,10 @@ export class VFXManager {
   private hammerBounceCursor = 0;
   private flareTrailCursor = 0;
   private waterWakeCursor = 0;
+  private turretDeployCursor = 0;
+  private turretLaserCursor = 0;
+  private slurpOrbCursor = 0;
+  private fishingSplashCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -5461,6 +5568,382 @@ export class VFXManager {
         droplets,
       });
     }
+
+    // 47. Sentry Auto-Turret Deploy (glowing cyan lock ring + holo dome + rising cyber sparks)
+    for (let i = 0; i < TURRET_DEPLOY_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_turret_deploy';
+      group.visible = false;
+
+      const baseRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const baseRingMesh = new THREE.Mesh(this.unitRingGeo, baseRingMat);
+      baseRingMesh.rotation.x = -Math.PI / 2;
+      baseRingMesh.position.y = 0.06;
+      group.add(baseRingMesh);
+
+      const lockRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const lockRingMesh = new THREE.Mesh(this.hexRingGeo, lockRingMat);
+      lockRingMesh.rotation.x = -Math.PI / 2;
+      lockRingMesh.position.y = 0.14;
+      group.add(lockRingMesh);
+
+      const holoDomeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x0ea5e9,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.56,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const holoDomeMesh = new THREE.Mesh(this.hexDomeGeo, holoDomeMat);
+      holoDomeMesh.position.y = 0.45;
+      group.add(holoDomeMesh);
+
+      const sparks: TurretDeploySpark[] = [];
+      for (let s = 0; s < TURRET_DEPLOY_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xe0f2fe : s % 2 === 0 ? 0x22d3ee : 0x38bdf8,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / TURRET_DEPLOY_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.75,
+          speedY: 2.0,
+          spin: 4.0,
+          baseScale: 0.10,
+        });
+      }
+
+      this.root.add(group);
+      this.turretDeploys.push({
+        active: false,
+        age: 0,
+        duration: 0.76,
+        group,
+        baseRingMesh,
+        baseRingMat,
+        lockRingMesh,
+        lockRingMat,
+        holoDomeMesh,
+        holoDomeMat,
+        sparks,
+      });
+    }
+
+    // 48. Sentry Auto-Turret Laser Shot (high-energy cyan bolt + muzzle flash + target impact ring)
+    for (let i = 0; i < TURRET_LASER_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_turret_laser';
+      group.visible = false;
+
+      const beamGroup = new THREE.Group();
+      group.add(beamGroup);
+
+      const outerBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerBeamMesh = new THREE.Mesh(this.unitCylinderGeo, outerBeamMat);
+      outerBeamMesh.rotation.x = Math.PI / 2;
+      beamGroup.add(outerBeamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.98,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      coreBeamMesh.rotation.x = Math.PI / 2;
+      beamGroup.add(coreBeamMesh);
+
+      const muzzleFlashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const muzzleFlashMesh = new THREE.Mesh(this.unitSphereGeo, muzzleFlashMat);
+      beamGroup.add(muzzleFlashMesh);
+
+      const impactRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const impactRingMesh = new THREE.Mesh(this.unitRingGeo, impactRingMat);
+      beamGroup.add(impactRingMesh);
+
+      const impactFlashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf0f9ff,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const impactFlashMesh = new THREE.Mesh(this.unitSphereGeo, impactFlashMat);
+      beamGroup.add(impactFlashMesh);
+
+      this.root.add(group);
+      this.turretLasers.push({
+        active: false,
+        age: 0,
+        duration: 0.18,
+        beamLength: 1,
+        group,
+        beamGroup,
+        outerBeamMesh,
+        outerBeamMat,
+        coreBeamMesh,
+        coreBeamMat,
+        muzzleFlashMesh,
+        muzzleFlashMat,
+        impactRingMesh,
+        impactRingMat,
+        impactFlashMesh,
+        impactFlashMat,
+      });
+    }
+
+    // 49. Exotic Chug Cannon Slurp Orb Burst (glowing cyan healing dome + teal rings + bubbling Slurp droplets)
+    for (let i = 0; i < SLURP_ORB_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_slurp_orb';
+      group.visible = false;
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.46,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.unitSphereGeo, domeMat);
+      group.add(domeMesh);
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa5f3fc,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMesh = new THREE.Mesh(this.unitSphereGeo, coreMat);
+      group.add(coreMesh);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x2dd4bf,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      ringMesh.position.y = 0.06;
+      group.add(ringMesh);
+
+      const tiltRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.86,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const tiltRingMesh = new THREE.Mesh(this.hexRingGeo, tiltRingMat);
+      tiltRingMesh.rotation.set(Math.PI / 4, 0, Math.PI / 6);
+      group.add(tiltRingMesh);
+
+      const droplets: SlurpOrbDroplet[] = [];
+      for (let d = 0; d < SLURP_ORB_DROPLET_COUNT; d++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: d % 3 === 0 ? 0xecfeff : d % 2 === 0 ? 0x22d3ee : 0x2dd4bf,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = d % 2 === 0 ? this.unitSphereGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        droplets.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.11,
+        });
+      }
+
+      this.root.add(group);
+      this.slurpOrbs.push({
+        active: false,
+        age: 0,
+        duration: 0.75,
+        radius: 4.5,
+        group,
+        domeMesh,
+        domeMat,
+        coreMesh,
+        coreMat,
+        ringMesh,
+        ringMat,
+        tiltRingMesh,
+        tiltRingMat,
+        droplets,
+      });
+    }
+
+    // 50. Fishing Hole Splash (aqua splash crown plume + concentric ripple rings + flying water droplets)
+    for (let i = 0; i < FISHING_SPLASH_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_fishing_splash';
+      group.visible = false;
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+      outerRingMesh.rotation.x = -Math.PI / 2;
+      outerRingMesh.position.y = 0.05;
+      group.add(outerRingMesh);
+
+      const innerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const innerRingMesh = new THREE.Mesh(this.unitRingGeo, innerRingMat);
+      innerRingMesh.rotation.x = -Math.PI / 2;
+      innerRingMesh.position.y = 0.08;
+      group.add(innerRingMesh);
+
+      const plumeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x7dd3fc,
+          transparent: true,
+          opacity: 0.54,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const plumeMesh = new THREE.Mesh(this.beamCylGeo, plumeMat);
+      plumeMesh.position.y = 0.55;
+      group.add(plumeMesh);
+
+      const droplets: FishingSplashDroplet[] = [];
+      for (let d = 0; d < FISHING_SPLASH_DROPLET_COUNT; d++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: d % 3 === 0 ? 0xf0f9ff : d % 2 === 0 ? 0x7dd3fc : 0x22d3ee,
+            transparent: true,
+            opacity: 0.94,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = d % 2 === 0 ? this.unitCrystalGeo : this.unitSphereGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        droplets.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.095,
+        });
+      }
+
+      this.root.add(group);
+      this.fishingSplashes.push({
+        active: false,
+        age: 0,
+        duration: 0.68,
+        group,
+        outerRingMesh,
+        outerRingMat,
+        innerRingMesh,
+        innerRingMat,
+        plumeMesh,
+        plumeMat,
+        droplets,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -5655,6 +6138,10 @@ export class VFXManager {
         this.spawnFlareTrail(e.origin, e.target, e.radius),
       ),
       this.eventBus.on('vfx:water_wake', (e) => this.spawnWaterWake(e.position, e.yaw, e.speed)),
+      this.eventBus.on('vfx:turret_deploy', (e) => this.spawnTurretDeploy(e.position)),
+      this.eventBus.on('vfx:turret_laser', (e) => this.spawnTurretLaser(e.from, e.to)),
+      this.eventBus.on('vfx:slurp_orb', (e) => this.spawnSlurpOrb(e.position, e.radius)),
+      this.eventBus.on('vfx:fishing_splash', (e) => this.spawnFishingSplash(e.position)),
     );
   }
 
@@ -5746,6 +6233,12 @@ export class VFXManager {
     } else if (weaponId === 'flare_gun') {
       scale = 1.18;
       color = 0xf97316;
+    } else if (weaponId === 'chug_cannon') {
+      scale = 1.55;
+      color = 0x22d3ee;
+    } else if (weaponId === 'auto_turret') {
+      scale = 0.9;
+      color = 0x38bdf8;
     } else if (weaponId === 'smg' || weaponId === 'pistol') {
       scale = 0.78;
     }
@@ -8102,6 +8595,164 @@ export class VFXManager {
         dr.material.opacity = fade;
       }
     }
+
+    // 48. Sentry Auto-Turret Deploy
+    for (let i = 0; i < TURRET_DEPLOY_POOL_SIZE; i++) {
+      const td = this.turretDeploys[i];
+      if (!td.active) continue;
+      td.age += safeDt;
+      const t = td.age / td.duration;
+      if (t >= 1) {
+        td.active = false;
+        td.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      td.baseRingMesh.scale.setScalar(0.55 + 2.25 * easeOut);
+      td.baseRingMat.opacity = 0.94 * fade;
+
+      td.lockRingMesh.position.y = 0.14 + 1.35 * easeOut;
+      td.lockRingMesh.rotation.z += 4.6 * safeDt;
+      td.lockRingMesh.scale.setScalar(0.45 + 1.25 * easeOut);
+      td.lockRingMat.opacity = 0.9 * fade;
+
+      const domeScale = 0.55 + 0.95 * easeOut;
+      td.holoDomeMesh.position.y = 0.45 + 0.35 * easeOut;
+      td.holoDomeMesh.rotation.y += 2.8 * safeDt;
+      td.holoDomeMesh.scale.setScalar(domeScale);
+      td.holoDomeMat.opacity = 0.56 * fade * fade;
+
+      for (let s = 0; s < TURRET_DEPLOY_SPARK_COUNT; s++) {
+        const sp = td.sparks[s];
+        const ang = sp.angle + td.age * sp.spin;
+        const rad = sp.radius * (0.65 + 0.65 * easeOut);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 6 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.45 * t));
+        sp.material.opacity = 0.96 * fade;
+      }
+    }
+
+    // 49. Sentry Auto-Turret Laser Shot
+    for (let i = 0; i < TURRET_LASER_POOL_SIZE; i++) {
+      const tl = this.turretLasers[i];
+      if (!tl.active) continue;
+      tl.age += safeDt;
+      const t = tl.age / tl.duration;
+      if (t >= 1) {
+        tl.active = false;
+        tl.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const wScale = 1 - 0.62 * t;
+
+      tl.outerBeamMesh.scale.set(0.085 * wScale, tl.beamLength, 0.085 * wScale);
+      tl.outerBeamMat.opacity = 0.85 * fade;
+
+      tl.coreBeamMesh.scale.set(0.036 * (1 - 0.72 * t), tl.beamLength, 0.036 * (1 - 0.72 * t));
+      tl.coreBeamMat.opacity = 0.98 * fade;
+
+      tl.muzzleFlashMesh.scale.setScalar(0.24 * (1 - 0.6 * t));
+      tl.muzzleFlashMat.opacity = 0.95 * fade;
+
+      tl.impactRingMesh.scale.setScalar(0.24 + 0.88 * easeOut);
+      tl.impactRingMat.opacity = 0.94 * fade;
+
+      tl.impactFlashMesh.scale.setScalar(0.28 * (1 - 0.55 * t));
+      tl.impactFlashMat.opacity = 0.96 * fade;
+    }
+
+    // 50. Exotic Chug Cannon Slurp Orb Burst
+    for (let i = 0; i < SLURP_ORB_POOL_SIZE; i++) {
+      const so = this.slurpOrbs[i];
+      if (!so.active) continue;
+      so.age += safeDt;
+      const t = so.age / so.duration;
+      if (t >= 1) {
+        so.active = false;
+        so.group.visible = false;
+        continue;
+      }
+
+      const expand = 1 - Math.pow(1 - Math.min(1, t * 1.85), 2);
+      const fade = 1 - t;
+
+      so.domeMesh.scale.set(
+        so.radius * (0.32 + 0.72 * expand),
+        so.radius * (0.28 + 0.56 * expand),
+        so.radius * (0.32 + 0.72 * expand),
+      );
+      so.domeMat.opacity = 0.46 * fade;
+
+      so.coreMesh.scale.setScalar(so.radius * 0.36 * (1 - 0.55 * t));
+      so.coreMat.opacity = 0.85 * fade * fade;
+
+      so.ringMesh.scale.setScalar(so.radius * (0.32 + 0.95 * expand));
+      so.ringMat.opacity = 0.92 * fade;
+
+      so.tiltRingMesh.rotation.y += 4.2 * safeDt;
+      so.tiltRingMesh.scale.setScalar(so.radius * (0.25 + 0.78 * expand));
+      so.tiltRingMat.opacity = 0.86 * fade;
+
+      for (let d = 0; d < SLURP_ORB_DROPLET_COUNT; d++) {
+        const dr = so.droplets[d];
+        dr.vy -= 5.8 * safeDt;
+        dr.mesh.position.x += dr.vx * safeDt;
+        dr.mesh.position.y = Math.max(0.03, dr.mesh.position.y + dr.vy * safeDt);
+        dr.mesh.position.z += dr.vz * safeDt;
+        dr.mesh.rotation.y += 5.5 * safeDt;
+        dr.mesh.scale.setScalar(dr.baseScale * (1 - 0.45 * t));
+        dr.material.opacity = 0.96 * fade;
+      }
+    }
+
+    // 51. Fishing Hole Splash
+    for (let i = 0; i < FISHING_SPLASH_POOL_SIZE; i++) {
+      const fs = this.fishingSplashes[i];
+      if (!fs.active) continue;
+      fs.age += safeDt;
+      const t = fs.age / fs.duration;
+      if (t >= 1) {
+        fs.active = false;
+        fs.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      fs.outerRingMesh.scale.setScalar(0.55 + 2.45 * easeOut);
+      fs.outerRingMat.opacity = 0.88 * fade;
+
+      fs.innerRingMesh.scale.setScalar(0.32 + 1.55 * easeOut);
+      fs.innerRingMat.opacity = 0.92 * fade;
+
+      const plumeLift = t < 0.3 ? t / 0.3 : 1 - (t - 0.3) / 0.7;
+      const plumeH = Math.max(0.15, 1.35 * plumeLift);
+      const plumeW = 0.48 + 0.68 * easeOut;
+      fs.plumeMesh.position.y = plumeH * 0.5;
+      fs.plumeMesh.scale.set(plumeW, plumeH, plumeW);
+      fs.plumeMat.opacity = 0.54 * fade;
+
+      for (let d = 0; d < FISHING_SPLASH_DROPLET_COUNT; d++) {
+        const dr = fs.droplets[d];
+        dr.vy -= 11.5 * safeDt;
+        dr.mesh.position.x += dr.vx * safeDt;
+        dr.mesh.position.y = Math.max(0.02, dr.mesh.position.y + dr.vy * safeDt);
+        dr.mesh.position.z += dr.vz * safeDt;
+        dr.mesh.rotation.y += 6 * safeDt;
+        dr.mesh.scale.setScalar(dr.baseScale * (1 - 0.45 * t));
+        dr.material.opacity = 0.94 * fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -9721,6 +10372,179 @@ export class VFXManager {
     }
   }
 
+  private spawnTurretDeploy(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.turretDeploys[this.turretDeployCursor];
+    this.turretDeployCursor = (this.turretDeployCursor + 1) % TURRET_DEPLOY_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.76;
+
+    slot.group.position.set(position.x, position.y + 0.04, position.z);
+    slot.group.visible = true;
+
+    slot.baseRingMesh.scale.setScalar(0.55);
+    slot.baseRingMat.opacity = 0.94;
+
+    slot.lockRingMesh.position.set(0, 0.14, 0);
+    slot.lockRingMesh.rotation.set(-Math.PI / 2, 0, 0);
+    slot.lockRingMesh.scale.setScalar(0.45);
+    slot.lockRingMat.opacity = 0.9;
+
+    slot.holoDomeMesh.position.set(0, 0.45, 0);
+    slot.holoDomeMesh.rotation.set(0, 0, 0);
+    slot.holoDomeMesh.scale.setScalar(0.55);
+    slot.holoDomeMat.opacity = 0.56;
+
+    for (let s = 0; s < TURRET_DEPLOY_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / TURRET_DEPLOY_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      sp.radius = 0.48 + this.nextRand() * 0.48;
+      sp.speedY = 1.6 + this.nextRand() * 1.8;
+      sp.spin = (s % 2 === 0 ? 1 : -1) * (3.2 + this.nextRand() * 2.4);
+      sp.baseScale = 0.09 + this.nextRand() * 0.05;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius * 0.65,
+        0.1 + this.nextRand() * 0.3,
+        Math.sin(sp.angle) * sp.radius * 0.65,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.96;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnTurretLaser(from: Vec3Like, to: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(from) || !isFiniteVec3(to)) return;
+
+    this.tmpA.set(from.x, from.y, from.z);
+    this.tmpB.set(to.x, to.y, to.z);
+    this.tmpDir.subVectors(this.tmpB, this.tmpA);
+    const rawLen = this.tmpDir.length();
+    if (!Number.isFinite(rawLen) || rawLen < 1e-4) return;
+
+    const len = clamp(rawLen, 0.05, 500);
+    this.tmpDir.divideScalar(rawLen);
+
+    const slot = this.turretLasers[this.turretLaserCursor];
+    this.turretLaserCursor = (this.turretLaserCursor + 1) % TURRET_LASER_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.18;
+    slot.beamLength = len;
+
+    slot.group.position.copy(this.tmpA);
+    slot.group.visible = true;
+
+    this.tmpQuat.setFromUnitVectors(this.zAxis, this.tmpDir);
+    slot.beamGroup.quaternion.copy(this.tmpQuat);
+
+    slot.outerBeamMesh.position.set(0, 0, len * 0.5);
+    slot.outerBeamMesh.scale.set(0.085, len, 0.085);
+    slot.outerBeamMat.opacity = 0.85;
+
+    slot.coreBeamMesh.position.set(0, 0, len * 0.5);
+    slot.coreBeamMesh.scale.set(0.036, len, 0.036);
+    slot.coreBeamMat.opacity = 0.98;
+
+    slot.muzzleFlashMesh.position.set(0, 0, 0);
+    slot.muzzleFlashMesh.scale.setScalar(0.24);
+    slot.muzzleFlashMat.opacity = 0.95;
+
+    slot.impactRingMesh.position.set(0, 0, len);
+    slot.impactRingMesh.scale.setScalar(0.24);
+    slot.impactRingMat.opacity = 0.94;
+
+    slot.impactFlashMesh.position.set(0, 0, len);
+    slot.impactFlashMesh.scale.setScalar(0.28);
+    slot.impactFlashMat.opacity = 0.96;
+  }
+
+  private spawnSlurpOrb(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.slurpOrbs[this.slurpOrbCursor];
+    this.slurpOrbCursor = (this.slurpOrbCursor + 1) % SLURP_ORB_POOL_SIZE;
+
+    const safeRadius = clamp(Number.isFinite(radius) && radius > 0 ? radius : 4.5, 1.2, 25);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.75;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.06, position.z);
+    slot.group.visible = true;
+
+    slot.domeMesh.scale.set(safeRadius * 0.32, safeRadius * 0.28, safeRadius * 0.32);
+    slot.domeMat.opacity = 0.46;
+
+    slot.coreMesh.scale.setScalar(safeRadius * 0.36);
+    slot.coreMat.opacity = 0.85;
+
+    slot.ringMesh.scale.setScalar(safeRadius * 0.32);
+    slot.ringMat.opacity = 0.92;
+
+    slot.tiltRingMesh.rotation.set(Math.PI / 4, this.nextRand() * Math.PI, Math.PI / 6);
+    slot.tiltRingMesh.scale.setScalar(safeRadius * 0.25);
+    slot.tiltRingMat.opacity = 0.86;
+
+    for (let d = 0; d < SLURP_ORB_DROPLET_COUNT; d++) {
+      const dr = slot.droplets[d];
+      const ang = (d / SLURP_ORB_DROPLET_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const horiz = (0.75 + this.nextRand() * 1.45) * Math.min(2.4, safeRadius * 0.5);
+      dr.vx = Math.cos(ang) * horiz;
+      dr.vy = 2.4 + this.nextRand() * 2.4;
+      dr.vz = Math.sin(ang) * horiz;
+      dr.baseScale = 0.09 + this.nextRand() * 0.06;
+      dr.mesh.position.set(Math.cos(ang) * 0.25, 0.22 + this.nextRand() * 0.25, Math.sin(ang) * 0.25);
+      dr.mesh.scale.setScalar(dr.baseScale);
+      dr.material.opacity = 0.96;
+      dr.mesh.visible = true;
+    }
+  }
+
+  private spawnFishingSplash(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.fishingSplashes[this.fishingSplashCursor];
+    this.fishingSplashCursor = (this.fishingSplashCursor + 1) % FISHING_SPLASH_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.68;
+
+    slot.group.position.set(position.x, position.y + 0.04, position.z);
+    slot.group.visible = true;
+
+    slot.outerRingMesh.scale.setScalar(0.55);
+    slot.outerRingMat.opacity = 0.88;
+
+    slot.innerRingMesh.scale.setScalar(0.32);
+    slot.innerRingMat.opacity = 0.92;
+
+    slot.plumeMesh.position.set(0, 0.25, 0);
+    slot.plumeMesh.scale.set(0.48, 0.45, 0.48);
+    slot.plumeMat.opacity = 0.54;
+
+    for (let d = 0; d < FISHING_SPLASH_DROPLET_COUNT; d++) {
+      const dr = slot.droplets[d];
+      const ang = (d / FISHING_SPLASH_DROPLET_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      const horiz = 0.9 + this.nextRand() * 1.65;
+      dr.vx = Math.cos(ang) * horiz;
+      dr.vy = 3.2 + this.nextRand() * 2.6;
+      dr.vz = Math.sin(ang) * horiz;
+      dr.baseScale = 0.075 + this.nextRand() * 0.05;
+      dr.mesh.position.set(Math.cos(ang) * 0.18, 0.14 + this.nextRand() * 0.15, Math.sin(ang) * 0.18);
+      dr.mesh.scale.setScalar(dr.baseScale);
+      dr.material.opacity = 0.94;
+      dr.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -9869,6 +10693,10 @@ export class VFXManager {
     for (const hb of this.hammerBounces) if (hb.active) count++;
     for (const ft of this.flareTrails) if (ft.active) count++;
     for (const ww of this.waterWakes) if (ww.active) count++;
+    for (const td of this.turretDeploys) if (td.active) count++;
+    for (const tl of this.turretLasers) if (tl.active) count++;
+    for (const so of this.slurpOrbs) if (so.active) count++;
+    for (const fs of this.fishingSplashes) if (fs.active) count++;
     return count;
   }
 
@@ -10116,6 +10944,30 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveTurretDeployCount(): number {
+    let count = 0;
+    for (const td of this.turretDeploys) if (td.active) count++;
+    return count;
+  }
+
+  public getActiveTurretLaserCount(): number {
+    let count = 0;
+    for (const tl of this.turretLasers) if (tl.active) count++;
+    return count;
+  }
+
+  public getActiveSlurpOrbCount(): number {
+    let count = 0;
+    for (const so of this.slurpOrbs) if (so.active) count++;
+    return count;
+  }
+
+  public getActiveFishingSplashCount(): number {
+    let count = 0;
+    for (const fs of this.fishingSplashes) if (fs.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -10302,6 +11154,22 @@ export class VFXManager {
     for (const ww of this.waterWakes) {
       ww.active = false;
       ww.group.visible = false;
+    }
+    for (const td of this.turretDeploys) {
+      td.active = false;
+      td.group.visible = false;
+    }
+    for (const tl of this.turretLasers) {
+      tl.active = false;
+      tl.group.visible = false;
+    }
+    for (const so of this.slurpOrbs) {
+      so.active = false;
+      so.group.visible = false;
+    }
+    for (const fs of this.fishingSplashes) {
+      fs.active = false;
+      fs.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

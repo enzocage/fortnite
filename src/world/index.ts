@@ -23,6 +23,8 @@ export {
   WorldInteractables,
   type CapturePointAdvanceResult,
   type ExplosiveBarrelDamageResult,
+  type FishingCastResult,
+  type FishingRewardKind,
   type GrindRailSampleResult,
   type HopCrystalConsumeResult,
   type LootIslandCaptureResult,
@@ -40,6 +42,7 @@ export {
   type Wave8ShowcaseResult,
   type Wave9ShowcaseResult,
   type Wave10ShowcaseResult,
+  type Wave11ShowcaseResult,
   type WeaponBunkerLootResult,
   type WildBoarDamageResult,
 } from './WorldInteractables';

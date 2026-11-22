@@ -32,6 +32,7 @@ import type {
   CapturePointEntity,
   DroppedCrownEntity,
   DroppedMedallionEntity,
+  FishingHoleEntity,
   ForecastTowerEntity,
   FutureStormRing,
   GrindRailEntity,
@@ -47,6 +48,7 @@ import type {
   RebootVanEntity,
   RiftEntity,
   ShieldMushroomEntity,
+  SkyBalloonEntity,
   SlurpTankerEntity,
   SpecialistRole,
   SupplyDroneEntity,
@@ -77,6 +79,7 @@ import {
   DEFAULT_LOBBY_CONFIG,
   deriveMatchHighlightBadges,
   drawFrontierMapOverlay,
+  drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
   drawSpeedboatMapChevron,
   drawTideMapOverlay,
@@ -105,6 +108,7 @@ import {
   getContextualHudHints,
   getContrailMeta,
   getCrownSvg,
+  getFishingHoleSvg,
   getFlareScanSvg,
   getForecastTowerSvg,
   getGameModeMeta,
@@ -126,6 +130,7 @@ import {
   getReviveCrossSvg,
   getShortestAngleDiffDeg,
   getSkullSvg,
+  getSkyBalloonSvg,
   getSkyRiftIconSvg,
   getSpeedboatSvg,
   getStealthLeafSvg,
@@ -133,9 +138,11 @@ import {
   getSupplyDroneSvg,
   getTacticalPingIconSvg,
   getTankerSvg,
+  getThermalVisionSvg,
   getTotalXpForLevel,
   getTrainSvg,
   getTrapSvg,
+  getTurretIconSvg,
   getUpgradeBenchIconSvg,
   getVaultKeySvg,
   getVaultLockSvg,
@@ -159,6 +166,7 @@ import {
   resetCareerStats,
   resolveFrontierOverlayArgs,
   resolveKeybinds,
+  resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
   resolveTideOverlayArgs,
   sanitizeGameMode,
@@ -169,6 +177,7 @@ import {
   updateGoldBars,
   updateVictoryCrown,
   type WorldFrontierOverlay,
+  type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
   type WorldTideOverlay,
   worldToMapNorm,
@@ -441,9 +450,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 33 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 35 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(33);
+    expect(weaponIds.length).toBe(35);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -455,7 +464,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9/Wave-10 upgraded icons have rich multi-element custom artwork
+    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9/Wave-10/Wave-11 upgraded icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -476,6 +485,8 @@ describe('WeaponIcons & SVG assets', () => {
       'plasma_flamethrower',
       'shockwave_hammer',
       'flare_gun',
+      'auto_turret',
+      'chug_cannon',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -4623,12 +4634,12 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     const bus = new EventBus();
     const ui = new UIManager(root as unknown as HTMLElement, bus);
 
-    // 1. Legend has exactly 28 rows including MOD BENCH, FORECAST TOWER, APEX TRAIN, RIFT CRATER, SPEEDBOAT & WILDLIFE
+    // 1. Legend has exactly 30 rows including MOD BENCH, FORECAST TOWER, APEX TRAIN, RIFT CRATER, SPEEDBOAT, WILDLIFE, SKY BALLOON & FISHING HOLE
     const legend = root.findByClass('fdr-map-legend');
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(28);
+    expect(legendRowCount).toBe(30);
     expect(legend?.textContent).toContain('MOD BENCH');
     expect(legend?.textContent).toContain('FORECAST TOWER');
 
@@ -4981,6 +4992,8 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const jetpackPill = chipRow?.findByClass('fdr-jetpack-pill');
     const lowGPill = chipRow?.findByClass('fdr-lowg-pill');
     const flarePill = chipRow?.findByClass('fdr-flare-pill');
+    const turretPill = chipRow?.findByClass('fdr-turret-pill');
+    const thermalPill = chipRow?.findByClass('fdr-thermal-pill');
     const vitalsStack = bottomCenter?.findByClass('fdr-vitals-stack');
     const channelBar = bottomCenter?.findByClass('fdr-channel-bar');
 
@@ -4990,11 +5003,20 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     expect(jetpackPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(lowGPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(flarePill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(turretPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(thermalPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeGreaterThanOrEqual(0);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeLessThan(
       bottomCenter?.children.indexOf(vitalsStack!) ?? 999,
     );
-    expect(chipRow?.children).toEqual([stealthPill, jetpackPill, lowGPill, flarePill]);
+    expect(chipRow?.children).toEqual([
+      stealthPill,
+      jetpackPill,
+      lowGPill,
+      flarePill,
+      turretPill,
+      thermalPill,
+    ]);
 
     // 2. All 3 status chips active + Train Hack channel bar + Minimap Skyforge Overlay
     const trainState: ApexTrainState = {
@@ -5203,12 +5225,12 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const bus = new EventBus();
     const ui = new UIManager(root as unknown as HTMLElement, bus);
 
-    // 1. Legend has exactly 28 rows including APEX TRAIN, RIFT CRATER, SPEEDBOAT & WILDLIFE
+    // 1. Legend has exactly 30 rows including APEX TRAIN, RIFT CRATER, SPEEDBOAT, WILDLIFE, SKY BALLOON & FISHING HOLE
     const legend = root.findByClass('fdr-map-legend');
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(28);
+    expect(legendRowCount).toBe(30);
     expect(legend?.textContent).toContain('APEX TRAIN');
     expect(legend?.textContent).toContain('RIFT CRATER');
 
@@ -5833,12 +5855,12 @@ describe('Wave 10 UI: Tide & Recon (Shockwave Hammer, Flare Gun, Apex Speedboat,
     const bus = new EventBus();
     const ui = new UIManager(root as unknown as HTMLElement, bus);
 
-    // 1. Legend has exactly 28 rows including SPEEDBOAT & WILDLIFE
+    // 1. Legend has exactly 30 rows including SPEEDBOAT, WILDLIFE, SKY BALLOON & FISHING HOLE
     const legend = root.findByClass('fdr-map-legend');
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(28);
+    expect(legendRowCount).toBe(30);
     expect(legend?.textContent).toContain('SPEEDBOAT');
     expect(legend?.textContent).toContain('WILDLIFE');
 
@@ -5973,6 +5995,525 @@ describe('Wave 10 UI: Tide & Recon (Shockwave Hammer, Flare Gun, Apex Speedboat,
     const highlightsRow = root.findByClass('fdr-highlights-row');
     expect(highlightsRow?.textContent).toContain('TITAN SMASH');
     expect(highlightsRow?.textContent).toContain('RECON ACE');
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 11 UI: Overlord (Auto-Turret, Chug Cannon, Fishing Channel, Thermal/Turret Pills, Overlord Map & Highlights)', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave-11 SVGs (auto_turret, chug_cannon, getFishingHoleSvg, getSkyBalloonSvg, getTurretIconSvg), Node-safe drawOverlordMapOverlay & TURRET ENGINEER / MASTER ANGLER highlights', () => {
+    for (const id of ['auto_turret', 'chug_cannon'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    const overlordIcons = [
+      getFishingHoleSvg(),
+      getSkyBalloonSvg(),
+      getTurretIconSvg(),
+      getThermalVisionSvg(),
+    ];
+    for (const svg of overlordIcons) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+    expect(new Set(overlordIcons).size).toBe(overlordIcons.length);
+
+    const fishingHoles: FishingHoleEntity[] = [
+      {
+        id: 'fh-active',
+        x: 32,
+        y: 0,
+        z: -48,
+        castsRemaining: 3,
+        depleted: false,
+      },
+      {
+        id: 'fh-depleted',
+        x: 96,
+        y: 0,
+        z: 96,
+        castsRemaining: 0,
+        depleted: true,
+      },
+    ];
+    const skyBalloons: SkyBalloonEntity[] = [
+      {
+        id: 'sb-1',
+        poiId: 'metro_towers',
+        x: -44,
+        baseY: 12,
+        topY: 85,
+        z: 28,
+      },
+    ];
+    const deployedTurrets = [
+      { x: 18, z: 22, isFriendly: true },
+      { x: -30, z: -26, isFriendly: false },
+    ];
+
+    const byArgs: WorldOverlordOverlay = resolveOverlordOverlayArgs(
+      fishingHoles,
+      skyBalloons,
+    );
+    expect(byArgs.fishingHoles.length).toBe(2);
+    expect(byArgs.skyBalloons.length).toBe(1);
+
+    const byObj: WorldOverlordOverlay = resolveOverlordOverlayArgs({
+      fishingHoles,
+      skyBalloons,
+    });
+    expect(byObj.fishingHoles[0].id).toBe('fh-active');
+    expect(byObj.skyBalloons[0].id).toBe('sb-1');
+
+    // Minimal Node canvas mock WITHOUT fillText, strokeText, ellipse, rotate, or strokeRect!
+    const directCalls: Array<{ op: string; args: unknown[] }> = [];
+    const safeCtx = {
+      save: () => directCalls.push({ op: 'save', args: [] }),
+      restore: () => directCalls.push({ op: 'restore', args: [] }),
+      translate: (...args: unknown[]) => directCalls.push({ op: 'translate', args }),
+      beginPath: () => directCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => directCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => directCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => directCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => directCalls.push({ op: 'arc', args }),
+      fill: () => directCalls.push({ op: 'fill', args: [] }),
+      stroke: () => directCalls.push({ op: 'stroke', args: [] }),
+      fillRect: (...args: unknown[]) => directCalls.push({ op: 'fillRect', args }),
+      setLineDash: (...args: unknown[]) => directCalls.push({ op: 'setLineDash', args }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    drawOverlordMapOverlay(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      220,
+      220 / 280,
+      (wx, wz) => ({ x: 110 + wx * (220 / 280), y: 110 + wz * (220 / 280) }),
+      byArgs,
+      deployedTurrets,
+      1800,
+    );
+
+    const hasTranslated = (wx: number, wz: number) =>
+      directCalls.some(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - (110 + wx * (220 / 280))) < 0.5 &&
+          Math.abs((c.args[1] as number) - (110 + wz * (220 / 280))) < 0.5,
+      );
+
+    expect(hasTranslated(32, -48)).toBe(true);
+    expect(hasTranslated(96, 96)).toBe(false);
+    expect(hasTranslated(-44, 28)).toBe(true);
+    expect(hasTranslated(18, 22)).toBe(true);
+    expect(hasTranslated(-30, -26)).toBe(true);
+    expect(directCalls.some((c) => c.op === 'setLineDash')).toBe(true);
+
+    const noWave11Badges = deriveMatchHighlightBadges({
+      victory: false,
+      placement: 12,
+      totalPlayers: 30,
+      kills: 1,
+      damageDealt: 120,
+      shotsFired: 8,
+      shotsHit: 2,
+      accuracy: 25,
+      headshots: 0,
+      structuresBuilt: 0,
+      chestsOpened: 1,
+      survivalTimeSec: 75,
+      turretsDeployed: 0,
+      fishCaught: 0,
+    });
+    expect(noWave11Badges.some((b) => b.label === 'TURRET ENGINEER')).toBe(false);
+    expect(noWave11Badges.some((b) => b.label === 'MASTER ANGLER')).toBe(false);
+
+    const badges = deriveMatchHighlightBadges({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 5,
+      damageDealt: 1100,
+      shotsFired: 30,
+      shotsHit: 16,
+      accuracy: 53,
+      headshots: 2,
+      structuresBuilt: 8,
+      chestsOpened: 4,
+      survivalTimeSec: 215,
+      turretsDeployed: 1,
+      fishCaught: 2,
+    });
+    expect(badges.find((b) => b.label === 'TURRET ENGINEER')?.tone).toBe('cyan');
+    expect(badges.find((b) => b.label === 'MASTER ANGLER')?.tone).toBe('emerald');
+  });
+
+  it('renders TURRET & THERMAL status chips, FISHING... channel bar, auto_turret/chug_cannon hotbar SVGs & Node-safe Minimap Overlord overlay', () => {
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    // Minimal 2D canvas context WITHOUT fillText, strokeText, or ellipse!
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => miniMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    const fishingHoles: FishingHoleEntity[] = [
+      {
+        id: 'fh-mini-1',
+        x: 20,
+        y: 0,
+        z: -18,
+        castsRemaining: 3,
+        depleted: false,
+      },
+      {
+        id: 'fh-mini-depleted',
+        x: -22,
+        y: 0,
+        z: -14,
+        castsRemaining: 0,
+        depleted: true,
+      },
+    ];
+    const skyBalloons: SkyBalloonEntity[] = [
+      {
+        id: 'sb-mini-1',
+        poiId: 'metro_towers',
+        x: -26,
+        baseY: 12,
+        topY: 85,
+        z: 24,
+      },
+    ];
+    hud.setWorldOverlordOverlay(fishingHoles, skyBalloons);
+    miniDrawCalls.length = 0;
+
+    hud.update(
+      makeBaseHUDState({
+        activeTurretRemainingSec: 35.4,
+        thermalVisionRemainingSec: 10.6,
+        fishingProgress: 0.45,
+        deployedTurrets: [{ x: 14, z: 16, isFriendly: true }],
+        slots: [
+          { uid: 'pick', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+          { uid: 'tur', weaponId: 'auto_turret', rarity: 'epic', magAmmo: 0, stackCount: 2 },
+          { uid: 'chug', weaponId: 'chug_cannon', rarity: 'mythic', magAmmo: 5, stackCount: 1 },
+          null,
+          null,
+          null,
+        ],
+        activeSlot: 2,
+      }),
+    );
+
+    const chipRow = hudRoot.findByClass('fdr-status-chip-row');
+    const turretPill = chipRow?.findByClass('fdr-turret-pill');
+    const thermalPill = chipRow?.findByClass('fdr-thermal-pill');
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(false);
+    expect(turretPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(turretPill?.dataset.active).toBe('true');
+    expect(turretPill?.textContent).toContain('TURRET · 36s');
+    expect(thermalPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(thermalPill?.dataset.active).toBe('true');
+    expect(thermalPill?.textContent).toContain('THERMAL · 11s');
+
+    const channelBar = hudRoot.findByClass('fdr-channel-bar');
+    expect(channelBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(channelBar?.classList.contains('fishing')).toBe(true);
+    expect(channelBar?.textContent).toContain('FISHING...');
+    expect(channelBar?.textContent).toContain('45%');
+    expect(channelBar?.findByClass('fdr-channel-fill')?.style.width).toBe('45%');
+
+    const slotCards = hudRoot.findAllByClass('fdr-slot-card');
+    expect(slotCards[1]?.innerHTML).toContain(getWeaponSvg('auto_turret'));
+    expect(slotCards[1]?.innerHTML).toContain('x2');
+    expect(slotCards[2]?.innerHTML).toContain(getWeaponSvg('chug_cannon'));
+    expect(slotCards[2]?.innerHTML).toContain('5');
+
+    const miniSize = 220;
+    const miniPxPerMeter = miniSize / 280;
+    const hasMiniTranslate = (wx: number, wz: number) =>
+      miniDrawCalls.some(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - (miniSize * 0.5 + wx * miniPxPerMeter)) < 0.5 &&
+          Math.abs((c.args[1] as number) - (miniSize * 0.5 + wz * miniPxPerMeter)) < 0.5,
+      );
+    expect(hasMiniTranslate(20, -18)).toBe(true);
+    expect(hasMiniTranslate(-22, -14)).toBe(false);
+    expect(hasMiniTranslate(-26, 24)).toBe(true);
+    expect(hasMiniTranslate(14, 16)).toBe(true);
+
+    // Zero / null clears chips and fishing channel bar cleanly
+    hud.update(
+      makeBaseHUDState({
+        activeTurretRemainingSec: 0,
+        thermalVisionRemainingSec: null,
+        fishingProgress: null,
+      }),
+    );
+    expect(turretPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(thermalPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(true);
+    expect(channelBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(channelBar?.classList.contains('fishing')).toBe(false);
+
+    hud.dispose();
+  });
+
+  it('forwards setWorldOverlordOverlay to FullMapOverlay (30 legend rows, Sky Balloons, Fishing Holes & Deployed Turrets before POI labels) & shows TURRET ENGINEER / MASTER ANGLER highlights on MatchOverlay', () => {
+    const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+
+    // FullMap mock WITHOUT ellipse
+    const fullMockCtx = {
+      clearRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => fullDrawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => fullDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => fullDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => fullDrawCalls.push({ op: 'arc', args }),
+      fill: () => fullDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => fullDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => fullDrawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => fullDrawCalls.push({ op: 'rotate', args }),
+      setLineDash: (...args: unknown[]) => fullDrawCalls.push({ op: 'setLineDash', args }),
+      fillText: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    let canvasCount = 0;
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          const idx = canvasCount++;
+          (el as unknown as { getContext: () => unknown }).getContext = () =>
+            idx === 0 ? miniMockCtx : fullMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. Legend has exactly 30 rows including SKY BALLOON & FISHING HOLE
+    const legend = root.findByClass('fdr-map-legend');
+    const legendRowCount = (
+      legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
+    ).length;
+    expect(legendRowCount).toBe(30);
+    expect(legend?.textContent).toContain('SKY BALLOON');
+    expect(legend?.textContent).toContain('FISHING HOLE');
+
+    // 2. setWorldOverlordOverlay & deployedTurrets render BEFORE POI text labels
+    const fishingHoles: FishingHoleEntity[] = [
+      {
+        id: 'fh-full-1',
+        x: -135,
+        y: 0,
+        z: 105,
+        castsRemaining: 3,
+        depleted: false,
+      },
+      {
+        id: 'fh-full-depleted',
+        x: 215,
+        y: 0,
+        z: 215,
+        castsRemaining: 0,
+        depleted: true,
+      },
+    ];
+    const skyBalloons: SkyBalloonEntity[] = [
+      {
+        id: 'sb-full-1',
+        poiId: 'sunny_suburbs',
+        x: 155,
+        baseY: 12,
+        topY: 85,
+        z: -110,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldOverlordOverlay(fishingHoles, skyBalloons);
+    ui.toggleFullMap(true);
+    fullDrawCalls.length = 0;
+    miniDrawCalls.length = 0;
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        playerPos: { x: 0, y: 10, z: 0 },
+        deployedTurrets: [{ x: 45, z: -35, isFriendly: true }],
+      }),
+    );
+
+    const findFullTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return fullDrawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const holeIdx = findFullTranslateIdx(-135, 105);
+    const depletedHoleIdx = findFullTranslateIdx(215, 215);
+    const balloonIdx = findFullTranslateIdx(155, -110);
+    const turretIdx = findFullTranslateIdx(45, -35);
+    const firstPoiLabelIdx = fullDrawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+
+    expect(holeIdx).toBeGreaterThanOrEqual(0);
+    expect(depletedHoleIdx).toBe(-1);
+    expect(balloonIdx).toBeGreaterThanOrEqual(0);
+    expect(turretIdx).toBeGreaterThanOrEqual(0);
+    expect(firstPoiLabelIdx).toBeGreaterThan(holeIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(balloonIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(turretIdx);
+
+    // 3. MatchOverlay shows TURRET ENGINEER & MASTER ANGLER highlights
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 6,
+      damageDealt: 1380,
+      shotsFired: 45,
+      shotsHit: 23,
+      accuracy: 51,
+      headshots: 2,
+      structuresBuilt: 6,
+      chestsOpened: 4,
+      survivalTimeSec: 220,
+      turretsDeployed: 2,
+      fishCaught: 3,
+      chugHeals: 4,
+    });
+    const highlightsRow = root.findByClass('fdr-highlights-row');
+    expect(highlightsRow?.textContent).toContain('TURRET ENGINEER');
+    expect(highlightsRow?.textContent).toContain('MASTER ANGLER');
 
     ui.dispose();
   });

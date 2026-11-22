@@ -7,6 +7,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   EmoteId,
+  FishingHoleEntity,
   ForecastTowerEntity,
   GameSettings,
   GrindRailEntity,
@@ -20,6 +21,7 @@ import type {
   ModBenchEntity,
   RebootVanEntity,
   ShieldMushroomEntity,
+  SkyBalloonEntity,
   SlurpTankerEntity,
   SupplyDroneEntity,
   TrapKind,
@@ -36,6 +38,7 @@ import {
   drawChapterMapOverlay,
   drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
+  drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
   drawTideMapOverlay,
   formatBiomeLabel,
@@ -62,12 +65,14 @@ import {
   resolveFrontierOverlayArgs,
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
+  resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
   resolveTideOverlayArgs,
   selectVisibleVisualSoundCues,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
+  type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
   type WorldTideOverlay,
   worldToMapNorm,
@@ -94,7 +99,9 @@ import {
   getStealthLeafSvg,
   getStormEyeSvg,
   getTacticalPingIconSvg,
+  getThermalVisionSvg,
   getTrapSvg,
+  getTurretIconSvg,
   getVaultKeySvg,
   getVehicleIconSvg,
   getVisualAudioIconSvg,
@@ -242,6 +249,10 @@ export class HUDManager {
     boars: [],
     mushrooms: [],
   };
+  private overlordOverlay: WorldOverlordOverlay = {
+    fishingHoles: [],
+    skyBalloons: [],
+  };
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
@@ -302,6 +313,10 @@ export class HUDManager {
   private lowGLabelEl: HTMLSpanElement;
   private flarePillEl: HTMLDivElement;
   private flareLabelEl: HTMLSpanElement;
+  private turretPillEl: HTMLDivElement;
+  private turretLabelEl: HTMLSpanElement;
+  private thermalPillEl: HTMLDivElement;
+  private thermalLabelEl: HTMLSpanElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -459,6 +474,8 @@ export class HUDManager {
   private lastJetpackVisible = false;
   private lastLowGVisible = false;
   private lastFlareMarkedCount = 0;
+  private lastTurretSec = 0;
+  private lastThermalSec = 0;
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -1165,11 +1182,35 @@ export class HUDManager {
     this.flareLabelEl.textContent = 'FLARE SCAN · 0 MARKED';
     this.flarePillEl.append(flareIcon, this.flareLabelEl);
 
+    this.turretPillEl = document.createElement('div');
+    this.turretPillEl.className = 'fdr-turret-pill fdr-hidden';
+    this.turretPillEl.dataset.active = 'false';
+    const turretIcon = document.createElement('span');
+    turretIcon.className = 'fdr-turret-icon';
+    turretIcon.innerHTML = getTurretIconSvg();
+    this.turretLabelEl = document.createElement('span');
+    this.turretLabelEl.className = 'fdr-turret-label';
+    this.turretLabelEl.textContent = 'TURRET · 0s';
+    this.turretPillEl.append(turretIcon, this.turretLabelEl);
+
+    this.thermalPillEl = document.createElement('div');
+    this.thermalPillEl.className = 'fdr-thermal-pill fdr-hidden';
+    this.thermalPillEl.dataset.active = 'false';
+    const thermalIcon = document.createElement('span');
+    thermalIcon.className = 'fdr-thermal-icon';
+    thermalIcon.innerHTML = getThermalVisionSvg();
+    this.thermalLabelEl = document.createElement('span');
+    this.thermalLabelEl.className = 'fdr-thermal-label';
+    this.thermalLabelEl.textContent = 'THERMAL · 0s';
+    this.thermalPillEl.append(thermalIcon, this.thermalLabelEl);
+
     this.statusChipRowEl.append(
       this.stealthPillEl,
       this.jetpackPillEl,
       this.lowGPillEl,
       this.flarePillEl,
+      this.turretPillEl,
+      this.thermalPillEl,
     );
 
     this.staminaWrapEl = document.createElement('div');
@@ -1823,6 +1864,22 @@ export class HUDManager {
     this.lastMinimapDraw = 0;
   }
 
+  setWorldOverlordOverlay(
+    fishingHoles: FishingHoleEntity[],
+    skyBalloons: SkyBalloonEntity[],
+  ): void;
+  setWorldOverlordOverlay(overlay: WorldOverlordOverlay): void;
+  setWorldOverlordOverlay(
+    fishingHolesOrOverlay: FishingHoleEntity[] | WorldOverlordOverlay,
+    skyBalloons?: SkyBalloonEntity[],
+  ): void {
+    this.overlordOverlay = resolveOverlordOverlayArgs(
+      fishingHolesOrOverlay,
+      skyBalloons,
+    );
+    this.lastMinimapDraw = 0;
+  }
+
   setVisible(visible: boolean): void {
     this.visible = visible;
     this.containerEl.classList.toggle('fdr-hidden', !visible);
@@ -1973,9 +2030,19 @@ export class HUDManager {
     this.flarePillEl.dataset.markedCount = '0';
     this.flareLabelEl.textContent = 'FLARE SCAN · 0 MARKED';
     this.lastFlareMarkedCount = 0;
+    this.turretPillEl.classList.add('fdr-hidden');
+    this.turretPillEl.dataset.active = 'false';
+    delete this.turretPillEl.dataset.remainingSec;
+    this.turretLabelEl.textContent = 'TURRET · 0s';
+    this.lastTurretSec = 0;
+    this.thermalPillEl.classList.add('fdr-hidden');
+    this.thermalPillEl.dataset.active = 'false';
+    delete this.thermalPillEl.dataset.remainingSec;
+    this.thermalLabelEl.textContent = 'THERMAL · 0s';
+    this.lastThermalSec = 0;
     this.statusChipRowEl.classList.add('fdr-hidden');
     this.channelEl.classList.add('fdr-hidden');
-    this.channelEl.classList.remove('train-hack');
+    this.channelEl.classList.remove('train-hack', 'fishing');
     this.lastChannelKey = '';
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
@@ -2195,6 +2262,7 @@ export class HUDManager {
     this.updateWave8HUD(state);
     this.updateWave9HUD(state);
     this.updateWave10HUD(state);
+    this.updateWave11HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2523,6 +2591,7 @@ export class HUDManager {
     let chLabel = '';
     let chProg: number | null = null;
     let isTrainHack = false;
+    let isFishing = false;
     if (
       !state.spectating &&
       typeof state.trainHackProgress === 'number' &&
@@ -2531,6 +2600,14 @@ export class HUDManager {
       chLabel = 'HACKING APEX EXPRESS...';
       chProg = state.trainHackProgress;
       isTrainHack = true;
+    } else if (
+      !state.spectating &&
+      typeof state.fishingProgress === 'number' &&
+      Number.isFinite(state.fishingProgress)
+    ) {
+      chLabel = 'FISHING...';
+      chProg = state.fishingProgress;
+      isFishing = true;
     } else if (state.healProgress !== null) {
       chLabel = state.healLabel || 'HEALING';
       chProg = state.healProgress;
@@ -2540,11 +2617,12 @@ export class HUDManager {
     }
 
     const pct = chProg !== null ? Math.max(0, Math.min(100, Math.round(chProg * 100))) : -1;
-    const cKey = `${chLabel}:${pct}:${isTrainHack ? 1 : 0}`;
+    const cKey = `${chLabel}:${pct}:${isTrainHack ? 1 : 0}:${isFishing ? 1 : 0}`;
     if (cKey !== this.lastChannelKey) {
       this.lastChannelKey = cKey;
       this.channelEl.classList.toggle('fdr-hidden', chProg === null);
       this.channelEl.classList.toggle('train-hack', isTrainHack);
+      this.channelEl.classList.toggle('fishing', isFishing);
       if (chProg !== null) {
         this.channelLabelEl.textContent = chLabel;
         this.channelPctEl.textContent = `${pct}%`;
@@ -3544,12 +3622,62 @@ export class HUDManager {
     this.syncStatusChipRow();
   }
 
+  private updateWave11HUD(state: HUDState): void {
+    // 1. Compact cyan TURRET · Xs chip inside .fdr-status-chip-row
+    const turretSec =
+      !state.spectating &&
+      typeof state.activeTurretRemainingSec === 'number' &&
+      Number.isFinite(state.activeTurretRemainingSec) &&
+      state.activeTurretRemainingSec > 0
+        ? Math.max(1, Math.ceil(state.activeTurretRemainingSec))
+        : 0;
+    if (turretSec !== this.lastTurretSec) {
+      this.lastTurretSec = turretSec;
+      const hasTurret = turretSec > 0;
+      this.turretPillEl.classList.toggle('fdr-hidden', !hasTurret);
+      this.turretPillEl.dataset.active = hasTurret ? 'true' : 'false';
+      if (hasTurret) {
+        this.turretPillEl.dataset.remainingSec = String(turretSec);
+        this.turretLabelEl.textContent = `TURRET · ${turretSec}s`;
+      } else {
+        delete this.turretPillEl.dataset.remainingSec;
+        this.turretLabelEl.textContent = 'TURRET · 0s';
+      }
+    }
+
+    // 2. Compact amber THERMAL · Xs chip inside .fdr-status-chip-row
+    const thermalSec =
+      !state.spectating &&
+      typeof state.thermalVisionRemainingSec === 'number' &&
+      Number.isFinite(state.thermalVisionRemainingSec) &&
+      state.thermalVisionRemainingSec > 0
+        ? Math.max(1, Math.ceil(state.thermalVisionRemainingSec))
+        : 0;
+    if (thermalSec !== this.lastThermalSec) {
+      this.lastThermalSec = thermalSec;
+      const hasThermal = thermalSec > 0;
+      this.thermalPillEl.classList.toggle('fdr-hidden', !hasThermal);
+      this.thermalPillEl.dataset.active = hasThermal ? 'true' : 'false';
+      if (hasThermal) {
+        this.thermalPillEl.dataset.remainingSec = String(thermalSec);
+        this.thermalLabelEl.textContent = `THERMAL · ${thermalSec}s`;
+      } else {
+        delete this.thermalPillEl.dataset.remainingSec;
+        this.thermalLabelEl.textContent = 'THERMAL · 0s';
+      }
+    }
+
+    this.syncStatusChipRow();
+  }
+
   private syncStatusChipRow(): void {
     const anyChipVisible =
       this.lastStealthKey ||
       this.lastJetpackVisible ||
       this.lastLowGVisible ||
-      this.lastFlareMarkedCount > 0;
+      this.lastFlareMarkedCount > 0 ||
+      this.lastTurretSec > 0 ||
+      this.lastThermalSec > 0;
     this.statusChipRowEl.classList.toggle('fdr-hidden', !anyChipVisible);
   }
 
@@ -3969,6 +4097,17 @@ export class HUDManager {
       this.tideOverlay,
       state.flareBeacons,
       undefined,
+      performance.now(),
+    );
+
+    // Wave-11 Overlord Overlay (Fishing Holes, Sky Balloons, Deployed Auto-Turrets)
+    drawOverlordMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      this.overlordOverlay,
+      state.deployedTurrets,
       performance.now(),
     );
 

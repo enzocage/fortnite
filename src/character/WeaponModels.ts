@@ -21,6 +21,7 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'grappler',
   'plasma_flamethrower',
   'flare_gun',
+  'chug_cannon',
 ]);
 
 const THROWABLE_WEAPONS = new Set<WeaponId>([
@@ -30,6 +31,7 @@ const THROWABLE_WEAPONS = new Set<WeaponId>([
   'shield_bubble',
   'port_a_bunker',
   'emp_grenade',
+  'auto_turret',
 ]);
 
 export function isRangedWeapon(weaponId: WeaponId): boolean {
@@ -2015,6 +2017,155 @@ function buildFlareGun(): THREE.Group {
   return group;
 }
 
+function buildAutoTurret(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_auto_turret';
+  group.userData.wrapDisabled = true;
+
+  const darkChassis = makeStandardMat('#0f172a', 0.42, 0.65);
+  const slateArmor = makeStandardMat('#334155', 0.34, 0.56);
+  const steelMetal = makeStandardMat('#94a3b8', 0.24, 0.85);
+  const blueTrim = makeStandardMat('#0284c7', 0.3, 0.48, '#0ea5e9', 0.25);
+  const cyanGlow = makeStandardMat('#22d3ee', 0.12, 0.18, '#22d3ee', 0.96);
+
+  const cx = 0;
+  const cy = 0.065;
+  const cz = 0.02;
+
+  // Compact cyber briefcase shell + beveled armor cheek plates
+  addBox(group, 0.168, 0.124, 0.086, darkChassis, cx, cy, cz);
+  addBox(group, 0.148, 0.104, 0.096, slateArmor, cx, cy, cz);
+  addBox(group, 0.174, 0.018, 0.072, blueTrim, cx, cy + 0.044, cz);
+  addBox(group, 0.174, 0.014, 0.072, blueTrim, cx, cy - 0.044, cz);
+
+  // Briefcase top carry handle + side latch clasps + folded tripod base pads
+  addBox(group, 0.090, 0.016, 0.024, slateArmor, cx, cy + 0.084, cz);
+  addBox(group, 0.018, 0.028, 0.020, darkChassis, -0.036, cy + 0.068, cz);
+  addBox(group, 0.018, 0.028, 0.020, darkChassis, 0.036, cy + 0.068, cz);
+  for (const side of [-1, 1] as const) {
+    addBox(group, 0.016, 0.038, 0.048, steelMetal, side * 0.082, cy + 0.012, cz);
+    addBox(group, 0.038, 0.014, 0.054, darkChassis, side * 0.056, cy - 0.066, cz);
+  }
+
+  // Folded twin-barrel turret accents tucked neatly across upper front foldout bay
+  addBox(group, 0.092, 0.036, 0.028, darkChassis, cx, cy + 0.038, cz + 0.046);
+  for (const side of [-1, 1] as const) {
+    const bx = side * 0.028;
+    addCylinder(
+      group,
+      0.011,
+      0.012,
+      0.092,
+      steelMetal,
+      bx,
+      cy + 0.040,
+      cz + 0.058,
+      0,
+      0,
+      Math.PI / 2,
+      10,
+    );
+    addCylinder(
+      group,
+      0.014,
+      0.014,
+      0.018,
+      darkChassis,
+      bx + side * 0.042,
+      cy + 0.040,
+      cz + 0.058,
+      0,
+      0,
+      Math.PI / 2,
+      10,
+    );
+  }
+
+  // Glowing cyan lock ring + inner targeting hub + status strips on front face
+  const lockY = cy - 0.008;
+  const lockZ = cz + 0.050;
+  addMesh(group, new THREE.TorusGeometry(0.032, 0.0065, 8, 18), cyanGlow, cx, lockY, lockZ);
+  addCylinder(group, 0.020, 0.020, 0.012, darkChassis, cx, lockY, lockZ, Math.PI / 2, 0, 0, 12);
+  addMesh(group, new THREE.SphereGeometry(0.011, 10, 8), cyanGlow, cx, lockY, lockZ + 0.005);
+  addBox(group, 0.024, 0.008, 0.010, cyanGlow, -0.052, lockY, lockZ);
+  addBox(group, 0.024, 0.008, 0.010, cyanGlow, 0.052, lockY, lockZ);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.24);
+  return group;
+}
+
+function buildChugCannon(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_chug_cannon';
+
+  const navyChassis = makeStandardMat('#0f172a', 0.42, 0.58);
+  const slurpBlue = makeStandardMat('#1d4ed8', 0.34, 0.42);
+  const steelTrim = makeStandardMat('#cbd5e1', 0.24, 0.84);
+  const cyanGlow = makeStandardMat('#22d3ee', 0.12, 0.16, '#22d3ee', 0.95);
+  const slurpCoreMat = makeStandardMat('#a5f3fc', 0.10, 0.12, '#67e8f9', 1.0);
+  const slurpGlass = new THREE.MeshStandardMaterial({
+    color: '#06b6d4',
+    emissive: '#22d3ee',
+    emissiveIntensity: 0.72,
+    roughness: 0.12,
+    metalness: 0.15,
+    transparent: true,
+    opacity: 0.68,
+  });
+
+  // Rear pistol grip, trigger guard & forward support grip (origin at rear hand grip 0, 0, 0)
+  addBox(group, 0.044, 0.12, 0.054, navyChassis, 0, -0.025, 0.015, 0.20, 0, 0);
+  addBox(group, 0.016, 0.032, 0.058, navyChassis, 0, 0.020, 0.075);
+  addBox(group, 0.040, 0.105, 0.048, navyChassis, 0, -0.012, 0.245, -0.14, 0, 0);
+
+  // Chunky pressurized Slurp launcher housing & heavy cylindrical cannon barrel
+  tagWrapTarget(addBox(group, 0.126, 0.136, 0.36, slurpBlue, 0, 0.10, 0.05));
+  tagWrapTarget(
+    addCylinder(group, 0.082, 0.082, 0.52, slurpBlue, 0, 0.11, 0.26, Math.PI / 2, 0, 0, 14),
+  );
+  // Heavy barrel clamp rings & rear pressure valve cap
+  addCylinder(group, 0.088, 0.088, 0.032, navyChassis, 0, 0.11, 0.16, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.088, 0.088, 0.032, navyChassis, 0, 0.11, 0.38, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.086, 0.072, 0.11, navyChassis, 0, 0.11, -0.19, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.038, 0.038, 0.024, steelTrim, 0, 0.11, -0.25, Math.PI / 2, 0, 0, 10);
+  addCylinder(group, 0.022, 0.022, 0.028, cyanGlow, 0, 0.11, -0.258, Math.PI / 2, 0, 0, 10);
+
+  // Flared pressurized Slurp launcher muzzle + glowing cyan accelerator ring + glowing Slurp orb core
+  addCylinder(group, 0.104, 0.082, 0.095, steelTrim, 0, 0.11, 0.54, Math.PI / 2, 0, 0, 14);
+  addMesh(group, new THREE.TorusGeometry(0.094, 0.012, 8, 18), cyanGlow, 0, 0.11, 0.585);
+  addMesh(group, new THREE.SphereGeometry(0.056, 12, 10), slurpCoreMat, 0, 0.11, 0.555);
+
+  // Dual carry handle: twin parallel overhead carry bars + side brace carry handle
+  for (const side of [-1, 1] as const) {
+    const hx = side * 0.038;
+    addBox(group, 0.020, 0.024, 0.30, steelTrim, hx, 0.228, 0.11);
+    addBox(group, 0.022, 0.068, 0.026, navyChassis, hx, 0.188, -0.02);
+    addBox(group, 0.022, 0.068, 0.026, navyChassis, hx, 0.188, 0.24);
+  }
+  addBox(group, 0.096, 0.018, 0.044, navyChassis, 0, 0.228, 0.11);
+  // Secondary lateral carry bar on right flank
+  addBox(group, 0.022, 0.024, 0.24, steelTrim, 0.102, 0.145, 0.14);
+  addBox(group, 0.034, 0.022, 0.024, navyChassis, 0.082, 0.145, 0.04);
+  addBox(group, 0.034, 0.022, 0.024, navyChassis, 0.082, 0.145, 0.24);
+
+  // Twin side-mounted translucent cyan Slurp fuel canisters with glowing liquid core & feed hoses
+  for (const side of [-1, 1] as const) {
+    const cx = side * 0.088;
+    const cy = 0.045;
+    const cz = 0.17;
+    addCylinder(group, 0.042, 0.042, 0.24, slurpGlass, cx, cy, cz, Math.PI / 2, 0, 0, 12);
+    addCylinder(group, 0.023, 0.023, 0.21, slurpCoreMat, cx, cy, cz, Math.PI / 2, 0, 0, 10);
+    addCylinder(group, 0.045, 0.045, 0.026, steelTrim, cx, cy, cz - 0.125, Math.PI / 2, 0, 0, 12);
+    addCylinder(group, 0.045, 0.045, 0.026, steelTrim, cx, cy, cz + 0.125, Math.PI / 2, 0, 0, 12);
+    addCylinder(group, 0.046, 0.046, 0.018, cyanGlow, cx, cy, cz, Math.PI / 2, 0, 0, 12);
+    // Feed manifold linking canister into cannon chamber
+    addBox(group, 0.036, 0.024, 0.028, cyanGlow, side * 0.056, 0.068, cz + 0.07);
+  }
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.11, 0.62);
+  return group;
+}
+
 const MOD_CHILD_NAMES = new Set([
   'mod_red_dot',
   'mod_suppressor',
@@ -2108,6 +2259,13 @@ function getWeaponModAnchors(weaponGroup: THREE.Group): WeaponModAnchors {
         redDot: [0, 0.160, 0.12],
         drumMag: [0, -0.055, 0.19],
         foregrip: [0, 0.012, 0.36],
+        suppressor: supPos,
+      };
+    case 'weapon_chug_cannon':
+      return {
+        redDot: [0, 0.242, 0.11],
+        drumMag: [0, -0.025, 0.18],
+        foregrip: [0, 0.006, 0.34],
         suppressor: supPos,
       };
     default:
@@ -2344,6 +2502,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildShockwaveHammer();
     case 'flare_gun':
       return buildFlareGun();
+    case 'auto_turret':
+      return buildAutoTurret();
+    case 'chug_cannon':
+      return buildChugCannon();
   }
 }
 

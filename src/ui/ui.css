@@ -6494,3 +6494,132 @@
     line-height: 1.08;
   }
 }
+
+/* ============================================================================
+   WAVE 11 UI: OVERLORD (TURRET & THERMAL STATUS CHIPS, FISHING CHANNEL BAR,
+   30-ROW TACTICAL LEGEND AT 1280x720)
+   ============================================================================ */
+
+.fdr-turret-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(8, 36, 58, 0.94), rgba(14, 116, 144, 0.92));
+  border: 1.5px solid #22d3ee;
+  box-shadow: 0 3px 10px rgba(34, 211, 238, 0.36), 0 0 10px rgba(56, 189, 248, 0.24);
+  color: #cffafe;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-turret-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-turret-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-thermal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(69, 26, 3, 0.94), rgba(146, 64, 14, 0.92));
+  border: 1.5px solid #fbbf24;
+  box-shadow: 0 3px 10px rgba(245, 158, 11, 0.4), 0 0 10px rgba(251, 191, 36, 0.28);
+  color: #fef3c7;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-thermal-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-thermal-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-channel-bar.fishing {
+  border-color: #38bdf8;
+  background: linear-gradient(180deg, rgba(8, 28, 56, 0.94), rgba(12, 54, 88, 0.95));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.58), 0 0 14px rgba(56, 189, 248, 0.36);
+}
+
+.fdr-channel-bar.fishing .fdr-channel-label {
+  color: #67e8f9;
+}
+
+.fdr-channel-bar.fishing .fdr-channel-fill {
+  background: linear-gradient(90deg, #0284c7 0%, #22d3ee 55%, #a5f3fc 100%);
+}
+
+.fdr-legend-swatch.skyballoon svg,
+.fdr-legend-swatch.fishinghole svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 1360px), (max-height: 760px) {
+  .fdr-turret-pill,
+  .fdr-thermal-pill {
+    padding: 1.5px 6px;
+    gap: 3px;
+    font-size: 9.5px;
+    letter-spacing: 0.04em;
+  }
+
+  .fdr-turret-icon,
+  .fdr-thermal-icon {
+    width: 11px;
+    height: 11px;
+  }
+
+  .fdr-map-legend {
+    gap: 1.5px 8px;
+    padding: 4px 8px;
+  }
+
+  .fdr-map-legend-title {
+    font-size: 10.5px;
+    padding-bottom: 2px;
+    margin-bottom: 0;
+  }
+
+  .fdr-map-legend-row {
+    font-size: 10px;
+    gap: 5px;
+    line-height: 1.05;
+  }
+
+  .fdr-legend-swatch {
+    width: 13px;
+    height: 13px;
+  }
+
+  .fdr-legend-swatch.skyballoon svg,
+  .fdr-legend-swatch.fishinghole svg {
+    width: 13px;
+    height: 13px;
+  }
+}

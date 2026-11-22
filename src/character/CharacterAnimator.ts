@@ -152,7 +152,8 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
     weaponId === 'railgun' ||
     weaponId === 'rocket_launcher' ||
     weaponId === 'mythic_blade_rifle' ||
-    weaponId === 'plasma_flamethrower'
+    weaponId === 'plasma_flamethrower' ||
+    weaponId === 'chug_cannon'
   );
 }
 
@@ -167,7 +168,8 @@ function isThrowable(weaponId: WeaponId): boolean {
     weaponId === 'chug_splash' ||
     weaponId === 'shield_bubble' ||
     weaponId === 'port_a_bunker' ||
-    weaponId === 'emp_grenade'
+    weaponId === 'emp_grenade' ||
+    weaponId === 'auto_turret'
   );
 }
 
@@ -1140,6 +1142,25 @@ export class CharacterAnimator {
         p.lShRy = -0.48;
         p.lShRz = 0.14;
         p.lElRx = -0.94;
+      } else if (weapon === 'chug_cannon') {
+        // Heavy shoulder-mounted Slurp launcher sprint brace
+        const strideBob = Math.sin(t * 11) * 0.04;
+        p.chestRy += 0.10;
+        p.rShRx = -1.06 + strideBob;
+        p.rShRy = 0.08;
+        p.rShRz = -0.06;
+        p.rElRx = -1.16;
+        p.rHaRx = 0.65;
+        p.lShRx = -1.18 - strideBob;
+        p.lShRy = -0.56;
+        p.lShRz = 0.12;
+        p.lElRx = -0.88;
+      } else if (weapon === 'auto_turret') {
+        // Briefcase tactical sprint carry in right hand
+        p.rShRx = -0.55 + Math.sin(t * 11) * 0.12;
+        p.rShRy = 0.18;
+        p.rShRz = -0.12;
+        p.rElRx = -0.88;
       } else if (isTwoHandedGun(weapon)) {
         p.rShRx = -0.78;
         p.rShRy = 0.58;
@@ -1366,6 +1387,26 @@ export class CharacterAnimator {
         p.lShRx = -Math.PI / 2 - railTorsoPitch - aimPitch - recoilTilt * 0.8 - p.lElRx + 0.05;
         p.lShRy = -0.52;
         p.lShRz = 0.10;
+      }
+      return;
+    }
+
+    if (weapon === 'chug_cannon') {
+      // Heavy shoulder-mounted pressurized Slurp launcher stance
+      p.spineRx -= 0.05;
+      p.chestRy += 0.12;
+      const launcherTorsoPitch = p.hipsRx + p.spineRx + p.chestRx;
+      p.rShRx = (state.isAiming ? -1.12 : -1.05) - aimPitch * 0.55 - recoilTilt * 0.45;
+      p.rShRy = 0.10;
+      p.rShRz = -0.06;
+      p.rElRx = state.isAiming ? -1.18 : -1.14;
+      p.rHaRx = -Math.PI / 2 - launcherTorsoPitch - aimPitch - recoilTilt - p.rShRx - p.rElRx;
+
+      if (!keepLeftGripOnZipline) {
+        p.lShRx = (state.isAiming ? -1.30 : -1.22) - aimPitch * 0.45 - recoilTilt * 0.35;
+        p.lShRy = -0.58;
+        p.lShRz = 0.12;
+        p.lElRx = state.isAiming ? -0.84 : -0.90;
       }
       return;
     }

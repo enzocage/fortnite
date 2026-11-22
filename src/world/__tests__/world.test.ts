@@ -10,6 +10,7 @@ import {
   POIS,
   REBOOT_VAN_COOLDOWN_SEC,
   SHIELD_MUSHROOM_RESPAWN_SEC,
+  SKY_BALLOON_HEIGHT,
   STEP_HEIGHT,
   STORM_PHASES,
   TRAIN_CHEST_COOLDOWN_SEC,
@@ -35,6 +36,7 @@ import {
   WorldBuilder,
   WorldInteractables,
   type BumpTextureKind,
+  type FishingCastResult,
   type GrindRailSampleResult,
   type NearbyGrindRailResult,
   type SupplyDroneDamageResult,
@@ -42,6 +44,7 @@ import {
   type Wave8ShowcaseResult,
   type Wave9ShowcaseResult,
   type Wave10ShowcaseResult,
+  type Wave11ShowcaseResult,
 } from '../index';
 import type { WeatherKind } from '../../types';
 
@@ -1121,7 +1124,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(barrels).toHaveLength(24);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
     expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     for (const sb of barrels) {
       expect(sb.hp).toBe(40);
@@ -1167,7 +1170,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(sb0.destroyed).toBe(true);
     expect(sbGroup.visible).toBe(false);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
     expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
     expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1193,7 +1196,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     ).toBe(true);
     expect(sbGroup.visible).toBe(true);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     interactables.dispose();
     builder.dispose();
@@ -1709,7 +1712,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     const expBarrels = interactables.getExplosiveBarrels();
     expect(expBarrels).toHaveLength(18);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     for (const eb of expBarrels) {
       expect(eb.hp).toBe(35);
@@ -1781,7 +1784,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     expect(eb0.exploded).toBe(true);
     expect(ebGroup.visible).toBe(false);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(17);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
     expect(interactables.damageExplosiveBarrel(eb0.id, 10)).toBeNull();
     expect(interactables.damageExplosiveBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1820,7 +1823,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     ).toBe(true);
     expect(ebGroup.visible).toBe(true);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -2047,7 +2050,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandCols[0].maxY).toBeCloseTo(groundY + 24, 4);
     expect(islandCols[0].minZ).toBeCloseTo(cz - 12.5, 4);
     expect(islandCols[0].maxZ).toBeCloseTo(cz + 12.5, 4);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 1 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 1 + 6 + 4 + 4);
 
     // 10s capture duration
     const islandFlagGroup = islandMesh.children[islandMesh.children.length - 1] as THREE.Group;
@@ -2091,7 +2094,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandMesh.visible).toBe(false);
     expect(geyserMesh.visible).toBe(false);
     expect(interactables.getLootIslandColliders()).toHaveLength(0);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -2711,7 +2714,7 @@ describe('WorldInteractables Wave-7 Grind Rails, Reboot Vans, Supply Drones & Sh
     const vans = interactables.getRebootVans();
     expect(vans).toHaveLength(6);
     expect(interactables.getRebootVanColliders()).toHaveLength(6);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     for (const van of vans) {
       expect(van.available).toBe(true);
@@ -2890,7 +2893,7 @@ describe('WorldInteractables Wave-7 Grind Rails, Reboot Vans, Supply Drones & Sh
     expect(interactables.getRebootVanColliders()).toHaveLength(6);
     expect(interactables.getGrindRails()).toHaveLength(4);
     expect(interactables.getSupplyDrones()).toHaveLength(12);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     interactables.dispose();
     terrain.dispose();
@@ -3237,14 +3240,14 @@ describe('WorldInteractables Wave-8 Mod Benches, Forecast Towers, Stealth Bushes
     expect(bush0Foliage.rotation.x).toBe(0);
     expect(bush0Foliage.scale.x).toBe(1);
 
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     // 4. reset() restores Forecast Towers & Stealth Bushes
     interactables.reset();
     expect(interactables.getForecastTowers().every((t) => !t.scanned && t.scannedBy === null)).toBe(true);
     expect((ft0BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString()).toBe(unscannedHex);
     expect(interactables.scanForecastTower(ft0.id, 'player2')).toBe(true);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -3300,7 +3303,7 @@ describe('WorldInteractables Wave-8 Mod Benches, Forecast Towers, Stealth Bushes
     expect(interactables.getForecastTowers()).toHaveLength(4);
     expect(interactables.getForecastTowerColliders()).toHaveLength(4);
     expect(interactables.getStealthBushes()).toHaveLength(28);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     interactables.dispose();
     terrain.dispose();
@@ -3812,7 +3815,7 @@ describe('WorldInteractables Wave-9 Apex Express Train, Meteor Craters & Showcas
     // reset() restores base 6 craters and base island mid-ring track
     interactables.reset();
     expect(interactables.getMeteorCraters()).toHaveLength(6);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     interactables.dispose();
     terrain.dispose();
@@ -4113,7 +4116,7 @@ describe('WorldInteractables Wave-10 Shield Mushrooms, Wild Loot Boars & Showcas
         .every((b) => b.alive && b.hp === WILD_BOAR_MAX_HP && b.state === 'roam'),
     ).toBe(true);
     expect(b0Group.visible).toBe(true);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -4287,6 +4290,353 @@ describe('Wave-10 Loot Pools, 3D Pickup Meshes & GLSL Shader Validation', () => 
     expect(mockShader.vertexShader).toContain('uniform float uWindStrength;');
 
     detail.dispose();
+    storm.dispose();
+    fx.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-11 Rippling Fishing Holes, Tethered Sky-Ascent Balloons & Showcase', () => {
+  it('constructs 14 Rippling Fishing Holes in verified water and 4 Towering Tethered Sky-Ascent Balloons clear of buildings/water/props with full lifecycle and reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const soundSpy = vi.fn();
+    const splashSpy = vi.fn();
+    bus.on('sound:play', soundSpy);
+    bus.on('vfx:fishing_splash', splashSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 1.0) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 3.5 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    // 1. 14 Rippling Fishing Holes in verified water locations
+    const holes = interactables.getFishingHoles();
+    expect(holes).toHaveLength(14);
+
+    const holePositionsBefore: number[] = [];
+    for (const fh of holes) {
+      expect(fh.castsRemaining).toBe(3);
+      expect(fh.depleted).toBe(false);
+      expect(terrain.isWater(fh.x, fh.z), `${fh.id} (${fh.x}, ${fh.z}) must be in water`).toBe(true);
+      expect(fh.y).toBeCloseTo(WATER_LEVEL, 4);
+      expect(isClearOfBuildings(fh.x, WATER_LEVEL, fh.z, 1.0), `${fh.id} hits building/dock`).toBe(true);
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(fh.x - veh.x, fh.z - veh.z)).toBeGreaterThan(4.0);
+      }
+
+      const holeGroup = interactables.getGroup().getObjectByName(`FishingHole_${fh.id}`) as THREE.Group;
+      expect(holeGroup).toBeDefined();
+      expect(holeGroup.visible).toBe(true);
+      const fish0 = holeGroup.getObjectByName(`FishingHoleFish_${fh.id}_1`) as THREE.Group;
+      const fish1 = holeGroup.getObjectByName(`FishingHoleFish_${fh.id}_2`) as THREE.Group;
+      expect(fish0).toBeDefined();
+      expect(fish1).toBeDefined();
+      holePositionsBefore.push(fish0.position.y);
+    }
+
+    // Animate rippling rings & leaping fish arcs
+    interactables.update(0.25, 0.25);
+    interactables.update(0.35, 0.6);
+    const fh0Group = interactables.getGroup().getObjectByName(`FishingHole_${holes[0].id}`) as THREE.Group;
+    const fh0Fish0 = fh0Group.getObjectByName(`FishingHoleFish_${holes[0].id}_1`) as THREE.Group;
+    expect(fh0Fish0.position.y).not.toBeCloseTo(holePositionsBefore[0], 3);
+
+    // Proximity lookup & safety checks
+    const fh0 = holes[0];
+    expect(interactables.findNearbyFishingHole({ x: fh0.x + 2.5, y: fh0.y + 0.5, z: fh0.z })?.id).toBe(fh0.id);
+    expect(interactables.findNearbyFishingHole({ x: fh0.x + 18, y: fh0.y, z: fh0.z })).toBeNull();
+    expect(interactables.findNearbyFishingHole({ x: Number.NaN, y: fh0.y, z: fh0.z })).toBeNull();
+    expect(interactables.findNearbyFishingHole({ x: fh0.x, y: fh0.y, z: fh0.z }, -1)).toBeNull();
+
+    // 3-cast lifecycle + rewards + VFX/SFX + depletion
+    const rewards: string[] = [];
+    for (let cast = 1; cast <= 3; cast++) {
+      const res = interactables.consumeFishingCast(fh0.id) as FishingCastResult;
+      expect(res).not.toBeNull();
+      expect(res.ok).toBe(true);
+      expect(['thermal_flopper', 'epic_weapon', 'gold_cache']).toContain(res.reward);
+      expect(res.position.x).toBe(fh0.x);
+      expect(res.position.z).toBe(fh0.z);
+      rewards.push(res.reward);
+      expect(fh0.castsRemaining).toBe(3 - cast);
+      expect(fh0.depleted).toBe(cast === 3);
+    }
+    expect(new Set(rewards)).toEqual(new Set(['thermal_flopper', 'epic_weapon', 'gold_cache']));
+    expect(splashSpy).toHaveBeenCalledTimes(3);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'fishing_catch' }));
+    expect(fh0Group.visible).toBe(false);
+    expect(interactables.consumeFishingCast(fh0.id)).toBeNull();
+    expect(interactables.consumeFishingCast('nonexistent_hole')).toBeNull();
+    expect(interactables.findNearbyFishingHole({ x: fh0.x, y: fh0.y, z: fh0.z }, 3.0)).toBeNull();
+
+    // 2. 4 Towering Tethered Sky-Ascent Balloons
+    const balloons = interactables.getSkyBalloons();
+    expect(balloons).toHaveLength(4);
+    expect(new Set(balloons.map((b) => b.poiId))).toEqual(
+      new Set(['metro_towers', 'crystal_basin', 'market_row', 'crater_depot']),
+    );
+    expect(interactables.getSkyBalloonColliders()).toHaveLength(4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+
+    for (const b of balloons) {
+      expect(terrain.isWater(b.x, b.z)).toBe(false);
+      expect(b.baseY).toBeCloseTo(terrain.getHeightAt(b.x, b.z), 4);
+      expect(b.topY).toBeCloseTo(b.baseY + SKY_BALLOON_HEIGHT, 4);
+      expect(b.topY).toBeGreaterThanOrEqual(b.baseY + 35);
+      expect(terrain.getNormalAt(b.x, b.z).y, `${b.id} slope`).toBeGreaterThan(0.85);
+      expect(isClearOfBuildings(b.x, b.baseY, b.z, 2.0), `${b.id} overlaps building`).toBe(true);
+
+      const blockingProp = pal.getProps().find((p) => Math.hypot(b.x - p.x, b.z - p.z) < p.radius + 1.4);
+      expect(blockingProp, `${b.id} (${b.x}, ${b.z}) near prop ${blockingProp?.kind}`).toBeUndefined();
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(b.x - veh.x, b.z - veh.z)).toBeGreaterThan(3.5);
+      }
+      for (const mb of interactables.getModBenches()) {
+        expect(Math.hypot(b.x - mb.x, b.z - mb.z)).toBeGreaterThan(4.0);
+      }
+      for (const ft of interactables.getForecastTowers()) {
+        expect(Math.hypot(b.x - ft.x, b.z - ft.z)).toBeGreaterThan(4.0);
+      }
+      for (const wb of interactables.getWeaponBunkers()) {
+        expect(Math.hypot(b.x - wb.x, b.z - wb.z)).toBeGreaterThan(4.0);
+      }
+
+      const bGroup = interactables.getGroup().getObjectByName(`SkyBalloon_${b.id}`) as THREE.Group;
+      const canopyGroup = interactables.getGroup().getObjectByName(`SkyBalloonCanopy_${b.id}`) as THREE.Group;
+      expect(bGroup).toBeDefined();
+      expect(canopyGroup).toBeDefined();
+      expect(Math.abs(canopyGroup.position.y - SKY_BALLOON_HEIGHT)).toBeLessThan(0.65);
+    }
+
+    const b0 = balloons[0];
+    const b0Canopy = interactables.getGroup().getObjectByName(`SkyBalloonCanopy_${b0.id}`) as THREE.Group;
+    const canopyYBefore = b0Canopy.position.y;
+    interactables.update(0.4, 1.3);
+    expect(b0Canopy.position.y).not.toBeCloseTo(canopyYBefore, 3);
+
+    expect(interactables.findNearbySkyBalloon({ x: b0.x + 2.5, y: b0.baseY + 0.8, z: b0.z })?.id).toBe(b0.id);
+    expect(interactables.findNearbySkyBalloon({ x: b0.x, y: b0.topY, z: b0.z })).toBeNull();
+    expect(interactables.findNearbySkyBalloon({ x: Number.NaN, y: b0.baseY, z: b0.z })).toBeNull();
+
+    // 3. reset() restores all 14 fishing holes & 4 balloons cleanly
+    interactables.reset();
+    expect(interactables.getFishingHoles()).toHaveLength(14);
+    expect(
+      interactables
+        .getFishingHoles()
+        .every((fh) => fh.castsRemaining === 3 && !fh.depleted),
+    ).toBe(true);
+    expect(fh0Group.visible).toBe(true);
+    expect(interactables.getSkyBalloons()).toHaveLength(4);
+    expect(b0Canopy.position.y).toBeCloseTo(SKY_BALLOON_HEIGHT, 4);
+
+    vehicles.dispose();
+    interactables.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('supports qaPlaceWave11Showcase(centerPos, yaw) placing ahead-left Sky Balloon + ahead-right Fishing Hole and cleans up on reset()/dispose()', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    // 1. Crystal Basin shore centerPos -> Fishing Hole snaps into real water ahead-right
+    const basinShore = { x: 25, y: terrain.getHeightAt(25, -55), z: -55 };
+    const yawNorth = Math.PI;
+    const basinShowcase: Wave11ShowcaseResult = interactables.qaPlaceWave11Showcase(basinShore, yawNorth);
+
+    expect(basinShowcase.balloon.id).toBe('balloon_qa_showcase');
+    expect(basinShowcase.balloon.topY).toBeCloseTo(basinShowcase.balloon.baseY + SKY_BALLOON_HEIGHT, 4);
+    expect(terrain.isWater(basinShowcase.balloon.x, basinShowcase.balloon.z)).toBe(false);
+
+    expect(basinShowcase.fishingHole.id).toBe('fishing_qa_showcase');
+    expect(basinShowcase.fishingHole.castsRemaining).toBe(3);
+    expect(basinShowcase.fishingHole.depleted).toBe(false);
+    expect(terrain.isWater(basinShowcase.fishingHole.x, basinShowcase.fishingHole.z)).toBe(true);
+    expect(basinShowcase.fishingHole.y).toBeCloseTo(WATER_LEVEL, 4);
+
+    // Verify ahead-left vs ahead-right placement relative to yawNorth
+    const fwdX = Math.sin(yawNorth);
+    const fwdZ = Math.cos(yawNorth);
+    const rightX = -Math.cos(yawNorth);
+    const rightZ = Math.sin(yawNorth);
+    const balFwd = (basinShowcase.balloon.x - basinShore.x) * fwdX + (basinShowcase.balloon.z - basinShore.z) * fwdZ;
+    const balRight = (basinShowcase.balloon.x - basinShore.x) * rightX + (basinShowcase.balloon.z - basinShore.z) * rightZ;
+    expect(balFwd).toBeGreaterThan(2);
+    expect(balRight).toBeLessThan(-1);
+
+    const fhFwd = (basinShowcase.fishingHole.x - basinShore.x) * fwdX + (basinShowcase.fishingHole.z - basinShore.z) * fwdZ;
+    const fhRight = (basinShowcase.fishingHole.x - basinShore.x) * rightX + (basinShowcase.fishingHole.z - basinShore.z) * rightZ;
+    expect(fhFwd).toBeGreaterThan(2);
+    expect(fhRight).toBeGreaterThan(0);
+
+    expect(interactables.getSkyBalloons()).toHaveLength(5);
+    expect(interactables.getFishingHoles()).toHaveLength(15);
+
+    // 2. Re-calling on dry Metro plateau replaces without leaking duplicates
+    const dryCenter = { x: -75, y: terrain.getHeightAt(-75, -12), z: -12 };
+    const dryShowcase = interactables.qaPlaceWave11Showcase(dryCenter, 0.3);
+    expect(dryShowcase.balloon.id).toBe('balloon_qa_showcase');
+    expect(dryShowcase.fishingHole.id).toBe('fishing_qa_showcase');
+    expect(interactables.getSkyBalloons()).toHaveLength(5);
+    expect(interactables.getFishingHoles()).toHaveLength(15);
+    expect(Math.hypot(dryShowcase.balloon.x - dryCenter.x, dryShowcase.balloon.z - dryCenter.z)).toBeLessThan(16);
+    expect(Math.hypot(dryShowcase.fishingHole.x - dryCenter.x, dryShowcase.fishingHole.z - dryCenter.z)).toBeLessThan(16);
+
+    // 3. reset() & dispose() clean up showcase entities and colliders
+    interactables.reset();
+    expect(interactables.getSkyBalloons()).toHaveLength(4);
+    expect(interactables.getFishingHoles()).toHaveLength(14);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+
+    interactables.dispose();
+    expect(interactables.getSkyBalloons()).toHaveLength(0);
+    expect(interactables.getFishingHoles()).toHaveLength(0);
+    terrain.dispose();
+  });
+});
+
+describe('Wave-11 Loot Pools, 3D Pickup Silhouettes & GLSL Shader Validation', () => {
+  it('spawns auto_turret and chug_cannon across floor, chest, and supply-drop pools with distinct 3D pickup silhouettes', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 480; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('auto_turret')).toBe(true);
+    expect(floorIds.has('chug_cannon')).toBe(true);
+    expect(chestIds.has('auto_turret')).toBe(true);
+    expect(chestIds.has('chug_cannon')).toBe(true);
+
+    const dropsBeforeSupply = pal.getLootDrops().length;
+    for (let i = 0; i < 110; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    const supplyIds = new Set(
+      pal
+        .getLootDrops()
+        .slice(dropsBeforeSupply)
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(supplyIds.has('auto_turret')).toBe(true);
+    expect(supplyIds.has('chug_cannon')).toBe(true);
+
+    // Distinct multi-part 3D pickup silhouettes for auto_turret & chug_cannon
+    const groupBefore = pal.getGroup().children.length;
+    pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'turret_mesh_test', weaponId: 'auto_turret', rarity: 'epic', magAmmo: 0, stackCount: 1 } },
+    );
+    const turretDropGroup = pal.getGroup().children[groupBefore] as THREE.Group;
+    const turretSilhouette = turretDropGroup.children[1] as THREE.Group;
+    expect(turretSilhouette).toBeInstanceOf(THREE.Group);
+    expect(turretSilhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.spawnLootDrop(
+      { x: 4, y: 12, z: 0 },
+      { item: { uid: 'chug_mesh_test', weaponId: 'chug_cannon', rarity: 'mythic', magAmmo: 5, stackCount: 1 } },
+    );
+    const chugDropGroup = pal.getGroup().children[groupBefore + 1] as THREE.Group;
+    const chugSilhouette = chugDropGroup.children[1] as THREE.Group;
+    expect(chugSilhouette).toBeInstanceOf(THREE.Group);
+    expect(chugSilhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('validates GLSL ShaderMaterial uniforms, smoothstep bounds, and EnvironmentDetail wind shader injection after Wave-11 additions', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const storm = new StormSystem(4201, 'solo');
+    const interactables = new WorldInteractables(terrain, bus);
+    const detail = new EnvironmentDetail(terrain, world.colliders, 'low', 4201);
+
+    const shaderMats: THREE.ShaderMaterial[] = [];
+    for (const root of [fx.getGroup(), world.group, storm.getMesh(), interactables.getGroup()]) {
+      root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof THREE.ShaderMaterial) {
+          shaderMats.push(obj.material);
+        }
+      });
+    }
+    expect(shaderMats.length).toBeGreaterThanOrEqual(6);
+
+    for (const mat of shaderMats) {
+      for (const glsl of [mat.vertexShader, mat.fragmentShader]) {
+        const smoothMatches = [
+          ...glsl.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g),
+        ];
+        for (const m of smoothMatches) {
+          expect(Number(m[1])).toBeLessThan(Number(m[2]));
+        }
+        const usedUniforms = new Set(glsl.match(/\bu[A-Z][A-Za-z0-9_]*/g) ?? []);
+        for (const uName of usedUniforms) {
+          expect(glsl).toMatch(
+            new RegExp(`uniform\\s+(?:float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\\s+${uName}\\b`),
+          );
+          expect(mat.uniforms[uName]).toBeDefined();
+        }
+      }
+    }
+
+    const grassMesh = detail.getGroup().getObjectByName('InstancedGrass') as THREE.InstancedMesh;
+    const grassMat = grassMesh.material as THREE.MeshStandardMaterial;
+    const mockShader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: '#include <common>\nvoid main() {\n#include <begin_vertex>\n}',
+      fragmentShader: '',
+    };
+    grassMat.onBeforeCompile(
+      mockShader as unknown as THREE.WebGLProgramParametersWithUniforms,
+      {} as THREE.WebGLRenderer,
+    );
+    expect(mockShader.vertexShader).toContain('uniform float uWindTime;');
+    expect(mockShader.vertexShader).toContain('uniform float uWindStrength;');
+
+    detail.dispose();
+    interactables.dispose();
     storm.dispose();
     fx.dispose();
     builder.dispose();

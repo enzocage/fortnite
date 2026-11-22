@@ -570,6 +570,7 @@ export class BotManager {
         captureTargetId: null,
         craterTargetId: null,
         craterDwellTimer: 0,
+        chugCannonRegenTimer: 0,
       };
 
       this.bots.push(bot);
@@ -760,6 +761,7 @@ export class BotManager {
         captureTargetId: null,
         craterTargetId: null,
         craterDwellTimer: 0,
+        chugCannonRegenTimer: 0,
       };
 
       this.bots.push(boss);
@@ -956,6 +958,7 @@ export class BotManager {
       captureTargetId: null,
       craterTargetId: null,
       craterDwellTimer: 0,
+      chugCannonRegenTimer: 0,
     };
 
     this.bots.push(partner);
@@ -1211,6 +1214,7 @@ export class BotManager {
       captureTargetId: null,
       craterTargetId: null,
       craterDwellTimer: 0,
+      chugCannonRegenTimer: 0,
       isAlly: true,
       allyRole: npc.role,
       allyAbilityCooldown: 0,
@@ -1345,6 +1349,7 @@ export class BotManager {
     partner.isGrinding = false;
     partner.craterTargetId = null;
     partner.craterDwellTimer = 0;
+    partner.chugCannonRegenTimer = 0;
     partner.emoteId = null;
     partner.moveSpeed = 0;
     partner.recoilKick = 0;
@@ -2586,6 +2591,7 @@ export class BotManager {
     bot.isGrinding = false;
     bot.craterTargetId = null;
     bot.craterDwellTimer = 0;
+    bot.chugCannonRegenTimer = 0;
     bot.emoteId = null;
     bot.moveSpeed = 0;
     bot.recoilKick = 0;

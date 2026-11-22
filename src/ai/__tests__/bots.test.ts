@@ -17,6 +17,7 @@ import type {
   SlurpBarrelEntity,
   StormState,
   TerrainQuery,
+  TurretEntity,
   Vec3Like,
   VehicleEntity,
   WallDir,
@@ -50,7 +51,9 @@ import {
   VOLCANO_LAVA_CENTER_Z,
   computeAimPitch,
   computeBotSpread,
+  findHostileTurretHazard,
   findIncomingVehicleThreat,
+  isFriendlyTurret,
   isInVolcanoLavaHazard,
   isShotBlockedByShieldBubbles,
   pickBotLoadoutCosmetics,
@@ -4992,5 +4995,384 @@ describe('Wave 10 Tidal Frontier: Shockwave Hammer, Recon Flare Gun Scoring & ge
     expect(enemiesOfRed.every((b) => b.teamId === 'team_blue')).toBe(true);
 
     rumbleMgr.dispose();
+  });
+});
+
+describe('Wave 11 Apex Overlord: Chug Cannon Heal Utility, Auto-Turret Scoring & Hostile Turret Hazard', () => {
+  it('excludes chug_cannon from bullet combat in selectBestWeaponForRange and uses it as self-heal utility when HP/Shield < 75', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 90, medium: 90, shells: 16, heavy: 10, rockets: 0 };
+
+    // 1. Utility exclusion from lethal bullet weapon offense across all ranges
+    const chugOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('chug_cannon', 'mythic', 5, 1),
+    ];
+    expect(selectBestWeaponForRange(chugOnly, 1.8, fullAmmo)?.item.weaponId).toBe('pickaxe');
+    for (const d of [6, 12, 25, 45, 65]) {
+      expect(selectBestWeaponForRange(chugOnly, d, fullAmmo)).toBeNull();
+      expect(selectBestWeaponForDistance(chugOnly, d, fullAmmo)).toBeNull();
+      expect(brain.selectBestWeaponForRange(chugOnly, d, fullAmmo)).toBeNull();
+    }
+    expect(selectCloseQuartersWeapon(chugOnly, fullAmmo)).toBeNull();
+
+    // Paired with a real gun, always prefers the firearm over mythic chug_cannon
+    const chugAndPistol: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('chug_cannon', 'mythic', 5, 1),
+      makeItem('pistol', 'common', 16),
+    ];
+    expect(selectBestWeaponForRange(chugAndPistol, 18, fullAmmo)?.item.weaponId).toBe('pistol');
+
+    // Never selects chug_cannon to shoot explosive barrels
+    const target: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 12 },
+      eyePos: { x: 0, y: 11.55, z: 12 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      isPlayer: true,
+    };
+    const barrel: ExplosiveBarrelEntity = {
+      id: 'barrel_w11',
+      x: 0,
+      y: 10,
+      z: 10,
+      hp: 60,
+      maxHp: 60,
+      blastRadius: 6,
+      blastDamage: 75,
+      exploded: false,
+    };
+    expect(
+      selectExplosiveBarrelTarget(
+        { position: { x: 0, y: 10, z: 0 }, isCrouching: false, inventory: { items: chugOnly, activeSlot: 1, ammo: fullAmmo, materials: { wood: 0, brick: 0, metal: 0 } } },
+        target,
+        [barrel],
+        () => true,
+      ),
+    ).toBeNull();
+
+    // 2. selectHealingItem uses chug_cannon when HP < 75 OR Shield < 75 (with magAmmo > 0), and skips >= 75/75 or empty magAmmo
+    expect(selectHealingItem(chugOnly, 60, 100)?.item.weaponId).toBe('chug_cannon');
+    expect(selectHealingItem(chugOnly, 100, 60)?.item.weaponId).toBe('chug_cannon');
+    expect(selectHealingItem(chugOnly, 50, 40)?.item.weaponId).toBe('chug_cannon');
+    expect(selectHealingItem(chugOnly, 75, 75)).toBeNull();
+    expect(selectHealingItem(chugOnly, 100, 100)).toBeNull();
+
+    const emptyChug: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('chug_cannon', 'mythic', 0, 1),
+    ];
+    expect(selectHealingItem(emptyChug, 40, 20)).toBeNull();
+
+    // 3. Live combat: healthy bot with ONLY chug_cannon never fires it offensively at enemy
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 25 },
+      eyePos: { x: 0, y: 11.55, z: 25 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const noShootCtx = makeMockContext({ getCombatTargets: () => [enemy] });
+    const healthyBot = makeBotEntity({
+      state: 'combat',
+      hp: 100,
+      shield: 100,
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    healthyBot.inventory.items[1] = makeItem('chug_cannon', 'mythic', 5, 1);
+    updateBot(healthyBot, noShootCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(noShootCtx.firedCalls).toHaveLength(0);
+
+    // 4. Live self-heal: injured bot (HP 60 < 75) pops chug_cannon downward (+20 HP, keeps item, consumes 1 magAmmo) then resumes AR combat
+    const healCtx = makeMockContext({ getCombatTargets: () => [enemy] });
+    const injuredBot = makeBotEntity({
+      state: 'combat',
+      hp: 60,
+      shield: 80,
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    injuredBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    injuredBot.inventory.items[2] = makeItem('chug_cannon', 'mythic', 5, 1);
+    injuredBot.inventory.ammo.medium = 90;
+
+    let elapsed = 10;
+    for (let i = 0; i < 8; i++) {
+      elapsed += 0.1;
+      updateBot(injuredBot, healCtx, 'standard', { x: 0, y: 175, z: 0 }, elapsed, 0.1, false);
+    }
+    const chugHealCall = healCtx.firedCalls.find((c) => c.weaponId === 'chug_cannon');
+    expect(chugHealCall).toBeDefined();
+    expect(chugHealCall!.aimDir.y).toBeLessThan(-0.5);
+    expect(injuredBot.hp).toBe(80);
+    expect(injuredBot.inventory.items[2]).not.toBeNull();
+    expect(injuredBot.inventory.items[2]!.magAmmo).toBe(4);
+
+    // Resumes firing AR once >= 75/75
+    updateBot(injuredBot, healCtx, 'sweaty', { x: 0, y: 175, z: 0 }, elapsed + 0.1, 0.05, false);
+    expect(healCtx.firedCalls.some((c) => c.weaponId === 'ar')).toBe(true);
+
+    // 5. Passive 8s charge regeneration restores depleted chug_cannon charge
+    const regenBot = makeBotEntity({
+      state: 'looting',
+      hp: 100,
+      shield: 100,
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    regenBot.inventory.items[1] = makeItem('chug_cannon', 'mythic', 0, 1);
+    const regenCtx = makeMockContext();
+    for (let i = 0; i < 82; i++) {
+      updateBot(regenBot, regenCtx, 'standard', { x: 0, y: 175, z: 0 }, 20 + i * 0.1, 0.1, false);
+    }
+    expect(regenBot.inventory.items[1]!.magAmmo).toBe(1);
+  });
+
+  it('scores auto_turret as a tactical combat throwable at mid-range (10..32m) and deploys it in combat', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 90, medium: 90, shells: 16, heavy: 10, rockets: 0 };
+
+    // 1. selectBestWeaponForRange scores auto_turret within 10..32m and excludes <10m, >32m, and stackCount=0
+    const turretOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('auto_turret', 'epic', 0, 2),
+    ];
+    expect(selectBestWeaponForRange(turretOnly, 10, fullAmmo)?.item.weaponId).toBe('auto_turret');
+    expect(brain.selectBestWeaponForRange(turretOnly, 20, fullAmmo)?.item.weaponId).toBe(
+      'auto_turret',
+    );
+    expect(selectBestWeaponForRange(turretOnly, 32, fullAmmo)?.item.weaponId).toBe('auto_turret');
+    expect(selectBestWeaponForRange(turretOnly, 8, fullAmmo)).toBeNull();
+    expect(selectBestWeaponForRange(turretOnly, 34, fullAmmo)).toBeNull();
+
+    const emptyTurret: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('auto_turret', 'epic', 0, 0),
+    ];
+    expect(selectBestWeaponForRange(emptyTurret, 20, fullAmmo)).toBeNull();
+
+    // Outscores frag_grenade at mid-range while yielding to primary firearms in selectBestWeaponForRange
+    const turretVsFrag: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('frag_grenade', 'rare', 0, 2),
+      makeItem('auto_turret', 'epic', 0, 1),
+    ];
+    expect(selectBestWeaponForRange(turretVsFrag, 22, fullAmmo)?.item.weaponId).toBe('auto_turret');
+
+    const turretWithAr: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('auto_turret', 'epic', 0, 2),
+    ];
+    expect(selectBestWeaponForRange(turretWithAr, 22, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // 2. selectThrowableForCombat chooses auto_turret at mid-range (10..32m), skips outside range or when friendly turret active nearby
+    const bot = makeBotEntity({
+      id: 'bot_turret_thrower',
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      throwCooldown: 0,
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    bot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    bot.inventory.items[2] = makeItem('auto_turret', 'epic', 0, 2);
+    bot.inventory.ammo.medium = 90;
+
+    const makeEnemyAt = (z: number): BotCombatTarget => ({
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z },
+      eyePos: { x: 0, y: 11.55, z },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    });
+
+    const midEnemy = makeEnemyAt(22);
+    expect(selectThrowableForCombat(bot, midEnemy, [midEnemy], true)?.item.weaponId).toBe(
+      'auto_turret',
+    );
+    expect(brain.selectThrowableForCombat(bot, makeEnemyAt(7), [makeEnemyAt(7)], true)).toBeNull();
+    expect(selectThrowableForCombat(bot, makeEnemyAt(36), [makeEnemyAt(36)], true)).toBeNull();
+
+    const activeFriendlyTurret: TurretEntity = {
+      id: 'turret_own',
+      ownerId: bot.id,
+      x: 0,
+      y: 10,
+      z: 6,
+      yaw: 0,
+      hp: 200,
+      maxHp: 200,
+      remainingSec: 30,
+      fireCooldown: 0,
+      alive: true,
+    };
+    expect(
+      selectThrowableForCombat(
+        bot,
+        midEnemy,
+        [midEnemy],
+        true,
+        undefined,
+        undefined,
+        'solo',
+        [activeFriendlyTurret],
+      ),
+    ).toBeNull();
+
+    // 3. Live combat: bot throws auto_turret at 22m enemy, sets cooldown, then switches cleanly to AR
+    const ctx = makeMockContext({ getCombatTargets: () => [midEnemy] });
+    bot.targetEnemyId = 'player';
+    updateBot(bot, ctx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(ctx.firedCalls).toHaveLength(1);
+    expect(ctx.firedCalls[0].weaponId).toBe('auto_turret');
+    expect(bot.inventory.items[2]?.stackCount).toBe(1);
+    expect(bot.throwCooldown).toBeGreaterThan(0);
+
+    // Subsequent tick while throwCooldown > 0 fires AR cleanly
+    bot.fireCooldown = 0;
+    updateBot(bot, ctx, 'sweaty', { x: 0, y: 175, z: 0 }, 10.2, 0.05, false);
+    expect(ctx.firedCalls.some((c) => c.weaponId === 'ar')).toBe(true);
+  });
+
+  it('treats active hostile TurretEntitys within 34m as tactical hazards triggering strafe & cover building while ignoring friendly turrets', () => {
+    const brain = new BotBrain();
+    const makeTurret = (overrides: Partial<TurretEntity> = {}): TurretEntity => ({
+      id: 'turret_1',
+      ownerId: 'player',
+      x: 0,
+      y: 10,
+      z: 20,
+      yaw: 0,
+      hp: 200,
+      maxHp: 200,
+      remainingSec: 35,
+      fireCooldown: 0,
+      alive: true,
+      ...overrides,
+    });
+
+    const soloBot = makeBotEntity({
+      id: 'bot_solo',
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      strafeDir: 1,
+      grounded: true,
+    });
+    soloBot.inventory.materials.wood = 90;
+
+    // 1. Range, alive/hp/remainingSec, and friendly ownerId/squadId/teamId checks
+    expect(findHostileTurretHazard(soloBot, [makeTurret({ z: 34 })])?.distance).toBe(34);
+    expect(brain.findHostileTurretHazard(soloBot, [makeTurret({ z: 34.5 })])).toBeNull();
+    expect(findHostileTurretHazard(soloBot, [makeTurret({ alive: false })])).toBeNull();
+    expect(findHostileTurretHazard(soloBot, [makeTurret({ hp: 0 })])).toBeNull();
+    expect(findHostileTurretHazard(soloBot, [makeTurret({ remainingSec: 0 })])).toBeNull();
+
+    // Friendly ownerId ignored
+    expect(findHostileTurretHazard(soloBot, [makeTurret({ ownerId: 'bot_solo' })])).toBeNull();
+
+    // Friendly squadId ignored
+    const squadBot = makeBotEntity({
+      id: 'bot_sq_1',
+      squadId: 'squad_7',
+      position: { x: 0, y: 10, z: 0 },
+    });
+    expect(
+      findHostileTurretHazard(squadBot, [
+        makeTurret({ ownerId: 'bot_sq_2', squadId: 'squad_7' }),
+      ]),
+    ).toBeNull();
+    expect(
+      findHostileTurretHazard(squadBot, [
+        makeTurret({ ownerId: 'bot_other', squadId: 'squad_9' }),
+      ]),
+    ).not.toBeNull();
+
+    // Friendly teamId & player-side ally immunity
+    const blueBot = makeBotEntity({
+      id: 'bot_blue_1',
+      teamId: 'team_blue',
+      position: { x: 0, y: 10, z: 0 },
+    });
+    expect(
+      isFriendlyTurret(blueBot, makeTurret({ ownerId: 'player', teamId: 'team_blue' }), undefined, 'team_rumble'),
+    ).toBe(true);
+    expect(
+      findHostileTurretHazard(blueBot, [makeTurret({ ownerId: 'player', teamId: 'team_blue' })], 34, undefined, 'team_rumble'),
+    ).toBeNull();
+    expect(
+      findHostileTurretHazard(blueBot, [makeTurret({ ownerId: 'bot_red_1', teamId: 'team_red' })], 34, undefined, 'team_rumble'),
+    ).not.toBeNull();
+
+    // 2. Active hostile turret within 34m triggers cover building + lateral strafe
+    const hostileTurret = makeTurret({ id: 'turret_hostile', ownerId: 'player', x: 0, y: 10, z: 20 });
+    const hazardCtx = makeMockContext({
+      getTurrets: () => [hostileTurret],
+    });
+    for (let i = 0; i < 10; i++) {
+      updateBot(soloBot, hazardCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.05, 0.05, false);
+    }
+    expect(hazardCtx.placedBuilds.some((b) => b.type === 'wall' && b.rotation === 2)).toBe(true);
+    expect(Math.abs(soloBot.position.x)).toBeGreaterThan(1.5);
+
+    // 3. Under Zero Build, bot skips building and still cleanly strafes laterally
+    const zbBot = makeBotEntity({
+      id: 'bot_zb',
+      state: 'looting',
+      position: { x: 0, y: 10, z: 0 },
+      strafeDir: -1,
+      grounded: true,
+    });
+    const zbCtx = makeMockContext({
+      gameMode: 'zero_build',
+      getTurrets: () => [hostileTurret],
+    });
+    for (let i = 0; i < 10; i++) {
+      updateBot(zbBot, zbCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.05, 0.05, false, 'zero_build');
+    }
+    expect(zbCtx.placedBuilds).toHaveLength(0);
+    expect(Math.abs(zbBot.position.x)).toBeGreaterThan(1.5);
+
+    // 4. Friendly turret (same team/squad/owner) causes ZERO reactive builds and ZERO turret strafe
+    const calmBot = makeBotEntity({
+      id: 'bot_calm',
+      state: 'rotating',
+      squadId: 'squad_alpha',
+      position: { x: 0, y: 10, z: 0 },
+      moveTarget: { x: 0, y: 10, z: 40 },
+      grounded: true,
+    });
+    calmBot.inventory.materials.wood = 80;
+    const friendlyCtx = makeMockContext({
+      getTurrets: () => [makeTurret({ ownerId: 'ally_1', squadId: 'squad_alpha', z: 20 })],
+    });
+    for (let i = 0; i < 8; i++) {
+      updateBot(calmBot, friendlyCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.05, 0.05, false);
+    }
+    expect(friendlyCtx.placedBuilds).toHaveLength(0);
+    expect(calmBot.isBuilding).toBe(false);
+    expect(Math.abs(calmBot.position.x)).toBeLessThan(0.01);
+    expect(calmBot.position.z).toBeGreaterThan(1.0);
   });
 });

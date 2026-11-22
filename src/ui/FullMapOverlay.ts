@@ -5,6 +5,7 @@ import type {
   CapturePointEntity,
   DroppedCrownEntity,
   DroppedMedallionEntity,
+  FishingHoleEntity,
   ForecastTowerEntity,
   GameSettings,
   GrindRailEntity,
@@ -17,6 +18,7 @@ import type {
   RebootVanEntity,
   RiftEntity,
   ShieldMushroomEntity,
+  SkyBalloonEntity,
   SlurpTankerEntity,
   SupplyDroneEntity,
   UpgradeBenchEntity,
@@ -32,6 +34,7 @@ import {
   drawChapterMapOverlay,
   drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
+  drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
   drawSpeedboatMapChevron,
   drawTideMapOverlay,
@@ -43,11 +46,13 @@ import {
   resolveFrontierOverlayArgs,
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
+  resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
   resolveTideOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
+  type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
   type WorldTideOverlay,
   worldToMapNorm,
@@ -59,6 +64,7 @@ import {
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getCrownSvg,
+  getFishingHoleSvg,
   getForecastTowerSvg,
   getGrindRailSvg,
   getHopCrystalSvg,
@@ -66,6 +72,7 @@ import {
   getMedallionSvg,
   getModBenchSvg,
   getRebootVanSvg,
+  getSkyBalloonSvg,
   getSkyRiftIconSvg,
   getSpeedboatSvg,
   getSupplyDroneSvg,
@@ -127,6 +134,10 @@ export class FullMapOverlay {
   private tideOverlay: WorldTideOverlay = {
     boars: [],
     mushrooms: [],
+  };
+  private overlordOverlay: WorldOverlordOverlay = {
+    fishingHoles: [],
+    skyBalloons: [],
   };
 
   private open = false;
@@ -323,6 +334,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch wildlife">${getBoarSvg()}</span>
         <span>WILDLIFE</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch skyballoon">${getSkyBalloonSvg()}</span>
+        <span>SKY BALLOON</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch fishinghole">${getFishingHoleSvg()}</span>
+        <span>FISHING HOLE</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -493,6 +512,24 @@ export class FullMapOverlay {
     mushrooms?: ShieldMushroomEntity[],
   ): void {
     this.tideOverlay = resolveTideOverlayArgs(boarsOrOverlay, mushrooms);
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldOverlordOverlay(
+    fishingHoles: FishingHoleEntity[],
+    skyBalloons: SkyBalloonEntity[],
+  ): void;
+  setWorldOverlordOverlay(overlay: WorldOverlordOverlay): void;
+  setWorldOverlordOverlay(
+    fishingHolesOrOverlay: FishingHoleEntity[] | WorldOverlordOverlay,
+    skyBalloons?: SkyBalloonEntity[],
+  ): void {
+    this.overlordOverlay = resolveOverlordOverlayArgs(
+      fishingHolesOrOverlay,
+      skyBalloons,
+    );
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -1226,6 +1263,17 @@ export class FullMapOverlay {
       this.tideOverlay,
       state.flareBeacons,
       undefined,
+      performance.now(),
+    );
+
+    // Wave-11 Overlord Overlay (Fishing Holes, Sky Balloons, Deployed Auto-Turrets)
+    drawOverlordMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      this.overlordOverlay,
+      state.deployedTurrets,
       performance.now(),
     );
 

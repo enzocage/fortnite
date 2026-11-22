@@ -9,6 +9,7 @@ import {
   RARITY_COLORS,
   REBOOT_VAN_COOLDOWN_SEC,
   SHIELD_MUSHROOM_RESPAWN_SEC,
+  SKY_BALLOON_HEIGHT,
   TRAIN_CHEST_COOLDOWN_SEC,
   TRAIN_HACK_DURATION_SEC,
   TRAIN_SPEED_MPS,
@@ -27,6 +28,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   ExplosiveBarrelEntity,
+  FishingHoleEntity,
   ForecastTowerEntity,
   GrindRailEntity,
   ItemInstance,
@@ -40,6 +42,7 @@ import type {
   RebootVanEntity,
   RiftEntity,
   ShieldMushroomEntity,
+  SkyBalloonEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SpecialistRole,
@@ -214,6 +217,19 @@ export interface WildBoarDamageResult {
 export interface Wave10ShowcaseResult {
   mushrooms: ShieldMushroomEntity[];
   boars: WildBoarEntity[];
+}
+
+export type FishingRewardKind = 'thermal_flopper' | 'epic_weapon' | 'gold_cache';
+
+export interface FishingCastResult {
+  ok: boolean;
+  reward: FishingRewardKind;
+  position: Vec3Like;
+}
+
+export interface Wave11ShowcaseResult {
+  balloon: SkyBalloonEntity;
+  fishingHole: FishingHoleEntity;
 }
 
 interface VendingMachineVisual {
@@ -488,6 +504,27 @@ interface WildBoarVisual {
   isQaShowcase?: boolean;
 }
 
+interface FishingHoleVisual {
+  data: FishingHoleEntity;
+  group: THREE.Group;
+  rings: THREE.Mesh[];
+  fishPivots: THREE.Group[];
+  leapPhase: number;
+  rewardOffset: number;
+  isQaShowcase?: boolean;
+}
+
+interface SkyBalloonVisual {
+  data: SkyBalloonEntity;
+  group: THREE.Group;
+  canopyGroup: THREE.Group;
+  ascentRings: THREE.Mesh[];
+  baseCanopyY: number;
+  bobPhase: number;
+  collider: ColliderBox;
+  isQaShowcase?: boolean;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -531,6 +568,14 @@ const SHIELD_MUSHROOM_NEARBY_RADIUS = 2.8;
 const BOAR_ROAM_SPEED = 2.6;
 const BOAR_FLEE_SPEED = 7.8;
 const BOAR_FLEE_DURATION_SEC = 5.0;
+const FISHING_HOLE_DEFAULT_CASTS = 3;
+const FISHING_HOLE_NEARBY_RADIUS = 5.4;
+const SKY_BALLOON_NEARBY_RADIUS = 4.6;
+const FISHING_REWARDS: readonly FishingRewardKind[] = [
+  'thermal_flopper',
+  'epic_weapon',
+  'gold_cache',
+];
 const TRAIN_MID_RING_WAYPOINTS_XZ: ReadonlyArray<[number, number]> = [
   [-38, -36],
   [-8, -52],
@@ -623,6 +668,10 @@ export class WorldInteractables {
   private shieldMushroomsMap = new Map<string, ShieldMushroomVisual>();
   private wildBoars: WildBoarEntity[] = [];
   private wildBoarsMap = new Map<string, WildBoarVisual>();
+  private fishingHoles: FishingHoleEntity[] = [];
+  private fishingHolesMap = new Map<string, FishingHoleVisual>();
+  private skyBalloons: SkyBalloonEntity[] = [];
+  private skyBalloonsMap = new Map<string, SkyBalloonVisual>();
   private trainGroup!: THREE.Group;
   private trainTrackGroup!: THREE.Group;
   private trainTrackGeos: THREE.BufferGeometry[] = [];
@@ -723,6 +772,8 @@ export class WorldInteractables {
     this.buildMeteorCraters(terrain);
     this.buildShieldMushrooms(terrain);
     this.buildWildBoars(terrain);
+    this.buildFishingHoles(terrain);
+    this.buildSkyBalloons(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -6112,6 +6163,24 @@ export class WorldInteractables {
       }
     }
 
+    const qaFishingId = 'fishing_qa_showcase';
+    const qaFishing = this.fishingHolesMap.get(qaFishingId);
+    if (qaFishing) {
+      this.group.remove(qaFishing.group);
+      this.fishingHolesMap.delete(qaFishingId);
+      const idx = this.fishingHoles.findIndex((f) => f.id === qaFishingId);
+      if (idx >= 0) this.fishingHoles.splice(idx, 1);
+    }
+
+    const qaBalloonId = 'balloon_qa_showcase';
+    const qaBalloon = this.skyBalloonsMap.get(qaBalloonId);
+    if (qaBalloon) {
+      this.group.remove(qaBalloon.group);
+      this.skyBalloonsMap.delete(qaBalloonId);
+      const idx = this.skyBalloons.findIndex((b) => b.id === qaBalloonId);
+      if (idx >= 0) this.skyBalloons.splice(idx, 1);
+    }
+
     for (const g of this.qaShowcaseGeos) g.dispose();
     this.qaShowcaseGeos = [];
 
@@ -6877,6 +6946,600 @@ export class WorldInteractables {
       y: boar.y,
       z: boar.z,
     };
+  }
+
+  private createFishingHoleEntry(spec: {
+    id: string;
+    x: number;
+    z: number;
+    yOverride?: number;
+    rewardOffset: number;
+    isQaShowcase?: boolean;
+  }): FishingHoleVisual {
+    const y = spec.yOverride ?? WATER_LEVEL;
+    const data: FishingHoleEntity = {
+      id: spec.id,
+      x: spec.x,
+      y,
+      z: spec.z,
+      castsRemaining: FISHING_HOLE_DEFAULT_CASTS,
+      depleted: false,
+    };
+    this.fishingHoles.push(data);
+
+    const ringBrightMat = this.getSharedMat('fishing_ring_bright_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#67e8f9',
+        transparent: true,
+        opacity: 0.82,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const ringOuterMat = this.getSharedMat('fishing_ring_outer_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#06b6d4',
+        transparent: true,
+        opacity: 0.56,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const foamMat = this.getSharedMat('fishing_foam_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#cffafe',
+        transparent: true,
+        opacity: 0.42,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const fishMat = this.getSharedMat('fishing_holo_fish_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#38bdf8',
+        emissive: '#22d3ee',
+        emissiveIntensity: 1.7,
+        roughness: 0.16,
+        metalness: 0.25,
+        transparent: true,
+        opacity: 0.92,
+      }),
+    );
+    const fishAccentMat = this.getSharedMat('fishing_holo_fish_fin_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#a5f3fc',
+        emissive: '#67e8f9',
+        emissiveIntensity: 1.9,
+        roughness: 0.14,
+      }),
+    );
+
+    const foamGeo = this.getSharedGeo('fishing_foam_geo', () => {
+      const g = new THREE.CircleGeometry(0.45, 16);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const poolGeo = this.getSharedGeo('fishing_pool_geo', () => {
+      const g = new THREE.CircleGeometry(1.85, 24);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const ringGeo0 = this.getSharedGeo('fishing_ring_geo_0', () => {
+      const g = new THREE.RingGeometry(0.42, 0.56, 22);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const ringGeo1 = this.getSharedGeo('fishing_ring_geo_1', () => {
+      const g = new THREE.RingGeometry(0.86, 1.02, 24);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const ringGeo2 = this.getSharedGeo('fishing_ring_geo_2', () => {
+      const g = new THREE.RingGeometry(1.34, 1.5, 28);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const fishBodyGeo = this.getSharedGeo('fishing_fish_body_geo', () => {
+      const g = new THREE.SphereGeometry(0.16, 10, 8);
+      g.scale(0.62, 0.85, 1.75);
+      return g;
+    });
+    const fishTailGeo = this.getSharedGeo('fishing_fish_tail_geo', () => {
+      const g = new THREE.ConeGeometry(0.12, 0.22, 4);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const fishFinGeo = this.getSharedGeo('fishing_fish_fin_geo', () =>
+      new THREE.BoxGeometry(0.03, 0.14, 0.16),
+    );
+
+    const holeGroup = new THREE.Group();
+    holeGroup.name = `FishingHole_${spec.id}`;
+    holeGroup.position.set(spec.x, y, spec.z);
+
+    if (spec.yOverride !== undefined) {
+      const poolMesh = new THREE.Mesh(poolGeo, ringOuterMat);
+      poolMesh.position.y = 0.03;
+      holeGroup.add(poolMesh);
+    }
+
+    const foam = new THREE.Mesh(foamGeo, foamMat);
+    foam.position.y = 0.05;
+    holeGroup.add(foam);
+
+    const rings: THREE.Mesh[] = [];
+    const ringGeos = [ringGeo0, ringGeo1, ringGeo2];
+    for (let i = 0; i < ringGeos.length; i++) {
+      const ring = new THREE.Mesh(ringGeos[i], i === 0 ? ringBrightMat : ringOuterMat);
+      ring.position.y = 0.055 + i * 0.005;
+      holeGroup.add(ring);
+      rings.push(ring);
+    }
+
+    const fishPivots: THREE.Group[] = [];
+    for (let f = 0; f < 2; f++) {
+      const pivot = new THREE.Group();
+      pivot.name = `FishingHoleFish_${spec.id}_${f + 1}`;
+      const body = new THREE.Mesh(fishBodyGeo, fishMat);
+      const tail = new THREE.Mesh(fishTailGeo, fishAccentMat);
+      tail.position.z = -0.28;
+      const dorsal = new THREE.Mesh(fishFinGeo, fishAccentMat);
+      dorsal.position.set(0, 0.12, -0.04);
+      dorsal.rotation.x = -0.35;
+      pivot.add(body, tail, dorsal);
+      pivot.scale.setScalar(f === 0 ? 1.0 : 0.78);
+      holeGroup.add(pivot);
+      fishPivots.push(pivot);
+    }
+
+    this.group.add(holeGroup);
+
+    const visual: FishingHoleVisual = {
+      data,
+      group: holeGroup,
+      rings,
+      fishPivots,
+      leapPhase: (this.fishingHoles.length * 0.37) % 1,
+      rewardOffset: spec.rewardOffset,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.fishingHolesMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildFishingHoles(_terrain: TerrainQuery): void {
+    const specs: Array<{ id: string; x: number; z: number }> = [
+      // 5 Crystal Basin lake spots (verified water ring)
+      { id: 'fish_basin_nw', x: -1, z: -140 },
+      { id: 'fish_basin_ne', x: 50, z: -140 },
+      { id: 'fish_basin_sw', x: -2, z: -92 },
+      { id: 'fish_basin_se', x: 48, z: -87 },
+      { id: 'fish_basin_s', x: 18, z: -79 },
+      // 5 Central River spots (clear of bridges, train & river speedboat)
+      { id: 'fish_river_upper', x: 76, z: -32 },
+      { id: 'fish_river_north', x: 88, z: -12 },
+      { id: 'fish_river_mid', x: 103, z: 74 },
+      { id: 'fish_river_south', x: 102, z: 108 },
+      { id: 'fish_river_delta', x: 95, z: 215 },
+      // 4 Scenic Coastal Shallows
+      { id: 'fish_coast_west', x: -355, z: -28 },
+      { id: 'fish_coast_north', x: 45, z: -356 },
+      { id: 'fish_coast_east', x: 356, z: 40 },
+      { id: 'fish_coast_south', x: -125, z: 336 },
+    ];
+
+    for (let i = 0; i < specs.length; i++) {
+      const spec = specs[i];
+      this.createFishingHoleEntry({
+        id: spec.id,
+        x: spec.x,
+        z: spec.z,
+        rewardOffset: i % FISHING_REWARDS.length,
+      });
+    }
+  }
+
+  getFishingHoles(): FishingHoleEntity[] {
+    return this.fishingHoles;
+  }
+
+  findNearbyFishingHole(
+    pos: Vec3Like,
+    radius = FISHING_HOLE_NEARBY_RADIUS,
+  ): FishingHoleEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return null;
+    }
+
+    let best: FishingHoleEntity | null = null;
+    let bestDist = radius;
+    for (let i = 0; i < this.fishingHoles.length; i++) {
+      const fh = this.fishingHoles[i];
+      if (fh.depleted || fh.castsRemaining <= 0) continue;
+      const d = Math.hypot(fh.x - pos.x, fh.y - pos.y, fh.z - pos.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = fh;
+      }
+    }
+    return best;
+  }
+
+  consumeFishingCast(id: string): FishingCastResult | null {
+    const entry = this.fishingHolesMap.get(id);
+    if (!entry || entry.data.depleted || entry.data.castsRemaining <= 0) {
+      return null;
+    }
+
+    const castIndex = FISHING_HOLE_DEFAULT_CASTS - entry.data.castsRemaining;
+    const reward =
+      FISHING_REWARDS[(entry.rewardOffset + castIndex) % FISHING_REWARDS.length];
+
+    entry.data.castsRemaining -= 1;
+    if (entry.data.castsRemaining <= 0) {
+      entry.data.castsRemaining = 0;
+      entry.data.depleted = true;
+      entry.group.visible = false;
+    }
+
+    const pos: Vec3Like = {
+      x: entry.data.x,
+      y: entry.data.y + 0.2,
+      z: entry.data.z,
+    };
+    this.eventBus?.emit('vfx:fishing_splash', { position: { ...pos } });
+    this.eventBus?.emit('sound:play', {
+      id: 'fishing_catch',
+      position: { ...pos },
+      volume: 0.92,
+      spatial: true,
+    });
+
+    return {
+      ok: true,
+      reward,
+      position: pos,
+    };
+  }
+
+  private createSkyBalloonEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    isQaShowcase?: boolean;
+  }): SkyBalloonVisual {
+    const baseY = this.terrain.getHeightAt(spec.x, spec.z);
+    const topY = baseY + SKY_BALLOON_HEIGHT;
+    const data: SkyBalloonEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      baseY,
+      topY,
+      z: spec.z,
+    };
+    this.skyBalloons.push(data);
+
+    const steelMat = this.getSharedMat('sky_balloon_steel', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#1e293b',
+        roughness: 0.36,
+        metalness: 0.82,
+      }),
+    );
+    const padMat = this.getSharedMat('sky_balloon_pad', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#334155',
+        roughness: 0.72,
+        metalness: 0.28,
+      }),
+    );
+    const canopyMat = this.getSharedMat('sky_balloon_canopy', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#0284c7',
+        emissive: '#0369a1',
+        emissiveIntensity: 0.45,
+        roughness: 0.42,
+        metalness: 0.15,
+      }),
+    );
+    const stripeMat = this.getSharedMat('sky_balloon_stripe', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#f59e0b',
+        emissiveIntensity: 1.25,
+        roughness: 0.22,
+        metalness: 0.3,
+      }),
+    );
+    const cyanGlowMat = this.getSharedMat('sky_balloon_cyan_glow', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.85,
+        roughness: 0.16,
+        metalness: 0.2,
+      }),
+    );
+    const tetherSheathMat = this.getSharedMat('sky_balloon_sheath', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.24,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const burnerMat = this.getSharedMat('sky_balloon_burner', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#fef08a',
+        emissive: '#f97316',
+        emissiveIntensity: 2.0,
+        roughness: 0.15,
+      }),
+    );
+
+    const basePadGeo = this.getSharedGeo(
+      'sky_balloon_base_pad',
+      () => new THREE.CylinderGeometry(2.15, 2.4, 0.28, 8),
+    );
+    const winchGeo = this.getSharedGeo(
+      'sky_balloon_winch',
+      () => new THREE.CylinderGeometry(0.76, 0.92, 1.38, 8),
+    );
+    const groundRingGeo = this.getSharedGeo('sky_balloon_ground_ring', () => {
+      const g = new THREE.RingGeometry(1.75, 2.15, 24);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const ascentRingGeo = this.getSharedGeo('sky_balloon_ascent_ring', () => {
+      const g = new THREE.TorusGeometry(0.72, 0.06, 8, 18);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const tetherHeight = SKY_BALLOON_HEIGHT - 2.4;
+    const tetherCoreGeo = this.getSharedGeo(
+      'sky_balloon_tether_core',
+      () => new THREE.CylinderGeometry(0.11, 0.11, tetherHeight, 8),
+    );
+    const tetherSheathGeo = this.getSharedGeo(
+      'sky_balloon_tether_sheath',
+      () => new THREE.CylinderGeometry(0.32, 0.32, tetherHeight, 10, 1, true),
+    );
+    const gondolaFloorGeo = this.getSharedGeo(
+      'sky_balloon_gondola_floor',
+      () => new THREE.CylinderGeometry(2.2, 1.9, 0.36, 8),
+    );
+    const gondolaRailGeo = this.getSharedGeo('sky_balloon_gondola_rail', () => {
+      const g = new THREE.TorusGeometry(2.05, 0.08, 8, 18);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const gondolaRimGeo = this.getSharedGeo('sky_balloon_gondola_rim', () => {
+      const g = new THREE.TorusGeometry(2.18, 0.06, 6, 18);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const strutGeo = this.getSharedGeo(
+      'sky_balloon_strut',
+      () => new THREE.CylinderGeometry(0.055, 0.055, 3.0, 6),
+    );
+    const canopyEnvelopeGeo = this.getSharedGeo('sky_balloon_envelope', () => {
+      const g = new THREE.SphereGeometry(4.6, 18, 14);
+      g.scale(1.0, 1.22, 1.0);
+      return g;
+    });
+    const canopyEqBandGeo = this.getSharedGeo('sky_balloon_eq_band', () => {
+      const g = new THREE.TorusGeometry(4.62, 0.24, 8, 24);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const canopyRibGeo = this.getSharedGeo('sky_balloon_rib', () => {
+      const g = new THREE.TorusGeometry(4.62, 0.14, 6, 24);
+      g.scale(1.0, 1.22, 1.0);
+      return g;
+    });
+    const throatCollarGeo = this.getSharedGeo(
+      'sky_balloon_throat',
+      () => new THREE.CylinderGeometry(2.2, 1.4, 1.3, 12),
+    );
+    const burnerFlameGeo = this.getSharedGeo(
+      'sky_balloon_flame',
+      () => new THREE.ConeGeometry(0.55, 1.25, 10),
+    );
+    const crownBeaconGeo = this.getSharedGeo(
+      'sky_balloon_crown',
+      () => new THREE.OctahedronGeometry(0.75, 0),
+    );
+
+    const balloonGroup = new THREE.Group();
+    balloonGroup.name = `SkyBalloon_${spec.id}`;
+    balloonGroup.position.set(spec.x, baseY, spec.z);
+
+    // Base anchor pad + armored winch + ascent ring
+    const basePad = new THREE.Mesh(basePadGeo, padMat);
+    basePad.position.y = 0.14;
+    basePad.castShadow = true;
+    basePad.receiveShadow = true;
+    balloonGroup.add(basePad);
+
+    const winch = new THREE.Mesh(winchGeo, steelMat);
+    winch.position.y = 0.82;
+    winch.castShadow = true;
+    balloonGroup.add(winch);
+
+    const groundRing = new THREE.Mesh(groundRingGeo, cyanGlowMat);
+    groundRing.position.y = 0.3;
+    balloonGroup.add(groundRing);
+
+    const baseRim = new THREE.Mesh(ascentRingGeo, cyanGlowMat);
+    baseRim.position.y = 1.45;
+    balloonGroup.add(baseRim);
+
+    // Vertical cyan ascent tether
+    const tetherY = 1.0 + tetherHeight * 0.5;
+    const tetherCore = new THREE.Mesh(tetherCoreGeo, cyanGlowMat);
+    tetherCore.position.y = tetherY;
+    balloonGroup.add(tetherCore);
+
+    const tetherSheath = new THREE.Mesh(tetherSheathGeo, tetherSheathMat);
+    tetherSheath.position.y = tetherY;
+    balloonGroup.add(tetherSheath);
+
+    const ascentRings: THREE.Mesh[] = [];
+    for (let r = 0; r < 3; r++) {
+      const ar = new THREE.Mesh(ascentRingGeo, cyanGlowMat);
+      ar.position.y = 1.6 + (r / 3) * (SKY_BALLOON_HEIGHT - 4.8);
+      balloonGroup.add(ar);
+      ascentRings.push(ar);
+    }
+
+    // Bobbing Gondola + Hot-Air Canopy assembly centered around topY = baseY + SKY_BALLOON_HEIGHT
+    const baseCanopyY = SKY_BALLOON_HEIGHT;
+    const canopyGroup = new THREE.Group();
+    canopyGroup.name = `SkyBalloonCanopy_${spec.id}`;
+    canopyGroup.position.y = baseCanopyY;
+
+    // Steel gondola platform
+    const gondolaFloor = new THREE.Mesh(gondolaFloorGeo, steelMat);
+    gondolaFloor.position.y = -2.2;
+    gondolaFloor.castShadow = true;
+    gondolaFloor.receiveShadow = true;
+    canopyGroup.add(gondolaFloor);
+
+    const gondolaRim = new THREE.Mesh(gondolaRimGeo, cyanGlowMat);
+    gondolaRim.position.y = -2.18;
+    canopyGroup.add(gondolaRim);
+
+    const gondolaRail = new THREE.Mesh(gondolaRailGeo, steelMat);
+    gondolaRail.position.y = -1.62;
+    canopyGroup.add(gondolaRail);
+
+    for (let s = 0; s < 4; s++) {
+      const ang = (s / 4) * Math.PI * 2 + Math.PI * 0.25;
+      const strut = new THREE.Mesh(strutGeo, steelMat);
+      strut.position.set(Math.cos(ang) * 1.68, -0.78, Math.sin(ang) * 1.68);
+      strut.rotation.z = Math.cos(ang) * 0.16;
+      strut.rotation.x = -Math.sin(ang) * 0.16;
+      canopyGroup.add(strut);
+    }
+
+    // Burner flame
+    const burnerFlame = new THREE.Mesh(burnerFlameGeo, burnerMat);
+    burnerFlame.position.y = -0.2;
+    canopyGroup.add(burnerFlame);
+
+    // Oversized glowing hot-air canopy
+    const envelope = new THREE.Mesh(canopyEnvelopeGeo, canopyMat);
+    envelope.position.y = 4.6;
+    envelope.castShadow = true;
+    canopyGroup.add(envelope);
+
+    const eqBand = new THREE.Mesh(canopyEqBandGeo, stripeMat);
+    eqBand.position.y = 4.6;
+    canopyGroup.add(eqBand);
+
+    for (let ribIdx = 0; ribIdx < 4; ribIdx++) {
+      const rib = new THREE.Mesh(canopyRibGeo, ribIdx % 2 === 0 ? stripeMat : cyanGlowMat);
+      rib.position.y = 4.6;
+      rib.rotation.y = (ribIdx / 4) * Math.PI;
+      canopyGroup.add(rib);
+    }
+
+    const throatCollar = new THREE.Mesh(throatCollarGeo, steelMat);
+    throatCollar.position.y = 0.55;
+    canopyGroup.add(throatCollar);
+
+    const crownBeacon = new THREE.Mesh(crownBeaconGeo, cyanGlowMat);
+    crownBeacon.position.y = 10.45;
+    canopyGroup.add(crownBeacon);
+
+    balloonGroup.add(canopyGroup);
+    this.group.add(balloonGroup);
+
+    const collider = this.makeRotatedCollider(
+      `${spec.id}_col`,
+      spec.x,
+      spec.z,
+      0,
+      0,
+      0.95,
+      0.95,
+      baseY,
+      baseY + 1.6,
+      0,
+      'metal',
+      `sky_balloon:${spec.id}`,
+    );
+
+    const visual: SkyBalloonVisual = {
+      data,
+      group: balloonGroup,
+      canopyGroup,
+      ascentRings,
+      baseCanopyY,
+      bobPhase: (this.skyBalloons.length * 1.45) % (Math.PI * 2),
+      collider,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.skyBalloonsMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildSkyBalloons(_terrain: TerrainQuery): void {
+    const specs: Array<{ id: string; poiId: string; x: number; z: number }> = [
+      { id: 'balloon_metro_towers', poiId: 'metro_towers', x: -106, z: -6 },
+      { id: 'balloon_crystal_basin', poiId: 'crystal_basin', x: -17, z: -71 },
+      { id: 'balloon_market_row', poiId: 'market_row', x: 213, z: 31 },
+      { id: 'balloon_crater_depot', poiId: 'crater_depot', x: 74, z: 98 },
+    ];
+    for (const spec of specs) {
+      this.createSkyBalloonEntry(spec);
+    }
+  }
+
+  getSkyBalloons(): SkyBalloonEntity[] {
+    return this.skyBalloons;
+  }
+
+  getSkyBalloonColliders(): ColliderBox[] {
+    return Array.from(this.skyBalloonsMap.values(), (v) => v.collider);
+  }
+
+  findNearbySkyBalloon(
+    pos: Vec3Like,
+    radius = SKY_BALLOON_NEARBY_RADIUS,
+  ): SkyBalloonEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return null;
+    }
+
+    let best: SkyBalloonEntity | null = null;
+    let bestDist = radius;
+    for (let i = 0; i < this.skyBalloons.length; i++) {
+      const b = this.skyBalloons[i];
+      const d = Math.hypot(b.x - pos.x, b.baseY - pos.y, b.z - pos.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = b;
+      }
+    }
+    return best;
   }
 
   private clearTrainTrackVisuals(): void {
@@ -8043,6 +8706,95 @@ export class WorldInteractables {
     };
   }
 
+  qaPlaceWave11Showcase(
+    centerPos: Vec3Like,
+    yaw = 0,
+  ): Wave11ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities();
+
+    const fwdX = Math.sin(yaw);
+    const fwdZ = Math.cos(yaw);
+    const rightX = -Math.cos(yaw);
+    const rightZ = Math.sin(yaw);
+
+    // 1. Towering Tethered Sky-Ascent Balloon grounded ahead-left
+    let balloonSpot = this.findDryGroundNear(
+      centerPos,
+      rightX * -5.8 + fwdX * 10.0,
+      rightZ * -5.8 + fwdZ * 10.0,
+    );
+    const aheadLeftCandidates: ReadonlyArray<[number, number]> = [
+      [-5.8, 10.0],
+      [-6.8, 7.5],
+      [-7.8, 5.5],
+      [-8.5, 4.0],
+      [-10.0, 3.5],
+      [-5.0, 5.0],
+    ];
+    let foundBalloonDry = false;
+    for (const [ro, fo] of aheadLeftCandidates) {
+      const cx = centerPos.x + rightX * ro + fwdX * fo;
+      const cz = centerPos.z + rightZ * ro + fwdZ * fo;
+      if (!this.terrain.isWater(cx, cz)) {
+        balloonSpot = { x: cx, y: this.terrain.getHeightAt(cx, cz), z: cz };
+        foundBalloonDry = true;
+        break;
+      }
+    }
+    if (!foundBalloonDry) {
+      for (let dist = 4; dist <= 18 && !foundBalloonDry; dist += 2) {
+        for (const lat of [-4, -6, -8, -10, -12, -2]) {
+          const cx = centerPos.x + fwdX * dist + rightX * lat;
+          const cz = centerPos.z + fwdZ * dist + rightZ * lat;
+          if (!this.terrain.isWater(cx, cz)) {
+            balloonSpot = { x: cx, y: this.terrain.getHeightAt(cx, cz), z: cz };
+            foundBalloonDry = true;
+            break;
+          }
+        }
+      }
+    }
+    const balloonVisual = this.createSkyBalloonEntry({
+      id: 'balloon_qa_showcase',
+      poiId: 'qa_showcase',
+      x: balloonSpot.x,
+      z: balloonSpot.z,
+      isQaShowcase: true,
+    });
+
+    // 2. Rippling Fishing Hole in nearby water/shore ahead-right
+    let holeX = centerPos.x + rightX * 4.8 + fwdX * 8.0;
+    let holeZ = centerPos.z + rightZ * 4.8 + fwdZ * 8.0;
+    let foundWater = false;
+
+    for (let dist = 5; dist <= 26 && !foundWater; dist += 2) {
+      for (const lat of [4, 7, 10, 2, 13, 0, -3]) {
+        const cx = centerPos.x + fwdX * dist + rightX * lat;
+        const cz = centerPos.z + fwdZ * dist + rightZ * lat;
+        if (this.terrain.isWater(cx, cz)) {
+          holeX = cx;
+          holeZ = cz;
+          foundWater = true;
+          break;
+        }
+      }
+    }
+
+    const holeVisual = this.createFishingHoleEntry({
+      id: 'fishing_qa_showcase',
+      x: holeX,
+      z: holeZ,
+      yOverride: foundWater ? WATER_LEVEL : this.terrain.getHeightAt(holeX, holeZ),
+      rewardOffset: 0,
+      isQaShowcase: true,
+    });
+
+    return {
+      balloon: balloonVisual.data,
+      fishingHole: holeVisual.data,
+    };
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -8063,6 +8815,7 @@ export class WorldInteractables {
       ...this.getRebootVanColliders(),
       ...this.getModBenchColliders(),
       ...this.getForecastTowerColliders(),
+      ...this.getSkyBalloonColliders(),
     ];
   }
 
@@ -8291,6 +9044,24 @@ export class WorldInteractables {
     this.trainHornTimer = TRAIN_HORN_INITIAL_SEC;
     this.syncTrainTransforms(false, 0);
     this.syncTrainChestVisual();
+
+    for (const fh of this.fishingHolesMap.values()) {
+      fh.data.castsRemaining = FISHING_HOLE_DEFAULT_CASTS;
+      fh.data.depleted = false;
+      fh.group.visible = true;
+      for (let i = 0; i < fh.rings.length; i++) {
+        fh.rings[i].scale.set(1, 1, 1);
+      }
+      for (let f = 0; f < fh.fishPivots.length; f++) {
+        fh.fishPivots[f].position.set(0, 0, 0);
+        fh.fishPivots[f].rotation.set(0, 0, 0);
+      }
+    }
+
+    for (const sb of this.skyBalloonsMap.values()) {
+      sb.canopyGroup.position.y = sb.baseCanopyY;
+      sb.canopyGroup.rotation.set(0, 0, 0);
+    }
   }
 
   unlockVault(vaultId: string): UnlockVaultResult {
@@ -8848,6 +9619,58 @@ export class WorldInteractables {
       wb.group.position.set(boar.x, boar.y, boar.z);
       wb.group.rotation.y = boar.yaw;
     }
+
+    // Animate 14 Rippling Fishing Holes (concentric glowing cyan rings & leaping holographic fish arcs)
+    for (const fh of this.fishingHolesMap.values()) {
+      if (fh.data.depleted) continue;
+
+      for (let i = 0; i < fh.rings.length; i++) {
+        const ringPhase = (elapsed * 0.65 + fh.leapPhase + i * 0.33) % 1;
+        const scale = 0.78 + ringPhase * 0.52;
+        fh.rings[i].scale.set(scale, 1, scale);
+      }
+
+      for (let f = 0; f < fh.fishPivots.length; f++) {
+        const pivot = fh.fishPivots[f];
+        const orbitAngle = elapsed * 1.45 + fh.leapPhase * Math.PI * 2 + f * Math.PI;
+        const orbitRadius = f === 0 ? 0.68 : 0.45;
+        const arcPhase = (elapsed * 0.65 + fh.leapPhase + f * 0.5) % 1;
+
+        if (arcPhase < 0.7) {
+          const u = arcPhase / 0.7;
+          const jumpY = Math.sin(u * Math.PI) * (f === 0 ? 1.18 : 0.88) - 0.08;
+          pivot.visible = true;
+          pivot.position.set(
+            Math.cos(orbitAngle) * orbitRadius,
+            jumpY,
+            Math.sin(orbitAngle) * orbitRadius,
+          );
+          pivot.rotation.y = -orbitAngle;
+          pivot.rotation.x = -Math.cos(u * Math.PI) * 0.85;
+        } else {
+          pivot.visible = false;
+          pivot.position.set(
+            Math.cos(orbitAngle) * orbitRadius,
+            -0.32,
+            Math.sin(orbitAngle) * orbitRadius,
+          );
+        }
+      }
+    }
+
+    // Animate 4 Towering Tethered Sky-Ascent Balloons (gentle canopy bob & rising cyan tether rings)
+    for (const sb of this.skyBalloonsMap.values()) {
+      const t = elapsed + sb.bobPhase;
+      sb.canopyGroup.position.y = sb.baseCanopyY + Math.sin(t * 1.35) * 0.55;
+      sb.canopyGroup.rotation.y = Math.sin(t * 0.45) * 0.06;
+      for (let r = 0; r < sb.ascentRings.length; r++) {
+        const ringPhase =
+          (elapsed * 0.42 + r / sb.ascentRings.length + sb.bobPhase * 0.1) % 1;
+        sb.ascentRings[r].position.y = 1.6 + ringPhase * (SKY_BALLOON_HEIGHT - 4.8);
+        const s = 1.0 + Math.sin(ringPhase * Math.PI) * 0.18;
+        sb.ascentRings[r].scale.set(s, s, s);
+      }
+    }
   }
 
   dispose(): void {
@@ -8911,6 +9734,10 @@ export class WorldInteractables {
     this.shieldMushroomsMap.clear();
     this.wildBoars = [];
     this.wildBoarsMap.clear();
+    this.fishingHoles = [];
+    this.fishingHolesMap.clear();
+    this.skyBalloons = [];
+    this.skyBalloonsMap.clear();
     this.trainTrackPoints = [];
     this.trainCarMetas = [];
     this.trainLocoWheels = [];
