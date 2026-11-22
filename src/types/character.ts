@@ -156,4 +156,6 @@ export interface CharacterRenderState {
   isBurning?: boolean;
   isShieldBlocking?: boolean;
   killStreak?: number;
+  isShadowCloaked?: boolean;
+  stormBlessingActive?: boolean;
 }

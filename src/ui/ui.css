@@ -6848,3 +6848,207 @@
     height: 13px;
   }
 }
+
+/* ============================================================================
+   WAVE 13 UI: STORM SOVEREIGN (SHADOW CLOAK PILL, STORM BLESSING PILL,
+   RUNE ATTUNE CHANNEL BAR, STORM CHOPPA ALTITUDE HUD & 34-ROW LEGEND)
+   ============================================================================ */
+
+.fdr-status-chip-row {
+  max-width: 100%;
+}
+
+.fdr-cloak-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(30, 27, 75, 0.94), rgba(88, 28, 135, 0.92));
+  border: 1.5px solid #c084fc;
+  box-shadow: 0 3px 10px rgba(168, 85, 247, 0.38), 0 0 10px rgba(192, 132, 252, 0.24);
+  color: #f3e8ff;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-cloak-pill.active {
+  border-color: #e879f9;
+  background: linear-gradient(90deg, rgba(59, 7, 100, 0.96), rgba(147, 51, 234, 0.94));
+  box-shadow: 0 0 14px rgba(232, 121, 249, 0.68), 0 0 10px rgba(34, 211, 238, 0.35);
+  color: #ffffff;
+}
+
+.fdr-cloak-pill.cooldown {
+  border-color: #64748b;
+  background: linear-gradient(90deg, rgba(15, 23, 42, 0.92), rgba(30, 27, 46, 0.92));
+  box-shadow: none;
+  color: #cbd5e1;
+}
+
+.fdr-cloak-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-cloak-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-blessing-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(46, 16, 101, 0.94), rgba(14, 116, 144, 0.92));
+  border: 1.5px solid #22d3ee;
+  box-shadow: 0 3px 10px rgba(168, 85, 247, 0.38), 0 0 12px rgba(34, 211, 238, 0.32);
+  color: #e0f2fe;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-blessing-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-blessing-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-channel-bar.rune-attune {
+  border-color: #c084fc;
+  background: linear-gradient(180deg, rgba(30, 11, 56, 0.95), rgba(46, 16, 101, 0.95));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6), 0 0 16px rgba(192, 132, 252, 0.42);
+}
+
+.fdr-channel-bar.rune-attune .fdr-channel-label {
+  color: #f5d0fe;
+}
+
+.fdr-channel-bar.rune-attune .fdr-channel-fill {
+  background: linear-gradient(90deg, #7e22ce 0%, #c084fc 55%, #22d3ee 100%);
+}
+
+.fdr-vehicle-alt-row {
+  grid-template-columns: 44px 1fr auto;
+}
+
+.fdr-vehicle-fill.altitude {
+  background: linear-gradient(90deg, #0284c7, #22d3ee, #a5f3fc);
+}
+
+.fdr-vehicle-alt {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #67e8f9;
+  min-width: 46px;
+  text-align: right;
+}
+
+.fdr-map-legend {
+  gap: 4px 10px;
+}
+
+.fdr-map-legend-row {
+  white-space: nowrap;
+  line-height: 1.08;
+}
+
+.fdr-legend-swatch.choppa svg,
+.fdr-legend-swatch.monolith svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 1360px), (max-height: 760px) {
+  .fdr-bottom-center {
+    gap: 5px;
+  }
+
+  .fdr-status-chip-row {
+    gap: 3px 4px;
+    max-width: 100%;
+  }
+
+  .fdr-cloak-pill,
+  .fdr-blessing-pill {
+    padding: 1.5px 6px;
+    gap: 3px;
+    font-size: 9.2px;
+    letter-spacing: 0.04em;
+  }
+
+  .fdr-cloak-icon,
+  .fdr-blessing-icon {
+    width: 11px;
+    height: 11px;
+  }
+
+  .fdr-map-legend {
+    grid-template-columns: repeat(2, minmax(132px, 1fr));
+    min-width: 288px;
+    gap: 1.5px 8px;
+    padding: 4px 8px;
+  }
+
+  .fdr-map-legend-title {
+    font-size: 10px;
+    padding-bottom: 1.5px;
+    margin-bottom: 0;
+  }
+
+  .fdr-map-legend-row {
+    font-size: 9.5px;
+    gap: 4.5px;
+    line-height: 1.04;
+    white-space: nowrap;
+  }
+
+  .fdr-legend-swatch {
+    width: 12px;
+    height: 12px;
+  }
+
+  .fdr-legend-swatch.choppa svg,
+  .fdr-legend-swatch.monolith svg,
+  .fdr-legend-swatch.hovertank svg,
+  .fdr-legend-swatch.hotdrop svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .fdr-summary-card .fdr-stats-grid {
+    gap: 4px;
+    margin-bottom: 7px;
+  }
+
+  .fdr-summary-card .fdr-stat-box {
+    padding: 4px 7px;
+  }
+
+  .fdr-summary-card .fdr-stat-k {
+    font-size: 10px;
+  }
+
+  .fdr-summary-card .fdr-stat-v {
+    font-size: 15px;
+  }
+}

@@ -54,9 +54,13 @@ export function shouldActivateContrail(
 const CONTRAIL_WHITE = new THREE.Color('#ffffff');
 const CONTRAIL_PARTICLES_PER_LIMB = 6;
 const BURNING_EMBER_COLOR = new THREE.Color('#f97316');
+const SHADOW_CLOAK_COLOR = new THREE.Color('#2e1065');
+const SHADOW_CLOAK_EMISSIVE = new THREE.Color('#7c3aed');
+const SHADOW_CLOAK_OPACITY = 0.34;
 const LOW_G_MOTES_PER_BOOT = 4;
 const BURNING_EMBER_MOTE_COUNT = 6;
 const STREAK_AURA_SPARK_COUNT = 10;
+const STORM_BLESSING_NODE_COUNT = 6;
 
 function normalizeWeaponMods(mods?: WeaponModId[]): WeaponModId[] {
   if (!mods || mods.length === 0) return [];
@@ -384,6 +388,30 @@ export class CharacterRig {
     speed: number;
     phase: number;
   }> = [];
+  private shadowCloaked = false;
+  private shadowCloakTime = 0;
+  private readonly skinStealthTargets: Array<{
+    mat: THREE.MeshStandardMaterial | THREE.MeshBasicMaterial;
+    baseColor: THREE.Color;
+    baseEmissive: THREE.Color;
+    baseEmissiveIntensity: number;
+    baseTransparent: boolean;
+    baseOpacity: number;
+    baseDepthWrite: boolean;
+  }> = [];
+  private stormBlessingActive = false;
+  private stormBlessingTime = 0;
+  private stormBlessingGroup: THREE.Group | null = null;
+  private readonly stormBlessingRings: THREE.Mesh[] = [];
+  private readonly stormBlessingRingMats: THREE.MeshBasicMaterial[] = [];
+  private stormBlessingNodeMat: THREE.MeshBasicMaterial | null = null;
+  private readonly stormBlessingNodes: Array<{
+    mesh: THREE.Mesh;
+    angle: number;
+    radius: number;
+    yOffset: number;
+    phase: number;
+  }> = [];
   private disposed = false;
 
   constructor(skin?: SkinDef, pickaxe?: PickaxeDef, glider?: GliderDef, contrailId?: string) {
@@ -568,6 +596,7 @@ export class CharacterRig {
     }
     this.skinVisualRoots.length = 0;
     this.skinEmissiveTargets.length = 0;
+    this.skinStealthTargets.length = 0;
     this.backblingParts = { style: 'none' };
   }
 
@@ -776,8 +805,13 @@ export class CharacterRig {
     const backVis = this.attachVisualGroup(this.joints.backblingSocket, 'backbling_visual');
     this.buildBackbling(backVis, primary, secondary, accent, armorSteel);
 
+    this.collectSkinStealthTargets();
+
     if (this.burningActive) {
       this.applyBurningMaterialTint(this.burningTime);
+    }
+    if (this.shadowCloaked) {
+      this.applyShadowCloakMaterials(true);
     }
   }
 
@@ -1417,6 +1451,20 @@ export class CharacterRig {
       this.setStreakAura(
         safeStreak,
         safeStreak >= 3 ? this.streakAuraTime + 1 / 60 : this.streakAuraTime,
+      );
+    }
+    if (state.isShadowCloaked !== undefined) {
+      const cloaked = Boolean(state.isShadowCloaked);
+      this.setShadowCloaked(
+        cloaked,
+        cloaked ? this.shadowCloakTime + 1 / 60 : this.shadowCloakTime,
+      );
+    }
+    if (state.stormBlessingActive !== undefined) {
+      const active = Boolean(state.stormBlessingActive);
+      this.setStormBlessingActive(
+        active,
+        active ? this.stormBlessingTime + 1 / 60 : this.stormBlessingTime,
       );
     }
   }
@@ -2749,6 +2797,9 @@ export class CharacterRig {
     if (!active) {
       this.burningActive = false;
       this.restoreBaseMaterialTint();
+      if (this.shadowCloaked) {
+        this.applyShadowCloakMaterials(true);
+      }
       if (this.burningEmberGroup) {
         this.burningEmberGroup.visible = false;
         this.burningEmberGroup.scale.setScalar(0.001);
@@ -3006,6 +3057,266 @@ export class CharacterRig {
     return this.killStreakCount;
   }
 
+  private collectSkinStealthTargets(): void {
+    this.skinStealthTargets.length = 0;
+    const seenMats = new Set<THREE.Material>();
+    for (const grp of this.skinVisualRoots) {
+      grp.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const mat of mats) {
+          if (!mat || seenMats.has(mat) || mat.userData?.sharedWrapMaterial) continue;
+          seenMats.add(mat);
+          if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshBasicMaterial) {
+            this.skinStealthTargets.push({
+              mat,
+              baseColor: mat.color.clone(),
+              baseEmissive:
+                mat instanceof THREE.MeshStandardMaterial
+                  ? mat.emissive.clone()
+                  : new THREE.Color(0x000000),
+              baseEmissiveIntensity:
+                mat instanceof THREE.MeshStandardMaterial ? mat.emissiveIntensity : 0,
+              baseTransparent: mat.transparent,
+              baseOpacity: mat.opacity,
+              baseDepthWrite: mat.depthWrite,
+            });
+          }
+        }
+      });
+    }
+  }
+
+  private applyShadowCloakMaterials(cloaked: boolean): void {
+    for (let i = 0; i < this.skinStealthTargets.length; i++) {
+      const target = this.skinStealthTargets[i];
+      const mat = target.mat;
+      if (cloaked) {
+        if (!mat.transparent) {
+          mat.transparent = true;
+          mat.needsUpdate = true;
+        }
+        mat.opacity = SHADOW_CLOAK_OPACITY;
+        mat.depthWrite = false;
+        mat.color.copy(target.baseColor).lerp(SHADOW_CLOAK_COLOR, 0.78);
+        if (mat instanceof THREE.MeshStandardMaterial && !this.burningActive) {
+          mat.emissive.copy(target.baseEmissive).lerp(SHADOW_CLOAK_EMISSIVE, 0.55);
+          mat.emissiveIntensity = Math.max(target.baseEmissiveIntensity, 0.42);
+        }
+      } else {
+        if (mat.transparent !== target.baseTransparent) {
+          mat.transparent = target.baseTransparent;
+          mat.needsUpdate = true;
+        }
+        mat.opacity = target.baseOpacity;
+        mat.depthWrite = target.baseDepthWrite;
+        mat.color.copy(target.baseColor);
+        if (mat instanceof THREE.MeshStandardMaterial) {
+          mat.emissive.copy(target.baseEmissive);
+          mat.emissiveIntensity = target.baseEmissiveIntensity;
+        }
+      }
+    }
+    if (!cloaked && this.burningActive) {
+      this.applyBurningMaterialTint(this.burningTime);
+    }
+  }
+
+  public setShadowCloaked(cloaked: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    const nextCloaked = Boolean(cloaked);
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.shadowCloakTime = elapsed;
+    }
+    if (nextCloaked === this.shadowCloaked) return;
+
+    this.shadowCloaked = nextCloaked;
+    this.applyShadowCloakMaterials(nextCloaked);
+  }
+
+  public isShadowCloaked(): boolean {
+    return this.shadowCloaked;
+  }
+
+  private buildStormBlessingGroup(): void {
+    const grp = new THREE.Group();
+    grp.name = 'storm_blessing_aura';
+    grp.position.set(0, 0.12, 0);
+    grp.visible = false;
+    grp.scale.setScalar(0.001);
+
+    this.stormBlessingRings.length = 0;
+    this.stormBlessingRingMats.length = 0;
+    this.stormBlessingNodes.length = 0;
+
+    const ringSpecs: Array<{
+      radius: number;
+      tube: number;
+      radialSegments: number;
+      tubularSegments: number;
+      color: number;
+      opacity: number;
+      posY: number;
+      rx: number;
+      ry: number;
+      rz: number;
+    }> = [
+      {
+        radius: 0.39,
+        tube: 0.014,
+        radialSegments: 8,
+        tubularSegments: 28,
+        color: 0xa855f7,
+        opacity: 0.88,
+        posY: 0,
+        rx: Math.PI / 2,
+        ry: 0,
+        rz: 0,
+      },
+      {
+        radius: 0.45,
+        tube: 0.011,
+        radialSegments: 6,
+        tubularSegments: 6,
+        color: 0xc084fc,
+        opacity: 0.84,
+        posY: 0.02,
+        rx: Math.PI / 2,
+        ry: 0,
+        rz: 0,
+      },
+      {
+        radius: 0.35,
+        tube: 0.010,
+        radialSegments: 8,
+        tubularSegments: 24,
+        color: 0x818cf8,
+        opacity: 0.8,
+        posY: 0.03,
+        rx: 0.38,
+        ry: 0,
+        rz: -0.32,
+      },
+    ];
+
+    for (const spec of ringSpecs) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: spec.color,
+        transparent: true,
+        opacity: spec.opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(
+        new THREE.TorusGeometry(spec.radius, spec.tube, spec.radialSegments, spec.tubularSegments),
+        mat,
+      );
+      mesh.position.set(0, spec.posY, 0);
+      mesh.rotation.set(spec.rx, spec.ry, spec.rz);
+      mesh.castShadow = false;
+      grp.add(mesh);
+      this.stormBlessingRings.push(mesh);
+      this.stormBlessingRingMats.push(mat);
+    }
+
+    const nodeMat = new THREE.MeshBasicMaterial({
+      color: 0xe9d5ff,
+      transparent: true,
+      opacity: 0.94,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.stormBlessingNodeMat = nodeMat;
+
+    for (let i = 0; i < STORM_BLESSING_NODE_COUNT; i++) {
+      const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.026, 0), nodeMat);
+      mesh.castShadow = false;
+      grp.add(mesh);
+      this.stormBlessingNodes.push({
+        mesh,
+        angle: (i / STORM_BLESSING_NODE_COUNT) * Math.PI * 2,
+        radius: 0.42,
+        yOffset: i % 2 === 0 ? 0.03 : -0.02,
+        phase: i / STORM_BLESSING_NODE_COUNT,
+      });
+    }
+
+    this.joints.chest.add(grp);
+    this.stormBlessingGroup = grp;
+  }
+
+  public setStormBlessingActive(active: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    if (!active) {
+      this.stormBlessingActive = false;
+      if (this.stormBlessingGroup) {
+        this.stormBlessingGroup.visible = false;
+        this.stormBlessingGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.stormBlessingGroup) {
+      this.buildStormBlessingGroup();
+    }
+
+    this.stormBlessingActive = true;
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.stormBlessingTime = elapsed;
+    }
+    const t = this.stormBlessingTime;
+    const pulse = 1 + 0.06 * Math.sin(t * 6.5);
+
+    const grp = this.stormBlessingGroup!;
+    grp.visible = true;
+    grp.scale.setScalar(1);
+    grp.position.y = 0.12 + Math.sin(t * 3.8) * 0.022;
+
+    if (this.stormBlessingRings[0]) {
+      this.stormBlessingRings[0].rotation.z = t * 2.5;
+      this.stormBlessingRings[0].scale.setScalar(pulse);
+    }
+    if (this.stormBlessingRings[1]) {
+      this.stormBlessingRings[1].rotation.z = -t * 2.0;
+      this.stormBlessingRings[1].scale.setScalar(1 + 0.05 * Math.cos(t * 5.8));
+    }
+    if (this.stormBlessingRings[2]) {
+      this.stormBlessingRings[2].rotation.y = t * 2.9;
+      this.stormBlessingRings[2].scale.setScalar(1 + 0.05 * Math.sin(t * 7.2));
+    }
+    for (let i = 0; i < this.stormBlessingRingMats.length; i++) {
+      this.stormBlessingRingMats[i].opacity = 0.72 + 0.22 * Math.sin(t * 6.5 + i * 1.2);
+    }
+
+    for (let i = 0; i < this.stormBlessingNodes.length; i++) {
+      const node = this.stormBlessingNodes[i];
+      const ang = node.angle + t * 2.4;
+      const bob = Math.sin(t * 4.4 + node.phase * Math.PI * 2) * 0.04;
+      node.mesh.position.set(
+        Math.cos(ang) * node.radius,
+        node.yOffset + bob,
+        Math.sin(ang) * node.radius,
+      );
+      node.mesh.rotation.set(t * 3.8 + i, t * 4.6, 0);
+      node.mesh.scale.setScalar(0.85 + 0.28 * Math.sin(t * 8.0 + i));
+    }
+
+    if (this.stormBlessingNodeMat) {
+      this.stormBlessingNodeMat.opacity = 0.78 + 0.2 * Math.sin(t * 8.5);
+    }
+  }
+
+  public isStormBlessingActive(): boolean {
+    return this.stormBlessingActive && Boolean(this.stormBlessingGroup?.visible);
+  }
+
+  public getStormBlessingGroup(): THREE.Group | null {
+    return this.stormBlessingGroup;
+  }
+
   public isBossAuraEnabled(): boolean {
     return this.bossAuraEnabled;
   }
@@ -3210,7 +3521,19 @@ export class CharacterRig {
       this.streakAuraVisible = false;
       this.killStreakCount = 0;
     }
+    if (this.stormBlessingGroup) {
+      disposeObject3D(this.stormBlessingGroup);
+      this.stormBlessingGroup.parent?.remove(this.stormBlessingGroup);
+      this.stormBlessingGroup = null;
+      this.stormBlessingRings.length = 0;
+      this.stormBlessingRingMats.length = 0;
+      this.stormBlessingNodeMat = null;
+      this.stormBlessingNodes.length = 0;
+      this.stormBlessingActive = false;
+    }
     this.skinEmissiveTargets.length = 0;
+    this.skinStealthTargets.length = 0;
+    this.shadowCloaked = false;
 
     disposeObject3D(this.joints.root);
     this.joints.root.parent?.remove(this.joints.root);

@@ -606,6 +606,11 @@ export class BotManager {
         craterTargetId: null,
         craterDwellTimer: 0,
         chugCannonRegenTimer: 0,
+        monolithTargetId: null,
+        monolithDwellTimer: 0,
+        shadowCloakTimer: 0,
+        shadowCloakCooldown: 0,
+        isShadowCloaked: false,
       };
 
       this.bots.push(bot);
@@ -797,6 +802,11 @@ export class BotManager {
         craterTargetId: null,
         craterDwellTimer: 0,
         chugCannonRegenTimer: 0,
+        monolithTargetId: null,
+        monolithDwellTimer: 0,
+        shadowCloakTimer: 0,
+        shadowCloakCooldown: 0,
+        isShadowCloaked: false,
       };
 
       this.bots.push(boss);
@@ -994,6 +1004,11 @@ export class BotManager {
       craterTargetId: null,
       craterDwellTimer: 0,
       chugCannonRegenTimer: 0,
+      monolithTargetId: null,
+      monolithDwellTimer: 0,
+      shadowCloakTimer: 0,
+      shadowCloakCooldown: 0,
+      isShadowCloaked: false,
     };
 
     this.bots.push(partner);
@@ -1250,6 +1265,11 @@ export class BotManager {
       craterTargetId: null,
       craterDwellTimer: 0,
       chugCannonRegenTimer: 0,
+      monolithTargetId: null,
+      monolithDwellTimer: 0,
+      shadowCloakTimer: 0,
+      shadowCloakCooldown: 0,
+      isShadowCloaked: false,
       isAlly: true,
       allyRole: npc.role,
       allyAbilityCooldown: 0,
@@ -1385,6 +1405,11 @@ export class BotManager {
     partner.craterTargetId = null;
     partner.craterDwellTimer = 0;
     partner.chugCannonRegenTimer = 0;
+    partner.monolithTargetId = null;
+    partner.monolithDwellTimer = 0;
+    partner.shadowCloakTimer = 0;
+    partner.shadowCloakCooldown = 0;
+    partner.isShadowCloaked = false;
     partner.emoteId = null;
     partner.moveSpeed = 0;
     partner.recoilKick = 0;
@@ -1908,6 +1933,10 @@ export class BotManager {
     bot.isGrinding = false;
     bot.craterTargetId = null;
     bot.craterDwellTimer = 0;
+    bot.monolithTargetId = null;
+    bot.monolithDwellTimer = 0;
+    bot.isShadowCloaked = false;
+    bot.shadowCloakTimer = 0;
     bot.burstQueue = 0;
     bot.reloadTimer = 0;
     bot.healTimer = 0;
@@ -2205,6 +2234,10 @@ export class BotManager {
     bot.isGrinding = false;
     bot.craterTargetId = null;
     bot.craterDwellTimer = 0;
+    bot.monolithTargetId = null;
+    bot.monolithDwellTimer = 0;
+    bot.isShadowCloaked = false;
+    bot.shadowCloakTimer = 0;
     bot.gliderOpen = false;
     bot.gliderFactor = 0;
 
@@ -2627,6 +2660,11 @@ export class BotManager {
     bot.craterTargetId = null;
     bot.craterDwellTimer = 0;
     bot.chugCannonRegenTimer = 0;
+    bot.monolithTargetId = null;
+    bot.monolithDwellTimer = 0;
+    bot.shadowCloakTimer = 0;
+    bot.shadowCloakCooldown = 0;
+    bot.isShadowCloaked = false;
     bot.emoteId = null;
     bot.moveSpeed = 0;
     bot.recoilKick = 0;
@@ -2786,6 +2824,7 @@ export class BotManager {
         isShieldBlocking:
           displayWeaponId === 'ballistic_shield' &&
           (bot.isAiming || bot.state === 'combat'),
+        isShadowCloaked: Boolean(bot.isShadowCloaked),
       };
     });
   }

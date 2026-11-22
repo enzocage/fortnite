@@ -30,6 +30,7 @@ import type {
   Rarity,
   RebootVanEntity,
   RiftEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
@@ -54,6 +55,9 @@ import type {
   ZiplineEntity,
 } from '../../types';
 import {
+  ARC_CHAIN_DAMAGE_MULT,
+  ARC_CHAIN_RADIUS,
+  ARC_MAX_CHAINS,
   AUGMENTS,
   BALLISTIC_SHIELD_MAX_HP,
   BALLISTIC_SHIELD_REGEN_PER_SEC,
@@ -86,10 +90,16 @@ import {
   REBOOT_DURATION_SEC,
   FISHING_CAST_SEC,
   REVIVE_DURATION_SEC,
+  RUNE_ATTUNE_DURATION_SEC,
+  SHADOW_CLOAK_COOLDOWN_SEC,
+  SHADOW_CLOAK_DURATION_SEC,
+  SHADOW_CLOAK_SPEED_MULT,
   SHIELD_MUSHROOM_AMOUNT,
   SKY_BALLOON_HEIGHT,
   SPIKE_TRAP_DAMAGE,
   STARTING_GOLD_BARS,
+  STORM_BLESSING_DURATION_SEC,
+  STORM_BLESSING_SHIELD_BONUS,
   TANK_CANNON_COOLDOWN_SEC,
   TANK_CANNON_DAMAGE,
   TANK_CANNON_SPLASH_RADIUS,
@@ -134,6 +144,7 @@ import {
   type CombatActor,
   type DuoRebootBridge,
   type DuoReviveBridge,
+  type InteractablesBridge,
   type PropsInteractionBridge,
   type SupplyDroneDamageResult,
   type VaultBridge,
@@ -8055,7 +8066,7 @@ describe('Wave 12 Gameplay Systems (Aegis Ballistic Shield, Sticky Remote C4, Va
   it('registers Wave-12 WEAPON_SOUND_MAP entries (37 total) and enforces Aegis Ballistic Shield frontal absorption, regen & break SFX', () => {
     expect(BALLISTIC_SHIELD_MAX_HP).toBe(250);
     expect(BALLISTIC_SHIELD_REGEN_PER_SEC).toBe(28);
-    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(37);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBeGreaterThanOrEqual(37);
     expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
     expect(WEAPON_SOUND_MAP.ballistic_shield).toBe('shot_pistol');
     expect(WEAPON_SOUND_MAP.remote_c4).toBe('c4_plant');
@@ -8502,6 +8513,617 @@ describe('Wave 12 Gameplay Systems (Aegis Ballistic Shield, Sticky Remote C4, Va
     expect(player.getBallisticShieldHp()).toBe(BALLISTIC_SHIELD_MAX_HP);
     expect(player.getHudSnapshot().tankCannonCooldown).toBeNull();
     expect(player.getHudSnapshot().inHotDropPoi).toBe(false);
+  });
+});
+
+describe('Wave 13 Gameplay Systems (Storm-Breaker Arc Rifle, Shadow Cloak Gauntlets, Rune Monoliths & Storm Blessing, Storm Choppa)', () => {
+  function setupWave13Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave13Tester');
+    player.setPhase('playing');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  it('registers Wave-13 WEAPON_SOUND_MAP entries (39 total) and chains Storm-Breaker Arc Rifle lightning to <= 2 distinct enemies within 12m', () => {
+    expect(ARC_CHAIN_RADIUS).toBe(12);
+    expect(ARC_MAX_CHAINS).toBe(2);
+    expect(ARC_CHAIN_DAMAGE_MULT).toBe(0.65);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(39);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+    expect(WEAPON_SOUND_MAP.storm_breaker).toBe('arc_shot');
+    expect(WEAPON_SOUND_MAP.shadow_cloak).toBe('cloak_activate');
+
+    const { bus, weapons, player } = setupWave13Harness();
+    const sounds: SoundEventId[] = [];
+    const arcVfx: Array<{ from: Vec3Like; to: Vec3Like; isChain?: boolean }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:arc_lightning', (ev) => arcVfx.push(ev));
+
+    // Primary target at z = -10, plus 3 enemies inside 12m, 1 friendly inside 12m, and 1 far enemy > 12m
+    const primary: CombatActor = {
+      id: 'arc_primary',
+      name: 'Primary',
+      position: { x: 0, y: 0, z: -10 },
+      eyePos: { x: 0, y: 1.5, z: -10 },
+      hp: 100,
+      shield: 0,
+      radius: 0.45,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_sq',
+    };
+    const chainNear1: CombatActor = {
+      id: 'arc_chain_1',
+      name: 'Chain1',
+      position: { x: 3.5, y: 0, z: -10 }, // ~3.5m from hit
+      eyePos: { x: 3.5, y: 1.5, z: -10 },
+      hp: 100,
+      shield: 0,
+      radius: 0.45,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_sq',
+    };
+    const chainNear2: CombatActor = {
+      id: 'arc_chain_2',
+      name: 'Chain2',
+      position: { x: -6, y: 0, z: -10 }, // ~6.0m from hit
+      eyePos: { x: -6, y: 1.5, z: -10 },
+      hp: 100,
+      shield: 0,
+      radius: 0.45,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_sq',
+    };
+    const chainThirdWithin12: CombatActor = {
+      id: 'arc_chain_3',
+      name: 'Chain3',
+      position: { x: 0, y: 0, z: -20 }, // ~10m from hit (3rd closest -> capped at ARC_MAX_CHAINS = 2)
+      eyePos: { x: 0, y: 1.5, z: -20 },
+      hp: 100,
+      shield: 0,
+      radius: 0.45,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_sq',
+    };
+    const farEnemy: CombatActor = {
+      id: 'arc_far',
+      name: 'Far',
+      position: { x: 0, y: 0, z: -24 }, // ~14m > 12m
+      eyePos: { x: 0, y: 1.5, z: -24 },
+      hp: 100,
+      shield: 0,
+      radius: 0.45,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_sq',
+    };
+    player.setGameMode('duos');
+    const friendlyNear: CombatActor = {
+      id: 'arc_ally',
+      name: 'Ally',
+      position: { x: 1.5, y: 0, z: -10 },
+      eyePos: { x: 1.5, y: 1.5, z: -10 },
+      hp: 100,
+      shield: 0,
+      radius: 0.45,
+      height: 1.85,
+      alive: true,
+      squadId: 'player_squad',
+    };
+    weapons.registerActorsProvider(() => [
+      player.getCombatActor(),
+      primary,
+      chainNear1,
+      chainNear2,
+      chainThirdWithin12,
+      farEnemy,
+      friendlyNear,
+    ]);
+
+    const arcItem: ItemInstance = {
+      uid: 'arc_rifle_1',
+      weaponId: 'storm_breaker',
+      rarity: 'mythic',
+      magAmmo: 20,
+      stackCount: 1,
+    };
+    player.getInventory().addItem(arcItem);
+    player.getInventory().addAmmo('medium', 60);
+    player.pressKey('Digit2');
+    player.releaseKey('Digit2');
+
+    // Sync camera and aim toward primary at (0, 0..1.85, -10)
+    player.setLook(Math.PI, -0.02);
+    let t = 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(sounds).toContain('arc_shot');
+    expect(sounds.filter((s) => s === 'arc_chain').length).toBe(2);
+    expect(arcVfx.some((v) => v.isChain === false)).toBe(true);
+    expect(arcVfx.filter((v) => v.isChain === true).length).toBe(2);
+
+    const primaryDmg = 100 - primary.hp;
+    expect(primaryDmg).toBeGreaterThan(0);
+    const expectedChainDmg = Math.round(primaryDmg * ARC_CHAIN_DAMAGE_MULT);
+    expect(100 - chainNear1.hp).toBe(expectedChainDmg);
+    expect(100 - chainNear2.hp).toBe(expectedChainDmg);
+    expect(chainThirdWithin12.hp).toBe(100);
+    expect(farEnemy.hp).toBe(100);
+    expect(friendlyNear.hp).toBe(100);
+    expect(player.getStats().arcChainHits).toBe(2);
+
+    // Direct WeaponSystem.fireWeapon also returns arcChainHits cleanly and rejects shadow_cloak
+    const directRes = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: arcItem,
+      origin: { x: 0, y: 1.4, z: 0 },
+      aimDir: { x: 0, y: -0.04, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(directRes.fired).toBe(true);
+    expect(directRes.arcChainHits).toBe(2);
+
+    const cloakDirect = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'sc_direct', weaponId: 'shadow_cloak', rarity: 'mythic', magAmmo: 0, stackCount: 1 },
+      origin: { x: 0, y: 1.4, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(cloakDirect.fired).toBe(false);
+  });
+
+  it('activates Shadow Cloak Gauntlets (10s, 1.24x speed, VFX/SFX), decloaks on fire/toggle/expiry with 12s cooldown, and exposes QA helper', () => {
+    expect(SHADOW_CLOAK_DURATION_SEC).toBe(10);
+    expect(SHADOW_CLOAK_COOLDOWN_SEC).toBe(12);
+    expect(SHADOW_CLOAK_SPEED_MULT).toBe(1.24);
+
+    const { bus, player } = setupWave13Harness();
+    const sounds: SoundEventId[] = [];
+    const cloakVfx: Array<{ position: Vec3Like; entering: boolean }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:shadow_cloak_burst', (ev) => cloakVfx.push(ev));
+
+    // Measure baseline walk speed without cloak
+    let t = 0;
+    player.setLook(Math.PI, 0);
+    player.pressKey('KeyW');
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const baseWalkSpeed = player.getCharacterRenderState().moveSpeed;
+    expect(baseWalkSpeed).toBeGreaterThan(6.0);
+    expect(baseWalkSpeed).toBeLessThan(7.0);
+    player.releaseKey('KeyW');
+
+    // Equip Shadow Cloak Gauntlets in slot 2 and AR in slot 3
+    player.getInventory().addItem({
+      uid: 'shadow_cloak_1',
+      weaponId: 'shadow_cloak',
+      rarity: 'mythic',
+      magAmmo: 0,
+      stackCount: 1,
+    });
+    player.getInventory().addItem({
+      uid: 'ar_ambush',
+      weaponId: 'ar',
+      rarity: 'rare',
+      magAmmo: 30,
+      stackCount: 1,
+    });
+    player.getInventory().addAmmo('medium', 60);
+
+    player.pressKey('Digit2');
+    player.releaseKey('Digit2');
+    t += 0.05;
+    player.update(0.05, t);
+
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(false);
+    expect(player.getHudSnapshot().shadowCloakState).toEqual({
+      active: false,
+      remainingSec: 0,
+      cooldownSec: 0,
+    });
+
+    // Activate cloak via LMB
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(true);
+    expect(player.getHudSnapshot().shadowCloakState?.active).toBe(true);
+    expect(player.getHudSnapshot().shadowCloakState?.remainingSec).toBeGreaterThan(9.8);
+    expect(sounds).toContain('cloak_activate');
+    expect(cloakVfx.some((v) => v.entering === true)).toBe(true);
+
+    // Cloaked walk speed receives 1.24x multiplier
+    player.pressKey('KeyW');
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const cloakedWalkSpeed = player.getCharacterRenderState().moveSpeed;
+    expect(cloakedWalkSpeed).toBeGreaterThan(baseWalkSpeed * 1.18);
+    expect(cloakedWalkSpeed).toBeCloseTo(baseWalkSpeed * SHADOW_CLOAK_SPEED_MULT, 1);
+    player.releaseKey('KeyW');
+
+    // Switch to AR and fire -> immediately decloaks & enters 12s cooldown
+    player.pressKey('Digit3');
+    player.releaseKey('Digit3');
+    t += 0.05;
+    player.update(0.05, t);
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(true);
+
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(false);
+    expect(sounds).toContain('cloak_decloak');
+    expect(cloakVfx.some((v) => v.entering === false)).toBe(true);
+    expect(player.getHudSnapshot().shadowCloakState?.cooldownSec).toBeGreaterThan(11.5);
+
+    // Cannot activate while cooldown > 0
+    player.pressKey('Digit2');
+    player.releaseKey('Digit2');
+    t += 0.05;
+    player.update(0.05, t);
+    expect(player.activateShadowCloak()).toBe(false);
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(false);
+
+    // Tick down 12s cooldown, re-activate via activateShadowCloak(), then test toggle-off
+    for (let i = 0; i < 245; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().shadowCloakState?.cooldownSec).toBe(0);
+    expect(player.activateShadowCloak()).toBe(true);
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(true);
+
+    // Manual toggle-off via second click while holding shadow_cloak
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(false);
+    expect(player.getHudSnapshot().shadowCloakState?.cooldownSec).toBeGreaterThan(11.5);
+
+    // QA helper setShadowCloakTimer triggers clean expiry decloak at 0
+    const decloakCountBefore = sounds.filter((s) => s === 'cloak_decloak').length;
+    player.setShadowCloakTimer(0.12);
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(true);
+    for (let i = 0; i < 4; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(false);
+    expect(sounds.filter((s) => s === 'cloak_decloak').length).toBe(decloakCountBefore + 1);
+    expect(player.getHudSnapshot().shadowCloakState?.cooldownSec).toBeGreaterThan(11.5);
+  });
+
+  it('channels Rune Monolith [E] for 2.2s to grant Storm Blessing (+50 shield, +100 gold, 30s storm immunity & +12% speed)', () => {
+    expect(RUNE_ATTUNE_DURATION_SEC).toBe(2.2);
+    expect(STORM_BLESSING_DURATION_SEC).toBe(30);
+    expect(STORM_BLESSING_SHIELD_BONUS).toBe(50);
+
+    const { bus, player } = setupWave13Harness();
+    const sounds: SoundEventId[] = [];
+    const runeVfx: Array<{ position: Vec3Like }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:rune_attune', (ev) => runeVfx.push(ev));
+
+    const monoliths: RuneMonolithEntity[] = [
+      { id: 'monolith_1', poiId: 'nexus_hub', x: 0, y: 0, z: -3.2, attuned: false, cooldownSec: 0 },
+    ];
+    let attuneCalls = 0;
+    const bridge: InteractablesBridge = {
+      findNearbyRuneMonolith: (pos, maxDist = 4.5) =>
+        monoliths.find(
+          (m) =>
+            !m.attuned &&
+            m.cooldownSec <= 0 &&
+            dist3D(pos, { x: m.x, y: m.y, z: m.z }) <= maxDist,
+        ) ?? null,
+      attuneRuneMonolith: (id) => {
+        const m = monoliths.find((item) => item.id === id);
+        if (!m || m.attuned) return { ok: false };
+        attuneCalls += 1;
+        m.attuned = true;
+        m.cooldownSec = 60;
+        return {
+          ok: true,
+          position: { x: m.x, y: m.y, z: m.z },
+          shieldBonus: STORM_BLESSING_SHIELD_BONUS,
+          goldBonus: 100,
+          weaponId: 'storm_breaker',
+          rarity: 'mythic',
+        };
+      },
+    };
+    player.setInteractablesBridge(bridge);
+
+    // Measure baseline walk speed first
+    let t = 0;
+    player.teleport({ x: 0, y: 0, z: 12 });
+    player.update(0.05, (t += 0.05));
+    expect(player.getInteractPrompt()).toBeNull();
+
+    player.setLook(Math.PI, 0);
+    player.pressKey('KeyW');
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const baseWalkSpeed = player.getCharacterRenderState().moveSpeed;
+    player.releaseKey('KeyW');
+
+    // Approach within 4.5m -> prompt appears -> start 2.2s channel via [E]
+    player.teleport({ x: 0, y: 0, z: 0 });
+    t += 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()?.label).toBe('[E] ATTUNE RUNE MONOLITH');
+
+    const goldBefore = player.getGoldBars();
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+
+    // Halfway (~1.1s)
+    for (let i = 0; i < 21; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const midProgress = player.getHudSnapshot().runeAttuneProgress ?? 0;
+    expect(midProgress).toBeGreaterThan(0.35);
+    expect(midProgress).toBeLessThan(0.8);
+    expect(attuneCalls).toBe(0);
+
+    // Complete 2.2s channel
+    for (let i = 0; i < 24; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(attuneCalls).toBe(1);
+    expect(player.getHudSnapshot().runeAttuneProgress).toBeNull();
+    expect(player.getShield()).toBe(STORM_BLESSING_SHIELD_BONUS);
+    expect(player.getGoldBars()).toBe(goldBefore + 100);
+    expect(player.getStats().runeMonolithsAttuned).toBe(1);
+    expect(player.getCharacterRenderState().stormBlessingActive).toBe(true);
+    expect(player.getHudSnapshot().stormBlessingRemainingSec).toBeCloseTo(30, 0);
+    expect(sounds).toContain('rune_attune');
+    expect(runeVfx.length).toBe(1);
+
+    // Storm Blessing blocks storm tick damage (both applyStormDamage & applyDamage isStorm)
+    const hpBeforeStorm = player.getHealth();
+    player.applyStormDamage(15);
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'storm',
+      attackerName: 'Storm',
+      weaponId: 'pickaxe',
+      rarity: 'common',
+      damage: 20,
+      hpDamage: 20,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { ...player.getPosition() },
+      distance: 0,
+      isStorm: true,
+    });
+    expect(player.getHealth()).toBe(hpBeforeStorm);
+
+    // Storm Blessing grants +12% movement speed boost
+    player.pressKey('KeyW');
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getCharacterRenderState().moveSpeed).toBeCloseTo(baseWalkSpeed * 1.12, 1);
+    player.releaseKey('KeyW');
+
+    // QA helper setStormBlessingTimer expires cleanly, restoring storm vulnerability
+    player.setStormBlessingTimer(0.12);
+    for (let i = 0; i < 4; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getCharacterRenderState().stormBlessingActive).toBe(false);
+    expect(player.getHudSnapshot().stormBlessingRemainingSec).toBeNull();
+    player.applyStormDamage(10);
+    expect(player.getHealth()).toBe(hpBeforeStorm - 10);
+  });
+
+  it('flies Storm Choppa with Space/KeyC/ControlLeft ascendInput, tracks choppaAltitude & choppaFlightSec, auto-deploys glider > 5m, and resets cleanly', () => {
+    const { bus, player } = setupWave13Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    const choppa: VehicleEntity = {
+      id: 'choppa_1',
+      kind: 'choppa',
+      x: 0,
+      y: 1.05,
+      z: 0,
+      yaw: Math.PI,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 1000,
+      maxHp: 1000,
+      boostCharge: 1,
+      isBoosting: false,
+      driverId: null,
+      destroyed: false,
+      altitude: 1.05,
+      rotorRpm: 0,
+    };
+    const recordedAscendInputs: number[] = [];
+    const vehicleBridge: VehicleBridge = {
+      getVehicles: () => [choppa],
+      enterVehicle: (id, driverId) => {
+        if (id !== choppa.id || choppa.driverId) return false;
+        choppa.driverId = driverId;
+        return true;
+      },
+      exitVehicle: (id, driverId) => {
+        if (id !== choppa.id || choppa.driverId !== driverId) return null;
+        choppa.driverId = null;
+        const alt = choppa.altitude ?? choppa.y;
+        return { x: choppa.x + 2, y: alt > 2.6 ? Math.max(0, choppa.y - 0.5) : 0, z: choppa.z };
+      },
+      driveVehicle: (id, throttle, _steer, _boost, dt, ascendInput = 0) => {
+        if (id !== choppa.id) return;
+        recordedAscendInputs.push(ascendInput);
+        const alt = Math.max(
+          1.05,
+          Math.min(42, (choppa.altitude ?? 1.05) + ascendInput * 15 * dt),
+        );
+        choppa.altitude = alt;
+        choppa.y = alt;
+        choppa.vx = Math.sin(choppa.yaw) * throttle * 14;
+        choppa.vz = Math.cos(choppa.yaw) * throttle * 14;
+      },
+      damageVehicle: () => false,
+    };
+    player.setVehicleBridge(vehicleBridge);
+
+    // Approach and board Storm Choppa
+    player.teleport({ x: 0, y: 0, z: 2 });
+    let t = 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()?.label).toBe('Fly Storm Choppa');
+
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(player.getActiveVehicleId()).toBe(choppa.id);
+    expect(player.getHudSnapshot().choppaAltitude).toBeCloseTo(1.05, 1);
+
+    // Hold Space (+1) for 1.0s -> climbs without exiting vehicle!
+    recordedAscendInputs.length = 0;
+    player.pressKey('Space');
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.releaseKey('Space');
+    expect(player.getActiveVehicleId()).toBe(choppa.id);
+    expect(recordedAscendInputs.every((v) => v === 1)).toBe(true);
+    expect(player.getHudSnapshot().choppaAltitude).toBeGreaterThan(14);
+    expect(player.getStats().choppaFlightSec).toBeGreaterThan(0.8);
+
+    // Hold KeyC (-1) and ControlLeft (-1) to descend
+    recordedAscendInputs.length = 0;
+    player.pressKey('KeyC');
+    for (let i = 0; i < 6; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.releaseKey('KeyC');
+    expect(recordedAscendInputs.every((v) => v === -1)).toBe(true);
+
+    const altBeforeCtrl = player.getHudSnapshot().choppaAltitude ?? 0;
+    recordedAscendInputs.length = 0;
+    player.pressKey('ControlLeft');
+    for (let i = 0; i < 16; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.releaseKey('ControlLeft');
+    expect(recordedAscendInputs.every((v) => v === -1)).toBe(true);
+    expect(player.getHudSnapshot().choppaAltitude!).toBeLessThan(altBeforeCtrl);
+
+    // Low-altitude exit (<= 5m) lands normally without glider deploy
+    expect(player.getHudSnapshot().choppaAltitude!).toBeLessThan(5);
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(player.getActiveVehicleId()).toBeNull();
+    expect(player.getPhase()).toBe('playing');
+    expect(sounds).not.toContain('glider_deploy');
+
+    // Re-board, ascend > 5m (to ~16m), and exit mid-air -> auto-deploys glider!
+    for (let i = 0; i < 10; i++) {
+      t += 0.05;
+      player.update(0.05, t); // clear 0.35s vehicleCooldown
+    }
+    player.teleport({ x: choppa.x, y: 0, z: choppa.z + 1.5 });
+    t += 0.05;
+    player.update(0.05, t);
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(player.getActiveVehicleId()).toBe(choppa.id);
+
+    player.pressKey('Space');
+    for (let i = 0; i < 22; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.releaseKey('Space');
+    expect(player.getHudSnapshot().choppaAltitude).toBeGreaterThan(15);
+
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(player.getActiveVehicleId()).toBeNull();
+    expect(player.getPhase()).toBe('gliding');
+    expect(sounds).toContain('glider_deploy');
+    expect(player.isFallImmune()).toBe(true);
+    expect(player.getHudSnapshot().choppaAltitude).toBeNull();
+
+    // Match reset clears all Wave-13 state & stats cleanly
+    player.setShadowCloakTimer(5);
+    player.setStormBlessingTimer(15);
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave13Reset');
+    player.setPhase('playing');
+    expect(player.getStats().arcChainHits).toBe(0);
+    expect(player.getStats().runeMonolithsAttuned).toBe(0);
+    expect(player.getStats().choppaFlightSec).toBe(0);
+    expect(player.getCharacterRenderState().isShadowCloaked).toBe(false);
+    expect(player.getCharacterRenderState().stormBlessingActive).toBe(false);
+    expect(player.getHudSnapshot().shadowCloakState).toBeNull();
+    expect(player.getHudSnapshot().stormBlessingRemainingSec).toBeNull();
+    expect(player.getHudSnapshot().runeAttuneProgress).toBeNull();
+    expect(player.getHudSnapshot().choppaAltitude).toBeNull();
   });
 });
 

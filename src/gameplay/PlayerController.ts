@@ -62,8 +62,14 @@ import {
   RARITY_ORDER,
   REBOOT_DURATION_SEC,
   REVIVE_DURATION_SEC,
+  RUNE_ATTUNE_DURATION_SEC,
+  SHADOW_CLOAK_COOLDOWN_SEC,
+  SHADOW_CLOAK_DURATION_SEC,
+  SHADOW_CLOAK_SPEED_MULT,
   SHIELD_MUSHROOM_AMOUNT,
   STARTING_GOLD_BARS,
+  STORM_BLESSING_DURATION_SEC,
+  STORM_BLESSING_SHIELD_BONUS,
   TANK_CANNON_COOLDOWN_SEC,
   THERMAL_FLOPPER_DURATION_SEC,
   UPGRADE_COSTS,
@@ -90,6 +96,7 @@ import type {
   DuoReviveBridge,
   FireWeaponResult,
   FishingCastResult,
+  InteractablesBridge,
   NearbyGrindRailMatch,
   PlayerHudSnapshot,
   PlayerInteractPrompt,
@@ -143,6 +150,7 @@ export class PlayerController {
   private skyforgeBridge: WorldSkyforgeBridge | null = null;
   private tideBridge: WorldTideBridge | null = null;
   private overlordBridge: WorldOverlordBridge | null = null;
+  private interactablesBridge: InteractablesBridge | null = null;
   private duoReviveBridge: DuoReviveBridge | null = null;
   private duoRebootBridge: DuoRebootBridge | null = null;
   private augmentManager: AugmentManager;
@@ -239,6 +247,11 @@ export class PlayerController {
   private ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
   private tankCannonCooldown = 0;
   private hotDropPoiIds: string[] = [];
+  private shadowCloakTimer = 0;
+  private shadowCloakCooldown = 0;
+  private stormBlessingTimer = 0;
+  private runeAttuneTimer = 0;
+  private runeAttuneTargetId: string | null = null;
 
   private gameMode: GameModeId = 'solo';
   private overshield = 0;
@@ -392,6 +405,9 @@ export class PlayerController {
     c4Blasts: 0,
     shieldBlockedDmg: 0,
     tankElims: 0,
+    arcChainHits: 0,
+    runeMonolithsAttuned: 0,
+    choppaFlightSec: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -445,6 +461,7 @@ export class PlayerController {
       skyforgeBridge?: WorldSkyforgeBridge | null;
       tideBridge?: WorldTideBridge | null;
       overlordBridge?: WorldOverlordBridge | null;
+      interactablesBridge?: InteractablesBridge | null;
       duoReviveBridge?: DuoReviveBridge | null;
       duoRebootBridge?: DuoRebootBridge | null;
       augmentManager?: AugmentManager | null;
@@ -510,6 +527,9 @@ export class PlayerController {
     }
     if (options?.overlordBridge !== undefined) {
       this.setOverlordBridge(options.overlordBridge);
+    }
+    if (options?.interactablesBridge !== undefined) {
+      this.setInteractablesBridge(options.interactablesBridge);
     }
     if (options?.duoReviveBridge !== undefined) {
       this.setDuoReviveBridge(options.duoReviveBridge);
@@ -757,10 +777,31 @@ export class PlayerController {
     this.overlordBridge = bridge;
     if (!bridge) {
       this.cancelFishingChannel();
+      if (!this.interactablesBridge) {
+        this.cancelRuneAttuneChannel();
+      }
     }
   }
 
   getOverlordBridge(): WorldOverlordBridge | null {
+    return this.overlordBridge;
+  }
+
+  setInteractablesBridge(bridge: InteractablesBridge | null): void {
+    this.interactablesBridge = bridge;
+    if (!bridge && !this.overlordBridge) {
+      this.cancelRuneAttuneChannel();
+    }
+  }
+
+  getInteractablesBridge(): InteractablesBridge | null {
+    return this.interactablesBridge;
+  }
+
+  private getRuneMonolithBridge(): InteractablesBridge | null {
+    if (this.interactablesBridge?.findNearbyRuneMonolith || this.interactablesBridge?.attuneRuneMonolith) {
+      return this.interactablesBridge;
+    }
     return this.overlordBridge;
   }
 
@@ -916,6 +957,79 @@ export class PlayerController {
     return [...this.hotDropPoiIds];
   }
 
+  setShadowCloakTimer(sec: number): void {
+    if (!Number.isFinite(sec)) return;
+    this.shadowCloakTimer = Math.max(0, sec);
+  }
+
+  setStormBlessingTimer(sec: number): void {
+    if (!Number.isFinite(sec)) return;
+    this.stormBlessingTimer = Math.max(0, sec);
+  }
+
+  activateShadowCloak(): boolean {
+    if (
+      this.phase !== 'playing' ||
+      !this.isAlive() ||
+      this.isKnocked ||
+      this.activeVehicleId !== null
+    ) {
+      return false;
+    }
+    const item = this.inventory.getActiveItem();
+    const def = item ? WEAPONS[item.weaponId] : null;
+    const isCloakWeapon = Boolean(
+      item && (def?.isShadowCloak || item.weaponId === 'shadow_cloak'),
+    );
+
+    if (this.shadowCloakTimer > 0) {
+      this.deactivateShadowCloak(true);
+      return true;
+    }
+
+    if (!isCloakWeapon) {
+      return false;
+    }
+
+    if (this.shadowCloakCooldown > 0) {
+      this.eventBus.emit('sound:play', {
+        id: 'dryfire',
+        position: { ...this.position },
+        spatial: true,
+      });
+      return false;
+    }
+
+    this.shadowCloakTimer = SHADOW_CLOAK_DURATION_SEC;
+    this.eventBus.emit('vfx:shadow_cloak_burst', {
+      position: { ...this.position },
+      entering: true,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'cloak_activate',
+      position: { ...this.position },
+      spatial: true,
+    });
+    return true;
+  }
+
+  private deactivateShadowCloak(startCooldown = true): void {
+    if (this.shadowCloakTimer <= 0) return;
+    this.shadowCloakTimer = 0;
+    if (startCooldown) {
+      this.shadowCloakCooldown = SHADOW_CLOAK_COOLDOWN_SEC;
+    }
+    this.eventBus.emit('sound:play', {
+      id: 'cloak_decloak',
+      position: { ...this.position },
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:shadow_cloak_burst', {
+      position: { ...this.position },
+      entering: false,
+    });
+  }
+
   detonatePlacedC4(): { blasts: number; hits: number; buildsDestroyed: number } {
     if (this.phase !== 'playing' || !this.isAlive() || this.isKnocked) {
       return { blasts: 0, hits: 0, buildsDestroyed: 0 };
@@ -925,6 +1039,7 @@ export class PlayerController {
       this.weapons.getActors(),
     );
     if (res.blasts > 0) {
+      this.deactivateShadowCloak(true);
       this.stats.c4Blasts = (this.stats.c4Blasts ?? 0) + res.blasts;
       this.eventBus.emit('vfx:camera_shake', {
         intensity: 0.45,
@@ -991,6 +1106,7 @@ export class PlayerController {
     });
 
     if (res.fired) {
+      this.deactivateShadowCloak(true);
       this.tankCannonCooldown = TANK_CANNON_COOLDOWN_SEC;
       this.stats.shotsFired += 1;
       return true;
@@ -1029,7 +1145,8 @@ export class PlayerController {
       def.isKineticBlade ||
       def.isShockwaveHammer ||
       def.isJetpack ||
-      def.isChugCannon
+      def.isChugCannon ||
+      def.isShadowCloak
     ) {
       return false;
     }
@@ -1151,6 +1268,7 @@ export class PlayerController {
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
     this.cancelFishingChannel();
+    this.cancelRuneAttuneChannel();
     this.isJetpackThrusting = false;
     this.clearHeldInputs();
     this.weapons.clearActorBurn('player');
@@ -1183,6 +1301,9 @@ export class PlayerController {
     this.thermalVisionTimer = 0;
     this.ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
     this.tankCannonCooldown = 0;
+    this.shadowCloakTimer = 0;
+    this.shadowCloakCooldown = 0;
+    this.stormBlessingTimer = 0;
     this.hammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
     this.hammerRechargeTimer = 0;
     this.isSliding = false;
@@ -1420,6 +1541,8 @@ export class PlayerController {
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
     this.cancelFishingChannel();
+    this.cancelRuneAttuneChannel();
+    this.shadowCloakTimer = 0;
     this.isJetpackThrusting = false;
     this.isAiming = false;
     this.isScoped = false;
@@ -1861,9 +1984,13 @@ export class PlayerController {
       this.cancelPartnerReboot();
       this.cancelTrainChestHack();
       this.cancelFishingChannel();
+      this.cancelRuneAttuneChannel();
       this.isJetpackThrusting = false;
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
+      this.shadowCloakTimer = 0;
+      this.shadowCloakCooldown = 0;
+      this.stormBlessingTimer = 0;
       this.building.setPreviewVisible(false);
       this.building.cancelEdit();
       this.isBuildMode = false;
@@ -2231,8 +2358,12 @@ export class PlayerController {
     this.thermalVisionTimer = 0;
     this.ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
     this.tankCannonCooldown = 0;
+    this.shadowCloakTimer = 0;
+    this.shadowCloakCooldown = 0;
+    this.stormBlessingTimer = 0;
     this.cancelTrainChestHack();
     this.cancelFishingChannel();
+    this.cancelRuneAttuneChannel();
     this.chugRegenTimers.clear();
     this.weapons.clearActorBurn('player');
     this.hotDropPoiIds = [];
@@ -2266,6 +2397,9 @@ export class PlayerController {
       c4Blasts: 0,
       shieldBlockedDmg: 0,
       tankElims: 0,
+      arcChainHits: 0,
+      runeMonolithsAttuned: 0,
+      choppaFlightSec: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -2410,6 +2544,7 @@ export class PlayerController {
     const isStorm = Boolean(ev.isStorm) || ev.attackerId === 'storm';
 
     if (isStorm) {
+      if (this.stormBlessingTimer > 0) return;
       const stormDmg =
         ev.hpDamage > 0 ? ev.hpDamage : Math.max(0, ev.damage);
       if (this.isKnocked) {
@@ -2586,6 +2721,7 @@ export class PlayerController {
 
   applyStormDamage(amount: number): void {
     if (!this.isAlive() || amount <= 0) return;
+    if (this.stormBlessingTimer > 0) return;
     if (this.isKnocked) {
       this.bleedOutHp = Math.max(0, this.bleedOutHp - amount);
       if (this.bleedOutHp <= 0) {
@@ -2633,12 +2769,16 @@ export class PlayerController {
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
     this.cancelFishingChannel();
+    this.cancelRuneAttuneChannel();
+    this.shadowCloakTimer = 0;
     this.isJetpackThrusting = false;
     this.jetpackDryLock = false;
     this.lowGravityTimer = 0;
     this.thermalVisionTimer = 0;
     this.ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
     this.tankCannonCooldown = 0;
+    this.shadowCloakCooldown = 0;
+    this.stormBlessingTimer = 0;
     this.chugRegenTimers.clear();
     this.flareBeacons = [];
     this.flareScanMarkedCount = 0;
@@ -2819,6 +2959,7 @@ export class PlayerController {
     this.cancelPartnerReboot();
     this.cancelTrainChestHack();
     this.cancelFishingChannel();
+    this.cancelRuneAttuneChannel();
     this.isJetpackThrusting = false;
     this.lastDraggedEditTile = -1;
   }
@@ -3130,7 +3271,9 @@ export class PlayerController {
     const kb = this.getResolvedKeybinds();
 
     if (this.activeVehicleId !== null) {
-      if (code === kb.interact || code === 'Space') {
+      const activeVeh = this.getActiveVehicleEntity();
+      const isChoppa = activeVeh?.kind === 'choppa';
+      if (code === kb.interact || (!isChoppa && code === 'Space')) {
         this.exitActiveVehicle(true);
         return;
       }
@@ -3374,6 +3517,7 @@ export class PlayerController {
     this.railgunCharge = 0;
     this.minigunSpinTimer = 0;
     this.cancelFishingChannel();
+    this.cancelRuneAttuneChannel();
   }
 
   private cancelPartnerRevive(): void {
@@ -3400,6 +3544,11 @@ export class PlayerController {
     this.fishingTimer = 0;
     this.fishingProgress = null;
     this.activeFishingHoleId = null;
+  }
+
+  private cancelRuneAttuneChannel(): void {
+    this.runeAttuneTimer = 0;
+    this.runeAttuneTargetId = null;
   }
 
   private cycleBuildMaterial(): void {
@@ -3514,6 +3663,7 @@ export class PlayerController {
   ): void {
     if (!res.fired) return;
 
+    this.deactivateShadowCloak(true);
     this.fireCooldown = 1 / def.fireRate;
     this.stealthBreakTimer = STEALTH_FIRE_BREAK_SEC;
     this.isStealthed = false;
@@ -3536,6 +3686,9 @@ export class PlayerController {
       if (res.shotsHit > 0) this.stats.shotsHit += 1;
       this.stats.headshots += res.headshots;
       this.stats.damageDealt += res.damageDealt;
+      if (res.arcChainHits && res.arcChainHits > 0) {
+        this.stats.arcChainHits = (this.stats.arcChainHits ?? 0) + res.arcChainHits;
+      }
       if (item.weaponId === 'plasma_flamethrower' && res.damageDealt > 0) {
         this.stats.flameDamage = (this.stats.flameDamage ?? 0) + res.damageDealt;
       }
@@ -3588,7 +3741,8 @@ export class PlayerController {
       this.isRevivingPartner ||
       this.isRebootingPartner ||
       this.isHackingTrainChest ||
-      this.isFishing
+      this.isFishing ||
+      this.runeAttuneTargetId !== null
     ) {
       return;
     }
@@ -3596,6 +3750,12 @@ export class PlayerController {
     if (!item) return;
     const def = WEAPONS[item.weaponId];
     if (def.isJetpack || item.weaponId === 'jetpack') return;
+
+    if (def.isShadowCloak || item.weaponId === 'shadow_cloak') {
+      if (!isInitialPress) return;
+      this.activateShadowCloak();
+      return;
+    }
 
     if (def.isConsumable) {
       if (!isInitialPress || this.healTimer > 0) return;
@@ -3900,6 +4060,7 @@ export class PlayerController {
     }
 
     this.kineticDashCharges -= 1;
+    this.deactivateShadowCloak(true);
     this.stealthBreakTimer = STEALTH_FIRE_BREAK_SEC;
     this.isStealthed = false;
     if (this.activeZipline) {
@@ -4014,6 +4175,7 @@ export class PlayerController {
     }
 
     this.hammerCharges -= 1;
+    this.deactivateShadowCloak(true);
     this.stealthBreakTimer = STEALTH_FIRE_BREAK_SEC;
     this.isStealthed = false;
     if (this.activeZipline) {
@@ -4295,6 +4457,21 @@ export class PlayerController {
       exitingVeh.vz = this.lastOverdriveApplied.baseVz;
     }
     this.lastOverdriveApplied = null;
+    const isChoppa = exitingVeh?.kind === 'choppa';
+    const exitVehGroundY = exitingVeh
+      ? Math.max(
+          this.terrain.getHeightAt(exitingVeh.x, exitingVeh.z),
+          WATER_LEVEL,
+        )
+      : 0;
+    const exitAltBefore = exitingVeh
+      ? Math.max(
+          exitingVeh.altitude !== undefined && Number.isFinite(exitingVeh.altitude)
+            ? exitingVeh.altitude
+            : 0,
+          exitingVeh.y - exitVehGroundY,
+        )
+      : 0;
     const exitPos =
       this.vehicleBridge?.exitVehicle(this.activeVehicleId, 'player') ?? null;
     this.activeVehicleId = null;
@@ -4312,6 +4489,39 @@ export class PlayerController {
         y: Math.max(exitPos.y, groundY),
         z: clamp(exitPos.z, -390, 390),
       };
+    }
+    const postExitTerrainY = this.terrain.getHeightAt(
+      this.position.x,
+      this.position.z,
+    );
+    const postExitFloorY = this.collision.getFloorHeightAt(
+      this.position.x,
+      this.position.z,
+      this.position.y + 0.5,
+    );
+    const postExitAlt =
+      this.position.y - Math.max(postExitTerrainY, postExitFloorY);
+    if (
+      isChoppa &&
+      withCooldown &&
+      this.phase === 'playing' &&
+      this.isAlive() &&
+      !this.isKnocked &&
+      (exitAltBefore > 5 || postExitAlt > 5)
+    ) {
+      this.velocity = {
+        x: exitingVeh ? exitingVeh.vx * 0.45 : 0,
+        y: -2.0,
+        z: exitingVeh ? exitingVeh.vz * 0.45 : 0,
+      };
+      this.moveSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+      this.grounded = false;
+      this.wasAirborne = true;
+      this.fallImmune = true;
+      this.fallPeakY = this.position.y;
+      this.phase = 'gliding';
+      this.eventBus.emit('sound:play', { id: 'glider_deploy' });
+      return true;
     }
     this.velocity = { x: 0, y: 0, z: 0 };
     this.moveSpeed = 0;
@@ -4421,7 +4631,8 @@ export class PlayerController {
       | 'forecast_tower'
       | 'shield_mushroom'
       | 'fishing_hole'
-      | 'sky_balloon';
+      | 'sky_balloon'
+      | 'rune_monolith';
     id: string;
     prompt: PlayerInteractPrompt;
   } | null {
@@ -4496,7 +4707,8 @@ export class PlayerController {
         | 'forecast_tower'
         | 'shield_mushroom'
         | 'fishing_hole'
-        | 'sky_balloon';
+        | 'sky_balloon'
+        | 'rune_monolith';
       id: string;
       prompt: PlayerInteractPrompt;
     } | null = null;
@@ -4675,13 +4887,15 @@ export class PlayerController {
             id: veh.id,
             prompt: {
               label:
-                veh.kind === 'hover_tank'
-                  ? 'Drive Vanguard Tank'
-                  : veh.kind === 'cyber_bike'
-                    ? 'Drive Cyber Bike'
-                    : veh.kind === 'speedboat'
-                      ? 'Drive Speedboat'
-                      : 'Drive Hover ATV',
+                veh.kind === 'choppa'
+                  ? 'Fly Storm Choppa'
+                  : veh.kind === 'hover_tank'
+                    ? 'Drive Vanguard Tank'
+                    : veh.kind === 'cyber_bike'
+                      ? 'Drive Cyber Bike'
+                      : veh.kind === 'speedboat'
+                        ? 'Drive Speedboat'
+                        : 'Drive Hover ATV',
               key: interactKey,
               rarity: 'rare',
             },
@@ -4826,6 +5040,29 @@ export class PlayerController {
               label: 'ASCEND SKY BALLOON',
               key: interactKey,
               rarity: 'epic',
+            },
+          };
+        }
+      }
+    }
+
+    const runeBridge = this.getRuneMonolithBridge();
+    if (runeBridge?.findNearbyRuneMonolith) {
+      const monolith = runeBridge.findNearbyRuneMonolith(this.position, 4.5);
+      if (monolith && !monolith.attuned && monolith.cooldownSec <= 0) {
+        const d = Math.min(
+          4.5,
+          dist3D(this.position, { x: monolith.x, y: monolith.y, z: monolith.z }),
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'rune_monolith',
+            id: monolith.id,
+            prompt: {
+              label: `[${interactKey}] ATTUNE RUNE MONOLITH`,
+              key: interactKey,
+              rarity: 'mythic',
             },
           };
         }
@@ -5669,6 +5906,7 @@ export class PlayerController {
         this.cancelPartnerReboot();
         this.cancelTrainChestHack();
         this.cancelFishingChannel();
+        this.cancelRuneAttuneChannel();
         this.isCrouching = false;
         this.isSliding = false;
         this.isMantling = false;
@@ -5703,6 +5941,34 @@ export class PlayerController {
           position: launchPos,
           spatial: true,
         });
+        return;
+      }
+
+      if (candidate.kind === 'rune_monolith') {
+        if (this.runeAttuneTargetId !== null) return;
+        const runeBridge = this.getRuneMonolithBridge();
+        const monolith = runeBridge?.findNearbyRuneMonolith?.(this.position, 4.5) ?? null;
+        if (!monolith || monolith.attuned || monolith.cooldownSec > 0) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        this.reloadTimer = 0;
+        this.healTimer = 0;
+        this.healLabel = null;
+        this.isDrawingBow = false;
+        this.bowDrawElapsed = 0;
+        this.bowCharge = 0;
+        this.isChargingRailgun = false;
+        this.railgunChargeElapsed = 0;
+        this.railgunCharge = 0;
+        this.cancelFishingChannel();
+        this.cancelTrainChestHack();
+        this.runeAttuneTargetId = monolith.id;
+        this.runeAttuneTimer = 0;
         return;
       }
     }
@@ -5862,7 +6128,12 @@ export class PlayerController {
       return;
     }
 
-    if (this.isRevivingPartner || this.isRebootingPartner || this.isHackingTrainChest) {
+    if (
+      this.isRevivingPartner ||
+      this.isRebootingPartner ||
+      this.isHackingTrainChest ||
+      this.runeAttuneTargetId !== null
+    ) {
       this.interactPrompt = null;
       this.canRepairBuild = false;
       return;
@@ -6213,6 +6484,34 @@ export class PlayerController {
       if (this.tankCannonCooldown > 0) {
         this.tankCannonCooldown = Math.max(0, this.tankCannonCooldown - safeDt);
       }
+      if (this.phase === 'gliding' || this.phase === 'skydiving') {
+        if (this.shadowCloakCooldown > 0) {
+          this.shadowCloakCooldown = Math.max(0, this.shadowCloakCooldown - safeDt);
+        }
+        if (this.shadowCloakTimer > 0) {
+          this.shadowCloakTimer = Math.max(0, this.shadowCloakTimer - safeDt);
+          if (this.shadowCloakTimer <= 0) {
+            this.shadowCloakTimer = 0;
+            this.shadowCloakCooldown = SHADOW_CLOAK_COOLDOWN_SEC;
+            this.eventBus.emit('sound:play', {
+              id: 'cloak_decloak',
+              position: { ...this.position },
+              spatial: true,
+            });
+            this.eventBus.emit('vfx:shadow_cloak_burst', {
+              position: { ...this.position },
+              entering: false,
+            });
+          }
+        }
+        if (this.stormBlessingTimer > 0) {
+          this.stormBlessingTimer = Math.max(0, this.stormBlessingTimer - safeDt);
+        }
+      } else {
+        this.shadowCloakTimer = 0;
+        this.shadowCloakCooldown = 0;
+        this.stormBlessingTimer = 0;
+      }
     } else {
       if (this.lowGravityTimer > 0) {
         this.lowGravityTimer = Math.max(0, this.lowGravityTimer - safeDt);
@@ -6222,6 +6521,28 @@ export class PlayerController {
       }
       if (this.tankCannonCooldown > 0) {
         this.tankCannonCooldown = Math.max(0, this.tankCannonCooldown - safeDt);
+      }
+      if (this.shadowCloakCooldown > 0) {
+        this.shadowCloakCooldown = Math.max(0, this.shadowCloakCooldown - safeDt);
+      }
+      if (this.shadowCloakTimer > 0) {
+        this.shadowCloakTimer = Math.max(0, this.shadowCloakTimer - safeDt);
+        if (this.shadowCloakTimer <= 0) {
+          this.shadowCloakTimer = 0;
+          this.shadowCloakCooldown = SHADOW_CLOAK_COOLDOWN_SEC;
+          this.eventBus.emit('sound:play', {
+            id: 'cloak_decloak',
+            position: { ...this.position },
+            spatial: true,
+          });
+          this.eventBus.emit('vfx:shadow_cloak_burst', {
+            position: { ...this.position },
+            entering: false,
+          });
+        }
+      }
+      if (this.stormBlessingTimer > 0) {
+        this.stormBlessingTimer = Math.max(0, this.stormBlessingTimer - safeDt);
       }
       if (
         this.isAlive() &&
@@ -6396,6 +6717,10 @@ export class PlayerController {
     const { forwardInput, rightInput } = this.getMoveAxes();
     const boost =
       this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight');
+    const ascendUp = this.keysDown.has('Space') ? 1 : 0;
+    const ascendDown =
+      this.keysDown.has('KeyC') || this.keysDown.has('ControlLeft') ? 1 : 0;
+    const ascendInput = ascendUp - ascendDown;
 
     this.vehicleBridge!.driveVehicle(
       veh.id,
@@ -6403,6 +6728,7 @@ export class PlayerController {
       rightInput,
       boost,
       dt,
+      ascendInput,
     );
 
     const updated = this.getActiveVehicleEntity();
@@ -6444,7 +6770,23 @@ export class PlayerController {
     };
     this.velocity = { x: updated.vx, y: updated.vy, z: updated.vz };
     this.moveSpeed = Math.hypot(updated.vx, updated.vz);
-    this.grounded = true;
+    const vehGroundY = Math.max(
+      this.terrain.getHeightAt(updated.x, updated.z),
+      WATER_LEVEL,
+    );
+    const choppaAlt =
+      updated.kind === 'choppa'
+        ? Math.max(
+            updated.altitude !== undefined && Number.isFinite(updated.altitude)
+              ? updated.altitude
+              : 0,
+            updated.y - vehGroundY,
+          )
+        : 0;
+    if (updated.kind === 'choppa' && choppaAlt > 1.25) {
+      this.stats.choppaFlightSec = (this.stats.choppaFlightSec ?? 0) + dt;
+    }
+    this.grounded = updated.kind !== 'choppa' || choppaAlt <= 1.35;
     this.isSprinting = false;
     this.isCrouching = false;
     this.isSliding = false;
@@ -6742,7 +7084,9 @@ export class PlayerController {
       activeItem?.weaponId !== 'kinetic_blade' &&
       activeItem?.weaponId !== 'shockwave_hammer' &&
       activeItem?.weaponId !== 'jetpack' &&
-      activeItem?.weaponId !== 'remote_c4';
+      activeItem?.weaponId !== 'remote_c4' &&
+      !activeDef.isShadowCloak &&
+      activeItem?.weaponId !== 'shadow_cloak';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
     const hasJetpack = this.inventory.findSlotByWeapon('jetpack') !== -1;
@@ -6870,6 +7214,14 @@ export class PlayerController {
         targetSpeed = 4.6;
       }
       if (inWater) targetSpeed *= 0.68;
+      if (!this.isKnocked) {
+        if (this.shadowCloakTimer > 0) {
+          targetSpeed *= SHADOW_CLOAK_SPEED_MULT;
+        }
+        if (this.stormBlessingTimer > 0) {
+          targetSpeed *= 1.12;
+        }
+      }
 
       const targetVx = wishX * targetSpeed;
       const targetVz = wishZ * targetSpeed;
@@ -7493,7 +7845,9 @@ export class PlayerController {
       activeItem?.weaponId !== 'kinetic_blade' &&
       activeItem?.weaponId !== 'shockwave_hammer' &&
       activeItem?.weaponId !== 'jetpack' &&
-      activeItem?.weaponId !== 'remote_c4';
+      activeItem?.weaponId !== 'remote_c4' &&
+      !activeDef.isShadowCloak &&
+      activeItem?.weaponId !== 'shadow_cloak';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
     if (this.isAiming || this.isFiring) {
@@ -8023,6 +8377,128 @@ export class PlayerController {
       }
     }
 
+    // Rune Monolith 2.2s attune channel
+    if (this.runeAttuneTargetId !== null) {
+      const runeBridge = this.getRuneMonolithBridge();
+      const monolith =
+        runeBridge?.findNearbyRuneMonolith?.(this.position, 5.0) ?? null;
+      if (
+        !runeBridge ||
+        !runeBridge.attuneRuneMonolith ||
+        !this.isAlive() ||
+        this.isKnocked ||
+        this.activeVehicleId !== null ||
+        this.activeZipline !== null ||
+        this.activeGrindRail !== null ||
+        this.isBuildMode ||
+        this.isSliding ||
+        this.isMantling ||
+        this.moveSpeed > 2.2 ||
+        !monolith ||
+        monolith.id !== this.runeAttuneTargetId ||
+        monolith.attuned ||
+        monolith.cooldownSec > 0
+      ) {
+        this.cancelRuneAttuneChannel();
+      } else {
+        this.reloadTimer = 0;
+        this.healTimer = 0;
+        this.healLabel = null;
+        this.isDrawingBow = false;
+        this.bowDrawElapsed = 0;
+        this.bowCharge = 0;
+        this.isChargingRailgun = false;
+        this.railgunChargeElapsed = 0;
+        this.railgunCharge = 0;
+
+        this.runeAttuneTimer += dt;
+        if (this.runeAttuneTimer >= RUNE_ATTUNE_DURATION_SEC - 1e-6) {
+          const targetId = this.runeAttuneTargetId;
+          const fallbackPos: Vec3Like = {
+            x: monolith.x,
+            y: monolith.y,
+            z: monolith.z,
+          };
+          let emittedAttuneSfx = false;
+          let emittedAttuneVfx = false;
+          const unsubSfx = this.eventBus.on('sound:play', (ev) => {
+            if (ev.id === 'rune_attune') emittedAttuneSfx = true;
+          });
+          const unsubVfx = this.eventBus.on('vfx:rune_attune', () => {
+            emittedAttuneVfx = true;
+          });
+          const attuneRes = runeBridge.attuneRuneMonolith(targetId);
+          unsubSfx();
+          unsubVfx();
+
+          this.cancelRuneAttuneChannel();
+
+          if (attuneRes && attuneRes.ok) {
+            const fxPos: Vec3Like = attuneRes.position
+              ? { ...attuneRes.position }
+              : fallbackPos;
+            const shieldAdd =
+              attuneRes.shieldBonus ?? STORM_BLESSING_SHIELD_BONUS;
+            this.shield = Math.min(this.maxShield, this.shield + shieldAdd);
+            this.stormBlessingTimer = STORM_BLESSING_DURATION_SEC;
+            const goldAdd = attuneRes.goldBonus ?? 100;
+            if (goldAdd > 0) {
+              this.addGoldBars(goldAdd, fxPos);
+            }
+            this.stats.runeMonolithsAttuned =
+              (this.stats.runeMonolithsAttuned ?? 0) + 1;
+
+            if (!emittedAttuneVfx) {
+              this.eventBus.emit('vfx:rune_attune', { position: fxPos });
+            }
+            if (!emittedAttuneSfx) {
+              this.eventBus.emit('sound:play', {
+                id: 'rune_attune',
+                position: fxPos,
+                spatial: true,
+              });
+            }
+
+            if (attuneRes.weaponId && WEAPONS[attuneRes.weaponId]) {
+              const wDef = WEAPONS[attuneRes.weaponId];
+              const dropRarity: Rarity = attuneRes.rarity ?? 'mythic';
+              const dropItem: ItemInstance = {
+                uid: `rune_${targetId}_${++this.bunkerItemSeq}`,
+                weaponId: attuneRes.weaponId,
+                rarity: dropRarity,
+                magAmmo: wDef.magSize,
+                stackCount: 1,
+              };
+              this.propsBridge.spawnLootDrop(
+                { x: fxPos.x, y: fxPos.y + 0.85, z: fxPos.z },
+                { item: dropItem },
+                { x: 1.6, y: 3.2, z: 1.6 },
+              );
+              if (wDef.ammoType) {
+                this.propsBridge.spawnLootDrop(
+                  { x: fxPos.x, y: fxPos.y + 0.85, z: fxPos.z },
+                  {
+                    ammo: {
+                      type: wDef.ammoType,
+                      amount: Math.max(wDef.magSize, 30),
+                    },
+                  },
+                  { x: -1.4, y: 3.0, z: 1.4 },
+                );
+              }
+            }
+
+            this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+          }
+        }
+
+        this.building.setPreviewVisible(false);
+        this.lastBuildPreview = null;
+        this.isFiring = false;
+        return;
+      }
+    }
+
     // Healing timer (cancelled if moving > 0.7 m/s or jumping)
     if (this.healTimer > 0) {
       if (this.moveSpeed > 0.75 || !this.grounded) {
@@ -8203,14 +8679,15 @@ export class PlayerController {
     } else if (this.activeVehicleId !== null) {
       const veh = this.getActiveVehicleEntity();
       const isTank = veh?.kind === 'hover_tank';
+      const isChoppa = veh?.kind === 'choppa';
       pivot = {
         x: this.position.x,
-        y: this.position.y + (isTank ? 1.75 : 1.25),
+        y: this.position.y + (isChoppa ? 1.85 : isTank ? 1.75 : 1.25),
         z: this.position.z,
       };
-      backDist = isTank ? 7.2 : 5.8;
+      backDist = isChoppa ? 8.8 : isTank ? 7.2 : 5.8;
       rightOffset = 0;
-      upOffset = isTank ? 1.45 : 1.05;
+      upOffset = isChoppa ? 2.1 : isTank ? 1.45 : 1.05;
       targetFov = this.settings.fov + (veh?.isBoosting ? 12 : 6);
     } else if (this.isEmoting) {
       pivot = {
@@ -8467,6 +8944,8 @@ export class PlayerController {
       isBurning: this.weapons.isActorBurning('player'),
       isShieldBlocking: this.isActivelyShieldBlocking(),
       killStreak: this.killStreak,
+      isShadowCloaked: this.shadowCloakTimer > 0,
+      stormBlessingActive: this.stormBlessingTimer > 0,
     };
   }
 
@@ -8486,6 +8965,19 @@ export class PlayerController {
           (0.65 + 0.35 * Math.sin(this.elapsedTime * 7.0))
         : 0;
     const activeVeh = this.getActiveVehicleEntity();
+    let choppaAltitude: number | null = null;
+    if (activeVeh?.kind === 'choppa' && !activeVeh.destroyed && activeVeh.hp > 0) {
+      const groundAtVeh = Math.max(
+        this.terrain.getHeightAt(activeVeh.x, activeVeh.z),
+        WATER_LEVEL,
+      );
+      choppaAltitude = Math.max(
+        0,
+        activeVeh.altitude !== undefined && Number.isFinite(activeVeh.altitude)
+          ? Math.max(activeVeh.altitude, activeVeh.y - groundAtVeh)
+          : activeVeh.y - groundAtVeh,
+      );
+    }
     const vehicleSnap: PlayerVehicleSnapshot | null =
       activeVeh && !activeVeh.destroyed && activeVeh.hp > 0
         ? {
@@ -8718,6 +9210,23 @@ export class PlayerController {
             ? this.tankCannonCooldown
             : null,
       inHotDropPoi: this.computeInHotDropPoi(),
+      shadowCloakState:
+        this.inventory.findSlotByWeapon('shadow_cloak') !== -1 ||
+        this.shadowCloakTimer > 0 ||
+        this.shadowCloakCooldown > 0
+          ? {
+              active: this.shadowCloakTimer > 0,
+              remainingSec: this.shadowCloakTimer,
+              cooldownSec: this.shadowCloakCooldown,
+            }
+          : null,
+      stormBlessingRemainingSec:
+        this.stormBlessingTimer > 0 ? this.stormBlessingTimer : null,
+      runeAttuneProgress:
+        this.runeAttuneTargetId !== null
+          ? clamp(this.runeAttuneTimer / RUNE_ATTUNE_DURATION_SEC, 0, 1)
+          : null,
+      choppaAltitude,
     };
   }
 }

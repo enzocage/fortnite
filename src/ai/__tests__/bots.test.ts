@@ -14,6 +14,7 @@ import type {
   MeteorCraterEntity,
   NpcSpecialistEntity,
   RiftEntity,
+  RuneMonolithEntity,
   SlurpBarrelEntity,
   StormState,
   TerrainQuery,
@@ -34,6 +35,7 @@ import {
   PICKAXES,
   POIS,
   REVIVE_DURATION_SEC,
+  SHADOW_CLOAK_SPEED_MULT,
   SKINS,
   TEAM_RUMBLE_RESPAWN_SEC,
   TEAM_RUMBLE_TARGET_SCORE,
@@ -46,19 +48,28 @@ import {
   BOUNTY_RESELECT_COOLDOWN_SEC,
   BotBrain,
   BotManager,
+  CHOPPA_THREAT_RANGE,
   DIFFICULTY_PROFILES,
+  MONOLITH_OPPORTUNITY_RANGE,
+  SHADOW_CLOAK_DETECTION_RANGE,
   TANK_THREAT_RANGE,
   VOLCANO_LAVA_CENTER_X,
   VOLCANO_LAVA_CENTER_Z,
+  canUpgradeOrTakeItem,
   computeAimPitch,
   computeBotSpread,
+  findChoppaThreat,
   findHostileTurretHazard,
   findHoverTankThreat,
   findIncomingVehicleThreat,
+  getItemLoadoutValue,
+  getTacticalUtilityScore,
+  getWeaponOverallValue,
   isFriendlyTurret,
   isInVolcanoLavaHazard,
   isShotBlockedByShieldBubbles,
   pickBotLoadoutCosmetics,
+  scoreWeaponForDistance,
   segmentIntersectsSphere,
   selectBestWeaponForDistance,
   selectBestWeaponForRange,
@@ -69,8 +80,10 @@ import {
   selectHealingItem,
   selectLaunchPadForRotation,
   selectMeteorCraterTarget,
+  selectRuneMonolithTarget,
   selectThrowableForCombat,
   selectTrainTarget,
+  shouldBotActivateShadowCloak,
   shouldBotBuildDefense,
   shouldBotDeployShieldBubble,
   updateAnimState,
@@ -5728,5 +5741,521 @@ describe('Wave 12 Vanguard Rising: Ballistic Shield & Remote C4 Scoring, Hot-Dro
     const incoming = findIncomingVehicleThreat({ x: 4.2, y: 10, z: 18 }, 'bot_1', [chargingTank]);
     expect(incoming).not.toBeNull();
     expect(incoming!.evadeDirX).toBeGreaterThan(0.5);
+  });
+});
+
+describe('Wave 13 Storm Sovereign: Storm-Breaker, Shadow Cloak 8m Stealth Cutoff, Rune Monoliths & Storm Choppa Bias', () => {
+  it('scores storm_breaker as a top mid-range rifle and shadow_cloak as a tactical utility in weapon valuation & loadout handling', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 120, medium: 120, shells: 24, heavy: 20, rockets: 4 };
+
+    // 1. storm_breaker achieves high mid-range rifle score (beating AR/DMR/SMG/Pistol),
+    // yields to CQC shotguns at <=8m and sniper beyond its 105m range, and skips when empty
+    const sbEpic = makeItem('storm_breaker', 'epic', 20);
+    const arEpic = makeItem('ar', 'epic', 30);
+    const dmrEpic = makeItem('tactical_dmr', 'epic', 10);
+    expect(scoreWeaponForDistance(sbEpic, 45, true)).toBeGreaterThan(
+      scoreWeaponForDistance(arEpic, 45, true),
+    );
+    expect(brain.scoreWeaponForDistance(sbEpic, 45, true)).toBeGreaterThan(
+      scoreWeaponForDistance(dmrEpic, 45, true),
+    );
+    expect(scoreWeaponForDistance(sbEpic, 115, true)).toBeLessThan(1);
+
+    const rifleLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('pistol', 'epic', 15),
+      makeItem('smg', 'epic', 30),
+      makeItem('ar', 'epic', 30),
+      makeItem('tactical_dmr', 'epic', 10),
+      sbEpic,
+    ];
+    expect(selectBestWeaponForRange(rifleLoadout, 35, fullAmmo)?.item.weaponId).toBe(
+      'storm_breaker',
+    );
+    expect(brain.selectBestWeaponForRange(rifleLoadout, 75, fullAmmo)?.item.weaponId).toBe(
+      'storm_breaker',
+    );
+
+    const cqcAndLongLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('heavy_shotgun', 'epic', 7),
+      sbEpic,
+      makeItem('sniper', 'epic', 5),
+    ];
+    expect(selectBestWeaponForRange(cqcAndLongLoadout, 6, fullAmmo)?.item.weaponId).toBe(
+      'heavy_shotgun',
+    );
+    expect(selectBestWeaponForRange(cqcAndLongLoadout, 45, fullAmmo)?.item.weaponId).toBe(
+      'storm_breaker',
+    );
+    expect(selectBestWeaponForRange(cqcAndLongLoadout, 120, fullAmmo)?.item.weaponId).toBe(
+      'sniper',
+    );
+
+    const emptyStormBreaker: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('storm_breaker', 'mythic', 0),
+    ];
+    expect(
+      selectBestWeaponForRange(emptyStormBreaker, 45, { ...fullAmmo, medium: 0 })?.item.weaponId,
+    ).toBe('ar');
+
+    // Overall weapon valuation ranks storm_breaker above AR and upgrades into it
+    expect(getWeaponOverallValue(sbEpic)).toBeGreaterThan(getWeaponOverallValue(arEpic));
+    expect(brain.getWeaponOverallValue(makeItem('storm_breaker', 'mythic', 20))).toBeGreaterThan(
+      getWeaponOverallValue(makeItem('storm_breaker', 'epic', 20)),
+    );
+
+    // 2. shadow_cloak is cleanly excluded from lethal gun selection while receiving tactical utility scoring
+    const cloakMythic = makeItem('shadow_cloak', 'mythic', 0, 1);
+    const cloakEpic = makeItem('shadow_cloak', 'epic', 0, 1);
+    expect(scoreWeaponForDistance(cloakMythic, 20, false)).toBe(-1);
+    expect(getWeaponOverallValue(cloakMythic)).toBe(0);
+    expect(getTacticalUtilityScore(cloakMythic)).toBeGreaterThan(
+      getTacticalUtilityScore(cloakEpic),
+    );
+    expect(brain.getItemLoadoutValue(cloakMythic)).toBe(getTacticalUtilityScore(cloakMythic));
+
+    const cloakOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      cloakMythic,
+    ];
+    expect(selectBestWeaponForRange(cloakOnly, 15, fullAmmo)).toBeNull();
+    expect(selectBestWeaponForDistance(cloakOnly, 1.8, fullAmmo)?.item.weaponId).toBe('pickaxe');
+    expect(selectCloseQuartersWeapon(cloakOnly, fullAmmo)).toBeNull();
+
+    const cloakAndPistol: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      cloakMythic,
+      makeItem('pistol', 'common', 16),
+    ];
+    expect(selectBestWeaponForRange(cloakAndPistol, 18, fullAmmo)?.item.weaponId).toBe('pistol');
+
+    // Loadout upgrade & slot handling: takes shadow_cloak into empty slot, upgrades rarity in-place,
+    // replaces a weak secondary gun when >=2 weapons remain, and never drops the bot's sole gun
+    const lootBot = makeBotEntity({ id: 'bot_loadout' });
+    lootBot.inventory.items = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('pistol', 'common', 16),
+      null,
+      null,
+      null,
+      null,
+    ];
+    expect(canUpgradeOrTakeItem(lootBot, cloakEpic)).toBe(2);
+    lootBot.inventory.items[2] = cloakEpic;
+    // Duplicate lower/equal rarity skipped; higher rarity upgrades slot 2 in place
+    expect(canUpgradeOrTakeItem(lootBot, cloakEpic)).toBe(-1);
+    expect(brain.canUpgradeOrTakeItem(lootBot, cloakMythic)).toBe(2);
+
+    // Full inventory with 1 gun + heals refuses to drop sole firearm for shadow_cloak
+    lootBot.inventory.items = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('pistol', 'common', 16),
+      makeItem('mini_shield', 'uncommon', 0, 3),
+      makeItem('medkit', 'uncommon', 0, 1),
+      makeItem('chug_splash', 'rare', 0, 2),
+      makeItem('shield_potion', 'rare', 0, 1),
+    ];
+    expect(canUpgradeOrTakeItem(lootBot, cloakMythic)).toBe(-1);
+
+    // Full inventory with 2 guns replaces weak common pistol (keeping AR)
+    lootBot.inventory.items[2] = makeItem('ar', 'epic', 30);
+    expect(canUpgradeOrTakeItem(lootBot, cloakMythic)).toBe(1);
+
+    // 3. Live combat & tactical activation: bot triggers shadow_cloak on burst damage (boosting speed + render flag)
+    // and immediately decloaks when firing storm_breaker
+    const enemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 35 },
+      eyePos: { x: 0, y: 11.55, z: 35 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const vfxBursts: boolean[] = [];
+    const cloakSounds: string[] = [];
+    const cloakCtx = makeMockContext({ getCombatTargets: () => [enemy] });
+    cloakCtx.eventBus.on('vfx:shadow_cloak_burst', (ev) => vfxBursts.push(ev.entering));
+    cloakCtx.eventBus.on('sound:play', (ev) => {
+      if (ev.id === 'cloak_activate' || ev.id === 'cloak_decloak') cloakSounds.push(ev.id);
+    });
+
+    const mgr = new BotManager(cloakCtx, 'sweaty', 1301);
+    mgr.spawnBots(1, 20);
+    const bot = mgr.getBots()[0];
+    bot.state = 'combat';
+    bot.position = { x: 0, y: 10, z: 0 };
+    bot.yaw = 0;
+    bot.grounded = true;
+    bot.hp = 55;
+    bot.shield = 0;
+    bot.lastDamageTime = 9.5;
+    bot.recentDamageTaken = 45;
+    bot.targetEnemyId = 'player';
+    bot.reactionTimer = 0;
+    bot.fireCooldown = 1.0; // wait to fire so cloak activates during retreat/reposition
+    bot.inventory.items[1] = makeItem('storm_breaker', 'mythic', 20);
+    bot.inventory.items[2] = cloakMythic;
+    bot.inventory.ammo.medium = 120;
+
+    expect(shouldBotActivateShadowCloak(bot, 10)).not.toBeNull();
+    expect(brain.shouldBotActivateShadowCloak(bot, 10)?.item.weaponId).toBe('shadow_cloak');
+
+    mgr.update(0.05, 10, { x: 0, y: 175, z: 0 }, enemy.position);
+    expect(bot.isShadowCloaked).toBe(true);
+    expect(mgr.getRenderStates()[0].isShadowCloaked).toBe(true);
+    expect(vfxBursts).toEqual([true]);
+    expect(cloakSounds).toEqual(['cloak_activate']);
+    expect(SHADOW_CLOAK_SPEED_MULT).toBeGreaterThan(1.2);
+
+    // Next tick when fireCooldown reaches 0 fires storm_breaker and decloaks immediately
+    bot.fireCooldown = 0;
+    mgr.update(0.05, 10.1, { x: 0, y: 175, z: 0 }, enemy.position);
+    expect(cloakCtx.firedCalls.some((c) => c.weaponId === 'storm_breaker')).toBe(true);
+    expect(cloakCtx.firedCalls.some((c) => c.weaponId === 'shadow_cloak')).toBe(false);
+    expect(bot.isShadowCloaked).toBe(false);
+    expect(mgr.getRenderStates()[0].isShadowCloaked).toBe(false);
+    expect(vfxBursts).toEqual([true, false]);
+    expect(cloakSounds).toEqual(['cloak_activate', 'cloak_decloak']);
+
+    mgr.dispose();
+  });
+
+  it('enforces the 8m Shadow Cloak stealth range cutoff in bot perception while detecting within <= 8m', () => {
+    expect(SHADOW_CLOAK_DETECTION_RANGE).toBe(8);
+
+    const makePlayerTarget = (z: number, eyeY = 11.55): BotCombatTarget => ({
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z },
+      eyePos: { x: 0, y: eyeY, z },
+      hp: 100,
+      shield: 100,
+      alive: true,
+      isPlayer: true,
+    });
+
+    const makeScoutBot = (overrides: Partial<BotEntity> = {}): BotEntity => {
+      const b = makeBotEntity({
+        id: 'bot_cloak_check',
+        state: 'rotating',
+        position: { x: 0, y: 10, z: 0 },
+        yaw: 0,
+        grounded: true,
+        targetEnemyId: null,
+        lastKnownEnemyPos: null,
+        lastDamageTime: -999,
+        ...overrides,
+      });
+      b.inventory.items[1] = makeItem('ar', 'rare', 30);
+      b.inventory.ammo.medium = 90;
+      return b;
+    };
+
+    // 1. Uncloaked player at 25m is immediately spotted & acquired
+    const uncloakedCtx = makeMockContext({
+      isPlayerShadowCloaked: false,
+      getCombatTargets: () => [makePlayerTarget(25)],
+    });
+    const spotter = makeScoutBot();
+    updateBot(spotter, uncloakedCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(spotter.targetEnemyId).toBe('player');
+    expect(spotter.state).toBe('combat');
+
+    // 2. Shadow-cloaked player at > 8m (8.5m, 15m, 40m) is NEVER acquired even on sweaty + 3 medallions!
+    for (const distZ of [8.5, 15, 40]) {
+      const cloakedFarCtx = makeMockContext({
+        isPlayerShadowCloaked: true,
+        playerMedallionCount: 3,
+        getCombatTargets: () => [makePlayerTarget(distZ)],
+      });
+      const bot = makeScoutBot();
+      updateBot(bot, cloakedFarCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+      expect(bot.targetEnemyId).toBeNull();
+      expect(bot.state).not.toBe('combat');
+      expect(cloakedFarCtx.firedCalls).toHaveLength(0);
+    }
+
+    // 3. Previously locked bot immediately drops sight lock if player Shadow Cloaks at > 8m
+    const lockedBot = makeScoutBot({
+      state: 'combat',
+      targetEnemyId: 'player',
+      lastKnownEnemyPos: { x: 0, y: 10, z: 14 },
+    });
+    const relockBlockedCtx = makeMockContext({
+      isPlayerShadowCloaked: true,
+      getCombatTargets: () => [makePlayerTarget(14)],
+    });
+    updateBot(lockedBot, relockBlockedCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 12, 0.05, false);
+    expect(lockedBot.targetEnemyId).toBeNull();
+    expect(relockBlockedCtx.firedCalls).toHaveLength(0);
+
+    // 4. Shadow-cloaked player within <= 8m (exact 8.0m boundary, crouched 8.0m, and 6.0m) WITH LOS IS detected
+    for (const [z, eyeY] of [
+      [8.0, 11.55],
+      [8.0, 11.05],
+      [6.0, 11.55],
+    ]) {
+      const cloakedCloseCtx = makeMockContext({
+        isPlayerShadowCloaked: true,
+        getCombatTargets: () => [makePlayerTarget(z, eyeY)],
+      });
+      const closeBot = makeScoutBot({ reactionTimer: 0, fireCooldown: 0 });
+      updateBot(closeBot, cloakedCloseCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+      expect(closeBot.targetEnemyId).toBe('player');
+      expect(closeBot.state).toBe('combat');
+    }
+
+    // 5. Within <= 8m WITHOUT line of sight stays undetected
+    const blockedLosCtx = makeMockContext({
+      isPlayerShadowCloaked: true,
+      hasLineOfSight: () => false,
+      getCombatTargets: () => [makePlayerTarget(6.0)],
+    });
+    const wallBot = makeScoutBot();
+    updateBot(wallBot, blockedLosCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(wallBot.targetEnemyId).toBeNull();
+    expect(wallBot.state).not.toBe('combat');
+  });
+
+  it('attracts rotating bots to unattuned Rune Monoliths and applies Storm Choppa airborne elevation bias in aiming & movement', () => {
+    const brain = new BotBrain();
+    const storm = makeDefaultStorm({ currentCenterX: 0, currentCenterZ: 0, currentRadius: 150 });
+
+    const makeMonolith = (overrides: Partial<RuneMonolithEntity> = {}): RuneMonolithEntity => ({
+      id: 'monolith_1',
+      poiId: 'metro_towers',
+      x: 0,
+      y: 10,
+      z: 36,
+      attuned: false,
+      cooldownSec: 0,
+      ...overrides,
+    });
+
+    // 1. selectRuneMonolithTarget filters attuned, cooldown, out-of-range (>65m), and storm-outside monoliths
+    const roamBot = makeBotEntity({
+      id: 'bot_monolith',
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    roamBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    expect(selectRuneMonolithTarget(roamBot, [makeMonolith()], storm, 10)?.id).toBe('monolith_1');
+    expect(
+      brain.selectRuneMonolithTarget(roamBot, [makeMonolith({ attuned: true })], storm, 10),
+    ).toBeNull();
+    expect(
+      selectRuneMonolithTarget(roamBot, [makeMonolith({ cooldownSec: 25 })], storm, 10),
+    ).toBeNull();
+    expect(
+      selectRuneMonolithTarget(
+        roamBot,
+        [makeMonolith({ z: MONOLITH_OPPORTUNITY_RANGE + 5 })],
+        storm,
+        10,
+      ),
+    ).toBeNull();
+    expect(
+      selectRuneMonolithTarget(
+        roamBot,
+        [makeMonolith({ z: 60 })],
+        makeDefaultStorm({ currentCenterX: 0, currentCenterZ: 0, currentRadius: 50 }),
+        10,
+      ),
+    ).toBeNull();
+
+    // Live bot steers toward unattuned monolith, and drops attraction once attuned
+    const liveMonolith = makeMonolith({ id: 'monolith_live', x: 0, y: 10, z: 34 });
+    const monoCtx = makeMockContext({
+      storm,
+      getRuneMonoliths: () => [liveMonolith],
+    });
+    for (let i = 0; i < 12; i++) {
+      updateBot(roamBot, monoCtx, 'standard', { x: 0, y: 175, z: 0 }, 20 + i * 0.1, 0.1, false);
+    }
+    expect(roamBot.monolithTargetId).toBe('monolith_live');
+    expect(roamBot.moveTarget).toEqual({ x: 0, y: 10, z: 34 });
+    expect(roamBot.position.z).toBeGreaterThan(4);
+
+    liveMonolith.attuned = true;
+    roamBot.moveTarget = { x: -45, y: 10, z: 0 };
+    updateBot(roamBot, monoCtx, 'standard', { x: 0, y: 175, z: 0 }, 22, 0.1, false);
+    expect(roamBot.monolithTargetId).toBeNull();
+    expect(roamBot.moveTarget?.z).not.toBe(34);
+
+    // 2. Storm Choppa airborne threat detection + weapon & aim elevation bias
+    const makeChoppa = (overrides: Partial<VehicleEntity> = {}): VehicleEntity => ({
+      id: 'choppa_1',
+      kind: 'choppa',
+      x: 0,
+      y: 28,
+      z: 24,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 1000,
+      maxHp: 1000,
+      boostCharge: 100,
+      isBoosting: false,
+      driverId: 'player',
+      destroyed: false,
+      altitude: 18,
+      rotorRpm: 1,
+      ...overrides,
+    });
+
+    const botPos = { x: 0, y: 10, z: 0 };
+    const groundedBot = makeBotEntity({
+      id: 'bot_aa',
+      state: 'combat',
+      position: botPos,
+      yaw: 0,
+      grounded: true,
+      strafeDir: 1,
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    groundedBot.inventory.materials = { wood: 90, brick: 40, metal: 40 };
+
+    expect(findChoppaThreat(groundedBot, [makeChoppa()])?.vehicle.id).toBe('choppa_1');
+    expect(
+      brain.findChoppaThreat(groundedBot, [
+        makeChoppa({ y: 68, z: 0, altitude: 58 }),
+      ]),
+    ).toBeNull();
+    expect(CHOPPA_THREAT_RANGE).toBe(56);
+    expect(findChoppaThreat(groundedBot, [makeChoppa({ y: 11, altitude: 1.0 })])).toBeNull();
+    expect(findChoppaThreat(groundedBot, [makeChoppa({ driverId: null })])).toBeNull();
+    expect(findChoppaThreat(groundedBot, [makeChoppa({ destroyed: true })])).toBeNull();
+
+    // Friendly Choppa pilot is ignored
+    const blueBot = makeBotEntity({ id: 'bot_blue_aa', teamId: 'team_blue', position: botPos });
+    expect(
+      findChoppaThreat(
+        blueBot,
+        [makeChoppa({ driverId: 'player' })],
+        CHOPPA_THREAT_RANGE,
+        undefined,
+        'team_rumble',
+      ),
+    ).toBeNull();
+
+    // Airborne Choppa target gets higher aimDir.y / pitch bias than non-Choppa target at identical coordinates,
+    // skips ground throwables (remote_c4), and picks storm_breaker over shotgun
+    const choppaPilot: BotCombatTarget = {
+      id: 'player',
+      name: 'Pilot',
+      position: { x: 0, y: 28, z: 24 },
+      eyePos: { x: 0, y: 29.55, z: 24 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+      inVehicle: true,
+    };
+    const nonChoppaCtx = makeMockContext({
+      getCombatTargets: () => [{ ...choppaPilot, inVehicle: false }],
+      getVehicles: () => [],
+    });
+    const plainBot = makeBotEntity({
+      id: 'bot_plain_air',
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    plainBot.inventory.items[1] = makeItem('storm_breaker', 'epic', 20);
+    plainBot.inventory.ammo.medium = 120;
+    updateBot(plainBot, nonChoppaCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+
+    const choppaCombatCtx = makeMockContext({
+      getCombatTargets: () => [choppaPilot],
+      getVehicles: () => [makeChoppa({ vy: 4 })],
+    });
+    const aaBot = makeBotEntity({
+      id: 'bot_choppa_aa',
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+      throwCooldown: 0,
+    });
+    aaBot.inventory.items[1] = makeItem('pump_shotgun', 'epic', 5);
+    aaBot.inventory.items[2] = makeItem('storm_breaker', 'epic', 20);
+    aaBot.inventory.items[3] = makeItem('remote_c4', 'epic', 0, 2);
+    aaBot.inventory.ammo.shells = 20;
+    aaBot.inventory.ammo.medium = 120;
+    updateBot(aaBot, choppaCombatCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+
+    expect(choppaCombatCtx.firedCalls).toHaveLength(1);
+    expect(choppaCombatCtx.firedCalls[0].weaponId).toBe('storm_breaker');
+    expect(choppaCombatCtx.firedCalls[0].aimDir.y).toBeGreaterThan(
+      nonChoppaCtx.firedCalls[0].aimDir.y,
+    );
+    expect(aaBot.pitch).toBeGreaterThan(plainBot.pitch);
+
+    // 3. Movement & cover bias: bot directly under hovering Choppa backs out laterally + builds overhead roof cover
+    const underChoppa = makeChoppa({ x: 0, y: 26, z: 4, altitude: 16 });
+    const underCtx = makeMockContext({
+      getVehicles: () => [underChoppa],
+    });
+    const underBot = makeBotEntity({
+      id: 'bot_under_choppa',
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      strafeDir: 1,
+      grounded: true,
+    });
+    underBot.inventory.materials = { wood: 120, brick: 40, metal: 40 };
+    for (let i = 0; i < 10; i++) {
+      updateBot(underBot, underCtx, 'standard', { x: 0, y: 175, z: 0 }, 10 + i * 0.05, 0.05, false);
+    }
+    expect(underCtx.placedBuilds.some((b) => b.type === 'roof')).toBe(true);
+    expect(Math.abs(underBot.position.x)).toBeGreaterThan(1.5);
+    expect(underBot.position.z).toBeLessThan(0);
+
+    // Zero Build skips roof/wall building while still sprinting laterally away from Choppa
+    const zbChoppaCtx = makeMockContext({
+      gameMode: 'zero_build',
+      getVehicles: () => [underChoppa],
+    });
+    const zbChoppaBot = makeBotEntity({
+      id: 'bot_zb_choppa',
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      strafeDir: -1,
+      grounded: true,
+    });
+    for (let i = 0; i < 10; i++) {
+      updateBot(
+        zbChoppaBot,
+        zbChoppaCtx,
+        'standard',
+        { x: 0, y: 175, z: 0 },
+        10 + i * 0.05,
+        0.05,
+        false,
+        'zero_build',
+      );
+    }
+    expect(zbChoppaCtx.placedBuilds).toHaveLength(0);
+    expect(zbChoppaBot.isSprinting).toBe(true);
+    expect(Math.abs(zbChoppaBot.position.x)).toBeGreaterThan(1.5);
   });
 });

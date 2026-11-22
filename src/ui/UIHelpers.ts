@@ -39,6 +39,7 @@ import type {
   ModBenchEntity,
   Rarity,
   RebootVanEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SkyBalloonEntity,
   SlurpTankerEntity,
@@ -537,6 +538,7 @@ export function formatWeatherLabel(weather?: WeatherKind): string {
  * Maps VehicleKind enum values to display labels.
  */
 export function formatVehicleKindLabel(kind: VehicleKind): string {
+  if (kind === 'choppa') return 'STORM CHOPPA';
   if (kind === 'cyber_bike') return 'CYBER BIKE';
   if (kind === 'speedboat') return 'APEX SPEEDBOAT';
   if (kind === 'hover_tank') return 'VANGUARD TANK';
@@ -1262,6 +1264,15 @@ export function deriveMatchHighlightBadges(
   }
   if ((summary.shieldBlockedDmg ?? 0) >= 100) {
     pushBadge('AEGIS WALL', 'cyan');
+  }
+  if ((summary.arcChainHits ?? 0) >= 1) {
+    pushBadge('ARC CONDUIT', 'cyan');
+  }
+  if ((summary.runeMonolithsAttuned ?? 0) >= 1) {
+    pushBadge('RUNE SOVEREIGN', 'gold');
+  }
+  if ((summary.choppaFlightSec ?? 0) >= 10) {
+    pushBadge('SKY PILOT', 'cyan');
   }
   if ((summary.trainChestsHacked ?? 0) >= 1) {
     pushBadge('TRAIN HEIST', 'gold');
@@ -2400,6 +2411,209 @@ export function drawVanguardMapOverlay(
       vp.y,
       vehicle.yaw,
       vehicle.driverId !== null,
+    );
+  }
+}
+
+export interface WorldSovereignOverlay {
+  runeMonoliths: RuneMonolithEntity[];
+  vehicles?: VehicleEntity[];
+}
+
+export function resolveSovereignOverlayArgs(
+  runeMonolithsOrOverlay: RuneMonolithEntity[] | Partial<WorldSovereignOverlay> = [],
+  vehicles: VehicleEntity[] = [],
+): WorldSovereignOverlay {
+  if (Array.isArray(runeMonolithsOrOverlay)) {
+    return {
+      runeMonoliths: runeMonolithsOrOverlay,
+      vehicles: Array.isArray(vehicles) ? vehicles : [],
+    };
+  }
+  const ov = runeMonolithsOrOverlay ?? {};
+  return {
+    runeMonoliths: Array.isArray(ov.runeMonoliths) ? ov.runeMonoliths : [],
+    vehicles:
+      Array.isArray(vehicles) && vehicles.length > 0
+        ? vehicles
+        : Array.isArray(ov.vehicles)
+          ? ov.vehicles
+          : [],
+  };
+}
+
+/**
+ * Draws a cyan Storm Choppa helicopter rotor icon at pixel coordinates `(px, py)`
+ * without fillText, strokeText, or ellipse (Node test mock safe).
+ */
+export function drawChoppaMapIcon(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  yaw = 0,
+  occupied = false,
+  nowMs = performance.now(),
+): void {
+  const rotorSpin = occupied ? (nowMs * 0.012) % (Math.PI * 2) : 0;
+  ctx.save();
+  ctx.translate(px, py);
+
+  // Outer cyan rotor perimeter ring
+  ctx.beginPath();
+  ctx.arc(0, 0, 9.0, 0, Math.PI * 2);
+  ctx.fillStyle = occupied ? 'rgba(8, 51, 68, 0.94)' : 'rgba(12, 34, 58, 0.92)';
+  ctx.fill();
+  ctx.strokeStyle = occupied ? '#ffd000' : '#22d3ee';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  if (typeof yaw === 'number' && Number.isFinite(yaw)) {
+    ctx.rotate?.(-yaw);
+  }
+
+  // Fuselage pod & tail boom
+  ctx.fillStyle = occupied ? '#ffd000' : '#06b6d4';
+  ctx.fillRect(-2.4, -4.6, 4.8, 6.8);
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(-0.9, 2.0, 1.8, 4.4);
+
+  // Crossed 4-blade main rotor silhouette
+  ctx.save();
+  if (rotorSpin !== 0) {
+    ctx.rotate?.(rotorSpin);
+  }
+  ctx.beginPath();
+  ctx.moveTo(-6.4, -6.4);
+  ctx.lineTo(6.4, 6.4);
+  ctx.moveTo(6.4, -6.4);
+  ctx.lineTo(-6.4, 6.4);
+  ctx.strokeStyle = '#e0f2fe';
+  ctx.lineWidth = 1.7;
+  ctx.stroke();
+  ctx.restore();
+
+  // Rotor hub core
+  ctx.beginPath();
+  ctx.arc(0, -0.6, 2.0, 0, Math.PI * 2);
+  ctx.fillStyle = occupied ? '#ffffff' : '#ffd000';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * Draws Wave-13 Sovereign overlay items (violet diamond Rune Monolith markers for active
+ * vs attuned states, and cyan Storm Choppa rotor icons) without fillText, strokeText,
+ * or ellipse (Node test mock safe).
+ */
+export function drawSovereignMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  _pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  runeMonolithsOrOverlay?: RuneMonolithEntity[] | Partial<WorldSovereignOverlay>,
+  vehicles?: VehicleEntity[],
+  nowMs = performance.now(),
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.006);
+  const resolved = resolveSovereignOverlayArgs(runeMonolithsOrOverlay, vehicles);
+
+  // 1. Violet Diamond Rune Monolith Markers (active vs attuned)
+  for (const monolith of resolved.runeMonoliths) {
+    if (!monolith || !Number.isFinite(monolith.x) || !Number.isFinite(monolith.z)) {
+      continue;
+    }
+    const mp = toPx(monolith.x, monolith.z);
+    if (mp.x < -16 || mp.x > size + 16 || mp.y < -16 || mp.y > size + 16) {
+      continue;
+    }
+
+    const attuned = Boolean(monolith.attuned);
+    ctx.save();
+    ctx.translate(mp.x, mp.y);
+
+    if (!attuned) {
+      // Active unattuned Rune Monolith: pulsing violet outer aura + luminous diamond
+      ctx.beginPath();
+      ctx.arc(0, 0, 8.6 + pulse * 1.6, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(192, 132, 252, ${(0.58 + pulse * 0.34).toFixed(2)})`;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 6.4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(46, 16, 101, 0.94)';
+      ctx.fill();
+      ctx.strokeStyle = '#c084fc';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(0, -4.6);
+      ctx.lineTo(3.8, 0);
+      ctx.lineTo(0, 4.6);
+      ctx.lineTo(-3.8, 0);
+      ctx.closePath();
+      ctx.fillStyle = '#a855f7';
+      ctx.strokeStyle = '#f5d0fe';
+      ctx.lineWidth = 1.1;
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#22d3ee';
+      ctx.fill();
+    } else {
+      // Attuned / cooling Rune Monolith: dashed ring + dimmed violet diamond
+      ctx.setLineDash?.([2.8, 2.2]);
+      ctx.beginPath();
+      ctx.arc(0, 0, 7.4, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.65)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.setLineDash?.([]);
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 5.8, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(30, 27, 46, 0.86)';
+      ctx.fill();
+      ctx.strokeStyle = '#7e22ce';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(0, -4.0);
+      ctx.lineTo(3.2, 0);
+      ctx.lineTo(0, 4.0);
+      ctx.lineTo(-3.2, 0);
+      ctx.closePath();
+      ctx.fillStyle = '#6b21a8';
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.0;
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // 2. Cyan Storm Choppa Rotor Icons
+  const vehs = Array.isArray(resolved.vehicles) ? resolved.vehicles : [];
+  for (const vehicle of vehs) {
+    if (!vehicle || vehicle.destroyed || vehicle.kind !== 'choppa') continue;
+    if (!Number.isFinite(vehicle.x) || !Number.isFinite(vehicle.z)) continue;
+    const vp = toPx(vehicle.x, vehicle.z);
+    if (vp.x < -16 || vp.x > size + 16 || vp.y < -16 || vp.y > size + 16) {
+      continue;
+    }
+    drawChoppaMapIcon(
+      ctx,
+      vp.x,
+      vp.y,
+      vehicle.yaw,
+      vehicle.driverId !== null,
+      nowMs,
     );
   }
 }

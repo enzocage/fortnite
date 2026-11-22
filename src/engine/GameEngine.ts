@@ -128,6 +128,7 @@ export interface FortdropDebugAPI {
   giveWave10Loadout(): void;
   giveWave11Loadout(): void;
   giveWave12Loadout(): void;
+  giveWave13Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -433,6 +434,9 @@ export class GameEngine {
       this.worldInteractables.getFishingHoles(),
       this.worldInteractables.getSkyBalloons(),
     );
+    this.uiManager.setWorldSovereignOverlay(
+      this.worldInteractables.getRuneMonoliths(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.gameMode = this.lobbyConfig.gameMode ?? 'solo';
@@ -467,6 +471,7 @@ export class GameEngine {
       ...this.worldInteractables.getRebootVanColliders(),
       ...this.worldInteractables.getModBenchColliders(),
       ...this.worldInteractables.getForecastTowerColliders(),
+      ...this.worldInteractables.getRuneMonolithColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -523,6 +528,7 @@ export class GameEngine {
       this.handleBoarEliminated(pos, attackerId);
     });
     this.playerController.setOverlordBridge(this.worldInteractables);
+    this.playerController.setInteractablesBridge(this.worldInteractables);
     this.playerController.setOnFishingReward((res) => {
       this.handleFishingReward(res);
     });
@@ -645,13 +651,15 @@ export class GameEngine {
       const search = new URLSearchParams(window.location.search);
       const qaPoi =
         search.get('qaPoi') ??
-        (search.has('qaWave12')
-          ? 'crater_depot'
-          : search.has('qaWave11') || search.has('qaWave10')
-            ? 'crystal_basin'
-            : search.has('qaWave9')
-              ? 'sunny_suburbs'
-              : null);
+        (search.has('qaWave13')
+          ? 'frostpeak_citadel'
+          : search.has('qaWave12')
+            ? 'crater_depot'
+            : search.has('qaWave11') || search.has('qaWave10')
+              ? 'crystal_basin'
+              : search.has('qaWave9')
+                ? 'sunny_suburbs'
+                : null);
       if (qaPoi && POIS.some((p) => p.id === qaPoi)) {
         const qaModeParam = search.get('qaMode');
         const qaMode: GameModeId | undefined =
@@ -686,7 +694,72 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (search.has('qaWave12')) {
+        if (search.has('qaWave13')) {
+          window.__GAME__?.giveWave13Loadout();
+          this.playerController.setStormBlessingTimer(26);
+          this.playerController.setShadowCloakTimer(0);
+          this.playerController.setGoldBars(950);
+
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const fwdX = Math.sin(yaw);
+          const fwdZ = Math.cos(yaw);
+          const rightX = -Math.cos(yaw);
+          const rightZ = Math.sin(yaw);
+
+          const w13 = this.worldInteractables.qaPlaceWave13Showcase(p, yaw);
+          this.vehicleSystem.spawnVehicleAt(
+            'choppa',
+            p.x + fwdX * 9.0 + rightX * 3.5,
+            p.z + fwdZ * 9.0 + rightZ * 3.5,
+            yaw + Math.PI * 0.72,
+          );
+
+          this.collision.setPropColliders([
+            ...this.propsAndLoot.getActivePropColliders(),
+            ...this.propsAndLoot.getActiveLlamaColliders(),
+            ...this.worldInteractables.getColliders(),
+            ...this.vehicleSystem.getActiveVehicleColliders(),
+          ]);
+          this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
+          this.uiManager.setWorldChapterOverlay(
+            this.worldInteractables.getWeaponBunkers(),
+            this.worldInteractables.getSlurpTankers(),
+            this.worldInteractables.getDroppedMedallions(),
+            this.worldInteractables.getDroppedCrowns(),
+          );
+          this.uiManager.setWorldOverdriveOverlay(
+            this.worldInteractables.getGrindRails(),
+            this.worldInteractables.getRebootVans(),
+            this.worldInteractables.getSupplyDrones(),
+          );
+          this.uiManager.setWorldFrontierOverlay(
+            this.worldInteractables.getModBenches(),
+            this.worldInteractables.getForecastTowers(),
+          );
+          this.uiManager.setWorldSkyforgeOverlay(
+            this.worldInteractables.getTrainState(),
+            this.worldInteractables.getMeteorCraters(),
+          );
+          this.uiManager.setWorldTideOverlay(
+            this.worldInteractables.getWildBoars(),
+            this.worldInteractables.getShieldMushrooms(),
+          );
+          this.uiManager.setWorldOverlordOverlay(
+            this.worldInteractables.getFishingHoles(),
+            this.worldInteractables.getSkyBalloons(),
+          );
+          this.uiManager.setWorldSovereignOverlay(
+            this.worldInteractables.getRuneMonoliths(),
+          );
+          if (w13?.monolith) {
+            this.eventBus.emit('vfx:rune_attune', {
+              position: { x: w13.monolith.x, y: w13.monolith.y, z: w13.monolith.z },
+            });
+          }
+          this.syncPlayerRig(this.playerController.getCharacterRenderState(), 1 / 60);
+          this.pushHUDState(false);
+        } else if (search.has('qaWave12')) {
           window.__GAME__?.giveWave12Loadout();
           this.playerController.setBallisticShieldHp(210);
           this.playerController.setKillStreak(3);
@@ -758,6 +831,9 @@ export class GameEngine {
             this.worldInteractables.getFishingHoles(),
             this.worldInteractables.getSkyBalloons(),
           );
+          this.uiManager.setWorldSovereignOverlay(
+            this.worldInteractables.getRuneMonoliths(),
+          );
           this.syncPlayerRig(this.playerController.getCharacterRenderState(), 1 / 60);
           this.pushHUDState(false);
         } else if (search.has('qaWave11')) {
@@ -821,6 +897,9 @@ export class GameEngine {
           this.uiManager.setWorldOverlordOverlay(
             this.worldInteractables.getFishingHoles(),
             this.worldInteractables.getSkyBalloons(),
+          );
+          this.uiManager.setWorldSovereignOverlay(
+            this.worldInteractables.getRuneMonoliths(),
           );
           this.syncPlayerRig(this.playerController.getCharacterRenderState(), 1 / 60);
           this.pushHUDState(false);
@@ -1445,6 +1524,10 @@ export class GameEngine {
       get hotDropPoiIds() {
         return self.worldInteractables.getHotDropPoiIds();
       },
+      get isPlayerShadowCloaked() {
+        return Boolean(self.playerController.getCharacterRenderState().isShadowCloaked);
+      },
+      getRuneMonoliths: () => this.worldInteractables.getRuneMonoliths(),
       getSquadmates: (squadId: string) =>
         this.botManager.getAliveBots().filter((b) => b.squadId === squadId),
       getMedallionHolders: () => this.botManager.getMedallionHolders(),
@@ -1994,6 +2077,9 @@ export class GameEngine {
       this.worldInteractables.getFishingHoles(),
       this.worldInteractables.getSkyBalloons(),
     );
+    this.uiManager.setWorldSovereignOverlay(
+      this.worldInteractables.getRuneMonoliths(),
+    );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
       this.worldBuildResult.floorLootSpots,
@@ -2013,6 +2099,7 @@ export class GameEngine {
       ...this.worldInteractables.getRebootVanColliders(),
       ...this.worldInteractables.getModBenchColliders(),
       ...this.worldInteractables.getForecastTowerColliders(),
+      ...this.worldInteractables.getRuneMonolithColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -2202,6 +2289,7 @@ export class GameEngine {
       ...this.worldInteractables.getRebootVanColliders(),
       ...this.worldInteractables.getModBenchColliders(),
       ...this.worldInteractables.getForecastTowerColliders(),
+      ...this.worldInteractables.getRuneMonolithColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
     this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
@@ -2245,6 +2333,9 @@ export class GameEngine {
     this.uiManager.setWorldOverlordOverlay(
       this.worldInteractables.getFishingHoles(),
       this.worldInteractables.getSkyBalloons(),
+    );
+    this.uiManager.setWorldSovereignOverlay(
+      this.worldInteractables.getRuneMonoliths(),
     );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
@@ -2429,6 +2520,7 @@ export class GameEngine {
       activeVeh?.speedKmh ?? 0,
       Boolean(activeVeh?.isBoosting),
       activeVeh?.kind,
+      pHudSnap.choppaAltitude ?? 0,
     );
     this.audioEngine.updateGrindRailLoop(
       Boolean(pHudSnap.isGrinding) && currPlayerPhase === 'playing' && !this.paused,
@@ -3182,6 +3274,9 @@ export class GameEngine {
       c4Blasts: stats.c4Blasts ?? 0,
       shieldBlockedDmg: Math.round(stats.shieldBlockedDmg ?? 0),
       tankElims: stats.tankElims ?? 0,
+      arcChainHits: stats.arcChainHits ?? 0,
+      runeMonolithsAttuned: stats.runeMonolithsAttuned ?? 0,
+      choppaFlightSec: Math.round(stats.choppaFlightSec ?? 0),
       teamRumbleScore:
         this.gameMode === 'team_rumble'
           ? (() => {
@@ -3204,6 +3299,9 @@ export class GameEngine {
         ...(stats.c4Blasts && stats.c4Blasts >= 1 ? ['DEMOLITIONIST'] : []),
         ...(stats.shieldBlockedDmg && stats.shieldBlockedDmg >= 50 ? ['AEGIS BULWARK'] : []),
         ...(stats.tankElims && stats.tankElims >= 1 ? ['ARMOR BREAKER'] : []),
+        ...(stats.arcChainHits && stats.arcChainHits >= 2 ? ['STORM BREAKER'] : []),
+        ...(stats.runeMonolithsAttuned && stats.runeMonolithsAttuned >= 1 ? ['RUNE SOVEREIGN'] : []),
+        ...(stats.choppaFlightSec && stats.choppaFlightSec >= 10 ? ['SKY ACE'] : []),
       ],
     };
     this.lastMatchSummary = summary;
@@ -3252,7 +3350,8 @@ export class GameEngine {
       s.includes('qaWave9') ||
       s.includes('qaWave10') ||
       s.includes('qaWave11') ||
-      s.includes('qaWave12')
+      s.includes('qaWave12') ||
+      s.includes('qaWave13')
     );
   }
 
@@ -3883,6 +3982,10 @@ export class GameEngine {
       tankCannonCooldown: snap.tankCannonCooldown ?? null,
       inHotDropPoi: Boolean(snap.inHotDropPoi),
       hotDropPoiIds: this.worldInteractables.getHotDropPoiIds(),
+      shadowCloakState: snap.shadowCloakState ?? null,
+      stormBlessingRemainingSec: snap.stormBlessingRemainingSec ?? null,
+      runeAttuneProgress: snap.runeAttuneProgress ?? null,
+      choppaAltitude: snap.choppaAltitude ?? null,
     };
 
     this.uiManager.updateHUD(hudState);
@@ -4214,8 +4317,8 @@ export class GameEngine {
           offsetX = -19;
           offsetZ = 31;
         } else if (poi.id === 'frostpeak_citadel') {
-          offsetX = 2;
-          offsetZ = 31;
+          offsetX = -8;
+          offsetZ = 33;
         } else if (poi.id === 'sunken_oasis') {
           offsetX = 12;
           offsetZ = 33;
@@ -4600,6 +4703,34 @@ export class GameEngine {
         });
         inv.addAmmo('light', 240);
         inv.addAmmo('medium', 160);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
+      giveWave13Loadout() {
+        const inv = engine.playerController.getInventory();
+        inv.reset();
+        const items: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic'; stack: number }> = [
+          { id: 'storm_breaker', rarity: 'mythic', stack: 1 },
+          { id: 'shadow_cloak', rarity: 'mythic', stack: 1 },
+          { id: 'ballistic_shield', rarity: 'mythic', stack: 1 },
+          { id: 'remote_c4', rarity: 'epic', stack: 4 },
+          { id: 'chug_cannon', rarity: 'mythic', stack: 1 },
+        ];
+        items.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w13_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('medium', 240);
+        inv.addAmmo('light', 180);
         inv.addMaterial('wood', 500);
         inv.addMaterial('brick', 500);
         inv.addMaterial('metal', 500);

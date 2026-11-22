@@ -54,6 +54,7 @@ export interface VehicleEngineState {
   speedKmh: number;
   isBoosting: boolean;
   kind: VehicleKind;
+  altitudeM?: number;
 }
 
 export interface WindRushState {
@@ -289,6 +290,17 @@ interface BiomeAmbienceRig {
   stormGain: GainNode;
 }
 
+interface ChoppaRotorSubRig {
+  rotorMasterGain: GainNode;
+  rotorFilter: BiquadFilterNode | null;
+  rotorPulseGain: GainNode;
+  slapOsc: OscillatorNode;
+  lfoOsc: OscillatorNode;
+  lfoDepthGain: GainNode;
+  washNoiseSource: AudioBufferSourceNode | null;
+  washNoiseGain: GainNode | null;
+}
+
 interface VehicleEngineRig {
   masterGain: GainNode;
   humFilter: BiquadFilterNode | null;
@@ -298,6 +310,7 @@ interface VehicleEngineRig {
   oscA: OscillatorNode;
   oscB: OscillatorNode;
   boostOsc: OscillatorNode;
+  choppaRotor: ChoppaRotorSubRig | null;
 }
 
 interface WindRushRig {
@@ -403,6 +416,9 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'c4_detonate':
     case 'streak_surge':
     case 'hot_drop_chime':
+    case 'arc_shot':
+    case 'rune_attune':
+    case 'choppa_boost':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -465,6 +481,10 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'fishing_catch':
     case 'shield_block':
     case 'c4_plant':
+    case 'arc_chain':
+    case 'cloak_activate':
+    case 'cloak_decloak':
+    case 'choppa_rotor':
     default:
       return 2;
   }
@@ -522,6 +542,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'revive_complete':
     case 'mod_install':
     case 'fishing_catch':
+    case 'cloak_activate':
       return 85;
     case 'upgrade_weapon':
     case 'campfire_ignite':
@@ -531,6 +552,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'grind_attach':
     case 'hop_crystal_consume':
     case 'boar_grunt':
+    case 'cloak_decloak':
       return 95;
     case 'slurp_barrel_break':
     case 'kinetic_slash':
@@ -568,6 +590,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 160;
     case 'jetpack_ignite':
     case 'hammer_bounce':
+    case 'arc_chain':
       return 165;
     case 'turret_fire':
       return 170;
@@ -602,6 +625,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 225;
     case 'drone_explode':
       return 230;
+    case 'rune_attune':
+      return 235;
     case 'shot_sniper':
     case 'shot_rocket':
     case 'explosion':
@@ -614,13 +639,18 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'emp_blast':
       return 240;
     case 'c4_detonate':
+    case 'arc_shot':
       return 245;
     case 'flare_burst':
       return 250;
+    case 'choppa_rotor':
+      return 255;
     case 'shot_railgun':
       return 260;
     case 'tank_impact':
       return 265;
+    case 'choppa_boost':
+      return 270;
     case 'tank_cannon':
       return 275;
     case 'reboot_complete':
@@ -682,6 +712,7 @@ export class AudioEngine {
   private vehicleEngineSpeedKmh = 0;
   private vehicleEngineBoosting = false;
   private vehicleEngineKind: VehicleKind = 'hover_atv';
+  private vehicleEngineAltitudeM = 0;
 
   private windRushRig: WindRushRig | null = null;
   private windRushActive = false;
@@ -1075,6 +1106,7 @@ export class AudioEngine {
    * Maintains a continuous pitch-mapped dual-oscillator + bandpass vehicle
    * engine synthesizer loop with cyber_bike harmonic whine, speedboat deep
    * aquatic outboard hum, hover_tank heavy armored diesel-turbine growl,
+   * choppa rhythmic low-frequency helicopter rotor slap + turbine hum,
    * and boost sub-layer.
    * Cleanly ramps down and releases nodes when inactive, paused, muted, or disposed.
    */
@@ -1083,15 +1115,21 @@ export class AudioEngine {
     speedKmh: number,
     isBoosting: boolean,
     kind: VehicleKind = 'hover_atv',
+    altitudeM = 0,
   ): void {
     if (this.disposed) return;
 
     const cleanSpeed = Number.isFinite(speedKmh) ? clamp(speedKmh, 0, 220) : 0;
     const cleanBoosting = Boolean(isBoosting);
     const cleanKind: VehicleKind =
-      kind === 'cyber_bike' || kind === 'speedboat' || kind === 'hover_tank'
+      kind === 'cyber_bike' ||
+      kind === 'speedboat' ||
+      kind === 'hover_tank' ||
+      kind === 'choppa'
         ? kind
         : 'hover_atv';
+    const cleanAltitude =
+      cleanKind === 'choppa' && Number.isFinite(altitudeM) ? clamp(altitudeM, 0, 120) : 0;
 
     if (!active || this.paused || this.isSfxMuted()) {
       this.teardownVehicleEngine();
@@ -1117,7 +1155,8 @@ export class AudioEngine {
       this.vehicleEngineRig &&
       Math.abs(this.vehicleEngineSpeedKmh - cleanSpeed) < 0.05 &&
       this.vehicleEngineBoosting === cleanBoosting &&
-      this.vehicleEngineKind === cleanKind
+      this.vehicleEngineKind === cleanKind &&
+      Math.abs(this.vehicleEngineAltitudeM - cleanAltitude) < 0.1
     ) {
       return;
     }
@@ -1139,6 +1178,7 @@ export class AudioEngine {
     this.vehicleEngineSpeedKmh = cleanSpeed;
     this.vehicleEngineBoosting = cleanBoosting;
     this.vehicleEngineKind = cleanKind;
+    this.vehicleEngineAltitudeM = cleanAltitude;
 
     this.applyVehicleEngineParams(
       this.ctx,
@@ -1146,16 +1186,28 @@ export class AudioEngine {
       cleanSpeed,
       cleanBoosting,
       cleanKind,
+      cleanAltitude,
     );
   }
 
+  /**
+   * Stops any active continuous vehicle engine or helicopter rotor loop cleanly.
+   */
+  stopVehicleEngine(): void {
+    this.teardownVehicleEngine();
+  }
+
   getVehicleEngineState(): VehicleEngineState {
-    return {
+    const state: VehicleEngineState = {
       active: this.vehicleEngineActive,
       speedKmh: this.vehicleEngineSpeedKmh,
       isBoosting: this.vehicleEngineBoosting,
       kind: this.vehicleEngineKind,
     };
+    if (this.vehicleEngineKind === 'choppa') {
+      state.altitudeM = this.vehicleEngineAltitudeM;
+    }
+    return state;
   }
 
   /**
@@ -1858,6 +1910,7 @@ export class AudioEngine {
         oscA,
         oscB,
         boostOsc,
+        choppaRotor: null,
       };
     } catch {
       this.safeDisconnect(oscA);
@@ -1872,85 +1925,203 @@ export class AudioEngine {
     }
   }
 
+  private createChoppaRotorSubRig(
+    ctx: AudioContext,
+    masterGain: GainNode,
+  ): ChoppaRotorSubRig | null {
+    if (typeof ctx.createGain !== 'function' || typeof ctx.createOscillator !== 'function') {
+      return null;
+    }
+
+    let rotorMasterGain: GainNode | null = null;
+    let rotorFilter: BiquadFilterNode | null = null;
+    let rotorPulseGain: GainNode | null = null;
+    let slapOsc: OscillatorNode | null = null;
+    let lfoOsc: OscillatorNode | null = null;
+    let lfoDepthGain: GainNode | null = null;
+    let washNoiseSource: AudioBufferSourceNode | null = null;
+    let washNoiseGain: GainNode | null = null;
+
+    try {
+      const now = ctx.currentTime;
+      rotorMasterGain = ctx.createGain();
+      this.setParam(rotorMasterGain.gain, 0.0001, now);
+      rotorMasterGain.connect(masterGain);
+
+      rotorFilter = this.safeCreateFilter(ctx);
+      if (rotorFilter) {
+        rotorFilter.type = 'bandpass';
+        this.setParam(rotorFilter.frequency, 210, now);
+        this.setParam(rotorFilter.Q, 1.25, now);
+        rotorFilter.connect(rotorMasterGain);
+      }
+      const rotorTarget: AudioNode = rotorFilter ?? rotorMasterGain;
+
+      rotorPulseGain = ctx.createGain();
+      this.setParam(rotorPulseGain.gain, 0.55, now);
+      rotorPulseGain.connect(rotorTarget);
+
+      slapOsc = ctx.createOscillator();
+      slapOsc.type = 'sawtooth';
+      this.setParam(slapOsc.frequency, 32, now);
+      slapOsc.connect(rotorPulseGain);
+      slapOsc.start(now);
+
+      lfoOsc = ctx.createOscillator();
+      lfoOsc.type = 'triangle';
+      this.setParam(lfoOsc.frequency, 7.2, now);
+
+      lfoDepthGain = ctx.createGain();
+      this.setParam(lfoDepthGain.gain, 0.28, now);
+      lfoOsc.connect(lfoDepthGain);
+      try {
+        lfoDepthGain.connect(rotorPulseGain.gain as unknown as AudioNode);
+      } catch {
+        // Ignore AudioParam connect errors on minimal mocks
+      }
+      lfoOsc.start(now);
+
+      const washBuf = this.buildLoopNoiseBuffer(ctx, 0x4c4f50, 0.22, 0.34, true);
+      if (washBuf && typeof ctx.createBufferSource === 'function') {
+        washNoiseSource = ctx.createBufferSource();
+        washNoiseSource.buffer = washBuf;
+        washNoiseSource.loop = true;
+        washNoiseGain = ctx.createGain();
+        this.setParam(washNoiseGain.gain, 0.34, now);
+        washNoiseSource.connect(washNoiseGain);
+        washNoiseGain.connect(rotorPulseGain);
+        washNoiseSource.start(now);
+      }
+
+      return {
+        rotorMasterGain,
+        rotorFilter,
+        rotorPulseGain,
+        slapOsc,
+        lfoOsc,
+        lfoDepthGain,
+        washNoiseSource,
+        washNoiseGain,
+      };
+    } catch {
+      this.safeDisconnect(slapOsc);
+      this.safeDisconnect(lfoOsc);
+      this.safeDisconnect(washNoiseSource);
+      this.safeDisconnect(lfoDepthGain);
+      this.safeDisconnect(washNoiseGain);
+      this.safeDisconnect(rotorPulseGain);
+      this.safeDisconnect(rotorFilter);
+      this.safeDisconnect(rotorMasterGain);
+      return null;
+    }
+  }
+
   private applyVehicleEngineParams(
     ctx: AudioContext,
     rig: VehicleEngineRig,
     speedKmh: number,
     isBoosting: boolean,
     kind: VehicleKind,
+    altitudeM = 0,
   ): void {
     const now = ctx.currentTime;
     const isBoat = kind === 'speedboat';
     const isBike = kind === 'cyber_bike';
     const isTank = kind === 'hover_tank';
-    const speedNorm = isTank ? clamp(speedKmh / 95, 0, 1) : clamp(speedKmh / 145, 0, 1);
+    const isChoppa = kind === 'choppa';
+    const altNorm = isChoppa ? clamp(altitudeM / 42, 0, 1) : 0;
+    const speedNorm = isTank
+      ? clamp(speedKmh / 95, 0, 1)
+      : isChoppa
+        ? clamp(speedKmh / 140, 0, 1)
+        : clamp(speedKmh / 145, 0, 1);
 
-    const boostLiftHz = isBoosting ? (isTank ? 12 : isBoat ? 14 : 16) : 0;
+    const boostLiftHz = isBoosting ? (isChoppa ? 10 : isTank ? 12 : isBoat ? 14 : 16) : 0;
     const kindLiftHz = isBike ? 6 : 0;
-    const baseFreq = isTank
-      ? clamp(40 + speedNorm * 50 + boostLiftHz, 40, 108)
-      : isBoat
-        ? clamp(52 + speedNorm * 76 + boostLiftHz, 52, 148)
-        : clamp(78 + speedNorm * 110 + boostLiftHz + kindLiftHz, 78, 210);
+    const baseFreq = isChoppa
+      ? clamp(28 + speedNorm * 16 + altNorm * 6 + boostLiftHz, 28, 62)
+      : isTank
+        ? clamp(40 + speedNorm * 50 + boostLiftHz, 40, 108)
+        : isBoat
+          ? clamp(52 + speedNorm * 76 + boostLiftHz, 52, 148)
+          : clamp(78 + speedNorm * 110 + boostLiftHz + kindLiftHz, 78, 210);
     const harmonicFreq = Math.max(
       40,
-      isTank
-        ? baseFreq * 2.25
-        : isBoat
-          ? baseFreq * 1.25
-          : isBike
-            ? baseFreq * 3.1
-            : baseFreq * 1.5,
+      isChoppa
+        ? clamp(175 + speedNorm * 120 + altNorm * 55 + (isBoosting ? 70 : 0), 175, 420)
+        : isTank
+          ? baseFreq * 2.25
+          : isBoat
+            ? baseFreq * 1.25
+            : isBike
+              ? baseFreq * 3.1
+              : baseFreq * 1.5,
     );
-    const boostFreq = Math.max(24, baseFreq * 0.5);
+    const boostFreq = isChoppa
+      ? Math.max(20, baseFreq * 0.72)
+      : Math.max(24, baseFreq * 0.5);
     const filterFreq = Math.max(
       60,
-      isTank
-        ? baseFreq * 1.55
-        : isBoat
-          ? baseFreq * 1.45
-          : isBike
-            ? baseFreq * 2.8
-            : baseFreq * 1.95,
+      isChoppa
+        ? clamp(155 + speedNorm * 155 + altNorm * 75 + (isBoosting ? 85 : 0), 155, 470)
+        : isTank
+          ? baseFreq * 1.55
+          : isBoat
+            ? baseFreq * 1.45
+            : isBike
+              ? baseFreq * 2.8
+              : baseFreq * 1.95,
     );
-    const filterQ = isTank ? 1.65 : isBoat ? 0.95 : isBike ? 2.1 : 1.4;
+    const filterQ = isChoppa ? 1.45 : isTank ? 1.65 : isBoat ? 0.95 : isBike ? 2.1 : 1.4;
 
     const humLevel = Math.max(
       0.0001,
-      isTank
-        ? 0.078 + speedNorm * 0.048
-        : isBoat
-          ? 0.064 + speedNorm * 0.042
-          : 0.045 + speedNorm * 0.032,
+      isChoppa
+        ? 0.068 + speedNorm * 0.038 + altNorm * 0.018
+        : isTank
+          ? 0.078 + speedNorm * 0.048
+          : isBoat
+            ? 0.064 + speedNorm * 0.042
+            : 0.045 + speedNorm * 0.032,
     );
     const whineLevel = Math.max(
       0.0001,
-      isTank
-        ? 0.032 + speedNorm * 0.028 + (isBoosting ? 0.014 : 0)
-        : isBoat
-          ? 0.014 + speedNorm * 0.012
-          : isBike
-            ? 0.052 + speedNorm * 0.038 + (isBoosting ? 0.015 : 0)
-            : 0.022 + speedNorm * 0.018,
+      isChoppa
+        ? 0.044 + speedNorm * 0.028 + altNorm * 0.016 + (isBoosting ? 0.022 : 0)
+        : isTank
+          ? 0.032 + speedNorm * 0.028 + (isBoosting ? 0.014 : 0)
+          : isBoat
+            ? 0.014 + speedNorm * 0.012
+            : isBike
+              ? 0.052 + speedNorm * 0.038 + (isBoosting ? 0.015 : 0)
+              : 0.022 + speedNorm * 0.018,
     );
     const boostLevel = Math.max(
       0.0001,
       isBoosting
-        ? isTank
-          ? 0.13 + speedNorm * 0.045
-          : isBoat
-            ? 0.11 + speedNorm * 0.04
-            : 0.095 + speedNorm * 0.035
+        ? isChoppa
+          ? 0.13 + speedNorm * 0.042 + altNorm * 0.02
+          : isTank
+            ? 0.13 + speedNorm * 0.045
+            : isBoat
+              ? 0.11 + speedNorm * 0.04
+              : 0.095 + speedNorm * 0.035
         : 0.0001,
     );
     const masterLevel = Math.max(
       0.0001,
-      isTank
-        ? 0.098 + speedNorm * 0.056 + (isBoosting ? 0.032 : 0)
-        : isBoat
-          ? 0.088 + speedNorm * 0.052 + (isBoosting ? 0.028 : 0)
-          : 0.08 + speedNorm * 0.05 + (isBoosting ? 0.025 : 0),
+      isChoppa
+        ? 0.094 + speedNorm * 0.048 + altNorm * 0.024 + (isBoosting ? 0.034 : 0)
+        : isTank
+          ? 0.098 + speedNorm * 0.056 + (isBoosting ? 0.032 : 0)
+          : isBoat
+            ? 0.088 + speedNorm * 0.052 + (isBoosting ? 0.028 : 0)
+            : 0.08 + speedNorm * 0.05 + (isBoosting ? 0.025 : 0),
     );
+
+    if (isChoppa && !rig.choppaRotor) {
+      rig.choppaRotor = this.createChoppaRotorSubRig(ctx, rig.masterGain);
+    }
 
     try {
       this.smoothParam(rig.oscA.frequency, baseFreq, now, 0.055, 0.08);
@@ -1966,6 +2137,67 @@ export class AudioEngine {
       this.smoothParam(rig.whineGain.gain, whineLevel, now, 0.06, 0.08);
       this.smoothParam(rig.boostGain.gain, boostLevel, now, 0.05, 0.07);
       this.smoothParam(rig.masterGain.gain, masterLevel, now, 0.06, 0.08);
+
+      if (rig.choppaRotor) {
+        const c = rig.choppaRotor;
+        if (isChoppa) {
+          const lfoFreqHz = clamp(
+            7.2 + speedNorm * 3.6 + altNorm * 2.8 + (isBoosting ? 2.6 : 0),
+            7.2,
+            16.5,
+          );
+          const lfoDepth = clamp(
+            0.28 + speedNorm * 0.14 + altNorm * 0.08 + (isBoosting ? 0.09 : 0),
+            0.28,
+            0.59,
+          );
+          const slapFreqHz = clamp(
+            32 + speedNorm * 18 + altNorm * 7 + (isBoosting ? 9 : 0),
+            32,
+            66,
+          );
+          const rotorFilterHz = clamp(
+            190 + speedNorm * 195 + altNorm * 85 + (isBoosting ? 110 : 0),
+            190,
+            580,
+          );
+          const rotorPulseCenter = clamp(
+            0.55 + speedNorm * 0.14 + altNorm * 0.08 + (isBoosting ? 0.1 : 0),
+            0.55,
+            0.87,
+          );
+          const rotorMasterLevel = clamp(
+            0.62 + speedNorm * 0.18 + altNorm * 0.12 + (isBoosting ? 0.14 : 0),
+            0.62,
+            1.06,
+          );
+          const washLevel = clamp(
+            0.34 + speedNorm * 0.22 + altNorm * 0.1 + (isBoosting ? 0.16 : 0),
+            0.34,
+            0.82,
+          );
+
+          this.smoothParam(c.lfoOsc.frequency, lfoFreqHz, now, 0.055, 0.08);
+          this.smoothParam(c.lfoDepthGain.gain, lfoDepth, now, 0.055, 0.08);
+          this.smoothParam(c.slapOsc.frequency, slapFreqHz, now, 0.055, 0.08);
+          if (c.rotorFilter) {
+            this.smoothParam(c.rotorFilter.frequency, rotorFilterHz, now, 0.06, 0.08);
+            this.smoothParam(c.rotorFilter.Q, 1.25 + speedNorm * 0.25, now, 0.06, 0.08);
+          }
+          this.smoothParam(c.rotorPulseGain.gain, rotorPulseCenter, now, 0.055, 0.08);
+          this.smoothParam(c.rotorMasterGain.gain, rotorMasterLevel, now, 0.055, 0.08);
+          if (c.washNoiseGain) {
+            this.smoothParam(c.washNoiseGain.gain, washLevel, now, 0.06, 0.08);
+          }
+        } else {
+          this.smoothParam(c.rotorMasterGain.gain, 0.0001, now, 0.04, 0.06);
+          this.smoothParam(c.rotorPulseGain.gain, 0.0001, now, 0.04, 0.06);
+          this.smoothParam(c.lfoDepthGain.gain, 0.0001, now, 0.04, 0.06);
+          if (c.washNoiseGain) {
+            this.smoothParam(c.washNoiseGain.gain, 0.0001, now, 0.04, 0.06);
+          }
+        }
+      }
     } catch {
       // Gracefully tolerate incomplete AudioNode mocks
     }
@@ -1978,6 +2210,7 @@ export class AudioEngine {
     this.vehicleEngineSpeedKmh = 0;
     this.vehicleEngineBoosting = false;
     this.vehicleEngineKind = 'hover_atv';
+    this.vehicleEngineAltitudeM = 0;
 
     if (!rig) return;
 
@@ -1999,6 +2232,34 @@ export class AudioEngine {
         // Ignore stop errors during teardown
       }
       this.safeDisconnect(osc);
+    }
+
+    if (rig.choppaRotor) {
+      const c = rig.choppaRotor;
+      try {
+        this.rampParam(c.rotorMasterGain.gain, 0.0001, now, 0.04);
+        this.rampParam(c.rotorPulseGain.gain, 0.0001, now, 0.04);
+        this.rampParam(c.lfoDepthGain.gain, 0.0001, now, 0.04);
+        if (c.washNoiseGain) {
+          this.rampParam(c.washNoiseGain.gain, 0.0001, now, 0.04);
+        }
+      } catch {
+        // Ignore ramp errors during teardown
+      }
+      for (const node of [c.slapOsc, c.lfoOsc, c.washNoiseSource]) {
+        if (!node) continue;
+        try {
+          node.stop(stopAt);
+        } catch {
+          // Ignore stop errors during teardown
+        }
+        this.safeDisconnect(node);
+      }
+      this.safeDisconnect(c.lfoDepthGain);
+      this.safeDisconnect(c.washNoiseGain);
+      this.safeDisconnect(c.rotorPulseGain);
+      this.safeDisconnect(c.rotorFilter);
+      this.safeDisconnect(c.rotorMasterGain);
     }
 
     this.safeDisconnect(rig.humFilter);

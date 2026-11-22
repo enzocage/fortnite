@@ -151,7 +151,14 @@ export type SoundEventId =
   | 'c4_plant'
   | 'c4_detonate'
   | 'streak_surge'
-  | 'hot_drop_chime';
+  | 'hot_drop_chime'
+  | 'arc_shot'
+  | 'arc_chain'
+  | 'cloak_activate'
+  | 'cloak_decloak'
+  | 'rune_attune'
+  | 'choppa_rotor'
+  | 'choppa_boost';
 
 export type MusicTrackId =
   | 'none'

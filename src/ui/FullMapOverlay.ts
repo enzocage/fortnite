@@ -17,6 +17,7 @@ import type {
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SkyBalloonEntity,
   SlurpTankerEntity,
@@ -36,6 +37,7 @@ import {
   drawOverdriveMapOverlay,
   drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
+  drawSovereignMapOverlay,
   drawSpeedboatMapChevron,
   drawTideMapOverlay,
   drawVanguardMapOverlay,
@@ -49,12 +51,14 @@ import {
   resolveOverdriveOverlayArgs,
   resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
+  resolveSovereignOverlayArgs,
   resolveTideOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
   type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
+  type WorldSovereignOverlay,
   type WorldTideOverlay,
   worldToMapNorm,
 } from './UIHelpers';
@@ -64,6 +68,7 @@ import {
   getBunkerSvg,
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
+  getChoppaSvg,
   getCrownSvg,
   getFishingHoleSvg,
   getForecastTowerSvg,
@@ -75,6 +80,7 @@ import {
   getMedallionSvg,
   getModBenchSvg,
   getRebootVanSvg,
+  getRuneMonolithSvg,
   getSkyBalloonSvg,
   getSkyRiftIconSvg,
   getSpeedboatSvg,
@@ -141,6 +147,9 @@ export class FullMapOverlay {
   private overlordOverlay: WorldOverlordOverlay = {
     fishingHoles: [],
     skyBalloons: [],
+  };
+  private sovereignOverlay: WorldSovereignOverlay = {
+    runeMonoliths: [],
   };
 
   private open = false;
@@ -353,6 +362,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch hotdrop">${getHotDropSvg()}</span>
         <span>HOT DROP</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch choppa">${getChoppaSvg()}</span>
+        <span>STORM CHOPPA</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch monolith">${getRuneMonolithSvg()}</span>
+        <span>RUNE MONOLITH</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -546,6 +563,17 @@ export class FullMapOverlay {
     }
   }
 
+  setWorldSovereignOverlay(runeMonoliths: RuneMonolithEntity[]): void;
+  setWorldSovereignOverlay(overlay: WorldSovereignOverlay): void;
+  setWorldSovereignOverlay(
+    runeMonolithsOrOverlay: RuneMonolithEntity[] | WorldSovereignOverlay,
+  ): void {
+    this.sovereignOverlay = resolveSovereignOverlayArgs(runeMonolithsOrOverlay);
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
   isOpen(): boolean {
     return this.open;
   }
@@ -725,11 +753,17 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
-    // Driveable Vehicles (hover_tank rendered in Wave-12 drawVanguardMapOverlay before POI labels)
+    // Driveable Vehicles (hover_tank & choppa rendered in Wave-12/Wave-13 overlays before POI labels)
     if (this.vehicles.length > 0) {
       ctx.save();
       for (const vehicle of this.vehicles) {
-        if (vehicle.destroyed || vehicle.kind === 'hover_tank') continue;
+        if (
+          vehicle.destroyed ||
+          vehicle.kind === 'hover_tank' ||
+          vehicle.kind === 'choppa'
+        ) {
+          continue;
+        }
         const vp = toPx(vehicle.x, vehicle.z);
         const occupied = vehicle.driverId !== null;
         if (vehicle.kind === 'speedboat') {
@@ -1295,6 +1329,17 @@ export class FullMapOverlay {
       pxPerMeter,
       toPx,
       state.hotDropPoiIds,
+      this.vehicles,
+      performance.now(),
+    );
+
+    // Wave-13 Sovereign Overlay (Rune Monoliths & Storm Choppa rotor icons)
+    drawSovereignMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      this.sovereignOverlay,
       this.vehicles,
       performance.now(),
     );

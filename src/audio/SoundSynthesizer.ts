@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 151 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 158 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -401,6 +401,20 @@ export class SoundSynthesizer {
         return this.playStreakSurge(t, targetNode, vol, pitch);
       case 'hot_drop_chime':
         return this.playHotDropChime(t, targetNode, vol, pitch);
+      case 'arc_shot':
+        return this.playArcShot(t, targetNode, vol, pitch);
+      case 'arc_chain':
+        return this.playArcChain(t, targetNode, vol, pitch);
+      case 'cloak_activate':
+        return this.playCloakActivate(t, targetNode, vol, pitch);
+      case 'cloak_decloak':
+        return this.playCloakDecloak(t, targetNode, vol, pitch);
+      case 'rune_attune':
+        return this.playRuneAttune(t, targetNode, vol, pitch);
+      case 'choppa_rotor':
+        return this.playChoppaRotor(t, targetNode, vol, pitch);
+      case 'choppa_boost':
+        return this.playChoppaBoost(t, targetNode, vol, pitch);
       default: {
         const exhaustive: never = id;
         return exhaustive;
@@ -8889,6 +8903,582 @@ export class SoundSynthesizer {
       wet: 0.38,
     });
     return 0.72;
+  }
+
+  // --- Wave 13 Bespoke SFX ---
+
+  private playArcShot(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.03) * pitch;
+    // Deep electromagnetic capacitor discharge kick
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 142 * jitter,
+      freqEnd: 28 * jitter,
+      duration: 0.24,
+      gain: 0.56 * vol,
+      wet: 0.26,
+    });
+    // Storm-Breaker twin-rail lightning plasma sweep
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 1720 * jitter,
+      freqEnd: 195 * jitter,
+      duration: 0.18,
+      gain: 0.32 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 4400,
+      filterFreqEnd: 420,
+      wet: 0.26,
+    });
+    // High-voltage Tesla coil snap transient
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 2680 * jitter,
+      freqEnd: 460 * jitter,
+      duration: 0.09,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3400 * jitter,
+      filterFreqEnd: 960 * jitter,
+      filterQ: 2.4,
+      wet: 0.22,
+    });
+    // Crackling arc-bolt FM plasma discharge resonance
+    this.playFmAura(
+      target,
+      t + 0.008,
+      0.24,
+      980 * jitter,
+      310 * jitter,
+      380 * jitter,
+      140 * jitter,
+      260 * jitter,
+      0.19 * vol,
+      4400,
+      920,
+      0.32,
+    );
+    // Sharp electric discharge snap
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.11,
+      gain: 0.5 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 4800 * jitter,
+      filterFreqEnd: 1250 * jitter,
+      filterQ: 1.5,
+      distort: true,
+      wet: 0.24,
+    });
+    // Ionized ozone thunder tail
+    this.noise(target, t + 0.015, {
+      buffer: 'pink',
+      duration: 0.38,
+      attack: 0.006,
+      gain: 0.36 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2600 * jitter,
+      filterFreqEnd: 240,
+      distort: true,
+      wet: 0.32,
+    });
+    return 0.42;
+  }
+
+  private playArcChain(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.05) * pitch;
+    // Crisp lightning arc jump sub-pop
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 185 * jitter,
+      freqEnd: 54 * jitter,
+      duration: 0.12,
+      gain: 0.34 * vol,
+      wet: 0.22,
+    });
+    // Primary arc-branch jump zap
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 2150 * jitter,
+      freqEnd: 880 * jitter,
+      duration: 0.07,
+      gain: 0.2 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2900 * jitter,
+      filterFreqEnd: 1100 * jitter,
+      filterQ: 2.8,
+      wet: 0.24,
+    });
+    // Secondary staggered chain-lightning jump chirp
+    this.tone(target, t + 0.055, {
+      type: 'square',
+      freqStart: 2640 * jitter,
+      freqEnd: 1180 * jitter,
+      duration: 0.075,
+      gain: 0.18 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3400 * jitter,
+      filterFreqEnd: 1400 * jitter,
+      filterQ: 2.8,
+      wet: 0.26,
+    });
+    // High-voltage chain arc FM flutter
+    this.playFmAura(
+      target,
+      t + 0.01,
+      0.18,
+      1120 * jitter,
+      540 * jitter,
+      460 * jitter,
+      210 * jitter,
+      290 * jitter,
+      0.17 * vol,
+      4600,
+      1150,
+      0.3,
+    );
+    // Crisp electric spark crackle 1
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.065,
+      gain: 0.38 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 5200 * jitter,
+      filterFreqEnd: 1800 * jitter,
+      filterQ: 1.9,
+      distort: true,
+      wet: 0.24,
+    });
+    // Secondary branched spark snap
+    this.noise(target, t + 0.055, {
+      buffer: 'white',
+      duration: 0.08,
+      gain: 0.26 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3100,
+      distort: true,
+      wet: 0.26,
+    });
+    // Ionized static decay hiss
+    this.noise(target, t + 0.03, {
+      buffer: 'pink',
+      duration: 0.2,
+      attack: 0.008,
+      gain: 0.2 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2400 * jitter,
+      filterFreqEnd: 420,
+      wet: 0.28,
+    });
+    return 0.28;
+  }
+
+  private playCloakActivate(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Deep shadowy phase-cloak bass engulfment
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 118 * pitch,
+      freqEnd: 34 * pitch,
+      duration: 0.42,
+      attack: 0.03,
+      gain: 0.46 * vol,
+      wet: 0.34,
+    });
+    // Hollow descending stealth-veil resonant sweep
+    this.tone(target, t + 0.015, {
+      type: 'triangle',
+      freqStart: 780 * pitch,
+      freqEnd: 145 * pitch,
+      duration: 0.44,
+      attack: 0.025,
+      gain: 0.24 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2100 * pitch,
+      filterFreqEnd: 280,
+      wet: 0.36,
+    });
+    // Ghostly obsidian-violet crystalline vanish overtone
+    this.tone(target, t + 0.04, {
+      type: 'sine',
+      freqStart: 1318.51 * pitch,
+      freqEnd: 659.25 * pitch,
+      duration: 0.36,
+      attack: 0.04,
+      gain: 0.14 * vol,
+      wet: 0.38,
+    });
+    // Dark spectral phase-shift FM shimmer
+    this.playFmAura(
+      target,
+      t + 0.03,
+      0.48,
+      520 * pitch,
+      180 * pitch,
+      165 * pitch,
+      58 * pitch,
+      125 * pitch,
+      0.18 * vol,
+      2600,
+      480,
+      0.4,
+    );
+    // Velvety shadow-cloak downward air sweep
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.48,
+      attack: 0.04,
+      gain: 0.36 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1850 * pitch,
+      filterFreqEnd: 280 * pitch,
+      filterQ: 1.6,
+      wet: 0.36,
+    });
+    // Ethereal stealth mist dissolve tail
+    this.noise(target, t + 0.06, {
+      buffer: 'white',
+      duration: 0.4,
+      attack: 0.05,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2800,
+      wet: 0.38,
+    });
+    return 0.58;
+  }
+
+  private playCloakDecloak(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Rising sub-bass phase re-entry swell
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 48 * pitch,
+      freqEnd: 132 * pitch,
+      duration: 0.22,
+      attack: 0.02,
+      gain: 0.38 * vol,
+      wet: 0.28,
+    });
+    // Crisp materialization reveal punch
+    this.tone(target, t + 0.12, {
+      type: 'sine',
+      freqStart: 175 * pitch,
+      freqEnd: 48 * pitch,
+      duration: 0.18,
+      gain: 0.44 * vol,
+      wet: 0.26,
+    });
+    // Ascending spectral phase-lock sweep
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 190 * pitch,
+      freqEnd: 920 * pitch,
+      duration: 0.28,
+      attack: 0.015,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 420 * pitch,
+      filterFreqEnd: 2800 * pitch,
+      filterQ: 1.8,
+      wet: 0.3,
+    });
+    // Sharp bright uncloak rune harmonic chime
+    this.tone(target, t + 0.11, {
+      type: 'sine',
+      freqStart: 880 * pitch,
+      freqEnd: 1318.51 * pitch,
+      duration: 0.24,
+      attack: 0.01,
+      gain: 0.15 * vol,
+      wet: 0.32,
+    });
+    // Unfolding cloak phase FM shimmer
+    this.playFmAura(
+      target,
+      t + 0.04,
+      0.34,
+      280 * pitch,
+      860 * pitch,
+      95 * pitch,
+      320 * pitch,
+      140 * pitch,
+      0.17 * vol,
+      900,
+      3800,
+      0.34,
+    );
+    // Upward air-rush materialization swell
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.34,
+      attack: 0.02,
+      gain: 0.32 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 360 * pitch,
+      filterFreqEnd: 2200 * pitch,
+      filterQ: 1.4,
+      wet: 0.3,
+    });
+    // Crisp decloak phase-snap transient
+    this.noise(target, t + 0.11, {
+      buffer: 'white',
+      duration: 0.11,
+      gain: 0.28 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3600 * pitch,
+      filterFreqEnd: 1400,
+      filterQ: 1.8,
+      wet: 0.26,
+    });
+    return 0.46;
+  }
+
+  private playRuneAttune(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Deep ancient basalt monolith sub-resonance
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 110 * pitch,
+      freqEnd: 48 * pitch,
+      duration: 0.56,
+      attack: 0.025,
+      gain: 0.48 * vol,
+      wet: 0.34,
+    });
+    // Mystical violet Storm-Rune attunement progression (D4 -> F4 -> A4 -> C5 -> F5)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.02, freq: 293.66, dur: 0.2, gain: 0.14 },
+        { offset: 0.1, freq: 349.23, dur: 0.22, gain: 0.15 },
+        { offset: 0.18, freq: 440.0, dur: 0.26, gain: 0.17 },
+        { offset: 0.28, freq: 698.46, dur: 0.44, gain: 0.19 },
+      ],
+      'triangle',
+      'sine',
+      1.5,
+      0.42,
+      3200,
+    );
+    // Arcane Storm-Blessing crystalline FM aura
+    this.playFmAura(
+      target,
+      t + 0.1,
+      0.62,
+      440 * pitch,
+      880 * pitch,
+      220 * pitch,
+      440 * pitch,
+      110 * pitch,
+      0.18 * vol,
+      1400,
+      4600,
+      0.44,
+    );
+    // Violet arcane monolith energy wind swirl
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.58,
+      attack: 0.04,
+      gain: 0.28 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 460 * pitch,
+      filterFreqEnd: 2100 * pitch,
+      filterQ: 1.7,
+      wet: 0.38,
+    });
+    // High shimmering rune-glyph dust sparkle
+    this.noise(target, t + 0.15, {
+      buffer: 'white',
+      duration: 0.48,
+      attack: 0.04,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3400,
+      wet: 0.4,
+    });
+    return 0.78;
+  }
+
+  private playChoppaRotor(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.04) * pitch;
+    // Continuous turbine core hum undertone
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 72 * jitter,
+      freqEnd: 86 * jitter,
+      duration: 0.38,
+      attack: 0.02,
+      gain: 0.26 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 420 * jitter,
+      filterFreqEnd: 580 * jitter,
+      wet: 0.22,
+    });
+    // Rhythmic multi-blade rotor slap pulses (3 distinct chop beats)
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 108 * jitter,
+      freqEnd: 34 * jitter,
+      duration: 0.11,
+      gain: 0.44 * vol,
+      wet: 0.18,
+    });
+    this.tone(target, t + 0.115, {
+      type: 'sine',
+      freqStart: 114 * jitter,
+      freqEnd: 35 * jitter,
+      duration: 0.11,
+      gain: 0.42 * vol,
+      wet: 0.18,
+    });
+    this.tone(target, t + 0.23, {
+      type: 'sine',
+      freqStart: 110 * jitter,
+      freqEnd: 34 * jitter,
+      duration: 0.12,
+      gain: 0.4 * vol,
+      wet: 0.18,
+    });
+    // Tail-rotor high-speed harmonic buzz
+    this.tone(target, t + 0.01, {
+      type: 'triangle',
+      freqStart: 220 * jitter,
+      freqEnd: 248 * jitter,
+      duration: 0.36,
+      attack: 0.02,
+      gain: 0.15 * vol,
+      wet: 0.2,
+    });
+    // Rhythmic downwash air-chop pulse 1
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.11,
+      gain: 0.44 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 380 * jitter,
+      filterFreqEnd: 140,
+      filterQ: 1.1,
+      distort: true,
+      wet: 0.2,
+    });
+    // Rhythmic downwash air-chop pulse 2
+    this.noise(target, t + 0.115, {
+      buffer: 'pink',
+      duration: 0.11,
+      gain: 0.42 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 410 * jitter,
+      filterFreqEnd: 145,
+      filterQ: 1.1,
+      distort: true,
+      wet: 0.2,
+    });
+    // Blade-tip aerodynamic air slice
+    this.noise(target, t + 0.23, {
+      buffer: 'white',
+      duration: 0.15,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1400 * jitter,
+      filterFreqEnd: 480,
+      filterQ: 1.3,
+      wet: 0.22,
+    });
+    return 0.44;
+  }
+
+  private playChoppaBoost(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Heavy twin-turbine afterburner sub-kick
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 96 * pitch,
+      freqEnd: 32 * pitch,
+      duration: 0.42,
+      gain: 0.54 * vol,
+      wet: 0.26,
+    });
+    // Turbo-shaft engine spool-up roar
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 118 * pitch,
+      freqEnd: 460 * pitch,
+      duration: 0.54,
+      attack: 0.025,
+      gain: 0.3 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 480 * pitch,
+      filterFreqEnd: 2200 * pitch,
+      wet: 0.28,
+    });
+    // High-RPM rotor gearbox harmonic whine
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 260 * pitch,
+      freqEnd: 780 * pitch,
+      duration: 0.5,
+      attack: 0.03,
+      gain: 0.2 * vol,
+      wet: 0.26,
+    });
+    // Accelerated rotor blade-slap pulse 1
+    this.tone(target, t + 0.02, {
+      type: 'sine',
+      freqStart: 132 * pitch,
+      freqEnd: 42 * pitch,
+      duration: 0.09,
+      gain: 0.34 * vol,
+      wet: 0.2,
+    });
+    // Accelerated rotor blade-slap pulse 2
+    this.tone(target, t + 0.1, {
+      type: 'sine',
+      freqStart: 146 * pitch,
+      freqEnd: 46 * pitch,
+      duration: 0.09,
+      gain: 0.32 * vol,
+      wet: 0.2,
+    });
+    // Jet-exhaust turbine FM roar
+    this.playFmAura(
+      target,
+      t + 0.03,
+      0.48,
+      320 * pitch,
+      740 * pitch,
+      84 * pitch,
+      190 * pitch,
+      165 * pitch,
+      0.18 * vol,
+      1100,
+      3400,
+      0.3,
+    );
+    // Pressurized turbo-exhaust air blast
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.58,
+      attack: 0.02,
+      gain: 0.52 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 320 * pitch,
+      filterFreqEnd: 2100 * pitch,
+      filterQ: 1.3,
+      distort: true,
+      wet: 0.3,
+    });
+    // High-velocity blade-tip air shear
+    this.noise(target, t + 0.03, {
+      buffer: 'white',
+      duration: 0.48,
+      attack: 0.025,
+      gain: 0.26 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2100,
+      wet: 0.3,
+    });
+    return 0.64;
   }
 
   private playHarmonicProgression(

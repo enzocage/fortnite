@@ -108,7 +108,7 @@ export interface LootLlamaEntity {
   opened: boolean;
 }
 
-export type VehicleKind = 'hover_atv' | 'cyber_bike' | 'speedboat' | 'hover_tank';
+export type VehicleKind = 'hover_atv' | 'cyber_bike' | 'speedboat' | 'hover_tank' | 'choppa';
 
 export interface VehicleEntity {
   id: string;
@@ -128,6 +128,8 @@ export interface VehicleEntity {
   isBoosting: boolean;
   driverId: string | null;
   destroyed: boolean;
+  altitude?: number;
+  rotorRpm?: number;
 }
 
 export type WeatherKind = 'clear' | 'golden_hour' | 'overcast' | 'rain' | 'storm_front';
@@ -476,6 +478,16 @@ export interface PlacedC4Entity {
   y: number;
   z: number;
   alive: boolean;
+}
+
+export interface RuneMonolithEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  attuned: boolean;
+  cooldownSec: number;
 }
 
 export interface SupplyDrop {

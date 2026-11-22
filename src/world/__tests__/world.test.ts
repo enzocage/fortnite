@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
+  CHOPPA_ASCEND_SPEED,
+  CHOPPA_DESCEND_SPEED,
+  CHOPPA_MAX_ALTITUDE_AGL,
   EventBus,
   GRIND_RAIL_SPEED,
   HOT_DROP_POI_COUNT,
@@ -10,9 +13,12 @@ import {
   PLAYER_RADIUS,
   POIS,
   REBOOT_VAN_COOLDOWN_SEC,
+  RUNE_MONOLITH_COOLDOWN_SEC,
+  RUNE_MONOLITH_COUNT,
   SHIELD_MUSHROOM_RESPAWN_SEC,
   SKY_BALLOON_HEIGHT,
   STEP_HEIGHT,
+  STORM_BLESSING_SHIELD_BONUS,
   STORM_PHASES,
   TRAIN_CHEST_COOLDOWN_SEC,
   TRAIN_HACK_DURATION_SEC,
@@ -40,6 +46,7 @@ import {
   type FishingCastResult,
   type GrindRailSampleResult,
   type NearbyGrindRailResult,
+  type RuneMonolithAttuneResult,
   type SupplyDroneDamageResult,
   type Wave7ShowcaseResult,
   type Wave8ShowcaseResult,
@@ -47,6 +54,7 @@ import {
   type Wave10ShowcaseResult,
   type Wave11ShowcaseResult,
   type Wave12ShowcaseResult,
+  type Wave13ShowcaseResult,
 } from '../index';
 import type { WeatherKind } from '../../types';
 
@@ -1126,7 +1134,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(barrels).toHaveLength(24);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
     expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     for (const sb of barrels) {
       expect(sb.hp).toBe(40);
@@ -1172,7 +1180,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(sb0.destroyed).toBe(true);
     expect(sbGroup.visible).toBe(false);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
     expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
     expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1198,7 +1206,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     ).toBe(true);
     expect(sbGroup.visible).toBe(true);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     interactables.dispose();
     builder.dispose();
@@ -1207,7 +1215,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
 });
 
 describe('VehicleSystem', () => {
-  it('spawns 14 deterministic vehicles (4 hover_atv + 4 cyber_bike + 4 speedboat + 2 hover_tank) clear of buildings', () => {
+  it('spawns 16 deterministic vehicles (4 hover_atv + 4 cyber_bike + 4 speedboat + 2 hover_tank + 2 choppa) clear of buildings', () => {
     const terrain = new TerrainSystem(4201);
     const builder = new WorldBuilder();
     const world = builder.build(terrain, 'low');
@@ -1217,14 +1225,15 @@ describe('VehicleSystem', () => {
 
     const v1 = vs1.getVehicles();
     const v2 = vs2.getVehicles();
-    expect(v1).toHaveLength(14);
-    expect(v2).toHaveLength(14);
+    expect(v1).toHaveLength(16);
+    expect(v2).toHaveLength(16);
     expect(v1.filter((v) => v.kind === 'hover_atv')).toHaveLength(4);
     expect(v1.filter((v) => v.kind === 'cyber_bike')).toHaveLength(4);
     expect(v1.filter((v) => v.kind === 'speedboat')).toHaveLength(4);
     expect(v1.filter((v) => v.kind === 'hover_tank')).toHaveLength(2);
+    expect(v1.filter((v) => v.kind === 'choppa')).toHaveLength(2);
     expect(vs1.getGroup()).toBeInstanceOf(THREE.Group);
-    expect(vs1.getActiveVehicleColliders()).toHaveLength(14);
+    expect(vs1.getActiveVehicleColliders()).toHaveLength(16);
 
     for (let i = 0; i < v1.length; i++) {
       expect(v1[i].id).toBe(v2[i].id);
@@ -1308,7 +1317,7 @@ describe('VehicleSystem', () => {
 
     // Water floatation over Crystal Basin lake (25 + 35, -115)
     const waterBike = vs.spawnVehicleAt('cyber_bike', 60, -115, 0);
-    expect(vs.getVehicles()).toHaveLength(15);
+    expect(vs.getVehicles()).toHaveLength(17);
     expect(terrain.isWater(waterBike.x, waterBike.z)).toBe(true);
     expect(waterBike.y).toBeGreaterThan(WATER_LEVEL + 0.3);
 
@@ -1338,7 +1347,7 @@ describe('VehicleSystem', () => {
     vs.exitVehicle(waterBoat.id, 'boat_driver');
 
     const dryBoat = vs.spawnVehicleAt('speedboat', -75, -40, 0);
-    expect(vs.getVehicles()).toHaveLength(16);
+    expect(vs.getVehicles()).toHaveLength(18);
     expect(terrain.isWater(dryBoat.x, dryBoat.z)).toBe(false);
     vs.enterVehicle(dryBoat.id, 'land_driver');
     for (let i = 0; i < 60; i++) {
@@ -1348,7 +1357,7 @@ describe('VehicleSystem', () => {
     const dryTopSpeed = Math.hypot(dryBoat.vx, dryBoat.vz);
 
     const waterCruiseBoat = vs.spawnVehicleAt('speedboat', 260, 260, Math.PI * 0.25);
-    expect(vs.getVehicles()).toHaveLength(17);
+    expect(vs.getVehicles()).toHaveLength(19);
     vs.enterVehicle(waterCruiseBoat.id, 'water_cruise_driver');
     for (let i = 0; i < 60; i++) {
       vs.driveVehicle(waterCruiseBoat.id, 1, 0, false, 0.05);
@@ -1376,12 +1385,13 @@ describe('VehicleSystem', () => {
     expect(first.hp).toBe(0);
     expect(explosionSpy).toHaveBeenCalledTimes(1);
     expect(vs.enterVehicle(first.id, 'player')).toBe(false);
-    expect(vs.getActiveVehicleColliders()).toHaveLength(17);
+    expect(vs.getActiveVehicleColliders()).toHaveLength(19);
 
     vs.reset();
-    expect(vs.getVehicles()).toHaveLength(14);
+    expect(vs.getVehicles()).toHaveLength(16);
     expect(vs.getVehicles().filter((v) => v.kind === 'speedboat')).toHaveLength(4);
     expect(vs.getVehicles().filter((v) => v.kind === 'hover_tank')).toHaveLength(2);
+    expect(vs.getVehicles().filter((v) => v.kind === 'choppa')).toHaveLength(2);
     expect(vs.getVehicles().every((v) => !v.destroyed && v.hp === v.maxHp)).toBe(true);
 
     vs.dispose();
@@ -1442,7 +1452,7 @@ describe('VehicleSystem', () => {
     const spawnedTank = vs.spawnVehicleAt('hover_tank', -75, -10, 0);
     expect(spawnedTank.kind).toBe('hover_tank');
     expect(spawnedTank.maxHp).toBe(900);
-    expect(vs.getVehicles()).toHaveLength(15);
+    expect(vs.getVehicles()).toHaveLength(17);
 
     vs.enterVehicle(spawnedTank.id, 'tanker');
     for (let i = 0; i < 80; i++) {
@@ -1466,8 +1476,9 @@ describe('VehicleSystem', () => {
     expect(vs.getTankCannonMuzzle(spawnedTank.id)).toBeNull();
 
     vs.reset();
-    expect(vs.getVehicles()).toHaveLength(14);
+    expect(vs.getVehicles()).toHaveLength(16);
     expect(vs.getVehicles().filter((v) => v.kind === 'hover_tank')).toHaveLength(2);
+    expect(vs.getVehicles().filter((v) => v.kind === 'choppa')).toHaveLength(2);
     vs.dispose();
     terrain.dispose();
   });
@@ -1800,7 +1811,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     const expBarrels = interactables.getExplosiveBarrels();
     expect(expBarrels).toHaveLength(18);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     for (const eb of expBarrels) {
       expect(eb.hp).toBe(35);
@@ -1872,7 +1883,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     expect(eb0.exploded).toBe(true);
     expect(ebGroup.visible).toBe(false);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(17);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
     expect(interactables.damageExplosiveBarrel(eb0.id, 10)).toBeNull();
     expect(interactables.damageExplosiveBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1911,7 +1922,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     ).toBe(true);
     expect(ebGroup.visible).toBe(true);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -2138,7 +2149,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandCols[0].maxY).toBeCloseTo(groundY + 24, 4);
     expect(islandCols[0].minZ).toBeCloseTo(cz - 12.5, 4);
     expect(islandCols[0].maxZ).toBeCloseTo(cz + 12.5, 4);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 1 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 1 + 6 + 4 + 4 + 4);
 
     // 10s capture duration
     const islandFlagGroup = islandMesh.children[islandMesh.children.length - 1] as THREE.Group;
@@ -2182,7 +2193,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandMesh.visible).toBe(false);
     expect(geyserMesh.visible).toBe(false);
     expect(interactables.getLootIslandColliders()).toHaveLength(0);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -2802,7 +2813,7 @@ describe('WorldInteractables Wave-7 Grind Rails, Reboot Vans, Supply Drones & Sh
     const vans = interactables.getRebootVans();
     expect(vans).toHaveLength(6);
     expect(interactables.getRebootVanColliders()).toHaveLength(6);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     for (const van of vans) {
       expect(van.available).toBe(true);
@@ -2981,7 +2992,7 @@ describe('WorldInteractables Wave-7 Grind Rails, Reboot Vans, Supply Drones & Sh
     expect(interactables.getRebootVanColliders()).toHaveLength(6);
     expect(interactables.getGrindRails()).toHaveLength(4);
     expect(interactables.getSupplyDrones()).toHaveLength(12);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     interactables.dispose();
     terrain.dispose();
@@ -3328,14 +3339,14 @@ describe('WorldInteractables Wave-8 Mod Benches, Forecast Towers, Stealth Bushes
     expect(bush0Foliage.rotation.x).toBe(0);
     expect(bush0Foliage.scale.x).toBe(1);
 
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     // 4. reset() restores Forecast Towers & Stealth Bushes
     interactables.reset();
     expect(interactables.getForecastTowers().every((t) => !t.scanned && t.scannedBy === null)).toBe(true);
     expect((ft0BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString()).toBe(unscannedHex);
     expect(interactables.scanForecastTower(ft0.id, 'player2')).toBe(true);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -3391,7 +3402,7 @@ describe('WorldInteractables Wave-8 Mod Benches, Forecast Towers, Stealth Bushes
     expect(interactables.getForecastTowers()).toHaveLength(4);
     expect(interactables.getForecastTowerColliders()).toHaveLength(4);
     expect(interactables.getStealthBushes()).toHaveLength(28);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     interactables.dispose();
     terrain.dispose();
@@ -3903,7 +3914,7 @@ describe('WorldInteractables Wave-9 Apex Express Train, Meteor Craters & Showcas
     // reset() restores base 6 craters and base island mid-ring track
     interactables.reset();
     expect(interactables.getMeteorCraters()).toHaveLength(6);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     interactables.dispose();
     terrain.dispose();
@@ -4204,7 +4215,7 @@ describe('WorldInteractables Wave-10 Shield Mushrooms, Wild Loot Boars & Showcas
         .every((b) => b.alive && b.hp === WILD_BOAR_MAX_HP && b.state === 'roam'),
     ).toBe(true);
     expect(b0Group.visible).toBe(true);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -4482,7 +4493,7 @@ describe('WorldInteractables Wave-11 Rippling Fishing Holes, Tethered Sky-Ascent
       new Set(['metro_towers', 'crystal_basin', 'market_row', 'crater_depot']),
     );
     expect(interactables.getSkyBalloonColliders()).toHaveLength(4);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     for (const b of balloons) {
       expect(terrain.isWater(b.x, b.z)).toBe(false);
@@ -4595,7 +4606,7 @@ describe('WorldInteractables Wave-11 Rippling Fishing Holes, Tethered Sky-Ascent
     interactables.reset();
     expect(interactables.getSkyBalloons()).toHaveLength(4);
     expect(interactables.getFishingHoles()).toHaveLength(14);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4);
 
     interactables.dispose();
     expect(interactables.getSkyBalloons()).toHaveLength(0);
@@ -4934,6 +4945,439 @@ describe('Wave-12 Loot Pools, 3D Pickup Silhouettes & GLSL Shader Validation', (
     const storm = new StormSystem(4201, 'solo');
     const interactables = new WorldInteractables(terrain, bus);
     interactables.selectHotDropPois(4201);
+    const detail = new EnvironmentDetail(terrain, world.colliders, 'low', 4201);
+
+    const shaderMats: THREE.ShaderMaterial[] = [];
+    for (const root of [fx.getGroup(), world.group, storm.getMesh(), interactables.getGroup()]) {
+      root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof THREE.ShaderMaterial) {
+          shaderMats.push(obj.material);
+        }
+      });
+    }
+    expect(shaderMats.length).toBeGreaterThanOrEqual(6);
+
+    for (const mat of shaderMats) {
+      for (const glsl of [mat.vertexShader, mat.fragmentShader]) {
+        const smoothMatches = [
+          ...glsl.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g),
+        ];
+        for (const m of smoothMatches) {
+          expect(Number(m[1])).toBeLessThan(Number(m[2]));
+        }
+        const usedUniforms = new Set(glsl.match(/\bu[A-Z][A-Za-z0-9_]*/g) ?? []);
+        for (const uName of usedUniforms) {
+          expect(glsl).toMatch(
+            new RegExp(`uniform\\s+(?:float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\\s+${uName}\\b`),
+          );
+          expect(mat.uniforms[uName]).toBeDefined();
+        }
+      }
+    }
+
+    const grassMesh = detail.getGroup().getObjectByName('InstancedGrass') as THREE.InstancedMesh;
+    const grassMat = grassMesh.material as THREE.MeshStandardMaterial;
+    const mockShader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: '#include <common>\nvoid main() {\n#include <begin_vertex>\n}',
+      fragmentShader: '',
+    };
+    grassMat.onBeforeCompile(
+      mockShader as unknown as THREE.WebGLProgramParametersWithUniforms,
+      {} as THREE.WebGLRenderer,
+    );
+    expect(mockShader.vertexShader).toContain('uniform float uWindTime;');
+    expect(mockShader.vertexShader).toContain('uniform float uWindStrength;');
+
+    detail.dispose();
+    interactables.dispose();
+    storm.dispose();
+    fx.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('Wave-13 VehicleSystem Storm Choppa Helicopter', () => {
+  it('spawns 2 deterministic Storm Choppas near Frostpeak & Skyline overlooks (16 vehicles across 5 kinds) with rotor pivots, flight AGL physics, and wash VFX', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const vs = new VehicleSystem(terrain, bus, 4201);
+
+    const washSpy = vi.fn();
+    const soundSpy = vi.fn();
+    bus.on('vfx:choppa_wash', washSpy);
+    bus.on('sound:play', soundSpy);
+
+    const all = vs.getVehicles();
+    expect(all).toHaveLength(16);
+    expect(all.filter((v) => v.kind === 'hover_atv')).toHaveLength(4);
+    expect(all.filter((v) => v.kind === 'cyber_bike')).toHaveLength(4);
+    expect(all.filter((v) => v.kind === 'speedboat')).toHaveLength(4);
+    expect(all.filter((v) => v.kind === 'hover_tank')).toHaveLength(2);
+    const choppas = all.filter((v) => v.kind === 'choppa');
+    expect(choppas).toHaveLength(2);
+
+    const frostpeak = POIS.find((p) => p.id === 'frostpeak_citadel')!;
+    const skyline = POIS.find((p) => p.id === 'skyline_spire')!;
+    expect(choppas.some((c) => Math.hypot(c.x - frostpeak.x, c.z - frostpeak.z) < 55)).toBe(true);
+    expect(choppas.some((c) => Math.hypot(c.x - skyline.x, c.z - skyline.z) < 55)).toBe(true);
+
+    for (const ch of choppas) {
+      expect(ch.maxHp).toBe(1000);
+      expect(ch.hp).toBe(1000);
+      expect(ch.altitude).toBeCloseTo(1.05, 4);
+      expect(ch.rotorRpm).toBe(0);
+      expect(terrain.isWater(ch.x, ch.z)).toBe(false);
+      expect(terrain.getNormalAt(ch.x, ch.z).y).toBeGreaterThan(0.95);
+
+      const blockingProp = pal.getProps().find((p) => Math.hypot(ch.x - p.x, ch.z - p.z) < p.radius + 2.5);
+      expect(blockingProp, `${ch.id} near prop ${blockingProp?.kind}`).toBeUndefined();
+
+      const chGroup = vs.getGroup().getObjectByName(`Vehicle_${ch.id}`) as THREE.Group;
+      expect(chGroup).toBeDefined();
+      const bodyPivot = chGroup.children[0] as THREE.Group;
+      expect(bodyPivot.children.length).toBeGreaterThanOrEqual(15);
+      const rotorPivot = chGroup.getObjectByName('rotorPivot') as THREE.Group;
+      const tailRotorPivot = chGroup.getObjectByName('tailRotorPivot') as THREE.Group;
+      expect(rotorPivot).toBeDefined();
+      expect(tailRotorPivot).toBeDefined();
+      expect(rotorPivot.children.length).toBeGreaterThanOrEqual(4);
+      expect(tailRotorPivot.children.length).toBeGreaterThanOrEqual(3);
+    }
+
+    // Spawn test choppa on open dry Metro plateau and exercise full flight lifecycle
+    const c0 = vs.spawnVehicleAt('choppa', -75, -10, 0);
+    expect(vs.getVehicles()).toHaveLength(17);
+    expect(vs.enterVehicle(c0.id, 'pilot')).toBe(true);
+
+    const c0Group = vs.getGroup().getObjectByName(`Vehicle_${c0.id}`) as THREE.Group;
+    const mainRotor = c0Group.getObjectByName('rotorPivot') as THREE.Group;
+    const tailRotor = c0Group.getObjectByName('tailRotorPivot') as THREE.Group;
+    const mainRotBefore = mainRotor.rotation.y;
+    const tailRotBefore = tailRotor.rotation.x;
+
+    // Low-altitude hover (< 9m AGL) emits periodic vfx:choppa_wash and spins rotors
+    for (let i = 0; i < 6; i++) {
+      vs.driveVehicle(c0.id, 0, 0, false, 0.05, 0);
+      vs.update(0.05, i * 0.05);
+    }
+    expect(washSpy).toHaveBeenCalled();
+    expect(washSpy.mock.calls[0][0].intensity).toBeGreaterThan(0.1);
+    expect(washSpy.mock.calls[0][0].intensity).toBeLessThanOrEqual(1);
+    expect(c0.rotorRpm!).toBeGreaterThan(0.5);
+    expect(c0.rotorRpm!).toBeLessThanOrEqual(1);
+    expect(mainRotor.rotation.y).not.toBeCloseTo(mainRotBefore, 2);
+    expect(tailRotor.rotation.x).not.toBeCloseTo(tailRotBefore, 2);
+
+    // Ascend cleanly at CHOPPA_ASCEND_SPEED up to CHOPPA_MAX_ALTITUDE_AGL (42m)
+    const altAfter1sStart = c0.altitude!;
+    for (let i = 0; i < 20; i++) {
+      vs.driveVehicle(c0.id, 0, 0, false, 0.05, 1);
+      vs.update(0.05, 0.3 + i * 0.05);
+    }
+    expect(c0.altitude! - altAfter1sStart).toBeGreaterThan(CHOPPA_ASCEND_SPEED * 0.65);
+    expect(c0.altitude!).toBeGreaterThan(10);
+
+    // Once above 9m AGL, vfx:choppa_wash stops emitting
+    washSpy.mockClear();
+    for (let i = 0; i < 50; i++) {
+      vs.driveVehicle(c0.id, 0, 0, false, 0.05, 1);
+      vs.update(0.05, 1.3 + i * 0.05);
+    }
+    expect(washSpy).not.toHaveBeenCalled();
+    expect(c0.altitude!).toBeCloseTo(CHOPPA_MAX_ALTITUDE_AGL, 1);
+    expect(c0.altitude!).toBeLessThanOrEqual(CHOPPA_MAX_ALTITUDE_AGL);
+
+    // Forward cruise (maxSpeed: 28) and boost (boostSpeed: 38 + choppa_boost)
+    soundSpy.mockClear();
+    for (let i = 0; i < 40; i++) {
+      vs.driveVehicle(c0.id, 1, 0, false, 0.05, 0);
+      vs.update(0.05, 3.8 + i * 0.05);
+    }
+    const cruiseSpeed = Math.hypot(c0.vx, c0.vz);
+    expect(cruiseSpeed).toBeGreaterThan(24);
+    expect(cruiseSpeed).toBeLessThanOrEqual(28.05);
+
+    for (let i = 0; i < 30; i++) {
+      vs.driveVehicle(c0.id, 1, 0.4, true, 0.05, 0);
+      vs.update(0.05, 5.8 + i * 0.05);
+    }
+    const boostSpeed = Math.hypot(c0.vx, c0.vz);
+    expect(boostSpeed).toBeGreaterThan(32);
+    expect(boostSpeed).toBeLessThanOrEqual(38.05);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'choppa_boost' }));
+
+    // Descend cleanly at CHOPPA_DESCEND_SPEED down to hoverHeight (1.05m) and resume rotor wash < 9m
+    const altBeforeDescend = c0.altitude!;
+    for (let i = 0; i < 20; i++) {
+      vs.driveVehicle(c0.id, 0, 0, false, 0.05, -1);
+      vs.update(0.05, 7.3 + i * 0.05);
+    }
+    expect(altBeforeDescend - c0.altitude!).toBeGreaterThan(CHOPPA_DESCEND_SPEED * 0.65);
+
+    washSpy.mockClear();
+    for (let i = 0; i < 65; i++) {
+      vs.driveVehicle(c0.id, 0, 0, false, 0.05, -1);
+      vs.update(0.05, 8.3 + i * 0.05);
+    }
+    expect(c0.altitude!).toBeCloseTo(1.05, 2);
+    expect(c0.altitude!).toBeGreaterThanOrEqual(1.05);
+    expect(washSpy).toHaveBeenCalled();
+
+    // Mid-air exit returns airborne coordinates cleanly
+    for (let i = 0; i < 25; i++) {
+      vs.driveVehicle(c0.id, 0, 0, false, 0.05, 1);
+      vs.update(0.05, 11.6 + i * 0.05);
+    }
+    const midAirExit = vs.exitVehicle(c0.id, 'pilot');
+    expect(midAirExit).not.toBeNull();
+    expect(midAirExit!.y).toBeGreaterThan(terrain.getHeightAt(midAirExit!.x, midAirExit!.z) + 5);
+
+    // reset() restores 16 default vehicles including 2 choppas
+    vs.reset();
+    expect(vs.getVehicles()).toHaveLength(16);
+    expect(vs.getVehicles().filter((v) => v.kind === 'choppa')).toHaveLength(2);
+    expect(vs.getVehicles().filter((v) => v.kind === 'choppa').every((c) => c.altitude === 1.05 && c.rotorRpm === 0)).toBe(true);
+
+    vs.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-13 Ancient Rune Monoliths & Showcase', () => {
+  it('constructs 4 Ancient Rune Monoliths clear of water/buildings/props/interactables with attune lifecycle, cooldown regen, showcase & reset', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const attuneVfxSpy = vi.fn();
+    const soundSpy = vi.fn();
+    bus.on('vfx:rune_attune', attuneVfxSpy);
+    bus.on('sound:play', soundSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 2.0) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.1 &&
+          c.minY < y + 4.0 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    const monoliths = interactables.getRuneMonoliths();
+    expect(monoliths).toHaveLength(RUNE_MONOLITH_COUNT);
+    expect(interactables.getRuneMonolithColliders()).toHaveLength(RUNE_MONOLITH_COUNT);
+    expect(interactables.getColliders()).toHaveLength(
+      15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4,
+    );
+
+    for (const rm of monoliths) {
+      expect(rm.attuned).toBe(false);
+      expect(rm.cooldownSec).toBe(0);
+      expect(terrain.isWater(rm.x, rm.z)).toBe(false);
+      expect(rm.y).toBeCloseTo(terrain.getHeightAt(rm.x, rm.z), 4);
+      expect(terrain.getNormalAt(rm.x, rm.z).y).toBeGreaterThan(0.95);
+      expect(isClearOfBuildings(rm.x, rm.y, rm.z, 2.0), `${rm.id} hits building`).toBe(true);
+
+      const blockingProp = pal.getProps().find((p) => Math.hypot(rm.x - p.x, rm.z - p.z) < p.radius + 2.0);
+      expect(blockingProp, `${rm.id} near prop ${blockingProp?.kind}`).toBeUndefined();
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(rm.x - veh.x, rm.z - veh.z)).toBeGreaterThan(4.5);
+      }
+      for (const mb of interactables.getModBenches()) {
+        expect(Math.hypot(rm.x - mb.x, rm.z - mb.z)).toBeGreaterThan(4.5);
+      }
+      for (const ft of interactables.getForecastTowers()) {
+        expect(Math.hypot(rm.x - ft.x, rm.z - ft.z)).toBeGreaterThan(4.5);
+      }
+      for (const sb of interactables.getSkyBalloons()) {
+        expect(Math.hypot(rm.x - sb.x, rm.z - sb.z)).toBeGreaterThan(4.5);
+      }
+
+      const group = interactables.getGroup().getObjectByName(`RuneMonolith_${rm.id}`) as THREE.Group;
+      const ring = interactables.getGroup().getObjectByName(`RuneMonolithRing_${rm.id}`) as THREE.Group;
+      expect(group).toBeDefined();
+      expect(ring).toBeDefined();
+      expect(ring.children.length).toBeGreaterThanOrEqual(6);
+    }
+
+    // Proximity lookup & safety guards
+    const m0 = monoliths[0];
+    expect(interactables.findNearbyRuneMonolith({ x: m0.x + 2.5, y: m0.y + 0.5, z: m0.z })?.id).toBe(m0.id);
+    expect(interactables.findNearbyRuneMonolith({ x: m0.x + 12, y: m0.y, z: m0.z })).toBeNull();
+    expect(interactables.findNearbyRuneMonolith({ x: Number.NaN, y: m0.y, z: m0.z })).toBeNull();
+    expect(interactables.findNearbyRuneMonolith({ x: m0.x, y: m0.y, z: m0.z }, -1)).toBeNull();
+
+    // Attune lifecycle + rewards + VFX/SFX + duplicate/invalid protection
+    const m0Ring = interactables.getGroup().getObjectByName(`RuneMonolithRing_${m0.id}`) as THREE.Group;
+    const rotBefore = m0Ring.rotation.y;
+    const res = interactables.attuneRuneMonolith(m0.id) as RuneMonolithAttuneResult;
+    expect(res.ok).toBe(true);
+    expect(res.position).toBeDefined();
+    expect(res.position!.x).toBe(m0.x);
+    expect(res.position!.z).toBe(m0.z);
+    expect(res.shieldBonus).toBe(STORM_BLESSING_SHIELD_BONUS);
+    expect(res.goldBonus).toBe(100);
+    expect(['storm_breaker', 'shadow_cloak']).toContain(res.weaponId);
+    expect(['mythic', 'legendary']).toContain(res.rarity);
+
+    expect(m0.attuned).toBe(true);
+    expect(m0.cooldownSec).toBe(RUNE_MONOLITH_COOLDOWN_SEC);
+    expect(attuneVfxSpy).toHaveBeenCalledTimes(1);
+    expect(attuneVfxSpy).toHaveBeenCalledWith({ position: res.position });
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'rune_attune' }));
+
+    expect(interactables.attuneRuneMonolith(m0.id)).toEqual({ ok: false });
+    expect(interactables.attuneRuneMonolith('nonexistent_monolith')).toEqual({ ok: false });
+    expect(interactables.findNearbyRuneMonolith({ x: m0.x, y: m0.y, z: m0.z })).toBeNull();
+
+    // Half cooldown + animation + full cooldown regen
+    interactables.update(25, 25);
+    expect(m0.attuned).toBe(true);
+    expect(m0.cooldownSec).toBeCloseTo(RUNE_MONOLITH_COOLDOWN_SEC - 25, 4);
+    expect(m0Ring.rotation.y).not.toBeCloseTo(rotBefore, 3);
+
+    interactables.update(40, 65);
+    expect(m0.attuned).toBe(false);
+    expect(m0.cooldownSec).toBe(0);
+    expect(interactables.findNearbyRuneMonolith({ x: m0.x, y: m0.y, z: m0.z })?.id).toBe(m0.id);
+
+    // qaPlaceWave13Showcase places dry-ground showcase monolith ahead-left and replaces cleanly
+    const basinShore = { x: 25, y: terrain.getHeightAt(25, -55), z: -55 };
+    const yawNorth = Math.PI;
+    const showcase: Wave13ShowcaseResult = interactables.qaPlaceWave13Showcase(basinShore, yawNorth);
+    expect(showcase.monolith.id).toBe('rune_monolith_qa_showcase');
+    expect(showcase.monolith.attuned).toBe(false);
+    expect(terrain.isWater(showcase.monolith.x, showcase.monolith.z)).toBe(false);
+
+    const fwdX = Math.sin(yawNorth);
+    const fwdZ = Math.cos(yawNorth);
+    const rightX = -Math.cos(yawNorth);
+    const rightZ = Math.sin(yawNorth);
+    const monoFwd = (showcase.monolith.x - basinShore.x) * fwdX + (showcase.monolith.z - basinShore.z) * fwdZ;
+    const monoRight = (showcase.monolith.x - basinShore.x) * rightX + (showcase.monolith.z - basinShore.z) * rightZ;
+    expect(monoFwd).toBeGreaterThan(2);
+    expect(monoRight).toBeLessThan(-1);
+    expect(interactables.getRuneMonoliths()).toHaveLength(5);
+    expect(interactables.getRuneMonolithColliders()).toHaveLength(5);
+
+    // Re-calling replaces cleanly without leaking duplicates
+    interactables.qaPlaceWave13Showcase({ x: -75, y: terrain.getHeightAt(-75, -12), z: -12 }, 0.25);
+    expect(interactables.getRuneMonoliths()).toHaveLength(5);
+
+    // reset() and dispose() clean up showcase monolith & restore base 4 monoliths
+    interactables.attuneRuneMonolith(m0.id);
+    interactables.reset();
+    expect(interactables.getRuneMonoliths()).toHaveLength(4);
+    expect(interactables.getRuneMonolithColliders()).toHaveLength(4);
+    expect(interactables.getRuneMonoliths().every((m) => !m.attuned && m.cooldownSec === 0)).toBe(true);
+    expect(interactables.getColliders()).toHaveLength(
+      15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4 + 4 + 4,
+    );
+
+    interactables.dispose();
+    expect(interactables.getRuneMonoliths()).toHaveLength(0);
+    expect(interactables.getRuneMonolithColliders()).toHaveLength(0);
+
+    vehicles.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('Wave-13 Loot Pools, 3D Pickup Meshes & GLSL Shader Validation', () => {
+  it('spawns storm_breaker and shadow_cloak across floor, chest, and supply-drop pools with distinct multi-part 3D pickup meshes', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 720; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('storm_breaker')).toBe(true);
+    expect(floorIds.has('shadow_cloak')).toBe(true);
+    expect(chestIds.has('storm_breaker')).toBe(true);
+    expect(chestIds.has('shadow_cloak')).toBe(true);
+
+    const dropsBeforeSupply = pal.getLootDrops().length;
+    for (let i = 0; i < 160; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    const supplyIds = new Set(
+      pal
+        .getLootDrops()
+        .slice(dropsBeforeSupply)
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(supplyIds.has('storm_breaker')).toBe(true);
+    expect(supplyIds.has('shadow_cloak')).toBe(true);
+
+    // Distinct multi-part 3D pickup meshes for storm_breaker & shadow_cloak
+    const groupBefore = pal.getGroup().children.length;
+    pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'arc_mesh_test', weaponId: 'storm_breaker', rarity: 'mythic', magAmmo: 20, stackCount: 1 } },
+    );
+    const arcDropGroup = pal.getGroup().children[groupBefore] as THREE.Group;
+    const arcSilhouette = arcDropGroup.children[1] as THREE.Group;
+    expect(arcSilhouette).toBeInstanceOf(THREE.Group);
+    expect(arcSilhouette.children.length).toBeGreaterThanOrEqual(6);
+
+    pal.spawnLootDrop(
+      { x: 4, y: 12, z: 0 },
+      { item: { uid: 'cloak_mesh_test', weaponId: 'shadow_cloak', rarity: 'mythic', magAmmo: 0, stackCount: 1 } },
+    );
+    const cloakDropGroup = pal.getGroup().children[groupBefore + 1] as THREE.Group;
+    const cloakSilhouette = cloakDropGroup.children[1] as THREE.Group;
+    expect(cloakSilhouette).toBeInstanceOf(THREE.Group);
+    expect(cloakSilhouette.children.length).toBeGreaterThanOrEqual(6);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('validates GLSL ShaderMaterial uniforms, smoothstep bounds, and EnvironmentDetail wind shader injection after Wave-13 additions', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const storm = new StormSystem(4201, 'solo');
+    const interactables = new WorldInteractables(terrain, bus);
     const detail = new EnvironmentDetail(terrain, world.colliders, 'low', 4201);
 
     const shaderMats: THREE.ShaderMaterial[] = [];

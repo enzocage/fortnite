@@ -202,6 +202,10 @@ export interface GameEventMap {
   'vfx:shield_ricochet': { position: Vec3Like; normal: Vec3Like };
   'vfx:c4_blast': { position: Vec3Like; radius: number };
   'vfx:hot_drop_beam': { position: Vec3Like };
+  'vfx:arc_lightning': { from: Vec3Like; to: Vec3Like; isChain?: boolean };
+  'vfx:shadow_cloak_burst': { position: Vec3Like; entering: boolean };
+  'vfx:rune_attune': { position: Vec3Like };
+  'vfx:choppa_wash': { position: Vec3Like; intensity: number };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

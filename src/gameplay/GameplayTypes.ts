@@ -31,6 +31,7 @@ import type {
   Rarity,
   RebootVanEntity,
   RiftEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SkyBalloonEntity,
   SlurpBarrelEntity,
@@ -65,6 +66,7 @@ export interface VehicleBridge {
     steer: number,
     boost: boolean,
     dt: number,
+    ascendInput?: number,
   ): void;
   damageVehicle(id: string, dmg: number, hitPos: Vec3Like): boolean;
   getTankCannonMuzzle?(id: string): Vec3Like | null;
@@ -274,7 +276,22 @@ export interface FishingCastResult {
   position: Vec3Like;
 }
 
-export interface WorldOverlordBridge {
+export interface InteractablesBridge {
+  findNearbyRuneMonolith?(
+    pos: Vec3Like,
+    maxDist?: number,
+  ): RuneMonolithEntity | null;
+  attuneRuneMonolith?(id: string): {
+    ok: boolean;
+    position?: Vec3Like;
+    shieldBonus?: number;
+    goldBonus?: number;
+    weaponId?: WeaponId;
+    rarity?: Rarity;
+  } | null;
+}
+
+export interface WorldOverlordBridge extends InteractablesBridge {
   getFishingHoles(): FishingHoleEntity[];
   findNearbyFishingHole(pos: Vec3Like, radius?: number): FishingHoleEntity | null;
   consumeFishingCast(id: string): FishingCastResult | null;
@@ -457,6 +474,7 @@ export interface FireWeaponResult {
   shotsHit: number;
   headshots: number;
   damageDealt: number;
+  arcChainHits?: number;
   burstRemaining?: number;
   bloomScale?: number;
   recoilScale?: number;
@@ -499,7 +517,12 @@ export interface PlayerMatchStats {
   c4Blasts?: number;
   shieldBlockedDmg?: number;
   tankElims?: number;
+  arcChainHits?: number;
+  runeMonolithsAttuned?: number;
+  choppaFlightSec?: number;
 }
+
+export type PlayerStats = PlayerMatchStats;
 
 export interface PlayerInteractPrompt {
   label: string;
@@ -613,4 +636,8 @@ export interface PlayerHudSnapshot {
   activeC4Count?: number;
   tankCannonCooldown?: number | null;
   inHotDropPoi?: boolean;
+  shadowCloakState?: { active: boolean; remainingSec: number; cooldownSec: number } | null;
+  stormBlessingRemainingSec?: number | null;
+  runeAttuneProgress?: number | null;
+  choppaAltitude?: number | null;
 }

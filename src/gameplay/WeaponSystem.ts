@@ -21,6 +21,9 @@ import type {
   WildBoarEntity,
 } from '../types';
 import {
+  ARC_CHAIN_DAMAGE_MULT,
+  ARC_CHAIN_RADIUS,
+  ARC_MAX_CHAINS,
   EventBus,
   FLARE_SCAN_DURATION_SEC,
   GRID_XZ,
@@ -94,6 +97,8 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   slurp_juice: 'ui_click',
   ballistic_shield: 'shot_pistol',
   remote_c4: 'c4_plant',
+  storm_breaker: 'arc_shot',
+  shadow_cloak: 'cloak_activate',
 };
 
 const SHOT_SOUND_MAP = WEAPON_SOUND_MAP;
@@ -739,7 +744,14 @@ export class WeaponSystem {
 
   fireWeapon(params: FireWeaponParams): FireWeaponResult {
     const def = WEAPONS[params.item.weaponId];
-    if (!def || def.isConsumable || def.isJetpack || params.item.weaponId === 'jetpack') {
+    if (
+      !def ||
+      def.isConsumable ||
+      def.isJetpack ||
+      params.item.weaponId === 'jetpack' ||
+      def.isShadowCloak ||
+      params.item.weaponId === 'shadow_cloak'
+    ) {
       return { fired: false, shotsHit: 0, headshots: 0, damageDealt: 0 };
     }
 
@@ -900,14 +912,21 @@ export class WeaponSystem {
       if (veh.destroyed || veh.hp <= 0) continue;
       if (excludeDriverId && veh.driverId === excludeDriverId) continue;
       const r =
-        veh.kind === 'hover_tank'
-          ? 1.85
-          : veh.kind === 'speedboat'
-            ? 1.5
-            : veh.kind === 'hover_atv'
-              ? 1.25
-              : 0.95;
-      const topY = veh.kind === 'hover_tank' ? veh.y + 1.85 : veh.y + 1.35;
+        veh.kind === 'choppa'
+          ? 2.1
+          : veh.kind === 'hover_tank'
+            ? 1.85
+            : veh.kind === 'speedboat'
+              ? 1.5
+              : veh.kind === 'hover_atv'
+                ? 1.25
+                : 0.95;
+      const topY =
+        veh.kind === 'choppa'
+          ? veh.y + 2.35
+          : veh.kind === 'hover_tank'
+            ? veh.y + 1.85
+            : veh.y + 1.35;
       const hit = this.intersectRayAABB(
         origin,
         dir,
@@ -1299,7 +1318,8 @@ export class WeaponSystem {
       ) {
         continue;
       }
-      const vehRadius = veh.kind === 'hover_tank' ? 2.1 : 1.4;
+      const vehRadius =
+        veh.kind === 'choppa' ? 2.4 : veh.kind === 'hover_tank' ? 2.1 : 1.4;
       const center = { x: veh.x, y: veh.y + 0.65, z: veh.z };
       const d = dist3D(impactPos, center);
       if (d <= radius + vehRadius && !this.isBlockedByShieldBubble(impactPos, center)) {
@@ -3812,6 +3832,9 @@ export class WeaponSystem {
     const combatMedallionMult = hasCombatMedallion ? 1.12 : 1.0;
     const demolisherMult = hasDemolisher ? 1.3 : 1.0;
     const isRailgun = Boolean(def.isRailgun || params.item.weaponId === 'railgun');
+    const isArcRifle = Boolean(
+      def.isArcRifle || params.item.weaponId === 'storm_breaker',
+    );
     const maxBuildPierces = isRailgun ? Math.max(0, def.pierceBuildCount ?? 1) : 0;
     params.onAmmoConsumed?.();
 
@@ -4260,6 +4283,12 @@ export class WeaponSystem {
           to: endPoint,
           pierced: piercedAnyBuild,
         });
+      } else if (isArcRifle) {
+        this.eventBus.emit('vfx:arc_lightning', {
+          from: muzzle,
+          to: endPoint,
+          isChain: false,
+        });
       } else {
         const isMythicPulse = params.item.weaponId === 'mythic_blade_rifle';
         this.eventBus.emit('vfx:tracer', {
@@ -4270,6 +4299,12 @@ export class WeaponSystem {
         });
       }
     }
+
+    let arcChainHits = 0;
+    const arcPrimaryHits: Array<{
+      hitPoint: Vec3Like;
+      hitDamage: number;
+    }> = [];
 
     for (const entry of actorAccum.values()) {
       const dmgRounded = Math.max(1, Math.round(entry.totalDamage));
@@ -4287,6 +4322,89 @@ export class WeaponSystem {
       shotsHit += 1;
       if (entry.anyHeadshot) headshots += 1;
       totalDamageDealt += ev.damage;
+      if (isArcRifle) {
+        arcPrimaryHits.push({
+          hitPoint: entry.hitPoint,
+          hitDamage: ev.damage,
+        });
+      }
+    }
+
+    if (isArcRifle && arcPrimaryHits.length > 0 && this.actorsProvider) {
+      const chainRadius = def.arcChainRadius ?? ARC_CHAIN_RADIUS;
+      const maxChains = Math.max(0, def.arcMaxChains ?? ARC_MAX_CHAINS);
+      const chainMult = def.arcChainDamageMult ?? ARC_CHAIN_DAMAGE_MULT;
+      const allActors = this.actorsProvider();
+      const attackerTeamId = params.actorTeamId ?? params.actor.teamId;
+      const chainedActorIds = new Set<string>(actorAccum.keys());
+
+      for (let h = 0; h < arcPrimaryHits.length; h++) {
+        const primary = arcPrimaryHits[h];
+        const chainDmg = Math.max(1, Math.round(primary.hitDamage * chainMult));
+        const candidates: Array<{
+          actor: CombatActor;
+          dist: number;
+          center: Vec3Like;
+        }> = [];
+
+        for (let i = 0; i < allActors.length; i++) {
+          const candidate = allActors[i];
+          if (!candidate.alive || candidate.hp <= 0) continue;
+          if (chainedActorIds.has(candidate.id)) continue;
+          if (
+            isFriendlyCombatActor(
+              params.actor.id,
+              params.actor.squadId,
+              attackerTeamId,
+              candidate,
+            )
+          ) {
+            continue;
+          }
+          const center: Vec3Like = {
+            x: candidate.position.x,
+            y: candidate.position.y + candidate.height * 0.5,
+            z: candidate.position.z,
+          };
+          const d = Math.min(
+            dist3D(primary.hitPoint, candidate.position),
+            dist3D(primary.hitPoint, center),
+          );
+          if (d <= chainRadius) {
+            candidates.push({ actor: candidate, dist: d, center });
+          }
+        }
+
+        candidates.sort((a, b) => a.dist - b.dist);
+        const chainCount = Math.min(maxChains, candidates.length);
+        for (let c = 0; c < chainCount; c++) {
+          const target = candidates[c];
+          chainedActorIds.add(target.actor.id);
+          this.eventBus.emit('vfx:arc_lightning', {
+            from: { ...primary.hitPoint },
+            to: { ...target.center },
+            isChain: true,
+          });
+          this.eventBus.emit('sound:play', {
+            id: 'arc_chain',
+            position: { ...target.center },
+            spatial: true,
+          });
+          const chainEv = this.applyActorDamage(
+            params.actor,
+            target.actor,
+            params.item.weaponId,
+            params.item.rarity,
+            chainDmg,
+            false,
+            target.center,
+            target.dist,
+            params.isPlayer,
+          );
+          arcChainHits += 1;
+          totalDamageDealt += chainEv.damage;
+        }
+      }
     }
 
     if (activeTideBridge) {
@@ -4332,6 +4450,7 @@ export class WeaponSystem {
       damageDealt: totalDamageDealt,
       bloomScale: modFx.bloomMult,
       recoilScale: modFx.recoilMult,
+      ...(isArcRifle ? { arcChainHits } : {}),
       ...(destroyedDrones.length > 0 ? { destroyedDrones } : {}),
     };
   }

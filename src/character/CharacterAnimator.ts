@@ -153,7 +153,8 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
     weaponId === 'rocket_launcher' ||
     weaponId === 'mythic_blade_rifle' ||
     weaponId === 'plasma_flamethrower' ||
-    weaponId === 'chug_cannon'
+    weaponId === 'chug_cannon' ||
+    weaponId === 'storm_breaker'
   );
 }
 
@@ -502,6 +503,18 @@ export class CharacterAnimator {
       rig.setStreakAura(safeStreak, data.time);
     } else if (rig.isStreakAuraVisible()) {
       rig.setStreakAura(rig.getKillStreak(), data.time);
+    }
+
+    if (state.isShadowCloaked !== undefined) {
+      rig.setShadowCloaked(Boolean(state.isShadowCloaked), data.time);
+    } else if (rig.isShadowCloaked()) {
+      rig.setShadowCloaked(true, data.time);
+    }
+
+    if (state.stormBlessingActive !== undefined) {
+      rig.setStormBlessingActive(Boolean(state.stormBlessingActive), data.time);
+    } else if (rig.isStormBlessingActive()) {
+      rig.setStormBlessingActive(true, data.time);
     }
   }
 
@@ -1194,6 +1207,17 @@ export class CharacterAnimator {
         p.rShRy = 0.18;
         p.rShRz = -0.12;
         p.rElRx = -0.88;
+      } else if (weapon === 'shadow_cloak') {
+        // Twin cyber-gauntlet streamlined stealth sprint carry
+        const strideBob = Math.sin(t * 11) * 0.10;
+        p.rShRx = -0.62 + strideBob;
+        p.rShRy = 0.18;
+        p.rShRz = -0.16;
+        p.rElRx = -0.92;
+        p.lShRx = -0.62 - strideBob;
+        p.lShRy = -0.18;
+        p.lShRz = 0.16;
+        p.lElRx = -0.92;
       } else if (isTwoHandedGun(weapon)) {
         p.rShRx = -0.78;
         p.rShRy = 0.58;
@@ -1300,6 +1324,21 @@ export class CharacterAnimator {
         p.lShRx = -0.48;
         p.lShRy = -0.25;
         p.lElRx = -0.65;
+      }
+      return;
+    }
+
+    if (weapon === 'shadow_cloak') {
+      const channeling = state.isShadowCloaked || state.isAiming || state.isFiring;
+      p.rShRx = (channeling ? -1.04 : -0.74) - aimPitch * 0.42;
+      p.rShRy = channeling ? 0.24 : 0.16;
+      p.rShRz = -0.14;
+      p.rElRx = channeling ? -0.88 : -0.80;
+      if (!keepLeftGripOnZipline) {
+        p.lShRx = (channeling ? -1.04 : -0.74) - aimPitch * 0.42;
+        p.lShRy = channeling ? -0.24 : -0.16;
+        p.lShRz = 0.14;
+        p.lElRx = channeling ? -0.88 : -0.80;
       }
       return;
     }

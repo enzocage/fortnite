@@ -26,6 +26,7 @@ import type {
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SkyBalloonEntity,
   SlurpTankerEntity,
@@ -50,12 +51,14 @@ import {
   resolveOverdriveOverlayArgs,
   resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
+  resolveSovereignOverlayArgs,
   resolveTideOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
   type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
+  type WorldSovereignOverlay,
   type WorldTideOverlay,
 } from './UIHelpers';
 
@@ -338,6 +341,16 @@ export class UIManager {
       resolved.fishingHoles,
       resolved.skyBalloons,
     );
+  }
+
+  setWorldSovereignOverlay(runeMonoliths: RuneMonolithEntity[]): void;
+  setWorldSovereignOverlay(overlay: WorldSovereignOverlay): void;
+  setWorldSovereignOverlay(
+    runeMonolithsOrOverlay: RuneMonolithEntity[] | WorldSovereignOverlay,
+  ): void {
+    const resolved = resolveSovereignOverlayArgs(runeMonolithsOrOverlay);
+    this.fullMap.setWorldSovereignOverlay(resolved.runeMonoliths);
+    this.hud.setWorldSovereignOverlay(resolved.runeMonoliths);
   }
 
   setPhase(phase: GamePhase): void {

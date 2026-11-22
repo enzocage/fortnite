@@ -545,6 +545,45 @@ export class MatchOverlay {
       },
     ];
 
+    const arcChainHits =
+      typeof summary.arcChainHits === 'number' &&
+      Number.isFinite(summary.arcChainHits)
+        ? Math.max(0, Math.round(summary.arcChainHits))
+        : 0;
+    if (arcChainHits > 0) {
+      statItems.push({
+        k: 'ARC CHAIN HITS',
+        v: String(arcChainHits),
+        highlight: true,
+      });
+    }
+
+    const runeMonolithsAttuned =
+      typeof summary.runeMonolithsAttuned === 'number' &&
+      Number.isFinite(summary.runeMonolithsAttuned)
+        ? Math.max(0, Math.round(summary.runeMonolithsAttuned))
+        : 0;
+    if (runeMonolithsAttuned > 0) {
+      statItems.push({
+        k: 'RUNES ATTUNED',
+        v: String(runeMonolithsAttuned),
+        highlight: true,
+      });
+    }
+
+    const choppaFlightSec =
+      typeof summary.choppaFlightSec === 'number' &&
+      Number.isFinite(summary.choppaFlightSec)
+        ? Math.max(0, Math.round(summary.choppaFlightSec))
+        : 0;
+    if (choppaFlightSec > 0) {
+      statItems.push({
+        k: 'CHOPPA FLIGHT',
+        v: `${choppaFlightSec}s`,
+        highlight: true,
+      });
+    }
+
     for (const item of statItems) {
       const box = document.createElement('div');
       box.className = `fdr-stat-box${item.highlight ? ' highlight' : ''}${item.wide ? ' fdr-stat-box-wide' : ''}`;

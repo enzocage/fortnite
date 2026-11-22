@@ -85,9 +85,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 37 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 39 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(37);
+    expect(allIds).toHaveLength(39);
 
     const seenNames = new Set<string>();
 
@@ -4829,6 +4829,476 @@ describe('Wave-12 Ballistic Shield, Remote C4, Kill-Streak Overdrive Aura & VFX 
     expect(vfx.getActiveShieldRicochetCount()).toBe(0);
     expect(vfx.getActiveC4BlastCount()).toBe(0);
     expect(vfx.getActiveHotDropBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-13 Storm-Breaker Arc Rifle, Shadow Cloak, Storm Blessing Aura & VFX Channels', () => {
+  it('builds bespoke Storm-Breaker Arc Rifle and Shadow Cloak Twin Cyber Gauntlets with wrap, mod, muzzle, and casing rules', () => {
+    const stormBreaker = createWeaponModel('storm_breaker');
+    expect(stormBreaker.name).toBe('weapon_storm_breaker');
+    expect(isRangedWeapon('storm_breaker')).toBe(true);
+    expect(isThrowableWeapon('storm_breaker')).toBe(false);
+    expect(hasMuzzleOffset('storm_breaker')).toBe(true);
+    expect(countMeshes(stormBreaker)).toBeGreaterThanOrEqual(20);
+    const sbMuzzle = stormBreaker.userData.muzzleOffset as THREE.Vector3;
+    expect(sbMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(sbMuzzle.z).toBeGreaterThan(0.5);
+
+    let sbPlasmaCoils = 0;
+    let sbWrapTargets = 0;
+    stormBreaker.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) sbWrapTargets++;
+      if (child.geometry instanceof THREE.TorusGeometry) sbPlasmaCoils++;
+    });
+    expect(sbPlasmaCoils).toBeGreaterThanOrEqual(4);
+    expect(sbWrapTargets).toBeGreaterThanOrEqual(3);
+
+    applyWeaponWrap(stormBreaker, 'neon_cyber');
+    const neonMat = getWeaponWrapMaterial('neon_cyber');
+    let wrappedCount = 0;
+    stormBreaker.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) {
+        expect(child.material).toBe(neonMat);
+        wrappedCount++;
+      } else {
+        expect(child.material).not.toBe(neonMat);
+      }
+    });
+    expect(wrappedCount).toBe(sbWrapTargets);
+
+    applyWeaponModsToModel(stormBreaker, ['red_dot', 'foregrip']);
+    expect(stormBreaker.getObjectByName('mod_red_dot')).toBeDefined();
+    expect(stormBreaker.getObjectByName('mod_foregrip')).toBeDefined();
+    assertFiniteBox(stormBreaker);
+    disposeObject3D(stormBreaker);
+
+    const shadowCloak = createWeaponModel('shadow_cloak');
+    expect(shadowCloak.name).toBe('weapon_shadow_cloak');
+    expect(shadowCloak.userData.wrapDisabled).toBe(true);
+    expect(isRangedWeapon('shadow_cloak')).toBe(false);
+    expect(isThrowableWeapon('shadow_cloak')).toBe(false);
+    expect(hasMuzzleOffset('shadow_cloak')).toBe(false);
+    expect(countMeshes(shadowCloak)).toBeGreaterThanOrEqual(16);
+
+    let runeRings = 0;
+    let runeCores = 0;
+    let holoTranslucent = 0;
+    shadowCloak.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.geometry instanceof THREE.TorusGeometry) runeRings++;
+      if (child.geometry instanceof THREE.OctahedronGeometry) runeCores++;
+      if (
+        child.material instanceof THREE.MeshStandardMaterial &&
+        child.material.transparent &&
+        child.material.opacity < 0.9
+      ) {
+        holoTranslucent++;
+      }
+    });
+    expect(runeRings).toBeGreaterThanOrEqual(2);
+    expect(runeCores).toBeGreaterThanOrEqual(2);
+    expect(holoTranslucent).toBeGreaterThanOrEqual(4);
+
+    applyWeaponWrap(shadowCloak, 'midas_gold');
+    const goldMat = getWeaponWrapMaterial('midas_gold');
+    shadowCloak.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        expect(child.material).not.toBe(goldMat);
+      }
+    });
+    assertFiniteBox(shadowCloak);
+    disposeObject3D(shadowCloak);
+
+    // Neither Storm-Breaker (Tesla arc rifle) nor Shadow Cloak ejects brass bullet casings
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.7 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'storm_breaker',
+    });
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.4 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'shadow_cloak',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(2);
+    vfx.dispose();
+
+    // CharacterAnimator cleanly poses both Wave-13 weapons
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+    animator.update(rig, makeRenderState({ weaponId: 'storm_breaker', isAiming: true }), 0);
+    expect(rig.getEquippedWeaponId()).toBe('storm_breaker');
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.8);
+    assertFiniteBox(rig.getGroup());
+
+    animator.update(
+      rig,
+      makeRenderState({ weaponId: 'shadow_cloak', isShadowCloaked: true }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('shadow_cloak');
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.9);
+    assertFiniteBox(rig.getGroup());
+
+    animator.update(
+      rig,
+      makeRenderState({ weaponId: 'shadow_cloak', animState: 'sprint', moveSpeed: 8.5 }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.4);
+    assertFiniteBox(rig.getGroup());
+    rig.dispose();
+  });
+
+  it('toggles isShadowCloaked body/limb obsidian-violet 0.34 opacity phase and restores originals without mutating other rigs', () => {
+    const animator = new CharacterAnimator();
+    const rigA = new CharacterRig(SKINS[0], PICKAXES[0], GLIDERS[0]);
+    const rigB = new CharacterRig(SKINS[0], PICKAXES[0], GLIDERS[0]);
+
+    expect(rigA.isShadowCloaked()).toBe(false);
+    expect(rigB.isShadowCloaked()).toBe(false);
+
+    const collectBodyMats = (rig: CharacterRig): THREE.MeshStandardMaterial[] => {
+      const mats: THREE.MeshStandardMaterial[] = [];
+      const seen = new Set<THREE.Material>();
+      const bodyGroupNames = [
+        'chest_visual',
+        'spine_visual',
+        'hips_visual',
+        'head_visual',
+        'shoulder_vis_1',
+        'elbow_vis_1',
+        'hip_vis_-1',
+        'knee_vis_-1',
+      ];
+      for (const name of bodyGroupNames) {
+        const grp = rig.getGroup().getObjectByName(name);
+        if (!grp) continue;
+        grp.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+            if (!seen.has(child.material)) {
+              seen.add(child.material);
+              mats.push(child.material);
+            }
+          }
+        });
+      }
+      return mats;
+    };
+
+    const matsA = collectBodyMats(rigA);
+    const matsB = collectBodyMats(rigB);
+    expect(matsA.length).toBeGreaterThanOrEqual(4);
+    const originalsA = matsA.map((m) => ({
+      transparent: m.transparent,
+      opacity: m.opacity,
+      colorHex: m.color.getHex(),
+      emissiveHex: m.emissive.getHex(),
+      emissiveIntensity: m.emissiveIntensity,
+    }));
+    const originalsB = matsB.map((m) => ({
+      transparent: m.transparent,
+      opacity: m.opacity,
+      colorHex: m.color.getHex(),
+    }));
+
+    // Enter Shadow Cloak phase on rigA via CharacterAnimator
+    animator.update(
+      rigA,
+      makeRenderState({ weaponId: 'shadow_cloak', isShadowCloaked: true }),
+      0.04,
+    );
+    expect(rigA.isShadowCloaked()).toBe(true);
+    for (let i = 0; i < matsA.length; i++) {
+      expect(matsA[i].transparent).toBe(true);
+      expect(matsA[i].opacity).toBeCloseTo(0.34, 4);
+      expect(matsA[i].color.getHex()).not.toBe(originalsA[i].colorHex);
+    }
+
+    // rigB sharing the same SkinDef must remain untouched
+    expect(rigB.isShadowCloaked()).toBe(false);
+    for (let i = 0; i < matsB.length; i++) {
+      expect(matsB[i].transparent).toBe(originalsB[i].transparent);
+      expect(matsB[i].opacity).toBeCloseTo(originalsB[i].opacity, 4);
+      expect(matsB[i].color.getHex()).toBe(originalsB[i].colorHex);
+    }
+
+    // Exit Shadow Cloak phase -> restores exact original transparent, opacity, color, emissive
+    animator.update(
+      rigA,
+      makeRenderState({ weaponId: 'shadow_cloak', isShadowCloaked: false }),
+      0.04,
+    );
+    expect(rigA.isShadowCloaked()).toBe(false);
+    for (let i = 0; i < matsA.length; i++) {
+      expect(matsA[i].transparent).toBe(originalsA[i].transparent);
+      expect(matsA[i].opacity).toBeCloseTo(originalsA[i].opacity, 4);
+      expect(matsA[i].color.getHex()).toBe(originalsA[i].colorHex);
+      expect(matsA[i].emissive.getHex()).toBe(originalsA[i].emissiveHex);
+      expect(matsA[i].emissiveIntensity).toBeCloseTo(originalsA[i].emissiveIntensity, 4);
+    }
+
+    // Re-cloak via updateFromState, swap skin while cloaked, then uncloak cleanly
+    rigA.updateFromState(makeRenderState({ isShadowCloaked: true }));
+    expect(rigA.isShadowCloaked()).toBe(true);
+    rigA.setSkin(SKINS[2]);
+    const newSkinMats = collectBodyMats(rigA);
+    for (const mat of newSkinMats) {
+      expect(mat.transparent).toBe(true);
+      expect(mat.opacity).toBeCloseTo(0.34, 4);
+    }
+    rigA.updateFromState(makeRenderState({ isShadowCloaked: false }));
+    expect(rigA.isShadowCloaked()).toBe(false);
+    for (const mat of newSkinMats) {
+      expect(mat.transparent).toBe(false);
+      expect(mat.opacity).toBeCloseTo(1.0, 4);
+    }
+
+    rigA.dispose();
+    rigB.dispose();
+  });
+
+  it('shows, animates, toggles, and disposes Storm Blessing violet rotating arcane rune aura around torso/shoulders', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    expect(rig.isStormBlessingActive()).toBe(false);
+    expect(rig.getStormBlessingGroup()).toBeNull();
+
+    animator.update(rig, makeRenderState({ stormBlessingActive: true }), 0.04);
+    expect(rig.isStormBlessingActive()).toBe(true);
+    const aura = rig.getStormBlessingGroup();
+    expect(aura).toBeInstanceOf(THREE.Group);
+    expect(aura!.name).toBe('storm_blessing_aura');
+    expect(aura!.visible).toBe(true);
+    expect(rig.joints.chest.getObjectByName('storm_blessing_aura')).toBe(aura);
+
+    let ringCount = 0;
+    let runeNodes = 0;
+    aura!.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.geometry instanceof THREE.TorusGeometry) ringCount++;
+      if (child.geometry instanceof THREE.OctahedronGeometry) runeNodes++;
+    });
+    expect(ringCount).toBeGreaterThanOrEqual(3);
+    expect(runeNodes).toBeGreaterThanOrEqual(6);
+    assertFiniteBox(rig.getGroup());
+
+    const ringRotStart = aura!.children[0].rotation.z;
+    const nodePosStart = aura!.children[3].position.clone();
+    animator.update(rig, makeRenderState({ stormBlessingActive: true }), 0.08);
+    expect(aura!.children[0].rotation.z).not.toBeCloseTo(ringRotStart, 3);
+    expect(aura!.children[3].position.distanceTo(nodePosStart)).toBeGreaterThan(0.01);
+
+    animator.update(rig, makeRenderState({ stormBlessingActive: false }), 0.04);
+    expect(rig.isStormBlessingActive()).toBe(false);
+    expect(aura!.visible).toBe(false);
+
+    rig.updateFromState(makeRenderState({ stormBlessingActive: true }));
+    expect(rig.isStormBlessingActive()).toBe(true);
+
+    rig.dispose();
+    expect(rig.isStormBlessingActive()).toBe(false);
+    expect(rig.getStormBlessingGroup()).toBeNull();
+    expect(rig.joints.chest.getObjectByName('storm_blessing_aura')).toBeUndefined();
+  });
+
+  it('spawns, updates, expires, guards NaN/zero-distance, clears, and disposes all 4 Wave-13 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:arc_lightning (primary + thinner/faster chain bolt)
+    bus.emit('vfx:arc_lightning', {
+      from: { x: 0, y: 1.4, z: 0 },
+      to: { x: 12, y: 1.6, z: 16 },
+      isChain: false,
+    });
+    bus.emit('vfx:arc_lightning', {
+      from: { x: 12, y: 1.6, z: 16 },
+      to: { x: 18, y: 1.4, z: 12 },
+      isChain: true,
+    });
+    expect(vfx.getActiveArcLightningCount()).toBe(2);
+
+    // Verify primary vs chain thickness & segmented bolt structure
+    const arcGroups: THREE.Group[] = [];
+    scene.traverse((obj) => {
+      if (obj instanceof THREE.Group && obj.name === 'vfx_arc_lightning' && obj.visible) {
+        arcGroups.push(obj);
+      }
+    });
+    expect(arcGroups).toHaveLength(2);
+    expect(arcGroups[0].children.length).toBeGreaterThanOrEqual(18);
+    const primaryCoreWidth = arcGroups[0].children[1].scale.x;
+    const chainCoreWidth = arcGroups[1].children[1].scale.x;
+    expect(chainCoreWidth).toBeLessThan(primaryCoreWidth);
+
+    // 2. vfx:shadow_cloak_burst (enter & exit)
+    bus.emit('vfx:shadow_cloak_burst', {
+      position: { x: -4, y: 0, z: 6 },
+      entering: true,
+    });
+    bus.emit('vfx:shadow_cloak_burst', {
+      position: { x: -4, y: 0, z: 8 },
+      entering: false,
+    });
+    expect(vfx.getActiveShadowCloakBurstCount()).toBe(2);
+
+    // 3. vfx:rune_attune
+    bus.emit('vfx:rune_attune', {
+      position: { x: 25, y: 0, z: -25 },
+    });
+    expect(vfx.getActiveRuneAttuneCount()).toBe(1);
+
+    // 4. vfx:choppa_wash (scaled by intensity)
+    bus.emit('vfx:choppa_wash', {
+      position: { x: 8, y: 0, z: -10 },
+      intensity: 1.6,
+    });
+    bus.emit('vfx:choppa_wash', {
+      position: { x: -8, y: 0, z: -10 },
+      intensity: 0.5,
+    });
+    expect(vfx.getActiveChoppaWashCount()).toBe(2);
+    expect(vfx.getActiveEffectCount()).toBe(7);
+
+    const washGroups: THREE.Group[] = [];
+    scene.traverse((obj) => {
+      if (obj instanceof THREE.Group && obj.name === 'vfx_choppa_wash' && obj.visible) {
+        washGroups.push(obj);
+      }
+    });
+    expect(washGroups).toHaveLength(2);
+    expect(washGroups[0].children[0].scale.x).toBeGreaterThan(washGroups[1].children[0].scale.x);
+
+    // Advance 0.10s -> all 7 active, rune_attune glyph ring rising & rotating, finite transforms
+    let runeGroup: THREE.Group | undefined;
+    scene.traverse((obj) => {
+      if (obj instanceof THREE.Group && obj.name === 'vfx_rune_attune' && obj.visible) {
+        runeGroup = obj;
+      }
+    });
+    expect(runeGroup).toBeDefined();
+    const glyphStartY = runeGroup!.children[2].position.y;
+    const glyphStartRot = runeGroup!.children[2].rotation.z;
+
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveEffectCount()).toBe(7);
+    expect(runeGroup!.children[2].position.y).toBeGreaterThan(glyphStartY);
+    expect(runeGroup!.children[2].rotation.z).not.toBeCloseTo(glyphStartRot, 3);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Advance past 0.18s -> chain arc (0.16s) expires while primary arc (0.24s) stays active
+    vfx.update(0.08);
+    expect(vfx.getActiveArcLightningCount()).toBe(1);
+
+    // Advance past 0.28s -> primary arc expires
+    vfx.update(0.10);
+    expect(vfx.getActiveArcLightningCount()).toBe(0);
+    expect(vfx.getActiveChoppaWashCount()).toBe(2);
+
+    // Advance past 0.56s -> choppa_wash (0.52s) expires
+    for (let i = 0; i < 6; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveChoppaWashCount()).toBe(0);
+    expect(vfx.getActiveShadowCloakBurstCount()).toBe(2);
+
+    // Advance past 0.68s -> shadow_cloak_burst (0.62s) expires while rune_attune (1.15s) stays active
+    for (let i = 0; i < 3; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveShadowCloakBurstCount()).toBe(0);
+    expect(vfx.getActiveRuneAttuneCount()).toBe(1);
+
+    // Advance past 1.25s -> rune_attune expires cleanly back to pool
+    for (let i = 0; i < 12; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveRuneAttuneCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Strict NaN / Infinity / zero-distance guards
+    bus.emit('vfx:arc_lightning', {
+      from: { x: Number.NaN, y: 1, z: 0 },
+      to: { x: 5, y: 1, z: 5 },
+    });
+    bus.emit('vfx:arc_lightning', {
+      from: { x: 0, y: 1, z: 0 },
+      to: { x: Number.POSITIVE_INFINITY, y: 1, z: 5 },
+    });
+    bus.emit('vfx:arc_lightning', {
+      from: { x: 3, y: 2, z: 3 },
+      to: { x: 3, y: 2, z: 3 },
+    });
+    bus.emit('vfx:shadow_cloak_burst', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+      entering: true,
+    });
+    bus.emit('vfx:rune_attune', {
+      position: { x: 0, y: Number.NEGATIVE_INFINITY, z: 0 },
+    });
+    bus.emit('vfx:choppa_wash', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+      intensity: 1.0,
+    });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // NaN / negative choppa_wash intensity clamped cleanly without NaN transforms
+    bus.emit('vfx:choppa_wash', { position: { x: 2, y: 0, z: 2 }, intensity: Number.NaN });
+    bus.emit('vfx:choppa_wash', { position: { x: -2, y: 0, z: -2 }, intensity: -5 });
+    expect(vfx.getActiveChoppaWashCount()).toBe(2);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 4 Wave-13 pools immediately
+    bus.emit('vfx:arc_lightning', { from: { x: 0, y: 1, z: 0 }, to: { x: 5, y: 1, z: 5 } });
+    bus.emit('vfx:shadow_cloak_burst', { position: { x: 0, y: 0, z: 0 }, entering: true });
+    bus.emit('vfx:rune_attune', { position: { x: 4, y: 0, z: 4 } });
+    expect(vfx.getActiveEffectCount()).toBe(5);
+    vfx.clear();
+    expect(vfx.getActiveArcLightningCount()).toBe(0);
+    expect(vfx.getActiveShadowCloakBurstCount()).toBe(0);
+    expect(vfx.getActiveRuneAttuneCount()).toBe(0);
+    expect(vfx.getActiveChoppaWashCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 4 Wave-13 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:arc_lightning', { from: { x: 0, y: 1, z: 0 }, to: { x: 5, y: 1, z: 5 } });
+    bus.emit('vfx:shadow_cloak_burst', { position: { x: 0, y: 0, z: 0 }, entering: false });
+    bus.emit('vfx:rune_attune', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:choppa_wash', { position: { x: 0, y: 0, z: 0 }, intensity: 1.0 });
+    expect(vfx.getActiveArcLightningCount()).toBe(0);
+    expect(vfx.getActiveShadowCloakBurstCount()).toBe(0);
+    expect(vfx.getActiveRuneAttuneCount()).toBe(0);
+    expect(vfx.getActiveChoppaWashCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

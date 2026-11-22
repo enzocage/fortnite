@@ -37,7 +37,9 @@ export type WeaponId =
   | 'auto_turret'
   | 'chug_cannon'
   | 'ballistic_shield'
-  | 'remote_c4';
+  | 'remote_c4'
+  | 'storm_breaker'
+  | 'shadow_cloak';
 
 export type WeaponCategory =
   | 'pickaxe'
@@ -134,6 +136,14 @@ export interface WeaponDef {
   isBallisticShield?: boolean;
   shieldMaxBlockHp?: number;
   isRemoteC4?: boolean;
+  isArcRifle?: boolean;
+  arcChainRadius?: number;
+  arcMaxChains?: number;
+  arcChainDamageMult?: number;
+  isShadowCloak?: boolean;
+  cloakDurationSec?: number;
+  cloakCooldownSec?: number;
+  cloakSpeedMult?: number;
   allowedRarities: Rarity[];
 }
 

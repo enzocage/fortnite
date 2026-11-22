@@ -33,6 +33,7 @@ import type {
   WallDir,
   WeaponId,
 } from '../types';
+import type { RuneMonolithEntity } from '../types/world';
 import type { EventBus } from '../core';
 
 export interface BotInventory {
@@ -64,6 +65,7 @@ export interface BotCombatTarget {
   height?: number;
   velocity?: Vec3Like;
   inVehicle?: boolean;
+  isShadowCloaked?: boolean;
 }
 
 export interface TeamRumbleScoreState {
@@ -336,6 +338,11 @@ export interface BotEntity {
   craterTargetId?: string | null;
   craterDwellTimer?: number;
   chugCannonRegenTimer?: number;
+  monolithTargetId?: string | null;
+  monolithDwellTimer?: number;
+  shadowCloakTimer?: number;
+  shadowCloakCooldown?: number;
+  isShadowCloaked?: boolean;
 }
 
 export interface BotWorldContext {
@@ -420,6 +427,7 @@ export interface BotWorldContext {
   ) => { exploded: boolean; position: Vec3Like; blastRadius: number; blastDamage: number } | null;
   getTrainState?: () => ApexTrainState | null;
   getMeteorCraters?: () => MeteorCraterEntity[];
+  getRuneMonoliths?: () => RuneMonolithEntity[];
   getTurrets?: () => TurretEntity[];
   onAllySupportEvent?: (event: AllySupportEvent) => void;
   gameMode?: GameModeId;
@@ -428,6 +436,7 @@ export interface BotWorldContext {
   playerRevivingPartner?: boolean;
   playerMedallionCount?: number;
   playerStealthed?: boolean;
+  isPlayerShadowCloaked?: boolean;
   onPlayerRevived?: (reviverId: string) => void;
   getSquadmates?: (squadId: string) => BotEntity[];
   getMedallionHolders?: () => MedallionHolderInfo[];

@@ -9,8 +9,11 @@ import {
   POIS,
   RARITY_COLORS,
   REBOOT_VAN_COOLDOWN_SEC,
+  RUNE_MONOLITH_COOLDOWN_SEC,
+  RUNE_MONOLITH_COUNT,
   SHIELD_MUSHROOM_RESPAWN_SEC,
   SKY_BALLOON_HEIGHT,
+  STORM_BLESSING_SHIELD_BONUS,
   TRAIN_CHEST_COOLDOWN_SEC,
   TRAIN_HACK_DURATION_SEC,
   TRAIN_SPEED_MPS,
@@ -43,6 +46,7 @@ import type {
   Rarity,
   RebootVanEntity,
   RiftEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SkyBalloonEntity,
   SlurpBarrelEntity,
@@ -239,6 +243,19 @@ export interface Wave12ShowcaseResult {
   hotDropPoiIds: string[];
   drone: SupplyDroneEntity;
   beaconPosition: Vec3Like;
+}
+
+export interface RuneMonolithAttuneResult {
+  ok: boolean;
+  position?: Vec3Like;
+  shieldBonus?: number;
+  goldBonus?: number;
+  weaponId?: 'storm_breaker' | 'shadow_cloak';
+  rarity?: 'mythic' | 'legendary';
+}
+
+export interface Wave13ShowcaseResult {
+  monolith: RuneMonolithEntity;
 }
 
 interface VendingMachineVisual {
@@ -547,6 +564,25 @@ interface HotDropBeaconVisual {
   isQaShowcase?: boolean;
 }
 
+interface RuneMonolithVisual {
+  data: RuneMonolithEntity;
+  group: THREE.Group;
+  crystalRingGroup: THREE.Group;
+  padRingMesh: THREE.Mesh;
+  runeStripMeshes: THREE.Mesh[];
+  coreDiamondMesh: THREE.Mesh;
+  readyMat: THREE.MeshStandardMaterial;
+  cooldownMat: THREE.MeshStandardMaterial;
+  readyPadMat: THREE.MeshBasicMaterial;
+  cooldownPadMat: THREE.MeshBasicMaterial;
+  baseCrystalY: number;
+  bobPhase: number;
+  rewardIndex: number;
+  attuneCount: number;
+  collider: ColliderBox;
+  isQaShowcase?: boolean;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -593,6 +629,7 @@ const BOAR_FLEE_DURATION_SEC = 5.0;
 const FISHING_HOLE_DEFAULT_CASTS = 3;
 const FISHING_HOLE_NEARBY_RADIUS = 5.4;
 const SKY_BALLOON_NEARBY_RADIUS = 4.6;
+const RUNE_MONOLITH_NEARBY_RADIUS = 4.5;
 const FISHING_REWARDS: readonly FishingRewardKind[] = [
   'thermal_flopper',
   'epic_weapon',
@@ -694,6 +731,8 @@ export class WorldInteractables {
   private fishingHolesMap = new Map<string, FishingHoleVisual>();
   private skyBalloons: SkyBalloonEntity[] = [];
   private skyBalloonsMap = new Map<string, SkyBalloonVisual>();
+  private runeMonoliths: RuneMonolithEntity[] = [];
+  private runeMonolithsMap = new Map<string, RuneMonolithVisual>();
   private hotDropPoiIds: string[] = [];
   private hotDropDroneIds: string[] = [];
   private hotDropBeaconsMap = new Map<string, HotDropBeaconVisual>();
@@ -800,6 +839,7 @@ export class WorldInteractables {
     this.buildWildBoars(terrain);
     this.buildFishingHoles(terrain);
     this.buildSkyBalloons(terrain);
+    this.buildRuneMonoliths(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -6256,6 +6296,15 @@ export class WorldInteractables {
       this.hotDropBeaconsMap.delete(qaHotDropBeaconId);
     }
 
+    const qaMonolithId = 'rune_monolith_qa_showcase';
+    const qaMonolith = this.runeMonolithsMap.get(qaMonolithId);
+    if (qaMonolith) {
+      this.group.remove(qaMonolith.group);
+      this.runeMonolithsMap.delete(qaMonolithId);
+      const idx = this.runeMonoliths.findIndex((m) => m.id === qaMonolithId);
+      if (idx >= 0) this.runeMonoliths.splice(idx, 1);
+    }
+
     if (this.qaFlaggedHotDropPoiId) {
       this.hotDropPoiIds = this.hotDropPoiIds.filter((id) => id !== this.qaFlaggedHotDropPoiId);
       this.qaFlaggedHotDropPoiId = null;
@@ -9170,6 +9219,400 @@ export class WorldInteractables {
     };
   }
 
+  private syncRuneMonolithVisual(entry: RuneMonolithVisual): void {
+    const ready = !entry.data.attuned;
+    const runeMat = ready ? entry.readyMat : entry.cooldownMat;
+    const padMat = ready ? entry.readyPadMat : entry.cooldownPadMat;
+    entry.coreDiamondMesh.material = runeMat;
+    entry.padRingMesh.material = padMat;
+    for (let i = 0; i < entry.runeStripMeshes.length; i++) {
+      entry.runeStripMeshes[i].material = runeMat;
+    }
+    entry.crystalRingGroup.scale.setScalar(ready ? 1.0 : 0.78);
+  }
+
+  private createRuneMonolithEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    rewardIndex: number;
+    isQaShowcase?: boolean;
+  }): RuneMonolithVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: RuneMonolithEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      y,
+      z: spec.z,
+      attuned: false,
+      cooldownSec: 0,
+    };
+    this.runeMonoliths.push(data);
+
+    const basaltMat = this.getSharedMat('rune_basalt_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#1e1b29',
+        roughness: 0.84,
+        metalness: 0.22,
+      }),
+    );
+    const darkCarveMat = this.getSharedMat('rune_dark_carve_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#110e1a',
+        roughness: 0.72,
+        metalness: 0.35,
+      }),
+    );
+    const readyMat = this.getSharedMat('rune_ready_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#c084fc',
+        emissive: '#7e22ce',
+        emissiveIntensity: 1.75,
+        roughness: 0.16,
+        metalness: 0.3,
+      }),
+    );
+    const cooldownMat = this.getSharedMat('rune_cooldown_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#475569',
+        emissive: '#3b0764',
+        emissiveIntensity: 0.35,
+        roughness: 0.48,
+        metalness: 0.45,
+      }),
+    );
+    const crystalCyanMat = this.getSharedMat('rune_crystal_cyan_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.65,
+        roughness: 0.15,
+        metalness: 0.28,
+      }),
+    );
+    const readyPadMat = this.getSharedMat('rune_pad_ready_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#a855f7',
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+      }),
+    );
+    const cooldownPadMat = this.getSharedMat('rune_pad_cooldown_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#475569',
+        transparent: true,
+        opacity: 0.35,
+        side: THREE.DoubleSide,
+      }),
+    );
+
+    const daisGeo = this.getSharedGeo(
+      'rune_dais_geo',
+      () => new THREE.CylinderGeometry(1.75, 1.98, 0.24, 8),
+    );
+    const stepGeo = this.getSharedGeo(
+      'rune_step_geo',
+      () => new THREE.CylinderGeometry(1.18, 1.4, 0.2, 8),
+    );
+    const padRingGeo = this.getSharedGeo('rune_pad_ring_geo', () => {
+      const g = new THREE.RingGeometry(1.3, 1.65, 24);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const obeliskGeo = this.getSharedGeo('rune_obelisk_geo', () => {
+      const g = new THREE.CylinderGeometry(0.42, 0.72, 3.65, 4);
+      g.rotateY(Math.PI * 0.25);
+      return g;
+    });
+    const collarGeo = this.getSharedGeo(
+      'rune_collar_geo',
+      () => new THREE.BoxGeometry(1.14, 0.2, 1.14),
+    );
+    const capSpireGeo = this.getSharedGeo('rune_cap_spire_geo', () => {
+      const g = new THREE.ConeGeometry(0.56, 0.85, 4);
+      g.rotateY(Math.PI * 0.25);
+      return g;
+    });
+    const runeStripGeo = this.getSharedGeo(
+      'rune_strip_geo',
+      () => new THREE.BoxGeometry(0.14, 2.35, 0.08),
+    );
+    const coreDiamondGeo = this.getSharedGeo(
+      'rune_core_diamond_geo',
+      () => new THREE.OctahedronGeometry(0.38, 0),
+    );
+    const outerRingGeo = this.getSharedGeo(
+      'rune_outer_ring_geo',
+      () => new THREE.TorusGeometry(0.95, 0.065, 8, 24),
+    );
+    const innerRingGeo = this.getSharedGeo(
+      'rune_inner_ring_geo',
+      () => new THREE.TorusGeometry(0.7, 0.042, 6, 20),
+    );
+    const shardGeo = this.getSharedGeo(
+      'rune_shard_geo',
+      () => new THREE.OctahedronGeometry(0.13, 0),
+    );
+
+    const monolithGroup = new THREE.Group();
+    monolithGroup.name = `RuneMonolith_${spec.id}`;
+    monolithGroup.position.set(spec.x, y, spec.z);
+
+    // 1. Glowing Runic Pad
+    const dais = new THREE.Mesh(daisGeo, basaltMat);
+    dais.position.y = 0.12;
+    dais.receiveShadow = true;
+    dais.castShadow = true;
+    monolithGroup.add(dais);
+
+    const step = new THREE.Mesh(stepGeo, darkCarveMat);
+    step.position.y = 0.32;
+    step.receiveShadow = true;
+    step.castShadow = true;
+    monolithGroup.add(step);
+
+    const padRingMesh = new THREE.Mesh(padRingGeo, readyPadMat);
+    padRingMesh.position.y = 0.26;
+    monolithGroup.add(padRingMesh);
+
+    // 2. Carved Basalt Obelisk & Etched Runes
+    const obelisk = new THREE.Mesh(obeliskGeo, basaltMat);
+    obelisk.position.y = 2.15;
+    obelisk.castShadow = true;
+    obelisk.receiveShadow = true;
+    monolithGroup.add(obelisk);
+
+    const collar = new THREE.Mesh(collarGeo, darkCarveMat);
+    collar.position.y = 1.65;
+    collar.castShadow = true;
+    monolithGroup.add(collar);
+
+    const capSpire = new THREE.Mesh(capSpireGeo, darkCarveMat);
+    capSpire.position.y = 4.35;
+    capSpire.castShadow = true;
+    monolithGroup.add(capSpire);
+
+    const runeStripMeshes: THREE.Mesh[] = [];
+    for (let f = 0; f < 4; f++) {
+      const ang = (f * Math.PI) / 2;
+      const strip = new THREE.Mesh(runeStripGeo, readyMat);
+      strip.position.set(Math.sin(ang) * 0.44, 2.2, Math.cos(ang) * 0.44);
+      strip.rotation.y = ang;
+      monolithGroup.add(strip);
+      runeStripMeshes.push(strip);
+    }
+
+    // 3. Rotating Crystal Ring Assembly
+    const baseCrystalY = 5.15;
+    const crystalRingGroup = new THREE.Group();
+    crystalRingGroup.name = `RuneMonolithRing_${spec.id}`;
+    crystalRingGroup.position.y = baseCrystalY;
+
+    const coreDiamondMesh = new THREE.Mesh(coreDiamondGeo, readyMat);
+    crystalRingGroup.add(coreDiamondMesh);
+
+    const outerRing = new THREE.Mesh(outerRingGeo, crystalCyanMat);
+    outerRing.rotation.x = Math.PI * 0.34;
+    crystalRingGroup.add(outerRing);
+
+    const innerRing = new THREE.Mesh(innerRingGeo, readyMat);
+    innerRing.rotation.x = -Math.PI * 0.28;
+    innerRing.rotation.z = Math.PI * 0.22;
+    crystalRingGroup.add(innerRing);
+
+    for (let s = 0; s < 4; s++) {
+      const a = (s / 4) * Math.PI * 2;
+      const shard = new THREE.Mesh(shardGeo, crystalCyanMat);
+      shard.position.set(Math.cos(a) * 0.95, Math.sin(a) * 0.28, Math.sin(a) * 0.95);
+      crystalRingGroup.add(shard);
+    }
+
+    monolithGroup.add(crystalRingGroup);
+    this.group.add(monolithGroup);
+
+    const collider = this.makeRotatedCollider(
+      `${spec.id}_col`,
+      spec.x,
+      spec.z,
+      0,
+      0,
+      1.05,
+      1.05,
+      y,
+      y + 4.8,
+      0,
+      'brick',
+      `rune_monolith:${spec.id}`,
+    );
+
+    const visual: RuneMonolithVisual = {
+      data,
+      group: monolithGroup,
+      crystalRingGroup,
+      padRingMesh,
+      runeStripMeshes,
+      coreDiamondMesh,
+      readyMat,
+      cooldownMat,
+      readyPadMat,
+      cooldownPadMat,
+      baseCrystalY,
+      bobPhase: (this.runeMonoliths.length * 1.42) % (Math.PI * 2),
+      rewardIndex: spec.rewardIndex,
+      attuneCount: 0,
+      collider,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.syncRuneMonolithVisual(visual);
+    this.runeMonolithsMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildRuneMonoliths(_terrain: TerrainQuery): void {
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      x: number;
+      z: number;
+      rewardIndex: number;
+    }> = [
+      { id: 'rune_monolith_metro', poiId: 'metro_towers', x: -107, z: -20, rewardIndex: 0 },
+      { id: 'rune_monolith_pines', poiId: 'whispering_pines', x: 129, z: -153, rewardIndex: 1 },
+      { id: 'rune_monolith_oasis', poiId: 'sunken_oasis', x: -213, z: -43, rewardIndex: 2 },
+      { id: 'rune_monolith_caldera', poiId: 'scorched_caldera', x: -163, z: 89, rewardIndex: 3 },
+    ];
+    const count = Math.min(RUNE_MONOLITH_COUNT, specs.length);
+    for (let i = 0; i < count; i++) {
+      this.createRuneMonolithEntry(specs[i]);
+    }
+  }
+
+  getRuneMonoliths(): RuneMonolithEntity[] {
+    return this.runeMonoliths;
+  }
+
+  getRuneMonolithColliders(): ColliderBox[] {
+    return Array.from(this.runeMonolithsMap.values(), (v) => v.collider);
+  }
+
+  findNearbyRuneMonolith(
+    pos: Vec3Like,
+    maxDist = RUNE_MONOLITH_NEARBY_RADIUS,
+  ): RuneMonolithEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(maxDist) ||
+      maxDist < 0
+    ) {
+      return null;
+    }
+
+    let best: RuneMonolithEntity | null = null;
+    let bestDist = maxDist;
+    for (let i = 0; i < this.runeMonoliths.length; i++) {
+      const rm = this.runeMonoliths[i];
+      if (rm.attuned) continue;
+      const d = Math.hypot(rm.x - pos.x, rm.y - pos.y, rm.z - pos.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = rm;
+      }
+    }
+    return best;
+  }
+
+  attuneRuneMonolith(id: string): RuneMonolithAttuneResult {
+    const entry = this.runeMonolithsMap.get(id);
+    if (!entry || entry.data.attuned) {
+      return { ok: false };
+    }
+
+    entry.data.attuned = true;
+    entry.data.cooldownSec = RUNE_MONOLITH_COOLDOWN_SEC;
+    this.syncRuneMonolithVisual(entry);
+
+    const pos: Vec3Like = {
+      x: entry.data.x,
+      y: entry.data.y + 1.8,
+      z: entry.data.z,
+    };
+    this.eventBus?.emit('vfx:rune_attune', { position: { ...pos } });
+    this.eventBus?.emit('sound:play', {
+      id: 'rune_attune',
+      position: { ...pos },
+      volume: 0.95,
+      spatial: true,
+    });
+
+    const idx = entry.rewardIndex + entry.attuneCount;
+    const weaponId: 'storm_breaker' | 'shadow_cloak' =
+      idx % 2 === 0 ? 'storm_breaker' : 'shadow_cloak';
+    const rarity: 'mythic' | 'legendary' =
+      Math.floor(idx / 2) % 2 === 0 ? 'mythic' : 'legendary';
+    entry.attuneCount++;
+
+    return {
+      ok: true,
+      position: pos,
+      shieldBonus: STORM_BLESSING_SHIELD_BONUS,
+      goldBonus: 100,
+      weaponId,
+      rarity,
+    };
+  }
+
+  qaPlaceWave13Showcase(
+    centerPos: Vec3Like,
+    yaw = 0,
+  ): Wave13ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities();
+
+    const fwdX = Math.sin(yaw);
+    const fwdZ = Math.cos(yaw);
+    const rightX = -Math.cos(yaw);
+    const rightZ = Math.sin(yaw);
+
+    let spot = this.findDryGroundNear(
+      centerPos,
+      rightX * -5.2 + fwdX * 8.2,
+      rightZ * -5.2 + fwdZ * 8.2,
+    );
+    const aheadLeftCandidates: ReadonlyArray<[number, number]> = [
+      [-5.2, 8.2],
+      [-6.5, 6.5],
+      [-7.8, 5.0],
+      [-8.8, 3.8],
+      [-4.8, 5.2],
+    ];
+    for (const [ro, fo] of aheadLeftCandidates) {
+      const cx = centerPos.x + rightX * ro + fwdX * fo;
+      const cz = centerPos.z + rightZ * ro + fwdZ * fo;
+      if (!this.terrain.isWater(cx, cz)) {
+        spot = { x: cx, y: this.terrain.getHeightAt(cx, cz), z: cz };
+        break;
+      }
+    }
+
+    const visual = this.createRuneMonolithEntry({
+      id: 'rune_monolith_qa_showcase',
+      poiId: 'qa_showcase',
+      x: spot.x,
+      z: spot.z,
+      rewardIndex: 0,
+      isQaShowcase: true,
+    });
+
+    return {
+      monolith: visual.data,
+    };
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -9191,6 +9634,7 @@ export class WorldInteractables {
       ...this.getModBenchColliders(),
       ...this.getForecastTowerColliders(),
       ...this.getSkyBalloonColliders(),
+      ...this.getRuneMonolithColliders(),
     ];
   }
 
@@ -9437,6 +9881,16 @@ export class WorldInteractables {
     for (const sb of this.skyBalloonsMap.values()) {
       sb.canopyGroup.position.y = sb.baseCanopyY;
       sb.canopyGroup.rotation.set(0, 0, 0);
+    }
+
+    for (const rm of this.runeMonolithsMap.values()) {
+      rm.data.attuned = false;
+      rm.data.cooldownSec = 0;
+      rm.attuneCount = 0;
+      rm.crystalRingGroup.position.y = rm.baseCrystalY;
+      rm.crystalRingGroup.rotation.set(0, 0, 0);
+      rm.padRingMesh.scale.set(1, 1, 1);
+      this.syncRuneMonolithVisual(rm);
     }
   }
 
@@ -10059,6 +10513,25 @@ export class WorldInteractables {
       const groundScale = 1.0 + Math.sin(t * 2.8) * 0.16;
       hb.ringMesh.scale.set(groundScale, groundScale, groundScale);
     }
+
+    // Update 4 Ancient Rune Monoliths (cooldown regen & rotating crystal ring)
+    for (const rm of this.runeMonolithsMap.values()) {
+      if (rm.data.attuned) {
+        rm.data.cooldownSec = Math.max(0, rm.data.cooldownSec - safeDt);
+        if (rm.data.cooldownSec <= 0) {
+          rm.data.cooldownSec = 0;
+          rm.data.attuned = false;
+          this.syncRuneMonolithVisual(rm);
+        }
+      }
+      const t = elapsed + rm.bobPhase;
+      const spinRate = rm.data.attuned ? 0.55 : 1.75;
+      rm.crystalRingGroup.rotation.y += safeDt * spinRate;
+      rm.crystalRingGroup.position.y =
+        rm.baseCrystalY + Math.sin(t * 2.2) * (rm.data.attuned ? 0.06 : 0.16);
+      const padPulse = rm.data.attuned ? 0.92 : 1.0 + Math.sin(t * 2.9) * 0.08;
+      rm.padRingMesh.scale.set(padPulse, padPulse, padPulse);
+    }
   }
 
   dispose(): void {
@@ -10127,6 +10600,8 @@ export class WorldInteractables {
     this.fishingHolesMap.clear();
     this.skyBalloons = [];
     this.skyBalloonsMap.clear();
+    this.runeMonoliths = [];
+    this.runeMonolithsMap.clear();
     this.trainTrackPoints = [];
     this.trainCarMetas = [];
     this.trainLocoWheels = [];

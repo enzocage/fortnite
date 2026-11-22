@@ -237,6 +237,10 @@ export interface HUDState {
   tankCannonCooldown?: number | null;
   inHotDropPoi?: boolean;
   hotDropPoiIds?: string[];
+  shadowCloakState?: { active: boolean; remainingSec: number; cooldownSec: number } | null;
+  stormBlessingRemainingSec?: number | null;
+  runeAttuneProgress?: number | null;
+  choppaAltitude?: number | null;
 }
 
 export interface MatchQuest {
@@ -329,6 +333,9 @@ export interface MatchSummary {
   c4Blasts?: number;
   shieldBlockedDmg?: number;
   tankElims?: number;
+  arcChainHits?: number;
+  runeMonolithsAttuned?: number;
+  choppaFlightSec?: number;
 }
 
 export interface BannerMessage {

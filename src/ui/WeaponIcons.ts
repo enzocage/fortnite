@@ -391,6 +391,27 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <rect x="48.5" y="22" width="4" height="5" rx="1" fill="#ef4444" stroke="#0f172a" stroke-width="1.2"/>
     <circle cx="50.5" cy="34" r="2" fill="#ffd000"/>
   </svg>`,
+
+  storm_breaker: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M5 35L15 30H40V38H29L26 48H20L22 38H14L7 43L5 35Z" fill="#1e293b" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="17" y="23" width="20" height="5" rx="1.5" fill="#0ea5e9" stroke="#0f172a" stroke-width="1.5"/>
+    <rect x="38" y="27" width="20" height="3.4" rx="1" fill="#22d3ee" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="38" y="34" width="18" height="3.4" rx="1" fill="#38bdf8" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="23" y="31" width="14" height="4.4" rx="1.4" fill="#7c3aed" stroke="#e9d5ff" stroke-width="1.2"/>
+    <path d="M42 26V38M48 26V38M54 27V37" stroke="#c084fc" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M56 32L61 27L59 32L62 36L56 32Z" fill="#fef08a" stroke="#22d3ee" stroke-width="1.2" stroke-linejoin="round"/>
+    <circle cx="30" cy="33.2" r="2.2" fill="#67e8f9"/>
+  </svg>`,
+
+  shadow_cloak: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M12 42L16 20L27 13L38 18L42 42L32 52H20L12 42Z" fill="#312e81" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M31 44L35 23L45 17L54 22L53 43L44 52H34L31 44Z" fill="#1e1b4b" stroke="#c084fc" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M27 21L35 31L27 42L19 31L27 21Z" fill="#a855f7" stroke="#f5d0fe" stroke-width="1.5" stroke-linejoin="round"/>
+    <circle cx="27" cy="31" r="3.4" fill="#22d3ee" stroke="#fae8ff" stroke-width="1.2"/>
+    <path d="M19 16L22 9L26 14M32 15L36 8L39 16M45 18L50 11L52 20" stroke="#e879f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="20" y="45" width="14" height="3.6" rx="1.4" fill="#c084fc"/>
+    <path d="M9 28C7 33 8 40 12 45M55 28C57 33 56 40 52 44" stroke="#38bdf8" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {
@@ -506,6 +527,9 @@ export function getBountyTargetSvg(): string {
 }
 
 export function getVehicleIconSvg(kind: VehicleKind): string {
+  if (kind === 'choppa') {
+    return getChoppaSvg();
+  }
   if (kind === 'hover_tank') {
     return getHoverTankSvg();
   }
@@ -1065,5 +1089,29 @@ export function getStreakFlameSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
     <path d="M12.5 2C12.5 2 19 7.6 19 13.6C19 17.8 15.9 21.2 12 21.2C8.1 21.2 5 17.8 5 13.6C5 9.8 7.8 7.2 9.5 5.5C9.5 7.7 11 8.8 11 8.8C10.8 6.2 12.5 2 12.5 2Z" fill="#f97316" stroke="#fde047" stroke-width="1.5" stroke-linejoin="round"/>
     <path d="M12 10.5C12 10.5 15.2 13.2 15.2 16C15.2 17.8 13.8 19.2 12 19.2C10.2 19.2 8.8 17.8 8.8 16C8.8 13.6 12 10.5 12 10.5Z" fill="#fef08a"/>
+  </svg>`;
+}
+
+export function getChoppaSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M8 16H56" stroke="#e0f2fe" stroke-width="3.4" stroke-linecap="round"/>
+    <path d="M16 12L48 20M16 20L48 12" stroke="#22d3ee" stroke-width="2.4" stroke-linecap="round"/>
+    <rect x="29" y="15" width="6" height="8" rx="1.5" fill="#94a3b8" stroke="#0f172a" stroke-width="1.4"/>
+    <circle cx="32" cy="15.5" r="3" fill="#ffd000" stroke="#0f172a" stroke-width="1.3"/>
+    <path d="M14 34L22 23H42L51 35L45 43H20L14 34Z" fill="#0284c7" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M23 25H39L44 33H21L23 25Z" fill="#67e8f9" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M47 32H59L57 38H47V32Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <circle cx="58" cy="34" r="3.5" stroke="#e0f2fe" stroke-width="1.8" fill="rgba(15,23,42,0.85)"/>
+    <path d="M19 48H46M25 43V48M40 43V48" stroke="#cbd5e1" stroke-width="2.8" stroke-linecap="round"/>
+    <rect x="27" y="36" width="12" height="4" rx="1.5" fill="#1e293b" stroke="#22d3ee" stroke-width="1.2"/>
+  </svg>`;
+}
+
+export function getRuneMonolithSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="16" r="12" fill="rgba(46,16,101,0.88)" stroke="#c084fc" stroke-width="1.8" stroke-dasharray="3.5 2.2"/>
+    <path d="M16 4L25 16L16 28L7 16L16 4Z" fill="#7e22ce" stroke="#f5d0fe" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M16 8.5L21 16L16 23.5L11 16L16 8.5Z" fill="#c084fc"/>
+    <circle cx="16" cy="16" r="2.8" fill="#22d3ee" stroke="#fae8ff" stroke-width="1.1"/>
   </svg>`;
 }

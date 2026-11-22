@@ -1301,6 +1301,99 @@ interface HotDropBeamSlot {
   sparks: HotDropBeamSpark[];
 }
 
+interface ArcLightningSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  isChain: boolean;
+  coreWidth: number;
+  glowWidth: number;
+  segmentLengths: number[];
+  group: THREE.Group;
+  coreSegments: THREE.Mesh[];
+  glowSegments: THREE.Mesh[];
+  coreMat: THREE.MeshBasicMaterial;
+  glowMat: THREE.MeshBasicMaterial;
+  originFlashMesh: THREE.Mesh;
+  impactFlashMesh: THREE.Mesh;
+  flashMat: THREE.MeshBasicMaterial;
+}
+
+interface ShadowCloakWisp {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  startRadius: number;
+  endRadius: number;
+  startY: number;
+  endY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface ShadowCloakBurstSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  entering: boolean;
+  group: THREE.Group;
+  mistRingMesh: THREE.Mesh;
+  mistRingMat: THREE.MeshBasicMaterial;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  shroudMesh: THREE.Mesh;
+  shroudMat: THREE.MeshBasicMaterial;
+  wisps: ShadowCloakWisp[];
+}
+
+interface RuneAttuneSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface RuneAttuneSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  outerBeamMesh: THREE.Mesh;
+  outerBeamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  glyphRingMesh: THREE.Mesh;
+  glyphRingMat: THREE.MeshBasicMaterial;
+  groundRingMesh: THREE.Mesh;
+  groundRingMat: THREE.MeshBasicMaterial;
+  sparks: RuneAttuneSpark[];
+}
+
+interface ChoppaWashMote {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface ChoppaWashSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  intensity: number;
+  group: THREE.Group;
+  outerDustRingMesh: THREE.Mesh;
+  outerDustRingMat: THREE.MeshBasicMaterial;
+  innerAirRingMesh: THREE.Mesh;
+  innerAirRingMat: THREE.MeshBasicMaterial;
+  motes: ChoppaWashMote[];
+}
+
 function getWeaponModColor(modId: WeaponModId): string {
   const found = WEAPON_MODS.find((m) => m.id === modId);
   return found?.accentColor ?? '#38bdf8';
@@ -1477,6 +1570,14 @@ const C4_BLAST_POOL_SIZE = 8;
 const C4_BLAST_SHARD_COUNT = 18;
 const HOT_DROP_BEAM_POOL_SIZE = 6;
 const HOT_DROP_BEAM_SPARK_COUNT = 14;
+const ARC_LIGHTNING_POOL_SIZE = 24;
+const ARC_LIGHTNING_SEGMENT_COUNT = 8;
+const SHADOW_CLOAK_BURST_POOL_SIZE = 10;
+const SHADOW_CLOAK_WISP_COUNT = 14;
+const RUNE_ATTUNE_POOL_SIZE = 6;
+const RUNE_ATTUNE_SPARK_COUNT = 14;
+const CHOPPA_WASH_POOL_SIZE = 16;
+const CHOPPA_WASH_MOTE_COUNT = 10;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -1569,6 +1670,10 @@ export class VFXManager {
   private readonly shieldRicochets: ShieldRicochetSlot[] = [];
   private readonly c4Blasts: C4BlastSlot[] = [];
   private readonly hotDropBeams: HotDropBeamSlot[] = [];
+  private readonly arcLightnings: ArcLightningSlot[] = [];
+  private readonly shadowCloakBursts: ShadowCloakBurstSlot[] = [];
+  private readonly runeAttunes: RuneAttuneSlot[] = [];
+  private readonly choppaWashes: ChoppaWashSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -1641,6 +1746,10 @@ export class VFXManager {
   private shieldRicochetCursor = 0;
   private c4BlastCursor = 0;
   private hotDropBeamCursor = 0;
+  private arcLightningCursor = 0;
+  private shadowCloakBurstCursor = 0;
+  private runeAttuneCursor = 0;
+  private choppaWashCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -1649,9 +1758,14 @@ export class VFXManager {
   private readonly tmpB = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
   private readonly tmpRight = new THREE.Vector3();
+  private readonly tmpOrthoUp = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
   private readonly upAxis = new THREE.Vector3(0, 1, 0);
   private readonly zAxis = new THREE.Vector3(0, 0, 1);
+  private readonly arcNodes: THREE.Vector3[] = Array.from(
+    { length: ARC_LIGHTNING_SEGMENT_COUNT + 1 },
+    () => new THREE.Vector3(),
+  );
 
   constructor(scene: THREE.Scene, eventBus: EventBus) {
     this.scene = scene;
@@ -6501,6 +6615,346 @@ export class VFXManager {
         sparks,
       });
     }
+
+    // 55. Arc Lightning Bolt (jagged segmented cyan-white core + purple outer glow)
+    for (let i = 0; i < ARC_LIGHTNING_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_arc_lightning';
+      group.visible = false;
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.98,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const glowMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.65,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const flashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+
+      const coreSegments: THREE.Mesh[] = [];
+      const glowSegments: THREE.Mesh[] = [];
+      const segmentLengths: number[] = [];
+      for (let s = 0; s < ARC_LIGHTNING_SEGMENT_COUNT; s++) {
+        const glowMesh = new THREE.Mesh(this.unitCylinderGeo, glowMat);
+        const coreMesh = new THREE.Mesh(this.unitCylinderGeo, coreMat);
+        group.add(glowMesh);
+        group.add(coreMesh);
+        glowSegments.push(glowMesh);
+        coreSegments.push(coreMesh);
+        segmentLengths.push(1);
+      }
+
+      const originFlashMesh = new THREE.Mesh(this.unitSphereGeo, flashMat);
+      const impactFlashMesh = new THREE.Mesh(this.unitSphereGeo, flashMat);
+      group.add(originFlashMesh);
+      group.add(impactFlashMesh);
+
+      this.root.add(group);
+      this.arcLightnings.push({
+        active: false,
+        age: 0,
+        duration: 0.24,
+        isChain: false,
+        coreWidth: 0.058,
+        glowWidth: 0.155,
+        segmentLengths,
+        group,
+        coreSegments,
+        glowSegments,
+        coreMat,
+        glowMat,
+        originFlashMesh,
+        impactFlashMesh,
+        flashMat,
+      });
+    }
+
+    // 56. Shadow Cloak Burst (expanding dark-violet mist ring + smoke wisps on enter/exit)
+    for (let i = 0; i < SHADOW_CLOAK_BURST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_shadow_cloak_burst';
+      group.visible = false;
+
+      const mistRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x4c1d95,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      const mistRingMesh = new THREE.Mesh(this.unitRingGeo, mistRingMat);
+      mistRingMesh.rotation.x = -Math.PI / 2;
+      mistRingMesh.position.y = 0.08;
+      group.add(mistRingMesh);
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x7c3aed,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.hexRingGeo, outerRingMat);
+      outerRingMesh.rotation.x = -Math.PI / 2;
+      outerRingMesh.position.y = 0.85;
+      group.add(outerRingMesh);
+
+      const shroudMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x2e1065,
+          transparent: true,
+          opacity: 0.44,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      const shroudMesh = new THREE.Mesh(this.unitSphereGeo, shroudMat);
+      shroudMesh.position.y = 0.9;
+      group.add(shroudMesh);
+
+      const wisps: ShadowCloakWisp[] = [];
+      for (let w = 0; w < SHADOW_CLOAK_WISP_COUNT; w++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: w % 3 === 0 ? 0x3b0764 : w % 2 === 0 ? 0x6d28d9 : 0xa855f7,
+            transparent: true,
+            opacity: 0.72,
+            depthWrite: false,
+          }),
+        );
+        const geo = w % 2 === 0 ? this.unitSphereGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        wisps.push({
+          mesh,
+          material,
+          angle: (w / SHADOW_CLOAK_WISP_COUNT) * Math.PI * 2,
+          startRadius: 0.85,
+          endRadius: 0.35,
+          startY: 0.25,
+          endY: 1.5,
+          spin: 2.5,
+          baseScale: 0.24,
+        });
+      }
+
+      this.root.add(group);
+      this.shadowCloakBursts.push({
+        active: false,
+        age: 0,
+        duration: 0.62,
+        entering: true,
+        group,
+        mistRingMesh,
+        mistRingMat,
+        outerRingMesh,
+        outerRingMat,
+        shroudMesh,
+        shroudMat,
+        wisps,
+      });
+    }
+
+    // 57. Rune Monolith Attunement (rising violet-cyan arcane beam + rotating glyph ring)
+    for (let i = 0; i < RUNE_ATTUNE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_rune_attune';
+      group.visible = false;
+
+      const outerBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x8b5cf6,
+          transparent: true,
+          opacity: 0.45,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerBeamMesh = new THREE.Mesh(this.beamCylGeo, outerBeamMat);
+      outerBeamMesh.position.y = 8;
+      group.add(outerBeamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.beamCylGeo, coreBeamMat);
+      coreBeamMesh.position.y = 8;
+      group.add(coreBeamMesh);
+
+      const glyphRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xc084fc,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const glyphRingMesh = new THREE.Mesh(this.hexRingGeo, glyphRingMat);
+      glyphRingMesh.rotation.x = -Math.PI / 2;
+      glyphRingMesh.position.y = 0.2;
+      group.add(glyphRingMesh);
+
+      const groundRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const groundRingMesh = new THREE.Mesh(this.unitRingGeo, groundRingMat);
+      groundRingMesh.rotation.x = -Math.PI / 2;
+      groundRingMesh.position.y = 0.08;
+      group.add(groundRingMesh);
+
+      const sparks: RuneAttuneSpark[] = [];
+      for (let s = 0; s < RUNE_ATTUNE_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0x22d3ee : s % 2 === 0 ? 0xc084fc : 0xa855f7,
+            transparent: true,
+            opacity: 0.94,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / RUNE_ATTUNE_SPARK_COUNT) * Math.PI * 2,
+          radius: 1.0,
+          speedY: 4.0,
+          spin: 3.2,
+          baseScale: 0.14,
+        });
+      }
+
+      this.root.add(group);
+      this.runeAttunes.push({
+        active: false,
+        age: 0,
+        duration: 1.15,
+        group,
+        outerBeamMesh,
+        outerBeamMat,
+        coreBeamMesh,
+        coreBeamMat,
+        glyphRingMesh,
+        glyphRingMat,
+        groundRingMesh,
+        groundRingMat,
+        sparks,
+      });
+    }
+
+    // 58. Storm Choppa Rotor Wash (expanding low-altitude translucent dust/air ring + motes)
+    for (let i = 0; i < CHOPPA_WASH_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_choppa_wash';
+      group.visible = false;
+
+      const outerDustRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xcbd5e1,
+          transparent: true,
+          opacity: 0.56,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      const outerDustRingMesh = new THREE.Mesh(this.unitRingGeo, outerDustRingMat);
+      outerDustRingMesh.rotation.x = -Math.PI / 2;
+      outerDustRingMesh.position.y = 0.06;
+      group.add(outerDustRingMesh);
+
+      const innerAirRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.48,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      const innerAirRingMesh = new THREE.Mesh(this.unitRingGeo, innerAirRingMat);
+      innerAirRingMesh.rotation.x = -Math.PI / 2;
+      innerAirRingMesh.position.y = 0.12;
+      group.add(innerAirRingMesh);
+
+      const motes: ChoppaWashMote[] = [];
+      for (let m = 0; m < CHOPPA_WASH_MOTE_COUNT; m++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: m % 3 === 0 ? 0xe2e8f0 : m % 2 === 0 ? 0xd6d3d1 : 0xcbd5e1,
+            transparent: true,
+            opacity: 0.46,
+            depthWrite: false,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitSphereGeo, material);
+        group.add(mesh);
+        motes.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.38,
+        });
+      }
+
+      this.root.add(group);
+      this.choppaWashes.push({
+        active: false,
+        age: 0,
+        duration: 0.52,
+        intensity: 1,
+        group,
+        outerDustRingMesh,
+        outerDustRingMat,
+        innerAirRingMesh,
+        innerAirRingMat,
+        motes,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -6707,6 +7161,14 @@ export class VFXManager {
       ),
       this.eventBus.on('vfx:c4_blast', (e) => this.spawnC4Blast(e.position, e.radius)),
       this.eventBus.on('vfx:hot_drop_beam', (e) => this.spawnHotDropBeam(e.position)),
+      this.eventBus.on('vfx:arc_lightning', (e) =>
+        this.spawnArcLightning(e.from, e.to, e.isChain),
+      ),
+      this.eventBus.on('vfx:shadow_cloak_burst', (e) =>
+        this.spawnShadowCloakBurst(e.position, e.entering),
+      ),
+      this.eventBus.on('vfx:rune_attune', (e) => this.spawnRuneAttune(e.position)),
+      this.eventBus.on('vfx:choppa_wash', (e) => this.spawnChoppaWash(e.position, e.intensity)),
     );
   }
 
@@ -6810,6 +7272,12 @@ export class VFXManager {
     } else if (weaponId === 'remote_c4') {
       scale = 0.85;
       color = 0xef4444;
+    } else if (weaponId === 'storm_breaker') {
+      scale = 1.4;
+      color = 0x38bdf8;
+    } else if (weaponId === 'shadow_cloak') {
+      scale = 0.9;
+      color = 0xa855f7;
     } else if (weaponId === 'smg' || weaponId === 'pistol') {
       scale = 0.78;
     }
@@ -6827,12 +7295,13 @@ export class VFXManager {
     slot.material.opacity = 0.95;
     slot.group.visible = true;
 
-    // Eject spinning brass casing or shotgun shell for bullet/shell firearms (not arrows, railgun slugs, or plasma flamethrower)
+    // Eject spinning brass casing or shotgun shell for bullet/shell firearms (not arrows, railgun slugs, plasma flamethrower, or Tesla arc rifle)
     const ammoType = WEAPONS[weaponId]?.ammoType;
     if (
       weaponId !== 'boom_bow' &&
       weaponId !== 'railgun' &&
       weaponId !== 'plasma_flamethrower' &&
+      weaponId !== 'storm_breaker' &&
       (ammoType === 'light' ||
         ammoType === 'medium' ||
         ammoType === 'heavy' ||
@@ -9501,6 +9970,159 @@ export class VFXManager {
         sp.material.opacity = 0.96 * fade;
       }
     }
+
+    // 56. Arc Lightning Bolt
+    for (let i = 0; i < ARC_LIGHTNING_POOL_SIZE; i++) {
+      const al = this.arcLightnings[i];
+      if (!al.active) continue;
+      al.age += safeDt;
+      const t = al.age / al.duration;
+      if (t >= 1) {
+        al.active = false;
+        al.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const flicker = 0.72 + 0.28 * Math.sin(al.age * (al.isChain ? 75 : 55));
+      const coreScaleXZ = al.coreWidth * Math.max(0.15, 1 - 0.55 * t);
+      const glowScaleXZ = al.glowWidth * Math.max(0.2, 1 - 0.4 * t);
+
+      for (let s = 0; s < ARC_LIGHTNING_SEGMENT_COUNT; s++) {
+        const segLen = al.segmentLengths[s];
+        al.coreSegments[s].scale.set(coreScaleXZ, segLen, coreScaleXZ);
+        al.glowSegments[s].scale.set(glowScaleXZ, segLen, glowScaleXZ);
+      }
+
+      al.coreMat.opacity = 0.98 * fade * flicker;
+      al.glowMat.opacity = 0.65 * fade * flicker;
+      al.flashMat.opacity = 0.92 * fade;
+      const flashScale = (al.isChain ? 0.24 : 0.36) * Math.max(0.1, 1 - 0.65 * t);
+      al.originFlashMesh.scale.setScalar(flashScale * 0.75);
+      al.impactFlashMesh.scale.setScalar(flashScale);
+    }
+
+    // 57. Shadow Cloak Burst
+    for (let i = 0; i < SHADOW_CLOAK_BURST_POOL_SIZE; i++) {
+      const sc = this.shadowCloakBursts[i];
+      if (!sc.active) continue;
+      sc.age += safeDt;
+      const t = sc.age / sc.duration;
+      if (t >= 1) {
+        sc.active = false;
+        sc.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      const mistScale = sc.entering
+        ? 0.45 + 1.85 * easeOut
+        : 0.35 + 2.35 * easeOut;
+      sc.mistRingMesh.scale.setScalar(mistScale);
+      sc.mistRingMat.opacity = 0.85 * fade;
+
+      sc.outerRingMesh.rotation.z += (sc.entering ? -3.4 : 4.2) * safeDt;
+      sc.outerRingMesh.position.y = sc.entering ? 0.3 + 0.9 * easeOut : 0.85 + 0.45 * easeOut;
+      sc.outerRingMesh.scale.setScalar(0.55 + 1.45 * easeOut);
+      sc.outerRingMat.opacity = 0.78 * fade;
+
+      sc.shroudMesh.scale.setScalar(
+        sc.entering ? 1.55 - 0.55 * easeOut : 0.85 + 1.65 * easeOut,
+      );
+      sc.shroudMat.opacity = 0.44 * fade * fade;
+
+      for (let w = 0; w < SHADOW_CLOAK_WISP_COUNT; w++) {
+        const wp = sc.wisps[w];
+        const ang = wp.angle + sc.age * wp.spin;
+        const rad = wp.startRadius + (wp.endRadius - wp.startRadius) * easeOut;
+        const wy = wp.startY + (wp.endY - wp.startY) * easeOut;
+        wp.mesh.position.set(Math.cos(ang) * rad, wy, Math.sin(ang) * rad);
+        wp.mesh.rotation.y += 3.5 * safeDt;
+        wp.mesh.scale.setScalar(wp.baseScale * (0.7 + 0.65 * Math.sin(t * Math.PI)));
+        wp.material.opacity = 0.72 * fade;
+      }
+    }
+
+    // 58. Rune Monolith Attunement
+    for (let i = 0; i < RUNE_ATTUNE_POOL_SIZE; i++) {
+      const ra = this.runeAttunes[i];
+      if (!ra.active) continue;
+      ra.age += safeDt;
+      const t = ra.age / ra.duration;
+      if (t >= 1) {
+        ra.active = false;
+        ra.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const beamHeight = 3.5 + 16.5 * easeOut;
+      const pulse = 1 + 0.12 * Math.sin(ra.age * 14);
+
+      ra.outerBeamMesh.position.y = beamHeight * 0.5;
+      ra.outerBeamMesh.scale.set(0.95 * pulse * (1 - 0.3 * t), beamHeight, 0.95 * pulse * (1 - 0.3 * t));
+      ra.outerBeamMat.opacity = 0.48 * fade;
+
+      ra.coreBeamMesh.position.y = beamHeight * 0.5;
+      ra.coreBeamMesh.scale.set(0.36 * pulse * (1 - 0.4 * t), beamHeight, 0.36 * pulse * (1 - 0.4 * t));
+      ra.coreBeamMat.opacity = 0.78 * fade;
+
+      ra.glyphRingMesh.position.y = 0.25 + 4.4 * easeOut;
+      ra.glyphRingMesh.rotation.z += 3.8 * safeDt;
+      ra.glyphRingMesh.scale.setScalar(0.85 + 1.85 * easeOut);
+      ra.glyphRingMat.opacity = 0.92 * fade;
+
+      ra.groundRingMesh.scale.setScalar(0.75 + 2.8 * easeOut);
+      ra.groundRingMat.opacity = 0.9 * fade;
+
+      for (let s = 0; s < RUNE_ATTUNE_SPARK_COUNT; s++) {
+        const sp = ra.sparks[s];
+        const ang = sp.angle + ra.age * sp.spin;
+        const rad = sp.radius * (1 - 0.35 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 5 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.4 * t));
+        sp.material.opacity = 0.94 * fade;
+      }
+    }
+
+    // 59. Storm Choppa Rotor Wash
+    for (let i = 0; i < CHOPPA_WASH_POOL_SIZE; i++) {
+      const cw = this.choppaWashes[i];
+      if (!cw.active) continue;
+      cw.age += safeDt;
+      const t = cw.age / cw.duration;
+      if (t >= 1) {
+        cw.active = false;
+        cw.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const sc = cw.intensity;
+
+      cw.outerDustRingMesh.scale.setScalar((1.1 + 4.4 * easeOut) * sc);
+      cw.outerDustRingMat.opacity = 0.56 * fade;
+
+      cw.innerAirRingMesh.rotation.z += 4.2 * safeDt;
+      cw.innerAirRingMesh.scale.setScalar((0.75 + 3.1 * easeOut) * sc);
+      cw.innerAirRingMat.opacity = 0.48 * fade;
+
+      for (let m = 0; m < CHOPPA_WASH_MOTE_COUNT; m++) {
+        const mt = cw.motes[m];
+        mt.mesh.position.x += mt.vx * safeDt;
+        mt.mesh.position.y = Math.max(0.05, mt.mesh.position.y + mt.vy * safeDt);
+        mt.mesh.position.z += mt.vz * safeDt;
+        mt.mesh.scale.setScalar(mt.baseScale * (0.65 + 1.15 * easeOut));
+        mt.material.opacity = 0.46 * fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -11534,6 +12156,232 @@ export class VFXManager {
     }
   }
 
+  private spawnArcLightning(from: Vec3Like, to: Vec3Like, isChain = false): void {
+    if (this.disposed || !isFiniteVec3(from) || !isFiniteVec3(to)) return;
+
+    this.tmpA.set(from.x, from.y, from.z);
+    this.tmpB.set(to.x, to.y, to.z);
+    this.tmpDir.subVectors(this.tmpB, this.tmpA);
+    const rawLen = this.tmpDir.length();
+    if (!Number.isFinite(rawLen) || rawLen < 1e-4) return;
+
+    const len = Math.min(rawLen, 500);
+    this.tmpDir.divideScalar(rawLen);
+    this.tmpB.copy(this.tmpA).addScaledVector(this.tmpDir, len);
+
+    const slot = this.arcLightnings[this.arcLightningCursor];
+    this.arcLightningCursor = (this.arcLightningCursor + 1) % ARC_LIGHTNING_POOL_SIZE;
+
+    const chain = Boolean(isChain);
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = chain ? 0.16 : 0.24;
+    slot.isChain = chain;
+    slot.coreWidth = chain ? 0.032 : 0.058;
+    slot.glowWidth = chain ? 0.088 : 0.155;
+
+    slot.group.position.set(0, 0, 0);
+    slot.group.visible = true;
+
+    // Build orthonormal basis perpendicular to the bolt axis for jagged offsets
+    if (Math.abs(this.tmpDir.y) < 0.92) {
+      this.tmpRight.crossVectors(this.tmpDir, this.upAxis).normalize();
+    } else {
+      this.tmpOrthoUp.set(1, 0, 0);
+      this.tmpRight.crossVectors(this.tmpDir, this.tmpOrthoUp);
+      if (this.tmpRight.lengthSq() < 1e-6) {
+        this.tmpRight.set(1, 0, 0);
+      } else {
+        this.tmpRight.normalize();
+      }
+    }
+    this.tmpOrthoUp.crossVectors(this.tmpRight, this.tmpDir).normalize();
+
+    const jitterAmp = clamp(len * 0.065, 0.08, 0.55) * (chain ? 0.85 : 1.0);
+    this.arcNodes[0].copy(this.tmpA);
+    this.arcNodes[ARC_LIGHTNING_SEGMENT_COUNT].copy(this.tmpB);
+    for (let k = 1; k < ARC_LIGHTNING_SEGMENT_COUNT; k++) {
+      const frac = k / ARC_LIGHTNING_SEGMENT_COUNT;
+      const env = Math.sin(frac * Math.PI);
+      const offR = (this.nextRand() - 0.5) * 2 * jitterAmp * env;
+      const offU = (this.nextRand() - 0.5) * 2 * jitterAmp * env;
+      this.arcNodes[k]
+        .lerpVectors(this.tmpA, this.tmpB, frac)
+        .addScaledVector(this.tmpRight, offR)
+        .addScaledVector(this.tmpOrthoUp, offU);
+    }
+
+    for (let s = 0; s < ARC_LIGHTNING_SEGMENT_COUNT; s++) {
+      const p0 = this.arcNodes[s];
+      const p1 = this.arcNodes[s + 1];
+      this.tmpDir.subVectors(p1, p0);
+      const segLen = Math.max(1e-4, this.tmpDir.length());
+      this.tmpDir.divideScalar(segLen);
+      this.tmpQuat.setFromUnitVectors(this.upAxis, this.tmpDir);
+
+      slot.segmentLengths[s] = segLen;
+
+      const coreMesh = slot.coreSegments[s];
+      coreMesh.position.addVectors(p0, p1).multiplyScalar(0.5);
+      coreMesh.quaternion.copy(this.tmpQuat);
+      coreMesh.scale.set(slot.coreWidth, segLen, slot.coreWidth);
+
+      const glowMesh = slot.glowSegments[s];
+      glowMesh.position.copy(coreMesh.position);
+      glowMesh.quaternion.copy(this.tmpQuat);
+      glowMesh.scale.set(slot.glowWidth, segLen, slot.glowWidth);
+    }
+
+    slot.coreMat.opacity = 0.98;
+    slot.glowMat.opacity = 0.65;
+    slot.flashMat.opacity = 0.92;
+
+    const flashScale = chain ? 0.24 : 0.36;
+    slot.originFlashMesh.position.copy(this.tmpA);
+    slot.originFlashMesh.scale.setScalar(flashScale * 0.75);
+    slot.impactFlashMesh.position.copy(this.tmpB);
+    slot.impactFlashMesh.scale.setScalar(flashScale);
+  }
+
+  private spawnShadowCloakBurst(position: Vec3Like, entering: boolean): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.shadowCloakBursts[this.shadowCloakBurstCursor];
+    this.shadowCloakBurstCursor =
+      (this.shadowCloakBurstCursor + 1) % SHADOW_CLOAK_BURST_POOL_SIZE;
+
+    const enter = Boolean(entering);
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.62;
+    slot.entering = enter;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.mistRingMat.color.setHex(enter ? 0x4c1d95 : 0x7c3aed);
+    slot.mistRingMat.opacity = 0.85;
+    slot.mistRingMesh.scale.setScalar(enter ? 0.45 : 0.35);
+
+    slot.outerRingMat.color.setHex(enter ? 0x7c3aed : 0xa855f7);
+    slot.outerRingMat.opacity = 0.78;
+    slot.outerRingMesh.position.y = enter ? 0.3 : 0.85;
+    slot.outerRingMesh.rotation.set(-Math.PI / 2, 0, this.nextRand() * Math.PI);
+    slot.outerRingMesh.scale.setScalar(0.55);
+
+    slot.shroudMat.color.setHex(enter ? 0x1e1038 : 0x5b21b6);
+    slot.shroudMat.opacity = 0.44;
+    slot.shroudMesh.scale.setScalar(enter ? 1.55 : 0.85);
+
+    for (let w = 0; w < SHADOW_CLOAK_WISP_COUNT; w++) {
+      const wp = slot.wisps[w];
+      wp.angle = (w / SHADOW_CLOAK_WISP_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      wp.startRadius = enter ? 0.95 + this.nextRand() * 0.45 : 0.25 + this.nextRand() * 0.25;
+      wp.endRadius = enter ? 0.2 + this.nextRand() * 0.25 : 1.35 + this.nextRand() * 0.65;
+      wp.startY = enter ? 0.2 + this.nextRand() * 0.4 : 0.5 + this.nextRand() * 0.5;
+      wp.endY = enter ? 1.2 + this.nextRand() * 0.65 : 0.9 + this.nextRand() * 0.9;
+      wp.spin = (enter ? -1 : 1) * (2.6 + this.nextRand() * 2.4);
+      wp.baseScale = 0.18 + this.nextRand() * 0.14;
+      wp.mesh.position.set(
+        Math.cos(wp.angle) * wp.startRadius,
+        wp.startY,
+        Math.sin(wp.angle) * wp.startRadius,
+      );
+      wp.mesh.scale.setScalar(wp.baseScale);
+      wp.material.opacity = 0.72;
+      wp.mesh.visible = true;
+    }
+  }
+
+  private spawnRuneAttune(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.runeAttunes[this.runeAttuneCursor];
+    this.runeAttuneCursor = (this.runeAttuneCursor + 1) % RUNE_ATTUNE_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.15;
+
+    slot.group.position.set(position.x, position.y + 0.04, position.z);
+    slot.group.visible = true;
+
+    slot.outerBeamMesh.position.set(0, 1.75, 0);
+    slot.outerBeamMesh.scale.set(0.95, 3.5, 0.95);
+    slot.outerBeamMat.opacity = 0.48;
+
+    slot.coreBeamMesh.position.set(0, 1.75, 0);
+    slot.coreBeamMesh.scale.set(0.36, 3.5, 0.36);
+    slot.coreBeamMat.opacity = 0.78;
+
+    slot.glyphRingMesh.position.set(0, 0.25, 0);
+    slot.glyphRingMesh.rotation.set(-Math.PI / 2, 0, this.nextRand() * Math.PI);
+    slot.glyphRingMesh.scale.setScalar(0.85);
+    slot.glyphRingMat.opacity = 0.92;
+
+    slot.groundRingMesh.scale.setScalar(0.75);
+    slot.groundRingMat.opacity = 0.9;
+
+    for (let s = 0; s < RUNE_ATTUNE_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / RUNE_ATTUNE_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      sp.radius = 0.65 + this.nextRand() * 0.75;
+      sp.speedY = 3.0 + this.nextRand() * 3.4;
+      sp.spin = (s % 2 === 0 ? 1 : -1) * (2.6 + this.nextRand() * 2.2);
+      sp.baseScale = 0.12 + this.nextRand() * 0.07;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.15 + this.nextRand() * 1.1,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.94;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnChoppaWash(position: Vec3Like, intensity: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.choppaWashes[this.choppaWashCursor];
+    this.choppaWashCursor = (this.choppaWashCursor + 1) % CHOPPA_WASH_POOL_SIZE;
+
+    const safeIntensity = clamp(
+      Number.isFinite(intensity) && intensity > 0 ? intensity : 0.65,
+      0.2,
+      2.5,
+    );
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.52;
+    slot.intensity = safeIntensity;
+
+    slot.group.position.set(position.x, position.y + 0.08, position.z);
+    slot.group.visible = true;
+
+    slot.outerDustRingMesh.scale.setScalar(1.1 * safeIntensity);
+    slot.outerDustRingMat.opacity = 0.56;
+
+    slot.innerAirRingMesh.rotation.set(-Math.PI / 2, 0, this.nextRand() * Math.PI);
+    slot.innerAirRingMesh.scale.setScalar(0.75 * safeIntensity);
+    slot.innerAirRingMat.opacity = 0.48;
+
+    for (let m = 0; m < CHOPPA_WASH_MOTE_COUNT; m++) {
+      const mt = slot.motes[m];
+      const ang = (m / CHOPPA_WASH_MOTE_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      const spd = (3.2 + this.nextRand() * 4.2) * safeIntensity;
+      mt.vx = Math.cos(ang) * spd;
+      mt.vy = 0.45 + this.nextRand() * 0.85 * safeIntensity;
+      mt.vz = Math.sin(ang) * spd;
+      mt.baseScale = (0.28 + this.nextRand() * 0.16) * clamp(safeIntensity, 0.65, 1.8);
+      mt.mesh.position.set(Math.cos(ang) * 0.65, 0.12, Math.sin(ang) * 0.65);
+      mt.mesh.scale.setScalar(mt.baseScale * 0.65);
+      mt.material.opacity = 0.46;
+      mt.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -11690,6 +12538,10 @@ export class VFXManager {
     for (const sr of this.shieldRicochets) if (sr.active) count++;
     for (const cb of this.c4Blasts) if (cb.active) count++;
     for (const hd of this.hotDropBeams) if (hd.active) count++;
+    for (const al of this.arcLightnings) if (al.active) count++;
+    for (const sc of this.shadowCloakBursts) if (sc.active) count++;
+    for (const ra of this.runeAttunes) if (ra.active) count++;
+    for (const cw of this.choppaWashes) if (cw.active) count++;
     return count;
   }
 
@@ -11985,6 +12837,30 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveArcLightningCount(): number {
+    let count = 0;
+    for (const al of this.arcLightnings) if (al.active) count++;
+    return count;
+  }
+
+  public getActiveShadowCloakBurstCount(): number {
+    let count = 0;
+    for (const sc of this.shadowCloakBursts) if (sc.active) count++;
+    return count;
+  }
+
+  public getActiveRuneAttuneCount(): number {
+    let count = 0;
+    for (const ra of this.runeAttunes) if (ra.active) count++;
+    return count;
+  }
+
+  public getActiveChoppaWashCount(): number {
+    let count = 0;
+    for (const cw of this.choppaWashes) if (cw.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -12203,6 +13079,22 @@ export class VFXManager {
     for (const hd of this.hotDropBeams) {
       hd.active = false;
       hd.group.visible = false;
+    }
+    for (const al of this.arcLightnings) {
+      al.active = false;
+      al.group.visible = false;
+    }
+    for (const sc of this.shadowCloakBursts) {
+      sc.active = false;
+      sc.group.visible = false;
+    }
+    for (const ra of this.runeAttunes) {
+      ra.active = false;
+      ra.group.visible = false;
+    }
+    for (const cw of this.choppaWashes) {
+      cw.active = false;
+      cw.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

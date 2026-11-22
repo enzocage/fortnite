@@ -23,6 +23,7 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'flare_gun',
   'chug_cannon',
   'ballistic_shield',
+  'storm_breaker',
 ]);
 
 const THROWABLE_WEAPONS = new Set<WeaponId>([
@@ -2318,6 +2319,141 @@ function buildRemoteC4(): THREE.Group {
   return group;
 }
 
+function buildStormBreaker(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_storm_breaker';
+
+  const darkChassis = makeStandardMat('#0f172a', 0.4, 0.6);
+  const cobaltBody = makeStandardMat('#1e3a8a', 0.34, 0.48);
+  const railAlloy = makeStandardMat('#38bdf8', 0.22, 0.72, '#0284c7', 0.42);
+  const steelTrim = makeStandardMat('#94a3b8', 0.24, 0.85);
+  const cyanPlasma = makeStandardMat('#22d3ee', 0.12, 0.18, '#22d3ee', 0.98);
+  const cobaltCoil = makeStandardMat('#38bdf8', 0.14, 0.22, '#3b82f6', 0.88);
+  const arcCore = makeStandardMat('#e0f2fe', 0.08, 0.1, '#67e8f9', 1.12);
+
+  // Ergonomic pistol grip & trigger guard
+  addBox(group, 0.042, 0.122, 0.052, darkChassis, 0, -0.022, -0.015, 0.24, 0, 0);
+  addBox(group, 0.016, 0.032, 0.056, darkChassis, 0, 0.018, 0.048);
+
+  // Tactical carbine stock + rubberized buttpad + cheek riser + cobalt-cyan trim
+  tagWrapTarget(addBox(group, 0.052, 0.084, 0.23, cobaltBody, 0, 0.068, -0.165, 0.04, 0, 0));
+  addBox(group, 0.056, 0.118, 0.032, darkChassis, 0, 0.058, -0.285);
+  addBox(group, 0.048, 0.028, 0.14, darkChassis, 0, 0.116, -0.155);
+  addBox(group, 0.058, 0.018, 0.16, cyanPlasma, 0, 0.072, -0.165);
+
+  // Main cobalt armored receiver + forward barrel shroud
+  tagWrapTarget(addBox(group, 0.074, 0.096, 0.32, cobaltBody, 0, 0.078, 0.105));
+  tagWrapTarget(addBox(group, 0.068, 0.062, 0.18, cobaltBody, 0, 0.082, 0.34));
+  addBox(group, 0.058, 0.038, 0.24, darkChassis, 0, 0.036, 0.22);
+
+  // Underside plasma capacitor cell magazine
+  addBox(group, 0.048, 0.112, 0.076, darkChassis, 0, -0.024, 0.13, -0.14, 0, 0);
+  addBox(group, 0.054, 0.068, 0.026, cyanPlasma, 0, -0.022, 0.13, -0.14, 0, 0);
+
+  // Top picatinny rail & holographic arc sight hood
+  addBox(group, 0.032, 0.016, 0.30, darkChassis, 0, 0.134, 0.11);
+  addBox(group, 0.034, 0.016, 0.068, darkChassis, 0, 0.150, 0.09);
+  addBox(group, 0.008, 0.036, 0.054, steelTrim, -0.018, 0.172, 0.09);
+  addBox(group, 0.008, 0.036, 0.054, steelTrim, 0.018, 0.172, 0.09);
+  addBox(group, 0.044, 0.009, 0.054, steelTrim, 0, 0.191, 0.09);
+  addBox(group, 0.024, 0.024, 0.006, cyanPlasma, 0, 0.172, 0.104);
+
+  // Cobalt-cyan twin parallel Tesla arc rails + stabilizer brackets + forward emitter prongs
+  for (const side of [-1, 1] as const) {
+    addBox(group, 0.022, 0.028, 0.50, railAlloy, side * 0.032, 0.088, 0.54);
+    addBox(group, 0.012, 0.018, 0.44, cyanPlasma, side * 0.020, 0.088, 0.55);
+    addBox(group, 0.018, 0.022, 0.055, steelTrim, side * 0.032, 0.088, 0.80);
+  }
+  for (const bz of [0.36, 0.58, 0.76]) {
+    addBox(group, 0.086, 0.042, 0.022, darkChassis, 0, 0.088, bz);
+  }
+
+  // Central illuminated Tesla plasma core conduit + 4 glowing plasma coils
+  addCylinder(group, 0.011, 0.011, 0.48, arcCore, 0, 0.088, 0.54, Math.PI / 2, 0, 0, 10);
+  const coilZs = [0.35, 0.47, 0.59, 0.71];
+  for (let i = 0; i < coilZs.length; i++) {
+    const coilMat = i % 2 === 0 ? cyanPlasma : cobaltCoil;
+    addMesh(
+      group,
+      new THREE.TorusGeometry(0.040, 0.009, 8, 16),
+      coilMat,
+      0,
+      0.088,
+      coilZs[i],
+      0,
+      0,
+      0,
+    );
+  }
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.088, 0.82);
+  return group;
+}
+
+function buildShadowCloak(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_shadow_cloak';
+  group.userData.wrapDisabled = true;
+
+  const obsidianArmor = makeStandardMat('#09090b', 0.34, 0.74);
+  const obsidianViolet = makeStandardMat('#1e1b4b', 0.36, 0.58, '#4c1d95', 0.3);
+  const runeCore = makeStandardMat('#c084fc', 0.1, 0.16, '#a855f7', 1.12);
+  const runeCoreHot = makeStandardMat('#f3e8ff', 0.08, 0.1, '#c084fc', 1.25);
+  const holoFrame = new THREE.MeshStandardMaterial({
+    color: '#7c3aed',
+    emissive: '#a855f7',
+    emissiveIntensity: 0.78,
+    roughness: 0.16,
+    metalness: 0.2,
+    transparent: true,
+    opacity: 0.74,
+  });
+
+  // Twin obsidian-violet holographic cyber gauntlets with glowing rune cores
+  for (const side of [-1, 1] as const) {
+    const gx = side * 0.072;
+    const gy = 0.025;
+    const gz = 0.045;
+
+    // Obsidian faceted forearm bracer shell & dark violet knuckle plating
+    addCylinder(group, 0.042, 0.048, 0.20, obsidianArmor, gx, gy, gz, Math.PI / 2, 0, 0, 6);
+    addBox(group, 0.078, 0.056, 0.145, obsidianViolet, gx, gy + 0.008, gz + 0.015);
+    addBox(group, 0.084, 0.024, 0.048, obsidianArmor, gx, gy + 0.012, gz + 0.095);
+
+    // Translucent holographic violet cyber wing fins & forward shadow talons
+    addBox(group, 0.012, 0.076, 0.17, holoFrame, gx + side * 0.046, gy + 0.022, gz + 0.025, 0, 0, side * -0.24);
+    addBox(group, 0.022, 0.018, 0.11, holoFrame, gx - 0.016, gy + 0.010, gz + 0.155, -0.06, 0, 0);
+    addBox(group, 0.022, 0.018, 0.11, holoFrame, gx + 0.016, gy + 0.010, gz + 0.155, -0.06, 0, 0);
+
+    // Glowing arcane rune core mounted on dorsal gauntlet housing
+    addCylinder(group, 0.028, 0.030, 0.016, obsidianArmor, gx, gy + 0.042, gz + 0.01, 0, 0, 0, 6);
+    addMesh(
+      group,
+      new THREE.TorusGeometry(0.026, 0.0055, 6, 6),
+      runeCore,
+      gx,
+      gy + 0.050,
+      gz + 0.01,
+      Math.PI / 2,
+      0,
+      0,
+    );
+    addMesh(
+      group,
+      new THREE.OctahedronGeometry(0.016, 0),
+      runeCoreHot,
+      gx,
+      gy + 0.056,
+      gz + 0.01,
+    );
+  }
+
+  // Holographic violet energy tether linking the twin cyber gauntlets
+  addBox(group, 0.125, 0.014, 0.022, holoFrame, 0, 0.032, 0.03);
+
+  return group;
+}
+
 const MOD_CHILD_NAMES = new Set([
   'mod_red_dot',
   'mod_suppressor',
@@ -2425,6 +2561,13 @@ function getWeaponModAnchors(weaponGroup: THREE.Group): WeaponModAnchors {
         redDot: [-0.02, 0.104, 0.095],
         drumMag: [-0.02, -0.060, 0.005],
         foregrip: [-0.02, 0.015, 0.145],
+        suppressor: supPos,
+      };
+    case 'weapon_storm_breaker':
+      return {
+        redDot: [0, 0.150, 0.09],
+        drumMag: [0, -0.026, 0.13],
+        foregrip: [0, 0.012, 0.28],
         suppressor: supPos,
       };
     default:
@@ -2669,6 +2812,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildBallisticShield();
     case 'remote_c4':
       return buildRemoteC4();
+    case 'storm_breaker':
+      return buildStormBreaker();
+    case 'shadow_cloak':
+      return buildShadowCloak();
   }
 }
 

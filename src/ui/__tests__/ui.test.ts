@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   AUGMENTS,
+  CHOPPA_MAX_ALTITUDE_AGL,
   CONTRAILS,
   CROSSHAIR_COLORS,
   CROSSHAIR_STYLES,
@@ -48,6 +49,7 @@ import type {
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SkyBalloonEntity,
   SlurpTankerEntity,
@@ -83,6 +85,8 @@ import {
   drawHoverTankMapChevron,
   drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
+  drawSovereignMapOverlay,
+  drawChoppaMapIcon,
   drawSpeedboatMapChevron,
   drawTideMapOverlay,
   drawVanguardMapOverlay,
@@ -108,6 +112,7 @@ import {
   getBunkerSvg,
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
+  getChoppaSvg,
   getContextualHudHints,
   getContrailMeta,
   getCrownSvg,
@@ -133,6 +138,7 @@ import {
   getRarityMeta,
   getRebootVanSvg,
   getReviveCrossSvg,
+  getRuneMonolithSvg,
   getShortestAngleDiffDeg,
   getSkullSvg,
   getSkyBalloonSvg,
@@ -174,6 +180,7 @@ import {
   resolveKeybinds,
   resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
+  resolveSovereignOverlayArgs,
   resolveTideOverlayArgs,
   resolveVanguardOverlayArgs,
   sanitizeGameMode,
@@ -186,6 +193,7 @@ import {
   type WorldFrontierOverlay,
   type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
+  type WorldSovereignOverlay,
   type WorldTideOverlay,
   type WorldVanguardOverlay,
   worldToMapNorm,
@@ -458,9 +466,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 37 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 39 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(37);
+    expect(weaponIds.length).toBe(39);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -472,7 +480,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9/Wave-10/Wave-11/Wave-12 upgraded icons have rich multi-element custom artwork
+    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9/Wave-10/Wave-11/Wave-12/Wave-13 upgraded icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -497,6 +505,8 @@ describe('WeaponIcons & SVG assets', () => {
       'chug_cannon',
       'ballistic_shield',
       'remote_c4',
+      'storm_breaker',
+      'shadow_cloak',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -4649,7 +4659,7 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(32);
+    expect(legendRowCount).toBe(34);
     expect(legend?.textContent).toContain('MOD BENCH');
     expect(legend?.textContent).toContain('FORECAST TOWER');
 
@@ -5007,6 +5017,8 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const bshieldPill = chipRow?.findByClass('fdr-bshield-pill');
     const c4Pill = chipRow?.findByClass('fdr-c4-pill');
     const streakPill = chipRow?.findByClass('fdr-streak-pill');
+    const cloakPill = chipRow?.findByClass('fdr-cloak-pill');
+    const blessingPill = chipRow?.findByClass('fdr-blessing-pill');
     const vitalsStack = bottomCenter?.findByClass('fdr-vitals-stack');
     const channelBar = bottomCenter?.findByClass('fdr-channel-bar');
 
@@ -5021,6 +5033,8 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     expect(bshieldPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(c4Pill?.classList.contains('fdr-hidden')).toBe(true);
     expect(streakPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(cloakPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(blessingPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeGreaterThanOrEqual(0);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeLessThan(
       bottomCenter?.children.indexOf(vitalsStack!) ?? 999,
@@ -5035,6 +5049,8 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
       bshieldPill,
       c4Pill,
       streakPill,
+      cloakPill,
+      blessingPill,
     ]);
 
     // 2. All 3 status chips active + Train Hack channel bar + Minimap Skyforge Overlay
@@ -5249,7 +5265,7 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(32);
+    expect(legendRowCount).toBe(34);
     expect(legend?.textContent).toContain('APEX TRAIN');
     expect(legend?.textContent).toContain('RIFT CRATER');
 
@@ -5879,7 +5895,7 @@ describe('Wave 10 UI: Tide & Recon (Shockwave Hammer, Flare Gun, Apex Speedboat,
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(32);
+    expect(legendRowCount).toBe(34);
     expect(legend?.textContent).toContain('SPEEDBOAT');
     expect(legend?.textContent).toContain('WILDLIFE');
 
@@ -6436,7 +6452,7 @@ describe('Wave 11 UI: Overlord (Auto-Turret, Chug Cannon, Fishing Channel, Therm
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(32);
+    expect(legendRowCount).toBe(34);
     expect(legend?.textContent).toContain('SKY BALLOON');
     expect(legend?.textContent).toContain('FISHING HOLE');
 
@@ -7030,7 +7046,7 @@ describe('Wave 12 UI: Vanguard (Ballistic Shield, Remote C4, Hover Tank, Hot-Dro
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(32);
+    expect(legendRowCount).toBe(34);
     expect(legend?.textContent).toContain('VANGUARD TANK');
     expect(legend?.textContent).toContain('HOT DROP');
 
@@ -7120,6 +7136,597 @@ describe('Wave 12 UI: Vanguard (Ballistic Shield, Remote C4, Hover Tank, Hot-Dro
     const highlightsRow = root.findByClass('fdr-highlights-row');
     expect(highlightsRow?.textContent).toContain('DEMOLITIONS');
     expect(highlightsRow?.textContent).toContain('AEGIS WALL');
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 13 UI: Storm Sovereign (Storm-Breaker, Shadow Cloak, Storm Choppa, Rune Monoliths, Map & Summary)', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave-13 SVGs (storm_breaker, shadow_cloak, getChoppaSvg, getRuneMonolithSvg), STORM CHOPPA label & Node-safe drawSovereignMapOverlay', () => {
+    expect((Object.keys(WEAPONS) as WeaponId[]).length).toBe(39);
+    for (const id of ['storm_breaker', 'shadow_cloak'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    const choppaSvg = getChoppaSvg();
+    const monolithSvg = getRuneMonolithSvg();
+    for (const svg of [choppaSvg, monolithSvg]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+    expect(getVehicleIconSvg('choppa')).toBe(choppaSvg);
+    expect(getVehicleIconSvg('choppa')).not.toBe(getVehicleIconSvg('hover_tank'));
+    expect(getVehicleIconSvg('choppa')).not.toBe(getVehicleIconSvg('hover_atv'));
+    expect(formatVehicleKindLabel('choppa')).toBe('STORM CHOPPA');
+
+    const monoliths: RuneMonolithEntity[] = [
+      {
+        id: 'rune-active',
+        poiId: 'metro_towers',
+        x: -24,
+        y: 12,
+        z: 18,
+        attuned: false,
+        cooldownSec: 0,
+      },
+      {
+        id: 'rune-attuned',
+        poiId: 'frostpeak_citadel',
+        x: 38,
+        y: 15,
+        z: -32,
+        attuned: true,
+        cooldownSec: 45,
+      },
+    ];
+    const choppas: VehicleEntity[] = [
+      {
+        id: 'choppa-live',
+        kind: 'choppa',
+        x: 16,
+        y: 26,
+        z: 34,
+        yaw: 0.6,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 1000,
+        maxHp: 1000,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: 'player',
+        destroyed: false,
+      },
+      {
+        id: 'choppa-dead',
+        kind: 'choppa',
+        x: -64,
+        y: 12,
+        z: -52,
+        yaw: 0,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 0,
+        maxHp: 1000,
+        boostCharge: 0,
+        isBoosting: false,
+        driverId: null,
+        destroyed: true,
+      },
+    ];
+
+    const byArgs: WorldSovereignOverlay = resolveSovereignOverlayArgs(
+      monoliths,
+      choppas,
+    );
+    expect(byArgs.runeMonoliths.length).toBe(2);
+    expect(byArgs.vehicles?.length).toBe(2);
+
+    const byObj: WorldSovereignOverlay = resolveSovereignOverlayArgs({
+      runeMonoliths: monoliths,
+      vehicles: choppas,
+    });
+    expect(byObj.runeMonoliths[0].id).toBe('rune-active');
+    expect(byObj.vehicles?.[0].id).toBe('choppa-live');
+
+    // Minimal Node canvas mock WITHOUT fillText, strokeText, ellipse, rotate, strokeRect, or createRadialGradient!
+    const directCalls: Array<{ op: string; args: unknown[] }> = [];
+    const safeCtx = {
+      save: () => directCalls.push({ op: 'save', args: [] }),
+      restore: () => directCalls.push({ op: 'restore', args: [] }),
+      translate: (...args: unknown[]) => directCalls.push({ op: 'translate', args }),
+      beginPath: () => directCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => directCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => directCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => directCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => directCalls.push({ op: 'arc', args }),
+      fill: () => directCalls.push({ op: 'fill', args: [] }),
+      stroke: () => directCalls.push({ op: 'stroke', args: [] }),
+      fillRect: (...args: unknown[]) => directCalls.push({ op: 'fillRect', args }),
+      setLineDash: (...args: unknown[]) => directCalls.push({ op: 'setLineDash', args }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    drawSovereignMapOverlay(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      220,
+      220 / 280,
+      (wx, wz) => ({ x: 110 + wx * (220 / 280), y: 110 + wz * (220 / 280) }),
+      monoliths,
+      choppas,
+      1400,
+    );
+
+    const hasTranslated = (wx: number, wz: number) =>
+      directCalls.some(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - (110 + wx * (220 / 280))) < 0.5 &&
+          Math.abs((c.args[1] as number) - (110 + wz * (220 / 280))) < 0.5,
+      );
+
+    expect(hasTranslated(-24, 18)).toBe(true); // active monolith
+    expect(hasTranslated(38, -32)).toBe(true); // attuned monolith
+    expect(hasTranslated(16, 34)).toBe(true); // live choppa
+    expect(hasTranslated(-64, -52)).toBe(false); // destroyed choppa skipped
+    expect(directCalls.some((c) => c.op === 'setLineDash')).toBe(true); // attuned monolith dashed cooldown ring
+
+    drawChoppaMapIcon(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      45,
+      55,
+      0.5,
+      false,
+      1000,
+    );
+  });
+
+  it('renders .fdr-cloak-pill, .fdr-blessing-pill, Rune Monolith channel bar, Choppa ALT Xm inside .fdr-vehicle-hud & Node-safe Minimap Sovereign overlay', () => {
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => miniMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    const monoliths: RuneMonolithEntity[] = [
+      {
+        id: 'rm-mini-1',
+        poiId: 'metro_towers',
+        x: 22,
+        y: 12,
+        z: -16,
+        attuned: false,
+        cooldownSec: 0,
+      },
+    ];
+    const choppaVec: VehicleEntity = {
+      id: 'choppa-mini-1',
+      kind: 'choppa',
+      x: -26,
+      y: 28,
+      z: 20,
+      yaw: 0.3,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 960,
+      maxHp: 1000,
+      boostCharge: 0.75,
+      isBoosting: false,
+      driverId: 'player',
+      destroyed: false,
+    };
+    hud.setWorldSovereignOverlay(monoliths);
+    hud.setWorldVehicles([choppaVec]);
+    miniDrawCalls.length = 0;
+
+    // 1. Active Shadow Cloak + Storm Blessing + Rune Attune Channel + Choppa Altitude inside .fdr-vehicle-hud
+    hud.update(
+      makeBaseHUDState({
+        playerPos: { x: 0, y: 12, z: 0 },
+        shadowCloakState: { active: true, remainingSec: 7.4, cooldownSec: 0 },
+        stormBlessingRemainingSec: 24.3,
+        runeAttuneProgress: 0.68,
+        vehicle: {
+          kind: 'choppa',
+          speedKmh: 78,
+          hp: 960,
+          maxHp: 1000,
+          boostCharge: 0.75,
+          isBoosting: false,
+        },
+        choppaAltitude: 21.4,
+        slots: [
+          { uid: 'pick', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+          { uid: 'sb', weaponId: 'storm_breaker', rarity: 'mythic', magAmmo: 20, stackCount: 1 },
+          { uid: 'sc', weaponId: 'shadow_cloak', rarity: 'mythic', magAmmo: 0, stackCount: 1 },
+          null,
+          null,
+          null,
+        ],
+        activeSlot: 1,
+      }),
+    );
+
+    const chipRow = hudRoot.findByClass('fdr-status-chip-row');
+    const cloakPill = chipRow?.findByClass('fdr-cloak-pill');
+    const blessingPill = chipRow?.findByClass('fdr-blessing-pill');
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(false);
+    expect(cloakPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(cloakPill?.classList.contains('active')).toBe(true);
+    expect(cloakPill?.dataset.active).toBe('true');
+    expect(cloakPill?.textContent).toContain('SHADOW CLOAK 8s');
+
+    expect(blessingPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(blessingPill?.dataset.active).toBe('true');
+    expect(blessingPill?.textContent).toContain('STORM BLESSING 25s');
+
+    const channelBar = hudRoot.findByClass('fdr-channel-bar');
+    expect(channelBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(channelBar?.classList.contains('rune-attune')).toBe(true);
+    expect(channelBar?.textContent).toContain('ATTUNING RUNE MONOLITH...');
+    expect(channelBar?.textContent).toContain('68%');
+    expect(channelBar?.findByClass('fdr-channel-fill')?.style.width).toBe('68%');
+
+    const vehHud = hudRoot.findByClass('fdr-vehicle-hud');
+    expect(vehHud).not.toBeNull();
+    expect(vehHud?.classList.contains('fdr-hidden')).toBe(false);
+    expect(vehHud?.textContent).toContain('STORM CHOPPA');
+    expect(vehHud?.textContent).toContain('ALT 21m');
+    expect(vehHud?.innerHTML).toContain(getChoppaSvg());
+    const altRow = vehHud?.findByClass('fdr-vehicle-alt-row');
+    expect(altRow?.classList.contains('fdr-hidden')).toBe(false);
+    const expectedAltPct = ((21.4 / CHOPPA_MAX_ALTITUDE_AGL) * 100).toFixed(1);
+    expect(altRow?.findByClass('fdr-vehicle-fill')?.style.width).toBe(`${expectedAltPct}%`);
+
+    const slotCards = hudRoot.findAllByClass('fdr-slot-card');
+    expect(slotCards[1]?.innerHTML).toContain(getWeaponSvg('storm_breaker'));
+    expect(slotCards[1]?.innerHTML).toContain('20');
+    expect(slotCards[2]?.innerHTML).toContain(getWeaponSvg('shadow_cloak'));
+
+    const miniSize = 220;
+    const miniPxPerMeter = miniSize / 280;
+    const hasMiniTranslate = (wx: number, wz: number) =>
+      miniDrawCalls.some(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - (miniSize * 0.5 + wx * miniPxPerMeter)) < 0.5 &&
+          Math.abs((c.args[1] as number) - (miniSize * 0.5 + wz * miniPxPerMeter)) < 0.5,
+      );
+    expect(hasMiniTranslate(22, -16)).toBe(true);
+    expect(hasMiniTranslate(-26, 20)).toBe(true);
+
+    // 2. Shadow Cloak Cooldown state + clearing blessing / channel / choppa
+    hud.update(
+      makeBaseHUDState({
+        shadowCloakState: { active: false, remainingSec: 0, cooldownSec: 6.2 },
+        stormBlessingRemainingSec: 0,
+        runeAttuneProgress: null,
+        vehicle: null,
+        choppaAltitude: null,
+      }),
+    );
+    expect(cloakPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(cloakPill?.classList.contains('cooldown')).toBe(true);
+    expect(cloakPill?.dataset.active).toBe('false');
+    expect(cloakPill?.textContent).toContain('SHADOW CLOAK CD 7s');
+    expect(blessingPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(channelBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(channelBar?.classList.contains('rune-attune')).toBe(false);
+    expect(vehHud?.classList.contains('fdr-hidden')).toBe(true);
+
+    // 3. Clearing shadowCloakState completely hides status chip row
+    hud.update(
+      makeBaseHUDState({
+        shadowCloakState: null,
+      }),
+    );
+    expect(cloakPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(true);
+
+    hud.dispose();
+  });
+
+  it('forwards setWorldSovereignOverlay to FullMapOverlay (34 legend rows, Rune Monoliths & Storm Choppas before POI labels) & displays Wave-13 summary stats when > 0', () => {
+    const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+
+    const fullMockCtx = {
+      clearRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => fullDrawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => fullDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => fullDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => fullDrawCalls.push({ op: 'arc', args }),
+      fill: () => fullDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => fullDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => fullDrawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => fullDrawCalls.push({ op: 'rotate', args }),
+      setLineDash: (...args: unknown[]) => fullDrawCalls.push({ op: 'setLineDash', args }),
+      fillText: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    let canvasCount = 0;
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          const idx = canvasCount++;
+          (el as unknown as { getContext: () => unknown }).getContext = () =>
+            idx === 0 ? miniMockCtx : fullMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. Legend has exactly 34 rows including STORM CHOPPA & RUNE MONOLITH
+    const legend = root.findByClass('fdr-map-legend');
+    const legendRowCount = (
+      legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
+    ).length;
+    expect(legendRowCount).toBe(34);
+    expect(legend?.textContent).toContain('STORM CHOPPA');
+    expect(legend?.textContent).toContain('RUNE MONOLITH');
+
+    // 2. setWorldSovereignOverlay + Storm Choppas render BEFORE POI text labels
+    const monoliths: RuneMonolithEntity[] = [
+      {
+        id: 'rm-full-1',
+        poiId: 'metro_towers',
+        x: -118,
+        y: 12,
+        z: 92,
+        attuned: false,
+        cooldownSec: 0,
+      },
+      {
+        id: 'rm-full-2',
+        poiId: 'skyline_spire',
+        x: 132,
+        y: 16,
+        z: -68,
+        attuned: true,
+        cooldownSec: 40,
+      },
+    ];
+    const choppas: VehicleEntity[] = [
+      {
+        id: 'choppa-full-1',
+        kind: 'choppa',
+        x: 84,
+        y: 22,
+        z: 118,
+        yaw: 0.9,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 1000,
+        maxHp: 1000,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: null,
+        destroyed: false,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldVehicles(choppas);
+    ui.setWorldSovereignOverlay(monoliths);
+    ui.toggleFullMap(true);
+    fullDrawCalls.length = 0;
+    miniDrawCalls.length = 0;
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        playerPos: { x: 0, y: 10, z: 0 },
+      }),
+    );
+
+    const findFullTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return fullDrawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const rm1Idx = findFullTranslateIdx(-118, 92);
+    const rm2Idx = findFullTranslateIdx(132, -68);
+    const choppaIdx = findFullTranslateIdx(84, 118);
+    const firstPoiLabelIdx = fullDrawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+
+    expect(rm1Idx).toBeGreaterThanOrEqual(0);
+    expect(rm2Idx).toBeGreaterThanOrEqual(0);
+    expect(choppaIdx).toBeGreaterThanOrEqual(0);
+    expect(firstPoiLabelIdx).toBeGreaterThan(rm1Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(rm2Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(choppaIdx);
+
+    // 3. Match Summary Modal renders arcChainHits, runeMonolithsAttuned, and choppaFlightSec when > 0
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 9,
+      damageDealt: 1850,
+      shotsFired: 50,
+      shotsHit: 28,
+      accuracy: 56,
+      headshots: 4,
+      structuresBuilt: 10,
+      chestsOpened: 5,
+      survivalTimeSec: 255,
+      arcChainHits: 7,
+      runeMonolithsAttuned: 2,
+      choppaFlightSec: 46,
+    });
+
+    const statsGrid = root.findByClass('fdr-stats-grid');
+    expect(statsGrid?.textContent).toContain('ARC CHAIN HITS');
+    expect(statsGrid?.textContent).toContain('7');
+    expect(statsGrid?.textContent).toContain('RUNES ATTUNED');
+    expect(statsGrid?.textContent).toContain('2');
+    expect(statsGrid?.textContent).toContain('CHOPPA FLIGHT');
+    expect(statsGrid?.textContent).toContain('46s');
+
+    // Zero values omit Wave-13 stat boxes cleanly
+    ui.showMatchSummary({
+      victory: false,
+      placement: 8,
+      totalPlayers: 30,
+      kills: 2,
+      damageDealt: 320,
+      shotsFired: 20,
+      shotsHit: 7,
+      accuracy: 35,
+      headshots: 0,
+      structuresBuilt: 2,
+      chestsOpened: 1,
+      survivalTimeSec: 95,
+      arcChainHits: 0,
+      runeMonolithsAttuned: 0,
+      choppaFlightSec: 0,
+    });
+    const clearedGrid = root.findByClass('fdr-stats-grid');
+    expect(clearedGrid?.textContent).not.toContain('ARC CHAIN HITS');
+    expect(clearedGrid?.textContent).not.toContain('RUNES ATTUNED');
+    expect(clearedGrid?.textContent).not.toContain('CHOPPA FLIGHT');
 
     ui.dispose();
   });

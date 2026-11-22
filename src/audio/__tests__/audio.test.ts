@@ -168,6 +168,13 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   c4_detonate: true,
   streak_surge: true,
   hot_drop_chime: true,
+  arc_shot: true,
+  arc_chain: true,
+  cloak_activate: true,
+  cloak_decloak: true,
+  rune_attune: true,
+  choppa_rotor: true,
+  choppa_boost: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -498,14 +505,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 151 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 158 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(151);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(158);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -1882,6 +1889,145 @@ describe('SoundSynthesizer', () => {
     const sparseDest = sparseFilterCtx.createGain();
     const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
     for (const id of wave12Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 13 SFX with strictly positive ramps >= 0.0001 across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave13Ids: SoundEventId[] = [
+      'arc_shot',
+      'arc_chain',
+      'cloak_activate',
+      'cloak_decloak',
+      'rune_attune',
+      'choppa_rotor',
+      'choppa_boost',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave13Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (id !== 'choppa_rotor') {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.arc_chain).toBeGreaterThan(0.22);
+    expect(durations.arc_chain).toBeLessThan(0.36);
+    expect(durations.arc_shot).toBeGreaterThan(0.36);
+    expect(durations.arc_shot).toBeLessThan(0.5);
+    expect(durations.choppa_rotor).toBeGreaterThan(0.38);
+    expect(durations.choppa_rotor).toBeLessThan(0.52);
+    expect(durations.cloak_decloak).toBeGreaterThan(0.4);
+    expect(durations.cloak_activate).toBeGreaterThan(0.5);
+    expect(durations.choppa_boost).toBeGreaterThan(0.58);
+    expect(durations.rune_attune).toBeGreaterThan(0.7);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave13Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave13Ids) {
       expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
     }
     sparseSynth.dispose();
@@ -4158,6 +4304,319 @@ describe('AudioEngine', () => {
     // Polyphony stays bounded under rapid Wave-12 SFX bursts
     for (let i = 0; i < 30; i++) {
       engine.playSound({ id: 'tank_cannon' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+
+    engine.dispose();
+  });
+
+  it('assigns explicit Wave-13 priorities, max hear distances, spatial culling, and manages choppa rotor + turbine loop lifecycle', async () => {
+    expect(getSoundPriority('arc_shot')).toBe(3);
+    expect(getSoundPriority('rune_attune')).toBe(3);
+    expect(getSoundPriority('choppa_boost')).toBe(3);
+    expect(getSoundPriority('arc_chain')).toBe(2);
+    expect(getSoundPriority('cloak_activate')).toBe(2);
+    expect(getSoundPriority('cloak_decloak')).toBe(2);
+    expect(getSoundPriority('choppa_rotor')).toBe(2);
+
+    expect(getMaxHearDistance('cloak_activate')).toBe(85);
+    expect(getMaxHearDistance('cloak_decloak')).toBe(95);
+    expect(getMaxHearDistance('arc_chain')).toBe(165);
+    expect(getMaxHearDistance('rune_attune')).toBe(235);
+    expect(getMaxHearDistance('arc_shot')).toBe(245);
+    expect(getMaxHearDistance('choppa_rotor')).toBe(255);
+    expect(getMaxHearDistance('choppa_boost')).toBe(270);
+
+    const bus = new EventBus();
+
+    // 1. Headless, suspended, and muted safety for Wave-13 SFX, choppa, and stopVehicleEngine
+    const headless = new AudioEngine(bus);
+    expect(() => headless.playSound({ id: 'arc_shot' })).not.toThrow();
+    expect(() =>
+      headless.playSound({ id: 'rune_attune', spatial: true, position: { x: 10, y: 0, z: 0 } }),
+    ).not.toThrow();
+    expect(() => headless.updateVehicleEngine(true, 90, true, 'choppa', 24)).not.toThrow();
+    expect(() =>
+      headless.updateVehicleEngine(true, Number.NaN, false, 'choppa', Number.NaN),
+    ).not.toThrow();
+    expect(() => headless.stopVehicleEngine()).not.toThrow();
+    expect(headless.getVehicleEngineState().active).toBe(false);
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    const suspendedCtx = new MockAudioContext();
+    suspendedCtx.state = 'suspended';
+    const suspendedEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => suspendedCtx as unknown as AudioContext,
+    });
+    suspendedEngine.updateVehicleEngine(true, 90, true, 'choppa', 18);
+    expect(suspendedCtx.oscillators.length).toBe(0);
+    expect(suspendedEngine.getVehicleEngineState().active).toBe(false);
+    suspendedEngine.dispose();
+
+    const mutedCtx = new MockAudioContext();
+    const mutedEngine = new AudioEngine(
+      bus,
+      { ...DEFAULT_SETTINGS, sfxVolume: 0 },
+      { contextFactory: () => mutedCtx as unknown as AudioContext },
+    );
+    await mutedEngine.unlock();
+    mutedEngine.updateVehicleEngine(true, 90, true, 'choppa', 18);
+    expect(mutedCtx.oscillators.length).toBe(0);
+    expect(mutedEngine.getVehicleEngineState().active).toBe(false);
+    mutedEngine.dispose();
+
+    // 2. Spatial culling and EventBus routing for all 7 Wave-13 SoundEventIds
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'cloak_activate', position: { x: 80, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'cloak_decloak', position: { x: 90, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'arc_chain', position: { x: 160, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'rune_attune', position: { x: 230, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'arc_shot', position: { x: 240, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'choppa_rotor', position: { x: 250, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'choppa_boost', position: { x: 265, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'cloak_activate', position: { x: 90, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'cloak_decloak', position: { x: 105, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'arc_chain', position: { x: 175, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'rune_attune', position: { x: 245, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'arc_shot', position: { x: 255, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'choppa_rotor', position: { x: 265, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'choppa_boost', position: { x: 280, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // EventBus routing triggers Wave-13 SFX cleanly
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    bus.emit('sound:play', { id: 'arc_shot', position: { x: 12, y: 0, z: 0 }, spatial: true });
+    bus.emit('sound:play', { id: 'arc_chain', position: { x: 14, y: 0, z: 0 }, spatial: true });
+    bus.emit('sound:play', { id: 'cloak_activate' });
+    bus.emit('sound:play', { id: 'cloak_decloak' });
+    bus.emit('sound:play', { id: 'rune_attune', position: { x: 8, y: 0, z: 0 }, spatial: true });
+    bus.emit('sound:play', { id: 'choppa_rotor', position: { x: 20, y: 0, z: 0 }, spatial: true });
+    bus.emit('sound:play', { id: 'choppa_boost', position: { x: 20, y: 0, z: 0 }, spatial: true });
+    expect(engine.getActiveVoiceCount()).toBe(7);
+
+    // Clear one-shots before isolating choppa rotor loop
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+
+    // 3. Storm Choppa rhythmic helicopter rotor slap + turbine hum loop lifecycle
+    const oscBeforeChoppa = mockCtx.oscillators.length;
+    const srcBeforeChoppa = mockCtx.bufferSources.length;
+    const filterBeforeChoppa = mockCtx.filters.length;
+    const gainsBeforeChoppa = mockCtx.gains.length;
+
+    engine.updateVehicleEngine(true, 0, false, 'choppa', 0);
+    expect(engine.getVehicleEngineState()).toEqual({
+      active: true,
+      speedKmh: 0,
+      isBoosting: false,
+      kind: 'choppa',
+      altitudeM: 0,
+    });
+    expect(engine.getActiveVoiceCount()).toBe(1);
+    // 3 base engine oscs (oscA, oscB, boostOsc) + 2 choppa rotor oscs (slapOsc, lfoOsc)
+    expect(mockCtx.oscillators.length - oscBeforeChoppa).toBe(5);
+    expect(mockCtx.bufferSources.length - srcBeforeChoppa).toBe(1);
+    expect(mockCtx.filters.length - filterBeforeChoppa).toBe(2);
+
+    const oscA = mockCtx.oscillators[oscBeforeChoppa];
+    const oscB = mockCtx.oscillators[oscBeforeChoppa + 1];
+    const slapOsc = mockCtx.oscillators[oscBeforeChoppa + 3];
+    const lfoOsc = mockCtx.oscillators[oscBeforeChoppa + 4];
+    const washSource = mockCtx.bufferSources[srcBeforeChoppa];
+    const rotorFilter = mockCtx.filters[filterBeforeChoppa + 1];
+
+    // Base rig gains: master(0), hum(1), whine(2), boost(3); Choppa gains: rotorMaster(4), rotorPulse(5), lfoDepth(6), wash(7)
+    const boostGain = mockCtx.gains[gainsBeforeChoppa + 3];
+    const rotorMasterGain = mockCtx.gains[gainsBeforeChoppa + 4];
+    const rotorPulseGain = mockCtx.gains[gainsBeforeChoppa + 5];
+    const lfoDepthGain = mockCtx.gains[gainsBeforeChoppa + 6];
+
+    // Rhythmic LFO modulates rotorPulseGain.gain and looping downwash noise runs continuously
+    expect(lfoDepthGain.connections).toContain(rotorPulseGain.gain as unknown as AudioNode);
+    expect(washSource.loop).toBe(true);
+    expect(washSource.started && !washSource.stopped).toBe(true);
+    expect(mockCtx.oscillators.slice(oscBeforeChoppa).every((o) => o.started && !o.stopped)).toBe(true);
+
+    // Idle low-frequency rotor slap vs turbine hum separation
+    const idleBaseFreq = oscA.frequency.value;
+    const idleTurbineFreq = oscB.frequency.value;
+    const idleLfoFreq = lfoOsc.frequency.value;
+    const idleSlapFreq = slapOsc.frequency.value;
+    const idleRotorFilterFreq = rotorFilter.frequency.value;
+    const idleRotorMaster = rotorMasterGain.gain.value;
+    expect(idleBaseFreq).toBeLessThan(35);
+    expect(idleLfoFreq).toBeGreaterThanOrEqual(7);
+    expect(idleLfoFreq).toBeLessThanOrEqual(8);
+    expect(idleTurbineFreq).toBeGreaterThan(idleBaseFreq * 4);
+    expect(boostGain.gain.value).toBeCloseTo(0.0001, 4);
+
+    // Repeated identical calls allocate zero extra nodes
+    for (let i = 0; i < 30; i++) {
+      engine.updateVehicleEngine(true, 0, false, 'choppa', 0);
+    }
+    expect(mockCtx.oscillators.length - oscBeforeChoppa).toBe(5);
+    expect(mockCtx.bufferSources.length - srcBeforeChoppa).toBe(1);
+
+    // Speed modulation (0 -> 90 km/h) raises rotor slap cadence, slap fundamental, and turbine hum
+    engine.updateVehicleEngine(true, 90, false, 'choppa', 0);
+    const cruise90BaseFreq = oscA.frequency.value;
+    const cruise90TurbineFreq = oscB.frequency.value;
+    const cruise90LfoFreq = lfoOsc.frequency.value;
+    const cruise90SlapFreq = slapOsc.frequency.value;
+    const cruise90RotorFilterFreq = rotorFilter.frequency.value;
+    const cruise90RotorMaster = rotorMasterGain.gain.value;
+    expect(cruise90LfoFreq).toBeGreaterThan(idleLfoFreq);
+    expect(cruise90SlapFreq).toBeGreaterThan(idleSlapFreq);
+    expect(cruise90BaseFreq).toBeGreaterThan(idleBaseFreq);
+    expect(cruise90TurbineFreq).toBeGreaterThan(idleTurbineFreq);
+    expect(cruise90RotorFilterFreq).toBeGreaterThan(idleRotorFilterFreq);
+    expect(cruise90RotorMaster).toBeGreaterThan(idleRotorMaster);
+
+    // Altitude modulation (0m -> 32m AGL) further lifts rotor RPM cadence, turbine pitch, and filter cutoff
+    engine.updateVehicleEngine(true, 90, false, 'choppa', 32);
+    expect(engine.getVehicleEngineState().altitudeM).toBe(32);
+    const highAltLfoFreq = lfoOsc.frequency.value;
+    const highAltTurbineFreq = oscB.frequency.value;
+    const highAltRotorFilterFreq = rotorFilter.frequency.value;
+    const highAltRotorMaster = rotorMasterGain.gain.value;
+    expect(highAltLfoFreq).toBeGreaterThan(cruise90LfoFreq);
+    expect(highAltTurbineFreq).toBeGreaterThan(cruise90TurbineFreq);
+    expect(highAltRotorFilterFreq).toBeGreaterThan(cruise90RotorFilterFreq);
+    expect(highAltRotorMaster).toBeGreaterThan(cruise90RotorMaster);
+
+    // Boost modulation kicks turbo afterburner sub-layer & elevates rotor slap rate and turbine hum
+    engine.updateVehicleEngine(true, 90, true, 'choppa', 32);
+    expect(lfoOsc.frequency.value).toBeGreaterThan(highAltLfoFreq);
+    expect(oscB.frequency.value).toBeGreaterThan(highAltTurbineFreq);
+    expect(boostGain.gain.value).toBeGreaterThan(0.12);
+    expect(rotorMasterGain.gain.value).toBeGreaterThan(highAltRotorMaster);
+
+    // Switching to ground vehicle mutes choppa sub-rig and switching back reuses nodes cleanly
+    engine.updateVehicleEngine(true, 80, false, 'hover_atv');
+    expect(engine.getVehicleEngineState()).toEqual({
+      active: true,
+      speedKmh: 80,
+      isBoosting: false,
+      kind: 'hover_atv',
+    });
+    expect(rotorMasterGain.gain.value).toBeCloseTo(0.0001, 4);
+    expect(lfoDepthGain.gain.value).toBeCloseTo(0.0001, 4);
+
+    engine.updateVehicleEngine(true, 80, false, 'choppa', 14);
+    expect(rotorMasterGain.gain.value).toBeGreaterThan(0.5);
+    expect(mockCtx.oscillators.length - oscBeforeChoppa).toBe(5);
+    expect(mockCtx.bufferSources.length - srcBeforeChoppa).toBe(1);
+
+    // Explicit stopVehicleEngine() cleanly stops all choppa oscillators and noise sources
+    engine.stopVehicleEngine();
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.slice(oscBeforeChoppa).every((o) => o.stopped)).toBe(true);
+    expect(washSource.stopped).toBe(true);
+
+    // Restarting after stopVehicleEngine() works and pause/mute/dispose clean up cleanly
+    const oscSecondWaveStart = mockCtx.oscillators.length;
+    const srcSecondWaveStart = mockCtx.bufferSources.length;
+    engine.updateVehicleEngine(true, 105, true, 'choppa', 38);
+    expect(engine.getVehicleEngineState().active).toBe(true);
+    expect(mockCtx.oscillators.length - oscSecondWaveStart).toBe(5);
+    expect(mockCtx.bufferSources.length - srcSecondWaveStart).toBe(1);
+
+    engine.setPaused(true);
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.slice(oscSecondWaveStart).every((o) => o.stopped)).toBe(true);
+    expect(mockCtx.bufferSources[srcSecondWaveStart].stopped).toBe(true);
+
+    engine.setPaused(false);
+    engine.updateVehicleEngine(true, 70, false, 'choppa', 20);
+    expect(engine.getVehicleEngineState().active).toBe(true);
+
+    // Minimal Node mock fallback without createBiquadFilter / createBufferSource / setTargetAtTime
+    const minOscs: Array<{
+      frequency: { value: number; setValueAtTime: (v: number) => unknown; linearRampToValueAtTime: (v: number) => unknown };
+      started: boolean;
+      stopped: boolean;
+      start: () => void;
+      stop: () => void;
+      connect: () => void;
+      disconnect: () => void;
+    }> = [];
+    const minCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => ({
+        gain: {
+          value: 1,
+          setValueAtTime(v: number) {
+            this.value = v;
+            return this;
+          },
+          linearRampToValueAtTime(v: number) {
+            this.value = v;
+            return this;
+          },
+        },
+        connect: () => {},
+        disconnect: () => {},
+      }),
+      createOscillator: () => {
+        const o = {
+          type: 'sine',
+          frequency: {
+            value: 0,
+            setValueAtTime(v: number) {
+              this.value = v;
+              return this;
+            },
+            linearRampToValueAtTime(v: number) {
+              this.value = v;
+              return this;
+            },
+          },
+          started: false,
+          stopped: false,
+          start() {
+            this.started = true;
+          },
+          stop() {
+            this.stopped = true;
+          },
+          connect() {},
+          disconnect() {},
+        };
+        minOscs.push(o);
+        return o;
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => minCtx,
+    });
+    await minEngine.unlock();
+    expect(() => minEngine.updateVehicleEngine(true, 85, true, 'choppa', 25)).not.toThrow();
+    expect(minEngine.getVehicleEngineState().active).toBe(true);
+    expect(minOscs.length).toBe(5);
+    expect(() => minEngine.stopVehicleEngine()).not.toThrow();
+    expect(minOscs.every((o) => o.stopped)).toBe(true);
+    minEngine.dispose();
+
+    // Polyphony stays bounded under rapid Wave-13 SFX bursts
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'arc_shot' });
+      engine.playSound({ id: 'arc_chain' });
     }
     expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
 

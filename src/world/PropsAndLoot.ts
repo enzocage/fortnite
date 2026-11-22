@@ -103,6 +103,8 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'chug_cannon',
   'ballistic_shield',
   'remote_c4',
+  'storm_breaker',
+  'shadow_cloak',
 ];
 
 const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
@@ -130,6 +132,8 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'chug_cannon',
   'ballistic_shield',
   'remote_c4',
+  'storm_breaker',
+  'shadow_cloak',
 ];
 
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
@@ -154,6 +158,8 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'chug_cannon',
   'ballistic_shield',
   'remote_c4',
+  'storm_breaker',
+  'shadow_cloak',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
@@ -2314,6 +2320,106 @@ export class PropsAndLoot {
         fob.rotation.z = -0.25;
         c4Group.add(chargeBrick, strapL, strapR, receiver, antenna, armedLed, fob);
         itemMesh = c4Group;
+      } else if (def.isArcRifle) {
+        const arcGroup = new THREE.Group();
+        const darkBodyMat = this.getMat('loot_arc_body', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#1e293b',
+            roughness: 0.34,
+            metalness: 0.82,
+          }),
+        );
+        const arcGlowMat = this.getMat('loot_arc_glow', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#22d3ee',
+            emissive: '#06b6d4',
+            emissiveIntensity: 1.75,
+            roughness: 0.14,
+            metalness: 0.3,
+          }),
+        );
+        const receiver = new THREE.Mesh(
+          this.getGeo('loot_arc_receiver', () => new THREE.BoxGeometry(0.15, 0.17, 0.44)),
+          darkBodyMat,
+        );
+        const stock = new THREE.Mesh(
+          this.getGeo('loot_arc_stock', () => new THREE.BoxGeometry(0.12, 0.15, 0.22)),
+          itemMat,
+        );
+        stock.position.set(0, -0.02, -0.28);
+        const arcRailGeo = this.getGeo('loot_arc_rail', () => new THREE.BoxGeometry(0.055, 0.045, 0.62));
+        const topRail = new THREE.Mesh(arcRailGeo, itemMat);
+        topRail.position.set(0, 0.065, 0.32);
+        const botRail = new THREE.Mesh(arcRailGeo, itemMat);
+        botRail.position.set(0, -0.04, 0.32);
+        const coilGeo = this.getGeo('loot_arc_coil', () => new THREE.TorusGeometry(0.088, 0.02, 6, 12));
+        const coilA = new THREE.Mesh(coilGeo, arcGlowMat);
+        coilA.position.set(0, 0.012, 0.24);
+        const coilB = new THREE.Mesh(coilGeo, arcGlowMat);
+        coilB.position.set(0, 0.012, 0.44);
+        const emitter = new THREE.Mesh(
+          this.getGeo('loot_arc_emitter', () => new THREE.OctahedronGeometry(0.065, 0)),
+          arcGlowMat,
+        );
+        emitter.position.set(0, 0.012, 0.62);
+        const grip = new THREE.Mesh(
+          this.getGeo('loot_gun_grip', () => new THREE.BoxGeometry(0.12, 0.22, 0.14)),
+          darkBodyMat,
+        );
+        grip.position.set(0, -0.15, -0.06);
+        arcGroup.add(receiver, stock, topRail, botRail, coilA, coilB, emitter, grip);
+        itemMesh = arcGroup;
+      } else if (def.isShadowCloak) {
+        const cloakGroup = new THREE.Group();
+        const obsidianMat = this.getMat('loot_cloak_obsidian', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#181424',
+            roughness: 0.32,
+            metalness: 0.78,
+          }),
+        );
+        const violetRuneMat = this.getMat('loot_cloak_rune', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#c084fc',
+            emissive: '#9333ea',
+            emissiveIntensity: 1.85,
+            roughness: 0.15,
+            metalness: 0.3,
+          }),
+        );
+        const gauntletGeo = this.getGeo('loot_cloak_gauntlet', () => new THREE.BoxGeometry(0.14, 0.13, 0.38));
+        const vaneGeo = this.getGeo('loot_cloak_vane', () => new THREE.BoxGeometry(0.05, 0.16, 0.28));
+        const runeGeo = this.getGeo('loot_cloak_rune_geo', () => new THREE.OctahedronGeometry(0.065, 0));
+
+        const gauntletL = new THREE.Mesh(gauntletGeo, obsidianMat);
+        gauntletL.position.set(-0.14, 0, 0);
+        gauntletL.rotation.y = 0.18;
+        const gauntletR = new THREE.Mesh(gauntletGeo, obsidianMat);
+        gauntletR.position.set(0.14, 0, 0);
+        gauntletR.rotation.y = -0.18;
+
+        const vaneL = new THREE.Mesh(vaneGeo, itemMat);
+        vaneL.position.set(-0.2, 0.04, 0.02);
+        const vaneR = new THREE.Mesh(vaneGeo, itemMat);
+        vaneR.position.set(0.2, 0.04, 0.02);
+
+        const runeL = new THREE.Mesh(runeGeo, violetRuneMat);
+        runeL.position.set(-0.14, 0.09, 0.04);
+        const runeR = new THREE.Mesh(runeGeo, violetRuneMat);
+        runeR.position.set(0.14, 0.09, 0.04);
+
+        const holoRing = new THREE.Mesh(
+          this.getGeo('loot_cloak_ring', () => {
+            const g = new THREE.TorusGeometry(0.26, 0.022, 6, 18);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          violetRuneMat,
+        );
+        holoRing.position.set(0, -0.05, 0);
+
+        cloakGroup.add(gauntletL, gauntletR, vaneL, vaneR, runeL, runeR, holoRing);
+        itemMesh = cloakGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),

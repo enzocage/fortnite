@@ -1430,6 +1430,82 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     maxStack: 6,
     allowedRarities: ['rare', 'epic'],
   },
+  storm_breaker: {
+    id: 'storm_breaker',
+    name: 'Mythic Storm-Breaker Arc Rifle',
+    shortName: 'ARC RIFLE',
+    category: 'rifle',
+    ammoType: 'medium',
+    isConsumable: false,
+    isArcRifle: true,
+    arcChainRadius: 12,
+    arcMaxChains: 2,
+    arcChainDamageMult: 0.65,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 0,
+    baseDamage: 38,
+    structureDamage: 55,
+    headshotMultiplier: 1.5,
+    fireRate: 3.4,
+    pellets: 1,
+    magSize: 20,
+    reloadTime: 2.1,
+    baseSpread: 0.012,
+    adsSpread: 0.004,
+    crouchSpreadMult: 0.78,
+    moveSpreadAdd: 0.01,
+    bloomPerShot: 0.003,
+    bloomMax: 0.022,
+    bloomRecovery: 0.09,
+    range: 105,
+    falloffStart: 50,
+    falloffEnd: 95,
+    minFalloffMult: 0.72,
+    recoilPitch: 0.013,
+    recoilYaw: 0.004,
+    maxStack: 1,
+    allowedRarities: ['epic', 'legendary', 'mythic'],
+  },
+  shadow_cloak: {
+    id: 'shadow_cloak',
+    name: 'Mythic Shadow Cloak Gauntlets',
+    shortName: 'SHADOW CLOAK',
+    category: 'consumable',
+    ammoType: null,
+    isConsumable: false,
+    isShadowCloak: true,
+    cloakDurationSec: 10,
+    cloakCooldownSec: 12,
+    cloakSpeedMult: 1.24,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 0,
+    baseDamage: 0,
+    structureDamage: 0,
+    headshotMultiplier: 1.0,
+    fireRate: 1.2,
+    pellets: 0,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0,
+    adsSpread: 0,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 0,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0,
+    recoilYaw: 0,
+    maxStack: 1,
+    allowedRarities: ['epic', 'legendary', 'mythic'],
+  },
 };
 
 export const POIS: POIDef[] = [
@@ -2159,6 +2235,21 @@ export const TANK_CANNON_STRUCT_DMG = 240;
 export const TANK_CANNON_SPLASH_RADIUS = 5.5;
 export const MAX_ACTIVE_C4_PER_PLAYER = 6;
 export const HOT_DROP_POI_COUNT = 2;
+
+export const ARC_CHAIN_RADIUS = 12;
+export const ARC_MAX_CHAINS = 2;
+export const ARC_CHAIN_DAMAGE_MULT = 0.65;
+export const SHADOW_CLOAK_DURATION_SEC = 10;
+export const SHADOW_CLOAK_COOLDOWN_SEC = 12;
+export const SHADOW_CLOAK_SPEED_MULT = 1.24;
+export const RUNE_MONOLITH_COUNT = 4;
+export const RUNE_ATTUNE_DURATION_SEC = 2.2;
+export const RUNE_MONOLITH_COOLDOWN_SEC = 60;
+export const STORM_BLESSING_DURATION_SEC = 30;
+export const STORM_BLESSING_SHIELD_BONUS = 50;
+export const CHOPPA_MAX_ALTITUDE_AGL = 42;
+export const CHOPPA_ASCEND_SPEED = 15;
+export const CHOPPA_DESCEND_SPEED = 13;
 
 export const WEAPON_MODS: readonly WeaponModDef[] = [
   {

@@ -30,6 +30,7 @@ export {
   type LootIslandCaptureResult,
   type NearbyGrindRailResult,
   type RiftTriggerResult,
+  type RuneMonolithAttuneResult,
   type SlurpBarrelDamageResult,
   type SlurpTankerDamageResult,
   type SupplyDroneDamageResult,
@@ -44,6 +45,7 @@ export {
   type Wave10ShowcaseResult,
   type Wave11ShowcaseResult,
   type Wave12ShowcaseResult,
+  type Wave13ShowcaseResult,
   type WeaponBunkerLootResult,
   type WildBoarDamageResult,
 } from './WorldInteractables';

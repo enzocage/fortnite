@@ -13,6 +13,7 @@ import type {
   MeteorCraterEntity,
   POIDef,
   RiftEntity,
+  RuneMonolithEntity,
   SlurpBarrelEntity,
   StormState,
   TurretEntity,
@@ -32,6 +33,9 @@ import {
   RARITY_MULTIPLIER,
   RARITY_ORDER,
   REVIVE_DURATION_SEC,
+  SHADOW_CLOAK_COOLDOWN_SEC,
+  SHADOW_CLOAK_DURATION_SEC,
+  SHADOW_CLOAK_SPEED_MULT,
   TURRET_RANGE,
   WATER_LEVEL,
   WEAPONS,
@@ -144,6 +148,9 @@ const REVIVE_REACH_DIST = 3.4;
 const SQUAD_REVIVE_RANGE = 55.0;
 const SQUAD_UNSAFE_ENEMY_DIST = 16.0;
 export const TANK_THREAT_RANGE = 48.0;
+export const CHOPPA_THREAT_RANGE = 56.0;
+export const SHADOW_CLOAK_DETECTION_RANGE = 8.0;
+export const MONOLITH_OPPORTUNITY_RANGE = 65.0;
 const playerReviveCompletedLatch = new WeakMap<BotEntity, boolean>();
 
 const SCORCHED_CALDERA_POI = POIS.find((p) => p.id === 'scorched_caldera');
@@ -204,10 +211,12 @@ function isUtilityOnlyItem(weaponId: WeaponId): boolean {
       def?.isShieldBubble ||
       def?.isPortABunker ||
       def?.isJetpack ||
+      def?.isShadowCloak ||
       weaponId === 'grappler' ||
       weaponId === 'shield_bubble' ||
       weaponId === 'port_a_bunker' ||
-      weaponId === 'jetpack',
+      weaponId === 'jetpack' ||
+      weaponId === 'shadow_cloak',
   );
 }
 
@@ -216,6 +225,8 @@ export interface WeaponSelectionOptions {
   buildPieces?: ReadonlyArray<BuildPiece>;
   targetPos?: Vec3Like;
   botPos?: Vec3Like;
+  targetElevation?: number;
+  isChoppaTarget?: boolean;
 }
 
 function hasBuildsNearEngagement(
@@ -265,6 +276,31 @@ function resolveNearBuildsFlag(
     );
   }
   return opts.buildPieces.some((p) => p.hp > 0);
+}
+
+function resolveWeaponSelectionContext(
+  nearBuildsOrOptions?: boolean | WeaponSelectionOptions | ReadonlyArray<BuildPiece>,
+): { nearBuilds: boolean; targetElevation: number; isChoppaTarget: boolean } {
+  const nearBuilds = resolveNearBuildsFlag(nearBuildsOrOptions);
+  if (
+    !nearBuildsOrOptions ||
+    typeof nearBuildsOrOptions === 'boolean' ||
+    Array.isArray(nearBuildsOrOptions)
+  ) {
+    return { nearBuilds, targetElevation: 0, isChoppaTarget: false };
+  }
+  const opts = nearBuildsOrOptions as WeaponSelectionOptions;
+  const targetElevation =
+    opts.targetElevation !== undefined
+      ? opts.targetElevation
+      : opts.targetPos && opts.botPos
+        ? opts.targetPos.y - opts.botPos.y
+        : 0;
+  return {
+    nearBuilds,
+    targetElevation: Number.isFinite(targetElevation) ? targetElevation : 0,
+    isChoppaTarget: Boolean(opts.isChoppaTarget),
+  };
 }
 
 function isOffensiveThrowable(weaponId: WeaponId): boolean {
@@ -415,27 +451,38 @@ export function computeBotSpread(
   return Math.max(0.001, spread);
 }
 
-function scoreWeaponForDistance(
+/**
+ * Computes the tactical distance score of an offensive weapon or throwable item.
+ * Utility-only items (`shadow_cloak`, `jetpack`, `grappler`, `shield_bubble`, `port_a_bunker`)
+ * and healing items return `-1`.
+ */
+export function scoreWeaponForDistance(
   item: ItemInstance,
   distance: number,
-  hasLoadedMag: boolean,
+  hasLoadedMag = true,
   nearBuilds = false,
+  targetElevation = 0,
+  isChoppaTarget = false,
 ): number {
   const def = WEAPONS[item.weaponId];
   if (!def || isHealingItem(item.weaponId) || isUtilityOnlyItem(item.weaponId)) {
     return -1;
   }
 
+  const airborneHigh = isChoppaTarget || targetElevation >= 4.0;
+
   if (item.weaponId === 'pickaxe') {
     return distance <= def.range + 1.0 ? 5 : -1;
   }
 
   if (item.weaponId === 'kinetic_blade') {
+    if (airborneHigh) return -1;
     return distance <= def.range + 1.0 ? 85 : -1;
   }
 
   if (def.isThrowable) {
     if (item.stackCount <= 0) return -1;
+    if (isChoppaTarget || targetElevation >= 6.0) return -1;
     if (item.weaponId === 'auto_turret' || def.isAutoTurret) {
       if (!Number.isFinite(distance) || distance < 10 || distance > 32) return -1;
       return 24;
@@ -517,6 +564,12 @@ function scoreWeaponForDistance(
       else if (distance <= 115) base = 109;
       else base = Math.max(24, 109 - (distance - 115) * 0.35);
       break;
+    case 'storm_breaker':
+      if (distance > def.range) return 0.5;
+      if (distance < 15) base = 74 + distance * 1.35;
+      else if (distance <= 95) base = 114;
+      else base = Math.max(22, 114 - (distance - 95) * 0.45);
+      break;
     case 'mythic_blade_rifle':
       if (distance > def.range) return 0.5;
       if (distance < 15) base = 76 + distance * 1.4;
@@ -548,6 +601,7 @@ function scoreWeaponForDistance(
       else base = Math.max(15, 92 - (distance - 55) * 0.45);
       break;
     case 'shockwave_hammer':
+      if (airborneHigh) return -1;
       if (!Number.isFinite(distance) || distance >= 10) return -1;
       base =
         (distance <= 6
@@ -562,6 +616,24 @@ function scoreWeaponForDistance(
       break;
   }
 
+  if (airborneHigh && distance <= def.range) {
+    if (
+      def.category === 'rifle' ||
+      def.category === 'railgun' ||
+      def.category === 'minigun' ||
+      def.category === 'sniper' ||
+      def.category === 'boom_bow' ||
+      def.category === 'launcher'
+    ) {
+      base += isChoppaTarget ? 16 : 10;
+    } else if (
+      isChoppaTarget &&
+      (def.category === 'shotgun' || item.weaponId === 'plasma_flamethrower')
+    ) {
+      base = Math.max(1, base - 22);
+    }
+  }
+
   const rarityMult = RARITY_MULTIPLIER[item.rarity] ?? 1.0;
   return base * rarityMult + (hasLoadedMag ? 15 : 0);
 }
@@ -569,7 +641,7 @@ function scoreWeaponForDistance(
 /**
  * Selects the highest-scoring weapon slot for the target distance,
  * skipping empty guns that have neither mag ammo nor reserve ammo
- * and excluding utility-only items such as `jetpack` / `grappler` / `shield_bubble` / `port_a_bunker`.
+ * and excluding utility-only items such as `shadow_cloak` / `jetpack` / `grappler` / `shield_bubble` / `port_a_bunker`.
  */
 export function selectBestWeaponForDistance(
   items: (ItemInstance | null)[],
@@ -580,7 +652,8 @@ export function selectBestWeaponForDistance(
   let bestSlot = -1;
   let bestItem: ItemInstance | null = null;
   let bestScore = -1;
-  const nearBuilds = resolveNearBuildsFlag(nearBuildsOrOptions);
+  const { nearBuilds, targetElevation, isChoppaTarget } =
+    resolveWeaponSelectionContext(nearBuildsOrOptions);
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
@@ -606,6 +679,8 @@ export function selectBestWeaponForDistance(
       distance,
       !def.isThrowable && isWeaponLoadedForScoring(item, ammo),
       nearBuilds,
+      targetElevation,
+      isChoppaTarget,
     );
     if (score > bestScore) {
       bestScore = score;
@@ -658,6 +733,7 @@ export function selectThrowableForCombat(
   activeTurrets?: ReadonlyArray<TurretEntity>,
 ): ThrowableDecision | null {
   if ((bot.throwCooldown ?? 0) > 0) return null;
+  if (target.position.y - bot.position.y > 6.0) return null;
 
   const horizDist = dist2D(
     bot.position.x,
@@ -1228,6 +1304,171 @@ export function findHoverTankThreat(
   };
 }
 
+export interface ChoppaThreat {
+  vehicle: VehicleEntity;
+  distance: number;
+  horizDist: number;
+  altitudeDelta: number;
+  evadeDirX: number;
+  evadeDirZ: number;
+}
+
+/**
+ * Finds the nearest active hostile airborne `'choppa'` within `maxRange` (default `56m`),
+ * returning the vehicle, 3D/horizontal distances, elevation delta, and lateral evasion vector.
+ */
+export function findChoppaThreat(
+  bot: Pick<
+    BotEntity,
+    'id' | 'position' | 'strafeDir' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+  >,
+  vehicles: ReadonlyArray<VehicleEntity>,
+  maxRange = CHOPPA_THREAT_RANGE,
+  squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+  gameMode?: GameModeId,
+  combatTargets?: ReadonlyArray<
+    Pick<
+      BotCombatTarget,
+      'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+    >
+  >,
+): ChoppaThreat | null {
+  if (!vehicles || vehicles.length === 0 || !Number.isFinite(maxRange) || maxRange <= 0) {
+    return null;
+  }
+
+  let closest: VehicleEntity | null = null;
+  let closestDist = Infinity;
+  let closestHoriz = 0;
+  let closestAltDelta = 0;
+
+  for (const v of vehicles) {
+    if (v.kind !== 'choppa' || v.destroyed || v.hp <= 0 || !v.driverId) continue;
+    if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) {
+      continue;
+    }
+    if (isFriendlyVehicleDriver(bot, v.driverId, squadmates, gameMode, combatTargets)) {
+      continue;
+    }
+
+    const altitudeDelta = v.y - bot.position.y;
+    const isAirborne = (v.altitude ?? altitudeDelta) >= 2.5 || altitudeDelta >= 2.5;
+    if (!isAirborne) continue;
+
+    const d = dist3D(bot.position, v);
+    if (d > maxRange || d >= closestDist) continue;
+    closestDist = d;
+    closest = v;
+    closestHoriz = dist2D(bot.position.x, bot.position.z, v.x, v.z);
+    closestAltDelta = Math.max(v.altitude ?? 0, altitudeDelta);
+  }
+
+  if (!closest) return null;
+
+  const dx = closest.x - bot.position.x;
+  const dz = closest.z - bot.position.z;
+  const horiz = Math.hypot(dx, dz);
+  const dirSign = bot.strafeDir === -1 ? -1 : 1;
+  let evadeDirX: number;
+  let evadeDirZ: number;
+  if (horiz > 1e-4) {
+    const fwdX = dx / horiz;
+    const fwdZ = dz / horiz;
+    evadeDirX = -fwdZ * dirSign;
+    evadeDirZ = fwdX * dirSign;
+  } else {
+    evadeDirX = dirSign;
+    evadeDirZ = 0;
+  }
+
+  return {
+    vehicle: closest,
+    distance: closestDist,
+    horizDist: closestHoriz,
+    altitudeDelta: closestAltDelta,
+    evadeDirX,
+    evadeDirZ,
+  };
+}
+
+/**
+ * Evaluates whether a bot carrying `shadow_cloak` should activate stealth cloak to evade burst damage or retreat.
+ */
+export function shouldBotActivateShadowCloak(
+  bot: Pick<
+    BotEntity,
+    | 'hp'
+    | 'maxHp'
+    | 'shield'
+    | 'maxShield'
+    | 'inventory'
+    | 'state'
+    | 'lastDamageTime'
+    | 'recentDamageTaken'
+    | 'retreatTimer'
+    | 'shadowCloakCooldown'
+    | 'isShadowCloaked'
+  >,
+  nowSec: number,
+): { slotIndex: number; item: ItemInstance } | null {
+  if (
+    bot.isShadowCloaked ||
+    (bot.shadowCloakCooldown ?? 0) > 0 ||
+    bot.state === 'bus' ||
+    bot.state === 'skydiving' ||
+    bot.state === 'gliding' ||
+    bot.state === 'knocked' ||
+    bot.state === 'reviving' ||
+    bot.state === 'eliminated'
+  ) {
+    return null;
+  }
+
+  let slotIndex = -1;
+  let item: ItemInstance | null = null;
+  for (let i = 1; i < bot.inventory.items.length; i++) {
+    const it = bot.inventory.items[i];
+    if (it && (it.weaponId === 'shadow_cloak' || WEAPONS[it.weaponId]?.isShadowCloak)) {
+      slotIndex = i;
+      item = it;
+      break;
+    }
+  }
+  if (slotIndex < 1 || !item) return null;
+
+  const recentlyDamaged =
+    bot.lastDamageTime >= 0 && nowSec - bot.lastDamageTime <= 2.5;
+  const maxHp = bot.maxHp || 100;
+  const maxShield = bot.maxShield || 100;
+  const lowAfterHit =
+    bot.hp <= maxHp * 0.65 ||
+    bot.hp + bot.shield <= (maxHp + maxShield) * 0.55;
+  const heavyBurst = (bot.recentDamageTaken ?? 0) >= 35;
+  const retreating = (bot.retreatTimer ?? 0) > 0 || bot.state === 'healing';
+
+  if (!(recentlyDamaged && (heavyBurst || lowAfterHit)) && !(retreating && lowAfterHit)) {
+    return null;
+  }
+  return { slotIndex, item };
+}
+
+function decloakBot(bot: BotEntity, ctx: BotWorldContext): void {
+  if (!bot.isShadowCloaked) return;
+  bot.isShadowCloaked = false;
+  bot.shadowCloakTimer = 0;
+  bot.shadowCloakCooldown =
+    WEAPONS.shadow_cloak.cloakCooldownSec ?? SHADOW_CLOAK_COOLDOWN_SEC;
+  ctx.eventBus.emit('vfx:shadow_cloak_burst', {
+    position: { ...bot.position },
+    entering: false,
+  });
+  ctx.eventBus.emit('sound:play', {
+    id: 'cloak_decloak',
+    position: { ...bot.position },
+    spatial: true,
+  });
+}
+
 /**
  * Selects the optimal usable healing item (consumable, `chug_splash`, or `chug_cannon`) respecting
  * Fortnite's heal caps (mini shields cap at 50 shield, bandages cap at 75 HP)
@@ -1354,6 +1595,7 @@ export function shouldBotBuildDefense(
   gameMode: GameModeId = 'solo',
   hasTurretHazard = false,
   hasHeavyVehicleThreat = false,
+  hasAirborneThreat = false,
 ): boolean {
   if (gameMode === 'zero_build') {
     return false;
@@ -1394,7 +1636,8 @@ export function shouldBotBuildDefense(
     !underAmbush &&
     !builderEngaged &&
     !hasTurretHazard &&
-    !hasHeavyVehicleThreat
+    !hasHeavyVehicleThreat &&
+    !hasAirborneThreat
   ) {
     return false;
   }
@@ -1403,7 +1646,8 @@ export function shouldBotBuildDefense(
     const bonus =
       (bot.personality === 'builder' ? 0.15 : 0) +
       (hasTurretHazard ? 0.25 : 0) +
-      (hasHeavyVehicleThreat ? 0.35 : 0);
+      (hasHeavyVehicleThreat ? 0.35 : 0) +
+      (hasAirborneThreat ? 0.25 : 0);
     return roll < clamp(profile.buildChance + bonus, 0, 1);
   }
 
@@ -1412,7 +1656,8 @@ export function shouldBotBuildDefense(
       effectiveHp < 70 * scale ||
       bot.personality === 'builder' ||
       hasTurretHazard ||
-      hasHeavyVehicleThreat
+      hasHeavyVehicleThreat ||
+      hasAirborneThreat
     );
   }
   return true;
@@ -1425,6 +1670,7 @@ function tryBuildCover(
   threatPos: Vec3Like,
   elapsed: number,
   preferStrongMaterial = false,
+  preferOverheadCover = false,
 ): boolean {
   if (!pickAvailableMaterial(bot, preferStrongMaterial)) return false;
 
@@ -1495,8 +1741,33 @@ function tryBuildCover(
     return false;
   };
 
+  const placeOverheadRoof = (): boolean => {
+    const mat = pickAvailableMaterial(bot, preferStrongMaterial);
+    if (!mat) return false;
+    const placed = ctx.placeBuildPiece(
+      bot.id,
+      'roof',
+      mat,
+      cell.gx,
+      cell.gy + 1,
+      cell.gz,
+      'N',
+      face,
+    );
+    if (placed) {
+      bot.inventory.materials[mat] = Math.max(
+        0,
+        bot.inventory.materials[mat] - BUILD_COST,
+      );
+      builtAny = true;
+      return true;
+    }
+    return false;
+  };
+
   const wantsMultiWallBox =
     preferStrongMaterial ||
+    preferOverheadCover ||
     difficulty !== 'casual' ||
     bot.personality === 'builder' ||
     bot.hp + bot.shield < 75 * (bot.maxHp / 100);
@@ -1518,7 +1789,12 @@ function tryBuildCover(
     placeRamp();
   }
 
-  // 4. Second perpendicular wall + rear wall to finish defensive 1x1 box
+  // 4. Overhead roof shield when defending against airborne Choppa pressure
+  if (preferOverheadCover) {
+    placeOverheadRoof();
+  }
+
+  // 5. Second perpendicular wall + rear wall to finish defensive 1x1 box
   if (wantsMultiWallBox) {
     placeWallFace(rightFace);
     if (
@@ -1550,7 +1826,11 @@ function tryBuildCover(
   return builtAny;
 }
 
-function getWeaponOverallValue(item: ItemInstance): number {
+/**
+ * Computes the overall combat-weapon valuation used for looting and upgrading guns.
+ * Returns `0` for healing items, utility-only items, throwables, and the pickaxe.
+ */
+export function getWeaponOverallValue(item: ItemInstance): number {
   const def = WEAPONS[item.weaponId];
   if (
     !def ||
@@ -1561,9 +1841,10 @@ function getWeaponOverallValue(item: ItemInstance): number {
   ) {
     return 0;
   }
-  const rarityIdx = RARITY_ORDER.indexOf(item.rarity);
+  const rarityIdx = Math.max(0, RARITY_ORDER.indexOf(item.rarity));
   const baseByType: Record<string, number> = {
     mythic_blade_rifle: 62,
+    storm_breaker: 60,
     shockwave_hammer: 58,
     railgun: 57,
     heavy_shotgun: 56,
@@ -1585,6 +1866,39 @@ function getWeaponOverallValue(item: ItemInstance): number {
     kinetic_blade: 26,
   };
   return (baseByType[item.weaponId] ?? 30) + rarityIdx * 14;
+}
+
+/**
+ * Computes tactical utility valuation for non-damaging mobility/stealth/defense tools
+ * (e.g. `shadow_cloak`, `chug_cannon`, `shield_bubble`, `port_a_bunker`).
+ */
+export function getTacticalUtilityScore(item: ItemInstance): number {
+  const def = WEAPONS[item.weaponId];
+  if (!def) return 0;
+  const rarityIdx = Math.max(0, RARITY_ORDER.indexOf(item.rarity));
+  if (item.weaponId === 'shadow_cloak' || def.isShadowCloak) {
+    return 50 + rarityIdx * 12;
+  }
+  if (item.weaponId === 'chug_cannon' || def.isChugCannon) {
+    return 52 + rarityIdx * 8;
+  }
+  if (item.weaponId === 'shield_bubble' || def.isShieldBubble) {
+    return 36 + rarityIdx * 8;
+  }
+  if (item.weaponId === 'port_a_bunker' || def.isPortABunker) {
+    return 34 + rarityIdx * 8;
+  }
+  if (item.weaponId === 'grappler' || def.isGrappler || item.weaponId === 'jetpack' || def.isJetpack) {
+    return 30 + rarityIdx * 8;
+  }
+  return 0;
+}
+
+/**
+ * Returns the unified loadout valuation across primary weapons and tactical utility items.
+ */
+export function getItemLoadoutValue(item: ItemInstance): number {
+  return Math.max(getWeaponOverallValue(item), getTacticalUtilityScore(item));
 }
 
 function countWeapons(bot: BotEntity): number {
@@ -1612,7 +1926,10 @@ function countHealingSlots(bot: BotEntity): number {
   return count;
 }
 
-function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
+/**
+ * Determines which inventory slot (1..5) should receive or upgrade `candidate`, or `-1` to skip.
+ */
+export function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
   const def = WEAPONS[candidate.weaponId];
   if (
     !def ||
@@ -1634,7 +1951,7 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
     }
   }
 
-  // Upgrade existing same-weapon slot in-place; skip equal/worse duplicates
+  // Upgrade existing same-weapon / single-slot utility (including shadow_cloak) in-place; skip duplicates
   if (!isHealingItem(candidate.weaponId) && !def.isConsumable && !def.isThrowable) {
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
@@ -1660,6 +1977,35 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
     }
   }
 
+  // Tactical utility upgrade / replacement (e.g. shadow_cloak)
+  if (isUtilityOnlyItem(candidate.weaponId)) {
+    const candUtility = getTacticalUtilityScore(candidate);
+    if (candUtility <= 0) return -1;
+    const weaponTotal = countWeapons(bot);
+    let bestSlot = -1;
+    let bestDiff = 0;
+    for (let i = 1; i < bot.inventory.items.length; i++) {
+      const slot = bot.inventory.items[i];
+      if (!slot || isHealingItem(slot.weaponId) || WEAPONS[slot.weaponId].isThrowable) {
+        continue;
+      }
+      if (isUtilityOnlyItem(slot.weaponId)) {
+        const diff = candUtility - getTacticalUtilityScore(slot);
+        if (diff >= 8 && diff > bestDiff) {
+          bestDiff = diff;
+          bestSlot = i;
+        }
+      } else if (weaponTotal >= 2) {
+        const diff = candUtility - getWeaponOverallValue(slot);
+        if (diff >= 14 && diff > bestDiff) {
+          bestDiff = diff;
+          bestSlot = i;
+        }
+      }
+    }
+    return bestSlot;
+  }
+
   // Replace existing same-weapon with higher rarity or strictly better weapon
   if (!isHealingItem(candidate.weaponId) && !def.isConsumable && !def.isThrowable) {
     const candValue = getWeaponOverallValue(candidate);
@@ -1668,7 +2014,13 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
       if (!slot) continue;
-      if (isHealingItem(slot.weaponId) || WEAPONS[slot.weaponId].isThrowable) continue;
+      if (
+        isHealingItem(slot.weaponId) ||
+        isUtilityOnlyItem(slot.weaponId) ||
+        WEAPONS[slot.weaponId].isThrowable
+      ) {
+        continue;
+      }
       const slotVal = getWeaponOverallValue(slot);
       const sameWeapon = slot.weaponId === candidate.weaponId;
       const diff = candValue - slotVal;
@@ -1686,7 +2038,12 @@ function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
     let lowestVal = Infinity;
     for (let i = 1; i < bot.inventory.items.length; i++) {
       const slot = bot.inventory.items[i];
-      if (!slot || isHealingItem(slot.weaponId) || WEAPONS[slot.weaponId].isThrowable) {
+      if (
+        !slot ||
+        isHealingItem(slot.weaponId) ||
+        isUtilityOnlyItem(slot.weaponId) ||
+        WEAPONS[slot.weaponId].isThrowable
+      ) {
         continue;
       }
       const val = getWeaponOverallValue(slot);
@@ -2096,6 +2453,7 @@ function selectEnemyTarget(
     if (isFriendlyTarget(bot, t, squadmates, ctx.gameMode)) continue;
 
     const d = dist3D(eye, t.eyePos);
+    const cloakDist = Math.min(d, dist3D(bot.position, t.position));
     const wasAttacker =
       bot.lastDamagerId === t.id &&
       bot.lastDamageTime >= 0 &&
@@ -2104,6 +2462,13 @@ function selectEnemyTarget(
     const medCount = getTargetMedallionCount(t, ctx, medallionHolderIds);
 
     const isPlayerTarget = Boolean(t.isPlayer) || t.id === 'player';
+    const targetShadowCloaked =
+      (Boolean(ctx.isPlayerShadowCloaked) && isPlayerTarget) ||
+      Boolean(t.isShadowCloaked);
+    if (targetShadowCloaked && cloakDist > SHADOW_CLOAK_DETECTION_RANGE && !wasAttacker) {
+      continue;
+    }
+
     const heardGunfireFromTarget =
       bot.lastHeardGunfireTime !== undefined &&
       bot.lastHeardGunfireTime >= 0 &&
@@ -2122,22 +2487,43 @@ function selectEnemyTarget(
     const stealthRadiusMult = applyStealthReduction ? 0.35 : 1.0;
 
     if (isPlayerSide) {
-      if (d > ALLY_COMBAT_RANGE * stealthRadiusMult) continue;
+      const allyMaxRange = targetShadowCloaked
+        ? Math.min(ALLY_COMBAT_RANGE * stealthRadiusMult, SHADOW_CLOAK_DETECTION_RANGE)
+        : ALLY_COMBAT_RANGE * stealthRadiusMult;
+      if (
+        d > allyMaxRange &&
+        !(targetShadowCloaked && cloakDist <= SHADOW_CLOAK_DETECTION_RANGE)
+      ) {
+        continue;
+      }
     } else {
-      const effectiveRange =
+      const baseRange =
         (medCount > 0 ? profile.visionRange * 1.25 : profile.visionRange) *
         stealthRadiusMult;
-      if (d > effectiveRange && !wasAttacker) {
+      const effectiveRange = targetShadowCloaked
+        ? Math.min(baseRange, SHADOW_CLOAK_DETECTION_RANGE)
+        : baseRange;
+      if (
+        d > effectiveRange &&
+        !wasAttacker &&
+        !(targetShadowCloaked && cloakDist <= SHADOW_CLOAK_DETECTION_RANGE)
+      ) {
         continue;
       }
     }
 
     let los = false;
-    const effectiveLosLimit = isPlayerSide
+    const baseLosLimit = isPlayerSide
       ? ALLY_COMBAT_RANGE * stealthRadiusMult
       : (medCount > 0 && !isFarLOD ? profile.visionRange * 1.25 : losLimit) *
         stealthRadiusMult;
-    if (d <= effectiveLosLimit) {
+    const effectiveLosLimit = targetShadowCloaked
+      ? Math.min(baseLosLimit, SHADOW_CLOAK_DETECTION_RANGE)
+      : baseLosLimit;
+    if (
+      d <= effectiveLosLimit ||
+      (targetShadowCloaked && cloakDist <= SHADOW_CLOAK_DETECTION_RANGE)
+    ) {
       los = ctx.hasLineOfSight(eye, t.eyePos);
     }
 
@@ -2218,8 +2604,31 @@ function resolveCombatAimPoint(
   eye: Vec3Like,
   target: Pick<BotCombatTarget, 'position' | 'eyePos' | 'velocity'>,
   profile: DifficultyProfile,
-): { point: Vec3Like; isElevatedAirborne: boolean } {
+  choppaVehicle?: Pick<VehicleEntity, 'kind' | 'y' | 'vy' | 'altitude'>,
+): { point: Vec3Like; isElevatedAirborne: boolean; isChoppaAirborne: boolean } {
   const verticalDelta = target.eyePos.y - eye.y;
+  const isChoppaTarget = choppaVehicle?.kind === 'choppa';
+  const choppaAirborne =
+    isChoppaTarget &&
+    ((choppaVehicle.altitude ?? verticalDelta) >= 2.0 || verticalDelta >= 2.0);
+  if (isChoppaTarget) {
+    const rotorClimbBias = clamp((choppaVehicle?.vy ?? 0) * 0.12, -0.35, 0.85);
+    const elevationLift = choppaAirborne ? 0.55 : 0.25;
+    const choppaAimY =
+      Math.max(
+        target.eyePos.y + elevationLift,
+        (choppaVehicle?.y ?? target.position.y) + 1.45,
+      ) + rotorClimbBias;
+    return {
+      point: {
+        x: target.position.x,
+        y: choppaAimY,
+        z: target.position.z,
+      },
+      isElevatedAirborne: true,
+      isChoppaAirborne: choppaAirborne,
+    };
+  }
   const isElevatedAirborne =
     Math.abs(verticalDelta) >= 2.2 || Math.abs(target.velocity?.y ?? 0) >= 1.5;
   const chestOffset = isElevatedAirborne
@@ -2232,6 +2641,7 @@ function resolveCombatAimPoint(
       z: target.position.z,
     },
     isElevatedAirborne,
+    isChoppaAirborne: false,
   };
 }
 
@@ -2303,26 +2713,31 @@ function handleFireAndBurst(
   const profile = DIFFICULTY_PROFILES[difficulty];
 
   const eye = getBotEyePos(bot);
-  const { point: aimTarget, isElevatedAirborne } = resolveCombatAimPoint(
+  const targetVehicle = ctx.getVehicles?.().find(
+    (v) => !v.destroyed && v.driverId === target.id,
+  );
+  const {
+    point: aimTarget,
+    isElevatedAirborne,
+    isChoppaAirborne,
+  } = resolveCombatAimPoint(
     eye,
     target,
     profile,
+    targetVehicle?.kind === 'choppa' ? targetVehicle : undefined,
   );
   let aimTargetX = aimTarget.x;
   let aimTargetY = aimTarget.y;
   let aimTargetZ = aimTarget.z;
 
   if (def.isProjectile) {
-    const vehicle = ctx.getVehicles?.().find(
-      (v) => !v.destroyed && v.driverId === target.id,
-    );
-    const targetVel = vehicle
-      ? { x: vehicle.vx, y: vehicle.vy, z: vehicle.vz }
+    const targetVel = targetVehicle
+      ? { x: targetVehicle.vx, y: targetVehicle.vy, z: targetVehicle.vz }
       : target.velocity;
     if (targetVel) {
       const projSpd = Math.max(12, def.projectileSpeed || 60);
       const leadSec = clamp(distance / projSpd, 0, 0.75);
-      const yLeadScale = isElevatedAirborne ? 0.65 : 0.35;
+      const yLeadScale = isChoppaAirborne ? 0.85 : isElevatedAirborne ? 0.65 : 0.35;
       aimTargetX += targetVel.x * leadSec;
       aimTargetY += targetVel.y * leadSec * yLeadScale;
       aimTargetZ += targetVel.z * leadSec;
@@ -2348,6 +2763,7 @@ function handleFireAndBurst(
     activeItem.weaponId === 'shockwave_hammer'
   ) {
     if (distance <= def.range + 0.3 && bot.fireCooldown <= 0 && hasLOS) {
+      decloakBot(bot, ctx);
       ctx.fireWeapon(bot, activeItem, eye, aimDir, 0.05);
       bot.fireCooldown = 1 / def.fireRate;
       bot.harvestSwingTimer = 0.35;
@@ -2374,6 +2790,7 @@ function handleFireAndBurst(
         );
         const res = ctx.fireWeapon(bot, activeItem, eye, throwDir, 0.02);
         if (!res || res.fired !== false) {
+          decloakBot(bot, ctx);
           activeItem.stackCount = Math.max(0, activeItem.stackCount - 1);
           if (activeItem.stackCount <= 0) {
             bot.inventory.items[bot.inventory.activeSlot] = null;
@@ -2412,6 +2829,7 @@ function handleFireAndBurst(
       );
       const res = ctx.fireWeapon(bot, activeItem, eye, aimDir, spread);
       if (!res || res.fired !== false) {
+        decloakBot(bot, ctx);
         consumeWeaponShotAmmo(bot, activeItem);
         bot.isFiring = true;
         bot.recoilKick = 1.0;
@@ -2438,6 +2856,7 @@ function handleFireAndBurst(
   );
   const res = ctx.fireWeapon(bot, activeItem, eye, aimDir, spread);
   if (!res || res.fired !== false) {
+    decloakBot(bot, ctx);
     consumeWeaponShotAmmo(bot, activeItem);
     bot.isFiring = true;
     bot.recoilKick = 1.0;
@@ -3185,8 +3604,8 @@ function getPreferredCombatRange(
   if (weaponId === 'sniper' || personality === 'sniper') {
     return { min: 42, max: 88 };
   }
-  if (weaponId === 'mythic_blade_rifle') {
-    return { min: 16, max: 38 };
+  if (weaponId === 'mythic_blade_rifle' || weaponId === 'storm_breaker') {
+    return { min: 15, max: 40 };
   }
   return { min: 16, max: 35 };
 }
@@ -3228,6 +3647,14 @@ function stepCombatState(
 
   const { target, hasLOS, distance } = combatMatch;
   const eye = getBotEyePos(bot);
+  const targetVehicle = ctx.getVehicles?.().find(
+    (v) => !v.destroyed && v.driverId === target.id,
+  );
+  const isChoppaTarget = targetVehicle?.kind === 'choppa';
+  const targetElevation = target.position.y - bot.position.y;
+  const isAirborneChoppa =
+    isChoppaTarget &&
+    ((targetVehicle?.altitude ?? targetElevation) >= 2.5 || targetElevation >= 2.5);
   const activeBubbles = ctx.getActiveShieldBubbles?.() ?? [];
   const blockingBubble =
     activeBubbles.length > 0
@@ -3251,7 +3678,12 @@ function stepCombatState(
   if (blockingBubble) {
     // Avoid wasting AR/sniper bursts into an active shield bubble dome
     bot.burstQueue = 0;
-    const { point: aimTarget } = resolveCombatAimPoint(eye, target, profile);
+    const { point: aimTarget } = resolveCombatAimPoint(
+      eye,
+      target,
+      profile,
+      isChoppaTarget ? targetVehicle : undefined,
+    );
     applyAimOrientation(bot, eye, aimTarget, profile.turnSpeedRadPerSec, safeDt);
     if (
       cqcWeapon &&
@@ -3276,7 +3708,11 @@ function stepCombatState(
     const buildPieces = ctx.getBuildPieces?.();
     // Check tactical throwables (`frag_grenade` / `shockwave_grenade` / `emp_grenade` / `auto_turret`)
     const throwDecision =
-      !isFarLOD && bot.reloadTimer <= 0 && bot.burstQueue <= 0
+      !isFarLOD &&
+      !isAirborneChoppa &&
+      targetElevation <= 6.0 &&
+      bot.reloadTimer <= 0 &&
+      bot.burstQueue <= 0
         ? selectThrowableForCombat(
             bot,
             target,
@@ -3305,7 +3741,13 @@ function stepCombatState(
         bot.inventory.items,
         distance,
         bot.inventory.ammo,
-        nearBuilds,
+        {
+          nearBuilds,
+          botPos: bot.position,
+          targetPos: target.position,
+          targetElevation,
+          isChoppaTarget,
+        },
       );
       if (chosen) {
         if (bot.inventory.activeSlot !== chosen.slotIndex) {
@@ -3314,7 +3756,12 @@ function stepCombatState(
         }
         handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
       } else {
-        const { point: aimTarget } = resolveCombatAimPoint(eye, target, profile);
+        const { point: aimTarget } = resolveCombatAimPoint(
+          eye,
+          target,
+          profile,
+          isChoppaTarget ? targetVehicle : undefined,
+        );
         applyAimOrientation(bot, eye, aimTarget, profile.turnSpeedRadPerSec, safeDt);
       }
     }
@@ -3371,6 +3818,15 @@ function stepCombatState(
       radial = 0.9;
     } else if (horizDist < minStay) {
       radial = -0.6;
+    }
+  } else if (isAirborneChoppa) {
+    const minAirSpacing = Math.max(range.min, 18);
+    const maxAirSpacing = Math.max(range.max, 42);
+    strafeWeightOverride = 0.95;
+    if (horizDist < minAirSpacing) {
+      radial = -0.9;
+    } else if (horizDist > maxAirSpacing || !hasLOS) {
+      radial = 0.75;
     }
   } else if (behindRampCover && isRangedPrecision && horizDist >= 12) {
     // Hold 1x1 ramp cover; nudge slightly up the ramp if own wall obscures LOS
@@ -3444,7 +3900,10 @@ function stepCombatState(
   }
 
   bot.isSprinting =
-    (forceBubbleSprint || (radial > 0 && horizDist > range.max + 8)) && !bot.isCrouching;
+    (forceBubbleSprint ||
+      (isAirborneChoppa && horizDist < 16) ||
+      (radial > 0 && horizDist > range.max + 8)) &&
+    !bot.isCrouching;
   const speed = bot.isCrouching
     ? CROUCH_SPEED
     : bot.isSprinting
@@ -3477,9 +3936,11 @@ function scanLootingTargets(
       bonus =
         drop.item.weaponId === 'chug_cannon'
           ? 28
-          : isHealingItem(drop.item.weaponId)
-            ? 18
-            : 32;
+          : drop.item.weaponId === 'shadow_cloak'
+            ? 26
+            : isHealingItem(drop.item.weaponId)
+              ? 18
+              : 32;
     } else if (drop.ammo) {
       bonus = 6;
     } else if (drop.materials && getTotalMaterials(bot) < 400) {
@@ -3843,6 +4304,79 @@ export function selectMeteorCraterTarget(
   return best;
 }
 
+/**
+ * Selects an unattuned `RuneMonolithEntity` within 65m inside the safe zone
+ * for opportunistic mid-game rotation and Storm Blessing attraction.
+ */
+export function selectRuneMonolithTarget(
+  bot: Pick<
+    BotEntity,
+    | 'position'
+    | 'state'
+    | 'isBoss'
+    | 'isAlly'
+    | 'isDuoPartner'
+    | 'monolithTargetId'
+    | 'ignoredTargetId'
+    | 'ignoredTargetUntil'
+  >,
+  monoliths: ReadonlyArray<RuneMonolithEntity>,
+  storm: Pick<StormState, 'currentCenterX' | 'currentCenterZ' | 'currentRadius'>,
+  elapsed = 0,
+): RuneMonolithEntity | null {
+  if (
+    bot.isBoss ||
+    bot.isAlly ||
+    bot.isDuoPartner ||
+    bot.state === 'bus' ||
+    bot.state === 'skydiving' ||
+    bot.state === 'gliding' ||
+    bot.state === 'combat' ||
+    bot.state === 'healing' ||
+    bot.state === 'knocked' ||
+    bot.state === 'reviving' ||
+    bot.state === 'eliminated' ||
+    monoliths.length === 0
+  ) {
+    return null;
+  }
+
+  let best: RuneMonolithEntity | null = null;
+  let bestScore = Infinity;
+  for (const monolith of monoliths) {
+    if (monolith.attuned || (monolith.cooldownSec ?? 0) > 0) continue;
+    if (monolith.id === bot.ignoredTargetId && elapsed < bot.ignoredTargetUntil) continue;
+    if (
+      !Number.isFinite(monolith.x) ||
+      !Number.isFinite(monolith.y) ||
+      !Number.isFinite(monolith.z)
+    ) {
+      continue;
+    }
+    if (Math.abs(monolith.y - bot.position.y) > 16) continue;
+    if (isInVolcanoLavaHazard(monolith.x, monolith.z)) continue;
+    if (
+      storm.currentRadius > 0 &&
+      dist2D(monolith.x, monolith.z, storm.currentCenterX, storm.currentCenterZ) >
+        Math.max(0, storm.currentRadius - 6)
+    ) {
+      continue;
+    }
+    const d = dist2D(bot.position.x, bot.position.z, monolith.x, monolith.z);
+    const maxRange =
+      bot.monolithTargetId === monolith.id
+        ? MONOLITH_OPPORTUNITY_RANGE + 8
+        : MONOLITH_OPPORTUNITY_RANGE;
+    if (d > maxRange) continue;
+    const score = d - (monolith.id === bot.monolithTargetId ? 5 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = monolith;
+    }
+  }
+  return best;
+}
+
 function stepRotatingState(
   bot: BotEntity,
   ctx: BotWorldContext,
@@ -3904,6 +4438,8 @@ function stepRotatingState(
     bot.launchPadTargetId = null;
     bot.craterTargetId = null;
     bot.craterDwellTimer = 0;
+    bot.monolithTargetId = null;
+    bot.monolithDwellTimer = 0;
   } else if (!needRotateStorm && !inStormNow && !isFarLOD && !bot.isAlly && !bot.isDuoPartner) {
     const trainTarget = selectTrainTarget(bot, ctx.getTrainState?.(), ctx.storm, elapsed);
     const craterTarget = selectMeteorCraterTarget(
@@ -3912,27 +4448,49 @@ function stepRotatingState(
       ctx.storm,
       elapsed,
     );
+    const monolithTarget = selectRuneMonolithTarget(
+      bot,
+      ctx.getRuneMonoliths?.() ?? [],
+      ctx.storm,
+      elapsed,
+    );
 
-    let chosenKind: 'train' | 'crater' | null = null;
-    if (trainTarget && craterTarget) {
+    let chosenKind: 'train' | 'crater' | 'monolith' | null = null;
+    let bestOppScore = Infinity;
+    if (trainTarget) {
       const trainScore =
         dist2D(bot.position.x, bot.position.z, trainTarget.x, trainTarget.z) - 12;
+      if (trainScore < bestOppScore) {
+        bestOppScore = trainScore;
+        chosenKind = 'train';
+      }
+    }
+    if (craterTarget) {
       const craterScore = dist2D(
         bot.position.x,
         bot.position.z,
         craterTarget.x,
         craterTarget.z,
       );
-      chosenKind = trainScore <= craterScore ? 'train' : 'crater';
-    } else if (trainTarget) {
-      chosenKind = 'train';
-    } else if (craterTarget) {
-      chosenKind = 'crater';
+      if (craterScore < bestOppScore) {
+        bestOppScore = craterScore;
+        chosenKind = 'crater';
+      }
+    }
+    if (monolithTarget) {
+      const monolithScore =
+        dist2D(bot.position.x, bot.position.z, monolithTarget.x, monolithTarget.z) - 15;
+      if (monolithScore < bestOppScore) {
+        bestOppScore = monolithScore;
+        chosenKind = 'monolith';
+      }
     }
 
     if (chosenKind === 'train' && trainTarget) {
       bot.craterTargetId = null;
       bot.craterDwellTimer = 0;
+      bot.monolithTargetId = null;
+      bot.monolithDwellTimer = 0;
       bot.launchPadTargetId = null;
       bot.moveTarget = { x: trainTarget.x, y: trainTarget.y, z: trainTarget.z };
       const dTrain = dist2D(bot.position.x, bot.position.z, trainTarget.x, trainTarget.z);
@@ -3941,6 +4499,8 @@ function stepRotatingState(
       targetingOpportunity = true;
       forceOpportunitySprint = dTrain > 8;
     } else if (chosenKind === 'crater' && craterTarget) {
+      bot.monolithTargetId = null;
+      bot.monolithDwellTimer = 0;
       if (bot.craterTargetId !== craterTarget.id) {
         bot.craterTargetId = craterTarget.id;
         bot.craterDwellTimer = 0;
@@ -3963,13 +4523,47 @@ function stepRotatingState(
         destination = bot.moveTarget;
         targetingOpportunity = true;
       }
+    } else if (chosenKind === 'monolith' && monolithTarget) {
+      bot.craterTargetId = null;
+      bot.craterDwellTimer = 0;
+      if (bot.monolithTargetId !== monolithTarget.id) {
+        bot.monolithTargetId = monolithTarget.id;
+        bot.monolithDwellTimer = 0;
+      }
+      bot.launchPadTargetId = null;
+      bot.moveTarget = { x: monolithTarget.x, y: monolithTarget.y, z: monolithTarget.z };
+      const dMonolith = dist2D(
+        bot.position.x,
+        bot.position.z,
+        monolithTarget.x,
+        monolithTarget.z,
+      );
+      if (dMonolith <= 2.8) {
+        bot.monolithDwellTimer = (bot.monolithDwellTimer ?? 0) + safeDt;
+        if (bot.monolithDwellTimer >= 2.5) {
+          bot.ignoredTargetId = monolithTarget.id;
+          bot.ignoredTargetUntil = elapsed + 30.0;
+          bot.monolithTargetId = null;
+          bot.monolithDwellTimer = 0;
+          bot.moveTarget = pickSafeDestination(bot, ctx);
+        } else {
+          return emptyMoveIntent();
+        }
+      } else {
+        destination = bot.moveTarget;
+        targetingOpportunity = true;
+      }
     } else {
       bot.craterTargetId = null;
       bot.craterDwellTimer = 0;
+      bot.monolithTargetId = null;
+      bot.monolithDwellTimer = 0;
     }
   } else {
     bot.craterTargetId = null;
     bot.craterDwellTimer = 0;
+    bot.monolithTargetId = null;
+    bot.monolithDwellTimer = 0;
   }
 
   if (
@@ -4156,7 +4750,8 @@ function recoverIfStuck(
     bot.harvestTargetId ||
     bot.captureTargetId ||
     bot.riftTargetId ||
-    bot.craterTargetId
+    bot.craterTargetId ||
+    bot.monolithTargetId
   ) {
     bot.ignoredTargetId =
       bot.lootTargetId ??
@@ -4165,6 +4760,7 @@ function recoverIfStuck(
       bot.captureTargetId ??
       bot.riftTargetId ??
       bot.craterTargetId ??
+      bot.monolithTargetId ??
       null;
     bot.ignoredTargetUntil = elapsed + 6.0;
     bot.lootTargetId = null;
@@ -4174,6 +4770,8 @@ function recoverIfStuck(
     bot.riftTargetId = null;
     bot.craterTargetId = null;
     bot.craterDwellTimer = 0;
+    bot.monolithTargetId = null;
+    bot.monolithDwellTimer = 0;
     bot.moveTarget = pickSafeDestination(bot, ctx);
   }
 }
@@ -5554,6 +6152,39 @@ function applyHoverTankEvasiveStrafe(
   );
 }
 
+function applyChoppaEvasiveStrafe(
+  bot: BotEntity,
+  threat: ChoppaThreat,
+  intent: MoveIntent,
+  needRotateStorm: boolean,
+  hasCombatTarget: boolean,
+  safeDt: number,
+): MoveIntent {
+  return applyLateralHazardStrafe(
+    bot,
+    threat.vehicle.x,
+    threat.vehicle.z,
+    threat.distance,
+    intent,
+    needRotateStorm,
+    hasCombatTarget,
+    safeDt,
+    {
+      strafeWeight: 0.95,
+      awayBias: threat.horizDist < 16 ? 0.52 : threat.horizDist < 26 ? 0.28 : 0.12,
+      combatBlend: 0.42,
+      sprintNow: needRotateStorm || threat.horizDist < 24 || bot.isSprinting,
+      wantsJump:
+        bot.grounded &&
+        bot.jumpCooldown <= 0 &&
+        threat.horizDist < 18 &&
+        nextBotRand(bot) < 0.35,
+      strafeMinSec: 0.6,
+      strafeSpanSec: 0.95,
+    },
+  );
+}
+
 /**
  * Advances a single bot's state machine, physics, perception, combat, building, and animations.
  */
@@ -5588,6 +6219,8 @@ export function updateBot(
     bot.isAiming = false;
     bot.isBuilding = false;
     bot.isGrinding = false;
+    bot.isShadowCloaked = false;
+    bot.shadowCloakTimer = 0;
     bot.gliderOpen = false;
     return;
   }
@@ -5615,6 +6248,15 @@ export function updateBot(
   }
   if ((bot.shieldBubbleCooldown ?? 0) > 0) {
     bot.shieldBubbleCooldown = Math.max(0, (bot.shieldBubbleCooldown ?? 0) - safeDt);
+  }
+  if ((bot.shadowCloakCooldown ?? 0) > 0) {
+    bot.shadowCloakCooldown = Math.max(0, (bot.shadowCloakCooldown ?? 0) - safeDt);
+  }
+  if (bot.isShadowCloaked) {
+    bot.shadowCloakTimer = Math.max(0, (bot.shadowCloakTimer ?? 0) - safeDt);
+    if (bot.shadowCloakTimer <= 0) {
+      decloakBot(bot, ctx);
+    }
   }
   if ((bot.launchPadCooldown ?? 0) > 0) {
     bot.launchPadCooldown = Math.max(0, (bot.launchPadCooldown ?? 0) - safeDt);
@@ -5816,8 +6458,16 @@ export function updateBot(
       bot.lastKnownEnemyPos = { ...combatMatch.target.position };
       bot.enemyLostTimer = 0;
     } else if (bot.targetEnemyId) {
+      const lostDueToShadowCloak =
+        Boolean(ctx.isPlayerShadowCloaked) &&
+        bot.targetEnemyId === 'player' &&
+        !(
+          bot.lastDamagerId === 'player' &&
+          bot.lastDamageTime >= 0 &&
+          elapsed - bot.lastDamageTime < 5.0
+        );
       bot.enemyLostTimer += isFarLOD ? 0.45 : safeDt;
-      if (isPlayerCompanion || bot.enemyLostTimer > 4.5) {
+      if (isPlayerCompanion || lostDueToShadowCloak || bot.enemyLostTimer > 4.5) {
         bot.targetEnemyId = null;
         bot.lastKnownEnemyPos = null;
       }
@@ -5843,7 +6493,16 @@ export function updateBot(
         !isFriendlyTarget(bot, t, effectiveSquadmates, effectiveMode) &&
         (!isPlayerCompanion || dist3D(bot.position, t.position) <= ALLY_COMBAT_RANGE),
     );
-    if (existing) {
+    const existingCloakedOut =
+      existing !== undefined &&
+      ((Boolean(ctx.isPlayerShadowCloaked) &&
+        (Boolean(existing.isPlayer) || existing.id === 'player')) ||
+        Boolean(existing.isShadowCloaked)) &&
+      Math.min(
+        dist3D(getBotEyePos(bot), existing.eyePos),
+        dist3D(bot.position, existing.position),
+      ) > SHADOW_CLOAK_DETECTION_RANGE;
+    if (existing && !existingCloakedOut) {
       combatMatch = {
         target: existing,
         hasLOS: dist3D(bot.position, existing.position) < 45,
@@ -5878,6 +6537,17 @@ export function updateBot(
           ctx.getCombatTargets(),
         )
       : null;
+  const choppaThreat =
+    vehicles && vehicles.some((v) => v.kind === 'choppa' && !v.destroyed && v.hp > 0 && v.driverId)
+      ? findChoppaThreat(
+          bot,
+          vehicles,
+          CHOPPA_THREAT_RANGE,
+          effectiveSquadmates,
+          effectiveMode,
+          ctx.getCombatTargets(),
+        )
+      : null;
 
   if (effectiveMode === 'zero_build' || bot.isAlly) {
     bot.isBuilding = false;
@@ -5891,11 +6561,13 @@ export function updateBot(
         combatMatch ? combatMatch.distance : Infinity,
         turretHazard ? turretHazard.distance : Infinity,
         hoverTankThreat ? hoverTankThreat.distance : Infinity,
+        choppaThreat ? choppaThreat.distance : Infinity,
       ),
       undefined,
       effectiveMode,
       Boolean(turretHazard),
       Boolean(hoverTankThreat),
+      Boolean(choppaThreat),
     )
   ) {
     const tankPos = hoverTankThreat
@@ -5903,6 +6575,13 @@ export function updateBot(
           x: hoverTankThreat.vehicle.x,
           y: hoverTankThreat.vehicle.y,
           z: hoverTankThreat.vehicle.z,
+        }
+      : null;
+    const choppaPos = choppaThreat
+      ? {
+          x: choppaThreat.vehicle.x,
+          y: choppaThreat.vehicle.y,
+          z: choppaThreat.vehicle.z,
         }
       : null;
     const turretPos = turretHazard
@@ -5921,6 +6600,7 @@ export function updateBot(
           ? turretPos!
           : combatMatch?.target.position ??
             tankPos ??
+            choppaPos ??
             turretPos ??
             bot.lastKnownEnemyPos ??
             bot.lastHeardNoisePos ?? {
@@ -5928,7 +6608,20 @@ export function updateBot(
               y: bot.position.y,
               z: bot.position.z + Math.cos(bot.yaw) * 15,
             };
-    tryBuildCover(bot, ctx, difficulty, threatPos, elapsed, Boolean(hoverTankThreat));
+    const preferOverheadCover =
+      Boolean(choppaThreat) &&
+      !Boolean(hoverTankThreat) &&
+      choppaThreat!.altitudeDelta >= 4.0 &&
+      (!combatMatch || bot.hp + bot.shield < 85 * (bot.maxHp / 100));
+    tryBuildCover(
+      bot,
+      ctx,
+      difficulty,
+      threatPos,
+      elapsed,
+      Boolean(hoverTankThreat),
+      preferOverheadCover,
+    );
   }
 
   if (!isFarLOD && !bot.isAlly) {
@@ -5954,6 +6647,23 @@ export function updateBot(
         bot.shieldBubbleCooldown = 12.0;
         bot.recentDamageTaken = 0;
       }
+    }
+
+    const cloakTrigger = shouldBotActivateShadowCloak(bot, elapsed);
+    if (cloakTrigger) {
+      bot.isShadowCloaked = true;
+      bot.shadowCloakTimer =
+        WEAPONS.shadow_cloak.cloakDurationSec ?? SHADOW_CLOAK_DURATION_SEC;
+      bot.recentDamageTaken = 0;
+      ctx.eventBus.emit('vfx:shadow_cloak_burst', {
+        position: { ...bot.position },
+        entering: true,
+      });
+      ctx.eventBus.emit('sound:play', {
+        id: 'cloak_activate',
+        position: { ...bot.position },
+        spatial: true,
+      });
     }
   }
 
@@ -6256,6 +6966,18 @@ export function updateBot(
     if (isPlayerCompanion && effectivePlayerPos && (bot.state === 'combat' || bot.state === 'healing')) {
       intent = enforceAllyCombatLeash(bot, effectivePlayerPos, intent);
     }
+  } else if (choppaThreat && !isFarLOD) {
+    intent = applyChoppaEvasiveStrafe(
+      bot,
+      choppaThreat,
+      intent,
+      needRotateStorm,
+      Boolean(combatMatch),
+      safeDt,
+    );
+    if (isPlayerCompanion && effectivePlayerPos && (bot.state === 'combat' || bot.state === 'healing')) {
+      intent = enforceAllyCombatLeash(bot, effectivePlayerPos, intent);
+    }
   }
 
   if (!isFarLOD && vehicles) {
@@ -6283,6 +7005,12 @@ export function updateBot(
     recoverIfStuck(bot, ctx, intent, elapsed, safeDt, isFarLOD);
   }
   intent = applyVolcanoLavaAvoidance(bot, intent);
+  if (bot.isShadowCloaked && intent.speed > 0) {
+    intent = {
+      ...intent,
+      speed: intent.speed * (WEAPONS.shadow_cloak.cloakSpeedMult ?? SHADOW_CLOAK_SPEED_MULT),
+    };
+  }
   applyMovementStep(
     bot,
     ctx,
@@ -6318,6 +7046,40 @@ export function updateBot(
  */
 export class BotBrain {
   readonly profiles = DIFFICULTY_PROFILES;
+
+  scoreWeaponForDistance(
+    item: ItemInstance,
+    distance: number,
+    hasLoadedMag = true,
+    nearBuilds = false,
+    targetElevation = 0,
+    isChoppaTarget = false,
+  ): number {
+    return scoreWeaponForDistance(
+      item,
+      distance,
+      hasLoadedMag,
+      nearBuilds,
+      targetElevation,
+      isChoppaTarget,
+    );
+  }
+
+  getWeaponOverallValue(item: ItemInstance): number {
+    return getWeaponOverallValue(item);
+  }
+
+  getTacticalUtilityScore(item: ItemInstance): number {
+    return getTacticalUtilityScore(item);
+  }
+
+  getItemLoadoutValue(item: ItemInstance): number {
+    return getItemLoadoutValue(item);
+  }
+
+  canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
+    return canUpgradeOrTakeItem(bot, candidate);
+  }
 
   selectBestWeaponForDistance(
     items: (ItemInstance | null)[],
@@ -6380,6 +7142,25 @@ export class BotBrain {
     elapsed = 0,
   ): MeteorCraterEntity | null {
     return selectMeteorCraterTarget(bot, craters, storm, elapsed);
+  }
+
+  selectRuneMonolithTarget(
+    bot: Pick<
+      BotEntity,
+      | 'position'
+      | 'state'
+      | 'isBoss'
+      | 'isAlly'
+      | 'isDuoPartner'
+      | 'monolithTargetId'
+      | 'ignoredTargetId'
+      | 'ignoredTargetUntil'
+    >,
+    monoliths: ReadonlyArray<RuneMonolithEntity>,
+    storm: Pick<StormState, 'currentCenterX' | 'currentCenterZ' | 'currentRadius'>,
+    elapsed = 0,
+  ): RuneMonolithEntity | null {
+    return selectRuneMonolithTarget(bot, monoliths, storm, elapsed);
   }
 
   selectThrowableForCombat(
@@ -6471,6 +7252,26 @@ export class BotBrain {
     return shouldBotDeployShieldBubble(bot, ctx, nowSec);
   }
 
+  shouldBotActivateShadowCloak(
+    bot: Pick<
+      BotEntity,
+      | 'hp'
+      | 'maxHp'
+      | 'shield'
+      | 'maxShield'
+      | 'inventory'
+      | 'state'
+      | 'lastDamageTime'
+      | 'recentDamageTaken'
+      | 'retreatTimer'
+      | 'shadowCloakCooldown'
+      | 'isShadowCloaked'
+    >,
+    nowSec: number,
+  ): { slotIndex: number; item: ItemInstance } | null {
+    return shouldBotActivateShadowCloak(bot, nowSec);
+  }
+
   findIncomingVehicleThreat(
     botPos: Vec3Like,
     botId: string,
@@ -6496,6 +7297,25 @@ export class BotBrain {
     >,
   ): HoverTankThreat | null {
     return findHoverTankThreat(bot, vehicles, maxRange, squadmates, gameMode, combatTargets);
+  }
+
+  findChoppaThreat(
+    bot: Pick<
+      BotEntity,
+      'id' | 'position' | 'strafeDir' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+    >,
+    vehicles: ReadonlyArray<VehicleEntity>,
+    maxRange = CHOPPA_THREAT_RANGE,
+    squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+    gameMode?: GameModeId,
+    combatTargets?: ReadonlyArray<
+      Pick<
+        BotCombatTarget,
+        'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+      >
+    >,
+  ): ChoppaThreat | null {
+    return findChoppaThreat(bot, vehicles, maxRange, squadmates, gameMode, combatTargets);
   }
 
   selectLaunchPadForRotation(
@@ -6593,6 +7413,7 @@ export class BotBrain {
     gameMode: GameModeId = 'solo',
     hasTurretHazard = false,
     hasHeavyVehicleThreat = false,
+    hasAirborneThreat = false,
   ): boolean {
     return shouldBotBuildDefense(
       bot,
@@ -6603,6 +7424,7 @@ export class BotBrain {
       gameMode,
       hasTurretHazard,
       hasHeavyVehicleThreat,
+      hasAirborneThreat,
     );
   }
 

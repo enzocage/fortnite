@@ -1,4 +1,5 @@
 import {
+  CHOPPA_MAX_ALTITUDE_AGL,
   DBNO_MAX_HP,
   EMOTES,
   TANK_CANNON_COOLDOWN_SEC,
@@ -27,6 +28,7 @@ import type {
   MeteorCraterEntity,
   ModBenchEntity,
   RebootVanEntity,
+  RuneMonolithEntity,
   ShieldMushroomEntity,
   SkyBalloonEntity,
   SlurpTankerEntity,
@@ -48,6 +50,7 @@ import {
   drawOverdriveMapOverlay,
   drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
+  drawSovereignMapOverlay,
   drawTideMapOverlay,
   drawVanguardMapOverlay,
   formatBiomeLabel,
@@ -76,6 +79,7 @@ import {
   resolveOverdriveOverlayArgs,
   resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
+  resolveSovereignOverlayArgs,
   resolveTideOverlayArgs,
   selectVisibleVisualSoundCues,
   type WorldChapterOverlay,
@@ -83,6 +87,7 @@ import {
   type WorldOverdriveOverlay,
   type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
+  type WorldSovereignOverlay,
   type WorldTideOverlay,
   worldToMapNorm,
 } from './UIHelpers';
@@ -105,6 +110,7 @@ import {
   getOvershieldBoltSvg,
   getRebootVanSvg,
   getReviveCrossSvg,
+  getRuneMonolithSvg,
   getSkullSvg,
   getStealthLeafSvg,
   getStormEyeSvg,
@@ -264,6 +270,9 @@ export class HUDManager {
     fishingHoles: [],
     skyBalloons: [],
   };
+  private sovereignOverlay: WorldSovereignOverlay = {
+    runeMonoliths: [],
+  };
   private vehicles: VehicleEntity[] = [];
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
@@ -307,6 +316,9 @@ export class HUDManager {
   private vehicleCannonRowEl: HTMLDivElement;
   private vehicleCannonFillEl: HTMLDivElement;
   private vehicleCannonStateEl: HTMLSpanElement;
+  private vehicleAltRowEl: HTMLDivElement;
+  private vehicleAltFillEl: HTMLDivElement;
+  private vehicleAltEl: HTMLSpanElement;
   private vehicleHintEl: HTMLDivElement;
   private campfirePillEl: HTMLDivElement;
   private dbnoBarEl: HTMLDivElement;
@@ -339,6 +351,10 @@ export class HUDManager {
   private c4LabelEl: HTMLSpanElement;
   private streakPillEl: HTMLDivElement;
   private streakLabelEl: HTMLSpanElement;
+  private cloakPillEl: HTMLDivElement;
+  private cloakLabelEl: HTMLSpanElement;
+  private blessingPillEl: HTMLDivElement;
+  private blessingLabelEl: HTMLSpanElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -503,6 +519,9 @@ export class HUDManager {
   private lastBShieldVisible = false;
   private lastC4Count = 0;
   private lastStreakPillCount = 0;
+  private lastCloakKey = '';
+  private lastCloakVisible = false;
+  private lastBlessingSec = 0;
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -1032,7 +1051,7 @@ export class HUDManager {
 
     // Vehicle Dashboard (above vitals when driving)
     this.vehicleDashEl = document.createElement('div');
-    this.vehicleDashEl.className = 'fdr-vehicle-dash fdr-hidden';
+    this.vehicleDashEl.className = 'fdr-vehicle-dash fdr-vehicle-hud fdr-hidden';
     const vehHead = document.createElement('div');
     vehHead.className = 'fdr-vehicle-head';
     const vehLeft = document.createElement('div');
@@ -1103,7 +1122,30 @@ export class HUDManager {
       this.vehicleCannonStateEl,
     );
 
-    vehBars.append(boostRow, vHpRow, this.vehicleCannonRowEl);
+    this.vehicleAltRowEl = document.createElement('div');
+    this.vehicleAltRowEl.className =
+      'fdr-vehicle-bar-row fdr-vehicle-alt-row fdr-hidden';
+    this.vehicleAltRowEl.dataset.altitude = '0';
+    const altLbl = document.createElement('span');
+    altLbl.className = 'fdr-vehicle-bar-lbl';
+    altLbl.textContent = 'ALTITUDE';
+    const altTrack = document.createElement('div');
+    altTrack.className = 'fdr-vehicle-track';
+    this.vehicleAltFillEl = document.createElement('div');
+    this.vehicleAltFillEl.className = 'fdr-vehicle-fill altitude';
+    this.vehicleAltFillEl.style.width = '0%';
+    altTrack.appendChild(this.vehicleAltFillEl);
+    this.vehicleAltEl = document.createElement('span');
+    this.vehicleAltEl.className = 'fdr-vehicle-alt';
+    this.vehicleAltEl.textContent = 'ALT 0m';
+    this.vehicleAltRowEl.append(altLbl, altTrack, this.vehicleAltEl);
+
+    vehBars.append(
+      boostRow,
+      vHpRow,
+      this.vehicleCannonRowEl,
+      this.vehicleAltRowEl,
+    );
 
     this.vehicleHintEl = document.createElement('div');
     this.vehicleHintEl.className = 'fdr-vehicle-hint';
@@ -1298,6 +1340,29 @@ export class HUDManager {
     this.streakLabelEl.textContent = '3X STREAK';
     this.streakPillEl.append(streakIcon, this.streakLabelEl);
 
+    this.cloakPillEl = document.createElement('div');
+    this.cloakPillEl.className = 'fdr-cloak-pill fdr-hidden';
+    this.cloakPillEl.dataset.active = 'false';
+    this.cloakPillEl.dataset.state = 'hidden';
+    const cloakIcon = document.createElement('span');
+    cloakIcon.className = 'fdr-cloak-icon';
+    cloakIcon.innerHTML = getWeaponSvg('shadow_cloak');
+    this.cloakLabelEl = document.createElement('span');
+    this.cloakLabelEl.className = 'fdr-cloak-label';
+    this.cloakLabelEl.textContent = 'SHADOW CLOAK';
+    this.cloakPillEl.append(cloakIcon, this.cloakLabelEl);
+
+    this.blessingPillEl = document.createElement('div');
+    this.blessingPillEl.className = 'fdr-blessing-pill fdr-hidden';
+    this.blessingPillEl.dataset.active = 'false';
+    const blessingIcon = document.createElement('span');
+    blessingIcon.className = 'fdr-blessing-icon';
+    blessingIcon.innerHTML = getRuneMonolithSvg();
+    this.blessingLabelEl = document.createElement('span');
+    this.blessingLabelEl.className = 'fdr-blessing-label';
+    this.blessingLabelEl.textContent = 'STORM BLESSING 0s';
+    this.blessingPillEl.append(blessingIcon, this.blessingLabelEl);
+
     this.statusChipRowEl.append(
       this.stealthPillEl,
       this.jetpackPillEl,
@@ -1308,6 +1373,8 @@ export class HUDManager {
       this.bshieldPillEl,
       this.c4PillEl,
       this.streakPillEl,
+      this.cloakPillEl,
+      this.blessingPillEl,
     );
 
     this.staminaWrapEl = document.createElement('div');
@@ -1977,6 +2044,15 @@ export class HUDManager {
     this.lastMinimapDraw = 0;
   }
 
+  setWorldSovereignOverlay(runeMonoliths: RuneMonolithEntity[]): void;
+  setWorldSovereignOverlay(overlay: WorldSovereignOverlay): void;
+  setWorldSovereignOverlay(
+    runeMonolithsOrOverlay: RuneMonolithEntity[] | WorldSovereignOverlay,
+  ): void {
+    this.sovereignOverlay = resolveSovereignOverlayArgs(runeMonolithsOrOverlay);
+    this.lastMinimapDraw = 0;
+  }
+
   setWorldVehicles(vehicles: VehicleEntity[]): void {
     this.vehicles = Array.isArray(vehicles) ? vehicles : [];
     this.lastMinimapDraw = 0;
@@ -2159,6 +2235,20 @@ export class HUDManager {
     this.streakPillEl.dataset.streak = '0';
     this.streakLabelEl.textContent = '3X STREAK';
     this.lastStreakPillCount = 0;
+    this.cloakPillEl.classList.add('fdr-hidden');
+    this.cloakPillEl.classList.remove('active', 'cooldown', 'ready');
+    this.cloakPillEl.dataset.active = 'false';
+    this.cloakPillEl.dataset.state = 'hidden';
+    delete this.cloakPillEl.dataset.remainingSec;
+    delete this.cloakPillEl.dataset.cooldownSec;
+    this.cloakLabelEl.textContent = 'SHADOW CLOAK';
+    this.lastCloakKey = '';
+    this.lastCloakVisible = false;
+    this.blessingPillEl.classList.add('fdr-hidden');
+    this.blessingPillEl.dataset.active = 'false';
+    delete this.blessingPillEl.dataset.remainingSec;
+    this.blessingLabelEl.textContent = 'STORM BLESSING 0s';
+    this.lastBlessingSec = 0;
     this.hotDropBadgeEl.classList.add('fdr-hidden');
     this.hotDropBadgeEl.dataset.hotDrop = 'false';
     this.lastInHotDrop = false;
@@ -2168,9 +2258,13 @@ export class HUDManager {
     delete this.vehicleCannonRowEl.dataset.cannonCooldown;
     this.vehicleCannonFillEl.style.width = '100%';
     this.vehicleCannonStateEl.textContent = 'READY';
+    this.vehicleAltRowEl.classList.add('fdr-hidden');
+    this.vehicleAltRowEl.dataset.altitude = '0';
+    this.vehicleAltFillEl.style.width = '0%';
+    this.vehicleAltEl.textContent = 'ALT 0m';
     this.statusChipRowEl.classList.add('fdr-hidden');
     this.channelEl.classList.add('fdr-hidden');
-    this.channelEl.classList.remove('train-hack', 'fishing');
+    this.channelEl.classList.remove('train-hack', 'fishing', 'rune-attune');
     this.lastChannelKey = '';
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
@@ -2392,6 +2486,7 @@ export class HUDManager {
     this.updateWave10HUD(state);
     this.updateWave11HUD(state);
     this.updateWave12HUD(state);
+    this.updateWave13HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2721,7 +2816,16 @@ export class HUDManager {
     let chProg: number | null = null;
     let isTrainHack = false;
     let isFishing = false;
+    let isRuneAttune = false;
     if (
+      !state.spectating &&
+      typeof state.runeAttuneProgress === 'number' &&
+      Number.isFinite(state.runeAttuneProgress)
+    ) {
+      chLabel = 'ATTUNING RUNE MONOLITH...';
+      chProg = state.runeAttuneProgress;
+      isRuneAttune = true;
+    } else if (
       !state.spectating &&
       typeof state.trainHackProgress === 'number' &&
       Number.isFinite(state.trainHackProgress)
@@ -2746,12 +2850,13 @@ export class HUDManager {
     }
 
     const pct = chProg !== null ? Math.max(0, Math.min(100, Math.round(chProg * 100))) : -1;
-    const cKey = `${chLabel}:${pct}:${isTrainHack ? 1 : 0}:${isFishing ? 1 : 0}`;
+    const cKey = `${chLabel}:${pct}:${isTrainHack ? 1 : 0}:${isFishing ? 1 : 0}:${isRuneAttune ? 1 : 0}`;
     if (cKey !== this.lastChannelKey) {
       this.lastChannelKey = cKey;
       this.channelEl.classList.toggle('fdr-hidden', chProg === null);
       this.channelEl.classList.toggle('train-hack', isTrainHack);
       this.channelEl.classList.toggle('fishing', isFishing);
+      this.channelEl.classList.toggle('rune-attune', isRuneAttune);
       if (chProg !== null) {
         this.channelLabelEl.textContent = chLabel;
         this.channelPctEl.textContent = `${pct}%`;
@@ -2932,6 +3037,7 @@ export class HUDManager {
       resolveKeybinds(this.settings.keybinds).interact,
     );
     const isTank = Boolean(veh && veh.kind === 'hover_tank');
+    const isChoppa = Boolean(veh && veh.kind === 'choppa');
     const rawCannonCd =
       isTank &&
       typeof state.tankCannonCooldown === 'number' &&
@@ -2939,8 +3045,15 @@ export class HUDManager {
         ? Math.max(0, state.tankCannonCooldown)
         : 0;
     const cannonTenths = Math.round(rawCannonCd * 10);
+    const rawChoppaAlt =
+      isChoppa &&
+      typeof state.choppaAltitude === 'number' &&
+      Number.isFinite(state.choppaAltitude)
+        ? Math.max(0, state.choppaAltitude)
+        : 0;
+    const choppaAltMeters = Math.round(rawChoppaAlt);
     const vehKey = veh
-      ? `${veh.kind}:${Math.round(veh.speedKmh)}:${Math.round(veh.hp)}/${Math.round(veh.maxHp)}:${Math.round(normalizeBoostChargePct(veh.boostCharge))}:${veh.isBoosting ? 1 : 0}:${isTank ? cannonTenths : -1}:${interactKey}`
+      ? `${veh.kind}:${Math.round(veh.speedKmh)}:${Math.round(veh.hp)}/${Math.round(veh.maxHp)}:${Math.round(normalizeBoostChargePct(veh.boostCharge))}:${veh.isBoosting ? 1 : 0}:${isTank ? cannonTenths : -1}:${isChoppa ? choppaAltMeters : -1}:${interactKey}`
       : '';
     if (vehKey !== this.lastVehicleKey) {
       this.lastVehicleKey = vehKey;
@@ -2961,6 +3074,7 @@ export class HUDManager {
         this.vehicleHpFillEl.classList.toggle('low', hpPct <= 30);
 
         this.vehicleCannonRowEl.classList.toggle('fdr-hidden', !isTank);
+        this.vehicleAltRowEl.classList.toggle('fdr-hidden', !isChoppa);
         if (isTank) {
           const isReady = cannonTenths <= 0;
           const maxCd = Math.max(0.1, TANK_CANNON_COOLDOWN_SEC);
@@ -2976,9 +3090,21 @@ export class HUDManager {
             ? 'READY'
             : `${(cannonTenths / 10).toFixed(1)}S`;
           this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [LMB] CANNON • [SHIFT] BOOST`;
+        } else if (isChoppa) {
+          this.vehicleCannonRowEl.classList.remove('ready', 'cooling');
+          delete this.vehicleCannonRowEl.dataset.cannonCooldown;
+          const maxAlt = Math.max(1, CHOPPA_MAX_ALTITUDE_AGL);
+          const altPct = Math.max(0, Math.min(100, (rawChoppaAlt / maxAlt) * 100));
+          this.vehicleAltRowEl.dataset.altitude = String(choppaAltMeters);
+          this.vehicleAltFillEl.style.width = `${altPct.toFixed(1)}%`;
+          this.vehicleAltEl.textContent = `ALT ${choppaAltMeters}m`;
+          this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [SPACE] ASCEND • [C] DESCEND`;
         } else {
           this.vehicleCannonRowEl.classList.remove('ready', 'cooling');
           delete this.vehicleCannonRowEl.dataset.cannonCooldown;
+          this.vehicleAltRowEl.dataset.altitude = '0';
+          this.vehicleAltFillEl.style.width = '0%';
+          this.vehicleAltEl.textContent = 'ALT 0m';
           this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [SHIFT] BOOST • [H] HORN`;
         }
       }
@@ -3917,6 +4043,95 @@ export class HUDManager {
     this.syncStatusChipRow();
   }
 
+  private updateWave13HUD(state: HUDState): void {
+    // 1. Shadow Cloak Status Pill (.fdr-cloak-pill)
+    const cloak = !state.spectating ? state.shadowCloakState ?? null : null;
+    const hasCloakInSlots =
+      Array.isArray(state.slots) &&
+      state.slots.some((s) => s?.weaponId === 'shadow_cloak');
+    const isActive = Boolean(cloak?.active);
+    const remSec =
+      cloak &&
+      typeof cloak.remainingSec === 'number' &&
+      Number.isFinite(cloak.remainingSec)
+        ? Math.max(0, cloak.remainingSec)
+        : 0;
+    const cdSec =
+      cloak &&
+      typeof cloak.cooldownSec === 'number' &&
+      Number.isFinite(cloak.cooldownSec)
+        ? Math.max(0, cloak.cooldownSec)
+        : 0;
+    const remCeil = remSec > 0 ? Math.max(1, Math.ceil(remSec)) : 0;
+    const cdCeil = cdSec > 0 ? Math.max(1, Math.ceil(cdSec)) : 0;
+    const cloakVisible = Boolean(
+      cloak && (isActive || cdCeil > 0 || hasCloakInSlots),
+    );
+    const cloakMode = !cloakVisible
+      ? 'hidden'
+      : isActive
+        ? 'active'
+        : cdCeil > 0
+          ? 'cooldown'
+          : 'ready';
+    const cloakKey = cloakVisible
+      ? `${cloakMode}:${isActive ? remCeil : cdCeil}`
+      : '';
+    if (cloakKey !== this.lastCloakKey) {
+      this.lastCloakKey = cloakKey;
+      this.lastCloakVisible = cloakVisible;
+      this.cloakPillEl.classList.toggle('fdr-hidden', !cloakVisible);
+      this.cloakPillEl.classList.toggle('active', cloakMode === 'active');
+      this.cloakPillEl.classList.toggle('cooldown', cloakMode === 'cooldown');
+      this.cloakPillEl.classList.toggle('ready', cloakMode === 'ready');
+      this.cloakPillEl.dataset.active = cloakMode === 'active' ? 'true' : 'false';
+      this.cloakPillEl.dataset.state = cloakMode;
+
+      if (cloakMode === 'active') {
+        this.cloakPillEl.dataset.remainingSec = String(remCeil);
+        delete this.cloakPillEl.dataset.cooldownSec;
+        this.cloakLabelEl.textContent =
+          remCeil > 0 ? `SHADOW CLOAK ${remCeil}s` : 'SHADOW CLOAK ACTIVE';
+      } else if (cloakMode === 'cooldown') {
+        this.cloakPillEl.dataset.cooldownSec = String(cdCeil);
+        delete this.cloakPillEl.dataset.remainingSec;
+        this.cloakLabelEl.textContent = `SHADOW CLOAK CD ${cdCeil}s`;
+      } else if (cloakMode === 'ready') {
+        delete this.cloakPillEl.dataset.remainingSec;
+        delete this.cloakPillEl.dataset.cooldownSec;
+        this.cloakLabelEl.textContent = 'SHADOW CLOAK READY';
+      } else {
+        delete this.cloakPillEl.dataset.remainingSec;
+        delete this.cloakPillEl.dataset.cooldownSec;
+        this.cloakLabelEl.textContent = 'SHADOW CLOAK';
+      }
+    }
+
+    // 2. Storm Blessing Pill (.fdr-blessing-pill: STORM BLESSING Xs)
+    const blessingSec =
+      !state.spectating &&
+      typeof state.stormBlessingRemainingSec === 'number' &&
+      Number.isFinite(state.stormBlessingRemainingSec) &&
+      state.stormBlessingRemainingSec > 0
+        ? Math.max(1, Math.ceil(state.stormBlessingRemainingSec))
+        : 0;
+    if (blessingSec !== this.lastBlessingSec) {
+      this.lastBlessingSec = blessingSec;
+      const hasBlessing = blessingSec > 0;
+      this.blessingPillEl.classList.toggle('fdr-hidden', !hasBlessing);
+      this.blessingPillEl.dataset.active = hasBlessing ? 'true' : 'false';
+      if (hasBlessing) {
+        this.blessingPillEl.dataset.remainingSec = String(blessingSec);
+        this.blessingLabelEl.textContent = `STORM BLESSING ${blessingSec}s`;
+      } else {
+        delete this.blessingPillEl.dataset.remainingSec;
+        this.blessingLabelEl.textContent = 'STORM BLESSING 0s';
+      }
+    }
+
+    this.syncStatusChipRow();
+  }
+
   private syncStatusChipRow(): void {
     const anyChipVisible =
       this.lastStealthKey ||
@@ -3927,7 +4142,9 @@ export class HUDManager {
       this.lastThermalSec > 0 ||
       this.lastBShieldVisible ||
       this.lastC4Count > 0 ||
-      this.lastStreakPillCount >= 3;
+      this.lastStreakPillCount >= 3 ||
+      this.lastCloakVisible ||
+      this.lastBlessingSec > 0;
     this.statusChipRowEl.classList.toggle('fdr-hidden', !anyChipVisible);
   }
 
@@ -4368,6 +4585,17 @@ export class HUDManager {
       pxPerMeter,
       worldToMini,
       state.hotDropPoiIds,
+      this.vehicles,
+      performance.now(),
+    );
+
+    // Wave-13 Sovereign Overlay (Rune Monoliths & Storm Choppa rotor icons)
+    drawSovereignMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      this.sovereignOverlay,
       this.vehicles,
       performance.now(),
     );
