@@ -1,8 +1,10 @@
-import { EMOTES, WEAPONS, WORLD_SIZE } from '../core';
+import { DBNO_MAX_HP, EMOTES, WEAPONS, WORLD_SIZE } from '../core';
 import type {
   AugmentId,
   BuildPieceType,
   DamageNumberEvent,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   EmoteId,
   GameSettings,
   HUDState,
@@ -11,6 +13,8 @@ import type {
   KillFeedEntry,
   MatchQuest,
   MaterialType,
+  SlurpTankerEntity,
+  WeaponBunkerEntity,
 } from '../types';
 import {
   angleRadToDeg,
@@ -19,6 +23,7 @@ import {
   computeFallbackStormDistance,
   computeOvershieldPct,
   computeQuestProgressPct,
+  drawChapterMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -32,12 +37,16 @@ import {
   getBearingDeg,
   getContextualHudHints,
   getKillStreakCallout,
+  getMedallionMeta,
   getRarityMeta,
   normalizeBoostChargePct,
+  type ResolvedChapterOverlay,
+  resolveChapterOverlayArgs,
   resolveCrosshairColor,
   resolveCrosshairStyle,
   resolveKeybinds,
   selectVisibleVisualSoundCues,
+  type WorldChapterOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
@@ -51,7 +60,9 @@ import {
   getGoldBarSvg,
   getLootIslandIconSvg,
   getMaterialIconSvg,
+  getMedallionSvg,
   getOvershieldBoltSvg,
+  getReviveCrossSvg,
   getSkullSvg,
   getStormEyeSvg,
   getTacticalPingIconSvg,
@@ -116,6 +127,18 @@ export class HUDManager {
   private bountyTargetEl: HTMLDivElement;
   private bountyDistEl: HTMLSpanElement;
   private bountyRewardEl: HTMLSpanElement;
+  private duoCardEl: HTMLDivElement;
+  private duoIconEl: HTMLSpanElement;
+  private duoNameEl: HTMLSpanElement;
+  private duoStatusPillEl: HTMLSpanElement;
+  private duoDistEl: HTMLSpanElement;
+  private duoBarsEl: HTMLDivElement;
+  private duoShieldFillEl: HTMLDivElement;
+  private duoHpFillEl: HTMLDivElement;
+  private duoBleedWrapEl: HTMLDivElement;
+  private duoBleedTextEl: HTMLSpanElement;
+  private duoBleedFillEl: HTMLDivElement;
+  private duoStatsEl: HTMLDivElement;
   private allyCardEl: HTMLDivElement;
   private allyRoleIconEl: HTMLSpanElement;
   private allyNameEl: HTMLSpanElement;
@@ -130,6 +153,9 @@ export class HUDManager {
   private questToastLayerEl: HTMLDivElement;
   private activeQuestToastTimers = new Set<ReturnType<typeof setTimeout>>();
   private activeAugmentsEl: HTMLDivElement;
+  private chapterRackEl: HTMLDivElement;
+  private hudCrownBadgeEl: HTMLDivElement;
+  private medallionRackEl: HTMLDivElement;
   private augmentPickerEl: HTMLDivElement;
   private augmentChoiceEls: Array<{
     btn: HTMLButtonElement;
@@ -157,6 +183,12 @@ export class HUDManager {
   private minimapCanvas: HTMLCanvasElement;
   private minimapCtx: CanvasRenderingContext2D | null;
   private terrainMapCanvas: HTMLCanvasElement | null = null;
+  private chapterOverlay: ResolvedChapterOverlay = {
+    bunkers: [],
+    tankers: [],
+    droppedMedallions: [],
+    droppedCrowns: [],
+  };
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
@@ -197,6 +229,13 @@ export class HUDManager {
   private vehicleHpFillEl: HTMLDivElement;
   private vehicleHintEl: HTMLDivElement;
   private campfirePillEl: HTMLDivElement;
+  private dbnoBarEl: HTMLDivElement;
+  private dbnoHpTextEl: HTMLSpanElement;
+  private dbnoFillEl: HTMLDivElement;
+  private reviveBarEl: HTMLDivElement;
+  private reviveLabelEl: HTMLSpanElement;
+  private revivePctEl: HTMLSpanElement;
+  private reviveFillEl: HTMLDivElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -241,6 +280,7 @@ export class HUDManager {
   private tacticalPingLabelEl: HTMLSpanElement;
   private tacticalPingDistEl: HTMLSpanElement;
   private crosshairEl: HTMLDivElement;
+  private bowArcEl: HTMLDivElement;
   private scopeEl: HTMLDivElement;
   private hitmarkerEl: HTMLDivElement;
   private damageArcWrapEl: HTMLDivElement;
@@ -323,6 +363,11 @@ export class HUDManager {
   private lastKineticKey = '';
   private lastAllyKey = '';
   private lastLootIslandKey = '';
+  private lastDuoKey = '';
+  private lastChapterRackKey = '';
+  private lastDbnoKey = '';
+  private lastReviveKey = '';
+  private lastBowChargeKey = '';
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -394,6 +439,64 @@ export class HUDManager {
     bountyMeta.append(this.bountyDistEl, this.bountyRewardEl);
     this.bountyCardEl.append(bountyHead, this.bountyTargetEl, bountyMeta);
 
+    this.duoCardEl = document.createElement('div');
+    this.duoCardEl.className = 'fdr-duo-card fdr-hidden';
+    const duoHead = document.createElement('div');
+    duoHead.className = 'fdr-duo-head';
+    this.duoIconEl = document.createElement('span');
+    this.duoIconEl.className = 'fdr-duo-icon';
+    this.duoIconEl.innerHTML = getReviveCrossSvg();
+    this.duoNameEl = document.createElement('span');
+    this.duoNameEl.className = 'fdr-duo-name';
+    this.duoStatusPillEl = document.createElement('span');
+    this.duoStatusPillEl.className = 'fdr-duo-status';
+    this.duoDistEl = document.createElement('span');
+    this.duoDistEl.className = 'fdr-duo-dist';
+    duoHead.append(
+      this.duoIconEl,
+      this.duoNameEl,
+      this.duoStatusPillEl,
+      this.duoDistEl,
+    );
+    this.duoBarsEl = document.createElement('div');
+    this.duoBarsEl.className = 'fdr-duo-bars';
+    const duoShieldTrack = document.createElement('div');
+    duoShieldTrack.className = 'fdr-duo-track shield';
+    this.duoShieldFillEl = document.createElement('div');
+    this.duoShieldFillEl.className = 'fdr-duo-fill shield';
+    duoShieldTrack.appendChild(this.duoShieldFillEl);
+    const duoHpTrack = document.createElement('div');
+    duoHpTrack.className = 'fdr-duo-track hp';
+    this.duoHpFillEl = document.createElement('div');
+    this.duoHpFillEl.className = 'fdr-duo-fill hp';
+    duoHpTrack.appendChild(this.duoHpFillEl);
+    this.duoBarsEl.append(duoShieldTrack, duoHpTrack);
+
+    this.duoBleedWrapEl = document.createElement('div');
+    this.duoBleedWrapEl.className = 'fdr-duo-bleed-wrap fdr-hidden';
+    const duoBleedHead = document.createElement('div');
+    duoBleedHead.className = 'fdr-duo-bleed-head';
+    const duoBleedLbl = document.createElement('span');
+    duoBleedLbl.textContent = 'KNOCKED BLEED';
+    this.duoBleedTextEl = document.createElement('span');
+    this.duoBleedTextEl.textContent = '100 / 100';
+    duoBleedHead.append(duoBleedLbl, this.duoBleedTextEl);
+    const duoBleedTrack = document.createElement('div');
+    duoBleedTrack.className = 'fdr-duo-bleed-track';
+    this.duoBleedFillEl = document.createElement('div');
+    this.duoBleedFillEl.className = 'fdr-duo-bleed-fill';
+    duoBleedTrack.appendChild(this.duoBleedFillEl);
+    this.duoBleedWrapEl.append(duoBleedHead, duoBleedTrack);
+
+    this.duoStatsEl = document.createElement('div');
+    this.duoStatsEl.className = 'fdr-duo-stats';
+    this.duoCardEl.append(
+      duoHead,
+      this.duoBarsEl,
+      this.duoBleedWrapEl,
+      this.duoStatsEl,
+    );
+
     this.allyCardEl = document.createElement('div');
     this.allyCardEl.className = 'fdr-ally-card fdr-hidden';
     const allyHead = document.createElement('div');
@@ -446,13 +549,32 @@ export class HUDManager {
     this.activeAugmentsEl = document.createElement('div');
     this.activeAugmentsEl.className = 'fdr-augments-strip fdr-hidden';
 
+    this.chapterRackEl = document.createElement('div');
+    this.chapterRackEl.className = 'fdr-chapter-rack fdr-hidden';
+
+    this.hudCrownBadgeEl = document.createElement('div');
+    this.hudCrownBadgeEl.className = 'fdr-hud-crown-badge fdr-hidden';
+    const hudCrownIcon = document.createElement('span');
+    hudCrownIcon.className = 'fdr-hud-crown-icon';
+    hudCrownIcon.innerHTML = getCrownSvg();
+    const hudCrownText = document.createElement('span');
+    hudCrownText.textContent = 'VICTORY CROWN';
+    this.hudCrownBadgeEl.append(hudCrownIcon, hudCrownText);
+
+    this.medallionRackEl = document.createElement('div');
+    this.medallionRackEl.className = 'fdr-medallion-rack fdr-hidden';
+
+    this.chapterRackEl.append(this.hudCrownBadgeEl, this.medallionRackEl);
+
     topLeftStack.append(
       this.fpsBadgeEl,
       this.killStreakEl,
       this.vaultKeyBadgeEl,
       this.bountyCardEl,
+      this.duoCardEl,
       this.allyCardEl,
       this.questsPanelEl,
+      this.chapterRackEl,
       this.activeAugmentsEl,
     );
 
@@ -776,6 +898,52 @@ export class HUDManager {
     campfireLabel.textContent = '+3 HP/S CAMPFIRE';
     this.campfirePillEl.append(campfireIcon, campfireLabel);
 
+    this.dbnoBarEl = document.createElement('div');
+    this.dbnoBarEl.className = 'fdr-dbno-bar fdr-hidden';
+    const dbnoTop = document.createElement('div');
+    dbnoTop.className = 'fdr-dbno-top';
+    const dbnoLeft = document.createElement('span');
+    dbnoLeft.className = 'fdr-dbno-title';
+    const dbnoIcon = document.createElement('span');
+    dbnoIcon.className = 'fdr-dbno-icon';
+    dbnoIcon.innerHTML = getReviveCrossSvg();
+    const dbnoLabel = document.createElement('span');
+    dbnoLabel.textContent = 'KNOCKED DOWN • BLEEDING OUT';
+    dbnoLeft.append(dbnoIcon, dbnoLabel);
+    this.dbnoHpTextEl = document.createElement('span');
+    this.dbnoHpTextEl.className = 'fdr-dbno-hp';
+    this.dbnoHpTextEl.textContent = `${DBNO_MAX_HP} / ${DBNO_MAX_HP}`;
+    dbnoTop.append(dbnoLeft, this.dbnoHpTextEl);
+    const dbnoTrack = document.createElement('div');
+    dbnoTrack.className = 'fdr-dbno-track';
+    this.dbnoFillEl = document.createElement('div');
+    this.dbnoFillEl.className = 'fdr-dbno-fill';
+    dbnoTrack.appendChild(this.dbnoFillEl);
+    this.dbnoBarEl.append(dbnoTop, dbnoTrack);
+
+    this.reviveBarEl = document.createElement('div');
+    this.reviveBarEl.className = 'fdr-revive-bar fdr-hidden';
+    const revTop = document.createElement('div');
+    revTop.className = 'fdr-revive-top';
+    const revLeft = document.createElement('span');
+    revLeft.className = 'fdr-revive-title';
+    const revIcon = document.createElement('span');
+    revIcon.className = 'fdr-revive-icon';
+    revIcon.innerHTML = getReviveCrossSvg();
+    this.reviveLabelEl = document.createElement('span');
+    this.reviveLabelEl.textContent = 'REVIVING PARTNER';
+    revLeft.append(revIcon, this.reviveLabelEl);
+    this.revivePctEl = document.createElement('span');
+    this.revivePctEl.className = 'fdr-revive-pct';
+    this.revivePctEl.textContent = '0%';
+    revTop.append(revLeft, this.revivePctEl);
+    const revTrack = document.createElement('div');
+    revTrack.className = 'fdr-revive-track';
+    this.reviveFillEl = document.createElement('div');
+    this.reviveFillEl.className = 'fdr-revive-fill';
+    revTrack.appendChild(this.reviveFillEl);
+    this.reviveBarEl.append(revTop, revTrack);
+
     this.vitalsStackEl = document.createElement('div');
     this.vitalsStackEl.className = 'fdr-vitals-stack';
 
@@ -844,6 +1012,8 @@ export class HUDManager {
       this.channelEl,
       this.vehicleDashEl,
       this.campfirePillEl,
+      this.dbnoBarEl,
+      this.reviveBarEl,
       this.vitalsStackEl,
     );
 
@@ -1066,6 +1236,9 @@ export class HUDManager {
       <div class="fdr-ch-tick left"></div>
       <div class="fdr-ch-tick right"></div>
     `;
+    this.bowArcEl = document.createElement('div');
+    this.bowArcEl.className = 'fdr-bow-charge-arc fdr-hidden';
+    this.crosshairEl.appendChild(this.bowArcEl);
 
     this.scopeEl = document.createElement('div');
     this.scopeEl.className = 'fdr-sniper-scope fdr-hidden';
@@ -1286,6 +1459,28 @@ export class HUDManager {
     this.lastMinimapDraw = 0;
   }
 
+  setWorldChapterOverlay(
+    bunkers: WeaponBunkerEntity[],
+    tankers: SlurpTankerEntity[],
+    droppedMedallions?: DroppedMedallionEntity[],
+    droppedCrowns?: DroppedCrownEntity[],
+  ): void;
+  setWorldChapterOverlay(overlay: WorldChapterOverlay): void;
+  setWorldChapterOverlay(
+    bunkersOrOverlay: WeaponBunkerEntity[] | WorldChapterOverlay,
+    tankers?: SlurpTankerEntity[],
+    droppedMedallions?: DroppedMedallionEntity[],
+    droppedCrowns?: DroppedCrownEntity[],
+  ): void {
+    this.chapterOverlay = resolveChapterOverlayArgs(
+      bunkersOrOverlay,
+      tankers,
+      droppedMedallions,
+      droppedCrowns,
+    );
+    this.lastMinimapDraw = 0;
+  }
+
   setVisible(visible: boolean): void {
     this.visible = visible;
     this.containerEl.classList.toggle('fdr-hidden', !visible);
@@ -1372,6 +1567,21 @@ export class HUDManager {
     this.lastAllyKey = '';
     this.lootIslandChipEl.classList.add('fdr-hidden');
     this.lastLootIslandKey = '';
+    this.duoCardEl.classList.add('fdr-hidden');
+    this.lastDuoKey = '';
+    this.chapterRackEl.classList.add('fdr-hidden');
+    this.hudCrownBadgeEl.classList.add('fdr-hidden');
+    this.medallionRackEl.classList.add('fdr-hidden');
+    this.medallionRackEl.innerHTML = '';
+    this.lastChapterRackKey = '';
+    this.dbnoBarEl.classList.add('fdr-hidden');
+    this.lastDbnoKey = '';
+    this.reviveBarEl.classList.add('fdr-hidden');
+    this.lastReviveKey = '';
+    this.bowArcEl.classList.add('fdr-hidden');
+    this.bowArcEl.classList.remove('full');
+    this.bowArcEl.innerHTML = '';
+    this.lastBowChargeKey = '';
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
     }
@@ -1585,6 +1795,7 @@ export class HUDManager {
     this.updateWave3HUD(state);
     this.updateWave4HUD(state, now);
     this.updateWave5HUD(state);
+    this.updateWave6HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2533,6 +2744,141 @@ export class HUDManager {
     }
   }
 
+  private updateWave6HUD(state: HUDState): void {
+    // 1. Top-Left Duo Partner Card
+    const duo = !state.spectating ? state.duoPartner ?? null : null;
+    const duoBleedRaw =
+      duo && duo.knocked
+        ? Math.max(0, Math.min(DBNO_MAX_HP, Math.round(duo.bleedOutHp ?? DBNO_MAX_HP)))
+        : DBNO_MAX_HP;
+    const duoKey = duo
+      ? `${duo.name}:${duo.alive ? 1 : 0}:${duo.knocked ? 1 : 0}:${Math.round(duo.hp)}/${Math.round(duo.maxHp)}:${Math.round(duo.shield)}/${Math.round(duo.maxShield)}:${duoBleedRaw}:${Math.round(duo.distance)}`
+      : '';
+    if (duoKey !== this.lastDuoKey) {
+      this.lastDuoKey = duoKey;
+      this.duoCardEl.classList.toggle('fdr-hidden', !duo);
+      if (duo) {
+        const dist = Math.max(0, Math.round(duo.distance));
+        this.duoNameEl.textContent = duo.name.toUpperCase();
+        this.duoDistEl.textContent = `${dist}M`;
+
+        if (!duo.alive) {
+          this.duoCardEl.className = 'fdr-duo-card eliminated';
+          this.duoCardEl.dataset.duoState = 'eliminated';
+          this.duoStatusPillEl.textContent = 'ELIMINATED';
+          this.duoBarsEl.classList.remove('fdr-hidden');
+          this.duoBleedWrapEl.classList.add('fdr-hidden');
+          this.duoShieldFillEl.style.width = '0%';
+          this.duoHpFillEl.style.width = '0%';
+          this.duoStatsEl.textContent = 'SQUAD PARTNER DOWN';
+        } else if (duo.knocked) {
+          const bleedPct = Math.max(
+            0,
+            Math.min(100, (duoBleedRaw / DBNO_MAX_HP) * 100),
+          );
+          this.duoCardEl.className = 'fdr-duo-card knocked';
+          this.duoCardEl.dataset.duoState = 'knocked';
+          this.duoStatusPillEl.textContent = 'KNOCKED';
+          this.duoBarsEl.classList.add('fdr-hidden');
+          this.duoBleedWrapEl.classList.remove('fdr-hidden');
+          this.duoBleedTextEl.textContent = `${duoBleedRaw} / ${DBNO_MAX_HP}`;
+          this.duoBleedFillEl.style.width = `${bleedPct.toFixed(1)}%`;
+          this.duoStatsEl.textContent = `REVIVE NEEDED • ${dist}M`;
+        } else {
+          const hp = Math.max(0, Math.round(duo.hp));
+          const maxHp = Math.max(1, Math.round(duo.maxHp));
+          const shield = Math.max(0, Math.round(duo.shield));
+          const maxShield = Math.max(0, Math.round(duo.maxShield));
+          this.duoCardEl.className = 'fdr-duo-card alive';
+          this.duoCardEl.dataset.duoState = 'alive';
+          this.duoStatusPillEl.textContent = 'DUO';
+          this.duoBarsEl.classList.remove('fdr-hidden');
+          this.duoBleedWrapEl.classList.add('fdr-hidden');
+          this.duoShieldFillEl.style.width =
+            maxShield > 0
+              ? `${Math.min(100, (shield / maxShield) * 100).toFixed(1)}%`
+              : '0%';
+          this.duoHpFillEl.style.width = `${Math.min(100, (hp / maxHp) * 100).toFixed(1)}%`;
+          this.duoStatsEl.textContent = `HP ${hp}/${maxHp} • SHD ${shield}/${maxShield}`;
+        }
+      }
+    }
+
+    // 2. Victory Crown Badge + Golden Medallion Rack (top-left under Squad/Quests)
+    const hasCrown = !state.spectating && Boolean(state.hasVictoryCrown);
+    const medallions =
+      !state.spectating && Array.isArray(state.medallions)
+        ? state.medallions.slice(0, 3)
+        : [];
+    const rackKey = `${hasCrown ? 1 : 0}:${medallions.join('|')}`;
+    if (rackKey !== this.lastChapterRackKey) {
+      this.lastChapterRackKey = rackKey;
+      const showRack = hasCrown || medallions.length > 0;
+      this.chapterRackEl.classList.toggle('fdr-hidden', !showRack);
+      this.hudCrownBadgeEl.classList.toggle('fdr-hidden', !hasCrown);
+      this.hudCrownBadgeEl.dataset.hasCrown = hasCrown ? 'true' : 'false';
+      this.medallionRackEl.classList.toggle('fdr-hidden', medallions.length === 0);
+      this.medallionRackEl.innerHTML = '';
+      for (const mId of medallions) {
+        const meta = getMedallionMeta(mId);
+        const chip = document.createElement('div');
+        chip.className = 'fdr-medallion-chip';
+        chip.dataset.medallionId = meta.id;
+        chip.style.borderColor = meta.accentColor;
+
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'fdr-medallion-icon';
+        iconSpan.innerHTML = getMedallionSvg(meta.id);
+
+        const lblSpan = document.createElement('span');
+        lblSpan.className = 'fdr-medallion-label';
+        lblSpan.textContent = meta.shortLabel.replace(/\s*CREST$/i, '');
+
+        chip.append(iconSpan, lblSpan);
+        this.medallionRackEl.appendChild(chip);
+      }
+    }
+
+    // 3. DBNO Self Bleed-out Bar (inside .fdr-bottom-center)
+    const isKnocked = !state.spectating && Boolean(state.isKnocked);
+    const bleedHp = isKnocked
+      ? Math.max(0, Math.min(DBNO_MAX_HP, Math.round(state.bleedOutHp ?? DBNO_MAX_HP)))
+      : -1;
+    const dbnoKey = isKnocked ? String(bleedHp) : '';
+    if (dbnoKey !== this.lastDbnoKey) {
+      this.lastDbnoKey = dbnoKey;
+      this.dbnoBarEl.classList.toggle('fdr-hidden', !isKnocked);
+      if (isKnocked) {
+        const pct = Math.max(0, Math.min(100, (bleedHp / DBNO_MAX_HP) * 100));
+        this.dbnoHpTextEl.textContent = `${bleedHp} / ${DBNO_MAX_HP}`;
+        this.dbnoFillEl.style.width = `${pct.toFixed(1)}%`;
+      }
+    }
+
+    // 4. Partner Revive Progress Bar (inside .fdr-bottom-center)
+    const hasReviveProg =
+      !state.spectating &&
+      typeof state.reviveProgress === 'number' &&
+      Number.isFinite(state.reviveProgress) &&
+      (state.reviveProgress > 0 || Boolean(state.reviveLabel));
+    const revPct = hasReviveProg
+      ? Math.max(0, Math.min(100, Math.round((state.reviveProgress ?? 0) * 100)))
+      : -1;
+    const revLbl = hasReviveProg
+      ? (state.reviveLabel?.trim().toUpperCase() || 'REVIVING PARTNER')
+      : '';
+    const revKey = hasReviveProg ? `${revLbl}:${revPct}` : '';
+    if (revKey !== this.lastReviveKey) {
+      this.lastReviveKey = revKey;
+      this.reviveBarEl.classList.toggle('fdr-hidden', !hasReviveProg);
+      if (hasReviveProg) {
+        this.reviveLabelEl.textContent = revLbl;
+        this.revivePctEl.textContent = `${revPct}%`;
+        this.reviveFillEl.style.width = `${revPct}%`;
+      }
+    }
+  }
+
   private updateCenterCombat(state: HUDState, now: number): void {
     if (this.lastScoped !== state.isScoped) {
       this.lastScoped = state.isScoped;
@@ -2562,6 +2908,37 @@ export class HUDManager {
     if (rawGap !== this.lastSpreadGap) {
       this.lastSpreadGap = rawGap;
       this.crosshairEl.style.setProperty('--ch-gap', `${rawGap}px`);
+    }
+
+    // Boom Bow Draw Arc around Crosshair
+    const bowChargeRaw =
+      !hideCrosshair &&
+      !state.isBuildMode &&
+      typeof state.bowCharge === 'number' &&
+      Number.isFinite(state.bowCharge) &&
+      state.bowCharge > 0
+        ? Math.max(0, Math.min(1, state.bowCharge))
+        : null;
+    const bowChargePct =
+      bowChargeRaw !== null ? Math.round(bowChargeRaw * 100) : -1;
+    const bowKey = bowChargePct >= 0 ? String(bowChargePct) : '';
+    if (bowKey !== this.lastBowChargeKey) {
+      this.lastBowChargeKey = bowKey;
+      this.bowArcEl.classList.toggle('fdr-hidden', bowChargeRaw === null);
+      if (bowChargeRaw !== null) {
+        const isFull = bowChargeRaw >= 0.95;
+        this.bowArcEl.classList.toggle('full', isFull);
+        this.bowArcEl.dataset.bowCharge = bowChargeRaw.toFixed(2);
+        this.bowArcEl.style.setProperty('--bow-charge', bowChargeRaw.toFixed(3));
+        const circ = 138.23;
+        const offset = circ * (1 - bowChargeRaw);
+        const arcColor = isFull ? '#ffd000' : '#fb923c';
+        this.bowArcEl.innerHTML = `<svg class="fdr-bow-arc-svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="22" fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="3"/><circle cx="32" cy="32" r="22" fill="none" stroke="${arcColor}" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="${circ.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}" transform="rotate(-90 32 32)"/></svg>`;
+      } else {
+        this.bowArcEl.classList.remove('full');
+        this.bowArcEl.dataset.bowCharge = '0';
+        this.bowArcEl.innerHTML = '';
+      }
     }
 
     if (
@@ -2760,6 +3137,17 @@ export class HUDManager {
         ctx.fill();
       }
     }
+
+    // Wave-6 Chapter Overlay (Medallion Threat Circles, Bunkers, Slurp Tankers, Dropped Medallions & Crowns)
+    drawChapterMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      this.chapterOverlay,
+      state.medallionCircles,
+      performance.now(),
+    );
 
     // Map waypoint + dashed line
     if (state.mapWaypoint) {

@@ -6,6 +6,7 @@ import {
   DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   GAME_MODES,
+  MEDALLIONS,
   RARITY_COLORS,
   WORLD_HALF,
   WORLD_SIZE,
@@ -17,15 +18,21 @@ import type {
   ContrailDef,
   CrosshairColor,
   CrosshairStyle,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   GameModeId,
   GameSettings,
   HUDState,
   KeybindMap,
   MatchQuest,
+  MedallionDef,
+  MedallionId,
   Rarity,
+  SlurpTankerEntity,
   StormState,
   VehicleKind,
   VisualSoundCue,
+  WeaponBunkerEntity,
   WeatherKind,
 } from '../types';
 
@@ -561,6 +568,17 @@ export function getContextualHudHints(
 }
 
 /**
+ * Sanitizes a raw game mode string into a valid GameModeId ('solo' fallback).
+ */
+export function sanitizeGameMode(mode: unknown): GameModeId {
+  if (typeof mode === 'string') {
+    const matched = GAME_MODES.find((m) => m.id === mode);
+    if (matched) return matched.id;
+  }
+  return 'solo';
+}
+
+/**
  * Returns GAME_MODES metadata entry for a GameModeId (defaulting to 'solo').
  */
 export function getGameModeMeta(modeId?: GameModeId): {
@@ -569,16 +587,18 @@ export function getGameModeMeta(modeId?: GameModeId): {
   subtitle: string;
   badge: string;
 } {
-  return GAME_MODES.find((m) => m.id === modeId) ?? GAME_MODES[0];
+  const safeId = sanitizeGameMode(modeId);
+  return GAME_MODES.find((m) => m.id === safeId) ?? GAME_MODES[0];
 }
 
 /**
- * Returns HUD mode chip text ('ZERO BUILD' | 'BLITZ'), or '' for default 'solo'.
+ * Returns HUD mode chip text ('ZERO BUILD' | 'BLITZ' | 'DUOS'), or '' for default 'solo'.
  */
 export function formatModeBadgeLabel(modeId?: GameModeId): string {
   if (!modeId || modeId === 'solo') return '';
   if (modeId === 'zero_build') return 'ZERO BUILD';
   if (modeId === 'blitz') return 'BLITZ';
+  if (modeId === 'duos') return 'DUOS';
   return String(modeId).toUpperCase();
 }
 
@@ -657,6 +677,13 @@ export function getAugmentMeta(id: AugmentId | string): AugmentDef {
 }
 
 /**
+ * Resolves MedallionDef metadata for a MedallionId (falls back to first medallion).
+ */
+export function getMedallionMeta(id: MedallionId | string): MedallionDef {
+  return MEDALLIONS.find((m) => m.id === id) ?? MEDALLIONS[0];
+}
+
+/**
  * Resolves ContrailDef metadata for a contrail id (falls back to default contrail).
  */
 export function getContrailMeta(id?: string): ContrailDef {
@@ -696,4 +723,254 @@ export function formatTacticalPingLabel(ping: {
     text: cleaned || fallback,
     distanceText: `${safeDist}M`,
   };
+}
+
+export interface WorldChapterOverlay {
+  bunkers?: WeaponBunkerEntity[];
+  tankers?: SlurpTankerEntity[];
+  droppedMedallions?: DroppedMedallionEntity[];
+  droppedCrowns?: DroppedCrownEntity[];
+}
+
+export interface ResolvedChapterOverlay {
+  bunkers: WeaponBunkerEntity[];
+  tankers: SlurpTankerEntity[];
+  droppedMedallions: DroppedMedallionEntity[];
+  droppedCrowns: DroppedCrownEntity[];
+}
+
+export function resolveChapterOverlayArgs(
+  bunkersOrOverlay: WeaponBunkerEntity[] | WorldChapterOverlay,
+  tankers: SlurpTankerEntity[] = [],
+  droppedMedallions: DroppedMedallionEntity[] = [],
+  droppedCrowns: DroppedCrownEntity[] = [],
+): ResolvedChapterOverlay {
+  if (Array.isArray(bunkersOrOverlay)) {
+    return {
+      bunkers: bunkersOrOverlay,
+      tankers: Array.isArray(tankers) ? tankers : [],
+      droppedMedallions: Array.isArray(droppedMedallions) ? droppedMedallions : [],
+      droppedCrowns: Array.isArray(droppedCrowns) ? droppedCrowns : [],
+    };
+  }
+  const ov = bunkersOrOverlay ?? {};
+  return {
+    bunkers: Array.isArray(ov.bunkers) ? ov.bunkers : [],
+    tankers: Array.isArray(ov.tankers) ? ov.tankers : [],
+    droppedMedallions: Array.isArray(ov.droppedMedallions) ? ov.droppedMedallions : [],
+    droppedCrowns: Array.isArray(ov.droppedCrowns) ? ov.droppedCrowns : [],
+  };
+}
+
+/**
+ * Draws Wave-6 Chapter overlay items (Medallion Threat Circles, Weapon Bunkers,
+ * Slurp Tankers, Dropped Medallions & Crowns) without fillText or ellipse.
+ */
+export function drawChapterMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  overlay: ResolvedChapterOverlay,
+  medallionCircles: HUDState['medallionCircles'],
+  nowMs: number,
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.005);
+
+  // 1. Pulsing golden Medallion Threat Circles
+  if (Array.isArray(medallionCircles) && medallionCircles.length > 0) {
+    for (const circle of medallionCircles) {
+      const cp = toPx(circle.x, circle.z);
+      const baseRad = Math.max(8, circle.radius * pxPerMeter);
+      if (
+        cp.x + baseRad < -16 ||
+        cp.x - baseRad > size + 16 ||
+        cp.y + baseRad < -16 ||
+        cp.y - baseRad > size + 16
+      ) {
+        continue;
+      }
+      const pulseRad = baseRad * (0.95 + pulse * 0.08);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cp.x, cp.y, baseRad, 0, Math.PI * 2);
+      ctx.fillStyle = circle.isPlayer
+        ? `rgba(254, 240, 138, ${(0.1 + pulse * 0.08).toFixed(2)})`
+        : `rgba(255, 208, 0, ${(0.12 + pulse * 0.1).toFixed(2)})`;
+      ctx.fill();
+      ctx.strokeStyle = circle.isPlayer ? '#fef08a' : '#ffd000';
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+
+      ctx.setLineDash?.([6, 4]);
+      ctx.beginPath();
+      ctx.arc(cp.x, cp.y, pulseRad + 3, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255, 215, 0, ${(0.55 + pulse * 0.35).toFixed(2)})`;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.setLineDash?.([]);
+
+      const pipCount = Math.max(1, Math.min(3, Math.round(circle.count || 1)));
+      for (let i = 0; i < pipCount; i++) {
+        const angle = -Math.PI / 2 + (i - (pipCount - 1) / 2) * 0.32;
+        const px = cp.x + Math.cos(angle) * baseRad;
+        const py = cp.y + Math.sin(angle) * baseRad;
+        ctx.beginPath();
+        ctx.arc(px, py, 2.6, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd000';
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  // 2. Weapon Bunkers (amber locked / green unlocked / muted looted)
+  for (const bunker of overlay.bunkers) {
+    const bp = toPx(bunker.x, bunker.z);
+    if (bp.x < -14 || bp.x > size + 14 || bp.y < -14 || bp.y > size + 14) {
+      continue;
+    }
+    const isGreen = bunker.unlocked && !bunker.looted;
+    const isLooted = bunker.looted;
+    const accent = isLooted ? '#64748b' : isGreen ? '#34eb5e' : '#f59e0b';
+    const bg = isLooted
+      ? 'rgba(15, 23, 42, 0.78)'
+      : isGreen
+        ? 'rgba(20, 83, 45, 0.92)'
+        : 'rgba(120, 53, 15, 0.92)';
+
+    ctx.save();
+    ctx.translate(bp.x, bp.y);
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.6, 0, Math.PI * 2);
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(-4.8, 3.8);
+    ctx.lineTo(-3.2, -3.4);
+    ctx.lineTo(3.2, -3.4);
+    ctx.lineTo(4.8, 3.8);
+    ctx.closePath();
+    ctx.fillStyle = '#334155';
+    ctx.fill();
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+
+    ctx.fillStyle = accent;
+    ctx.fillRect(-2.6, -1.0, 5.2, 4.4);
+    ctx.beginPath();
+    ctx.arc(0, -4.6, 1.8, 0, Math.PI * 2);
+    ctx.fillStyle = accent;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 3. Intact Slurp Tankers (cyan/mint pressurized cylinder)
+  for (const tanker of overlay.tankers) {
+    if (tanker.destroyed) continue;
+    const tp = toPx(tanker.x, tanker.z);
+    if (tp.x < -14 || tp.x > size + 14 || tp.y < -14 || tp.y > size + 14) {
+      continue;
+    }
+    ctx.save();
+    ctx.translate(tp.x, tp.y);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(8, 36, 56, 0.92)';
+    ctx.fill();
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    ctx.fillStyle = '#06b6d4';
+    ctx.fillRect(-4.6, -2.6, 7.6, 5.2);
+    ctx.beginPath();
+    ctx.arc(-4.6, 0, 2.6, Math.PI * 0.5, Math.PI * 1.5);
+    ctx.arc(3.0, 0, 2.6, -Math.PI * 0.5, Math.PI * 0.5);
+    ctx.fill();
+    ctx.fillStyle = '#a7f3d0';
+    ctx.fillRect(-3.5, -1.1, 5.4, 1.8);
+    ctx.fillStyle = '#38bdf8';
+    ctx.fillRect(3.2, -1.8, 2.4, 3.6);
+    ctx.restore();
+  }
+
+  // 4. Dropped Medallions
+  for (const med of overlay.droppedMedallions) {
+    if (med.collected) continue;
+    const mp = toPx(med.x, med.z);
+    if (mp.x < -14 || mp.x > size + 14 || mp.y < -14 || mp.y > size + 14) {
+      continue;
+    }
+    const meta = getMedallionMeta(med.medallionId);
+    ctx.save();
+    ctx.translate(mp.x, mp.y);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.5 + pulse * 1.5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 208, 0, 0.68)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 5.8, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffd000';
+    ctx.fill();
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = meta.accentColor;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 5. Dropped Victory Crowns
+  for (const crown of overlay.droppedCrowns) {
+    if (crown.collected) continue;
+    const cp = toPx(crown.x, crown.z);
+    if (cp.x < -14 || cp.x > size + 14 || cp.y < -14 || cp.y > size + 14) {
+      continue;
+    }
+    ctx.save();
+    ctx.translate(cp.x, cp.y);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 8.2 + pulse * 1.6, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(254, 240, 138, 0.78)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 6.4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(120, 53, 15, 0.92)';
+    ctx.fill();
+    ctx.strokeStyle = '#ffd000';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(-4.4, 3.2);
+    ctx.lineTo(-4.8, -2.8);
+    ctx.lineTo(-2.0, 0.2);
+    ctx.lineTo(0, -4.0);
+    ctx.lineTo(2.0, 0.2);
+    ctx.lineTo(4.8, -2.8);
+    ctx.lineTo(4.4, 3.2);
+    ctx.closePath();
+    ctx.fillStyle = '#ffd000';
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 1.0;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
 }

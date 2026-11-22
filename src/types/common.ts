@@ -21,7 +21,18 @@ export type GamePhase =
 
 export type Difficulty = 'casual' | 'standard' | 'sweaty';
 
-export type GameModeId = 'solo' | 'zero_build' | 'blitz';
+export type GameModeId = 'solo' | 'zero_build' | 'blitz' | 'duos';
+
+export type MedallionId = 'medallion_siphon' | 'medallion_agility' | 'medallion_combat';
+
+export interface MedallionDef {
+  id: MedallionId;
+  name: string;
+  shortLabel: string;
+  bossPoiId: string;
+  description: string;
+  accentColor: string;
+}
 
 export type AugmentId =
   | 'parkour_boost'

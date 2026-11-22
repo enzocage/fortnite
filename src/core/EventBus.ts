@@ -145,6 +145,21 @@ export interface GameEventMap {
   'vfx:loot_island_rift': {
     position: Vec3Like;
   };
+  'vfx:bow_explosion': {
+    position: Vec3Like;
+    radius: number;
+  };
+  'vfx:slurp_tanker_burst': {
+    position: Vec3Like;
+    radius: number;
+  };
+  'vfx:crown_glint': {
+    position: Vec3Like;
+  };
+  'vfx:revive_beam': {
+    position: Vec3Like;
+    progress: number;
+  };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

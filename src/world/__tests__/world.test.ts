@@ -1105,7 +1105,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(barrels).toHaveLength(24);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
     expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
 
     for (const sb of barrels) {
       expect(sb.hp).toBe(40);
@@ -1151,7 +1151,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(sb0.destroyed).toBe(true);
     expect(sbGroup.visible).toBe(false);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6);
     expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
     expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1177,7 +1177,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     ).toBe(true);
     expect(sbGroup.visible).toBe(true);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
 
     interactables.dispose();
     builder.dispose();
@@ -1635,7 +1635,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     const expBarrels = interactables.getExplosiveBarrels();
     expect(expBarrels).toHaveLength(18);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
 
     for (const eb of expBarrels) {
       expect(eb.hp).toBe(35);
@@ -1707,7 +1707,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     expect(eb0.exploded).toBe(true);
     expect(ebGroup.visible).toBe(false);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(17);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6);
     expect(interactables.damageExplosiveBarrel(eb0.id, 10)).toBeNull();
     expect(interactables.damageExplosiveBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1746,7 +1746,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     ).toBe(true);
     expect(ebGroup.visible).toBe(true);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
 
     vehicles.dispose();
     interactables.dispose();
@@ -1973,7 +1973,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandCols[0].maxY).toBeCloseTo(groundY + 24, 4);
     expect(islandCols[0].minZ).toBeCloseTo(cz - 12.5, 4);
     expect(islandCols[0].maxZ).toBeCloseTo(cz + 12.5, 4);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 1);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 1);
 
     // 10s capture duration
     const islandFlagGroup = islandMesh.children[islandMesh.children.length - 1] as THREE.Group;
@@ -2017,7 +2017,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandMesh.visible).toBe(false);
     expect(geyserMesh.visible).toBe(false);
     expect(interactables.getLootIslandColliders()).toHaveLength(0);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
 
     vehicles.dispose();
     interactables.dispose();
@@ -2076,5 +2076,444 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     pal.dispose();
     builder.dispose();
     terrain.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-6 Weapon Bunkers, Slurp Tankers, Dropped Medallions/Crowns & Showcase', () => {
+  it('constructs 8 Weapon Bunkers near POI flanks and 6 Slurp Tanker trucks along roads clear of water/buildings/props with full lifecycle', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const soundSpy = vi.fn();
+    const tankerVfxSpy = vi.fn();
+    bus.on('sound:play', soundSpy);
+    bus.on('vfx:slurp_tanker_burst', tankerVfxSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 1.2) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 3.2 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    const isClearOfProps = (x: number, z: number, pad = 1.4) =>
+      !pal.getProps().some((p) => Math.hypot(x - p.x, z - p.z) < p.radius + pad);
+
+    // 1. 8 Weapon Bunkers near POI flanks
+    const bunkers = interactables.getWeaponBunkers();
+    expect(bunkers).toHaveLength(8);
+    expect(interactables.getWeaponBunkerColliders()).toHaveLength(40); // 8 * (4 walls/roof + 1 door)
+    expect(new Set(bunkers.map((b) => b.poiId)).size).toBe(8);
+
+    for (const b of bunkers) {
+      expect(b.unlockAtStormPhase).toBe(2);
+      expect(b.unlocked).toBe(false);
+      expect(b.looted).toBe(false);
+      expect(terrain.isWater(b.x, b.z)).toBe(false);
+      expect(b.y).toBeCloseTo(terrain.getHeightAt(b.x, b.z), 4);
+      expect(terrain.getNormalAt(b.x, b.z).y).toBeGreaterThan(0.92);
+      expect(isClearOfBuildings(b.x, b.y, b.z, 1.4)).toBe(true);
+      expect(isClearOfProps(b.x, b.z, 1.4)).toBe(true);
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(b.x - veh.x, b.z - veh.z)).toBeGreaterThan(3.5);
+      }
+      for (const v of interactables.getVaults()) {
+        expect(Math.hypot(b.x - v.x, b.z - v.z)).toBeGreaterThan(4.5);
+      }
+      for (const p of interactables.getLaunchPads()) {
+        expect(Math.hypot(b.x - p.x, b.z - p.z)).toBeGreaterThan(4.0);
+      }
+      for (const cp of interactables.getCapturePoints()) {
+        expect(Math.hypot(b.x - cp.x, b.z - cp.z)).toBeGreaterThan(4.0);
+      }
+      for (const vm of interactables.getVendingMachines()) {
+        expect(Math.hypot(b.x - vm.x, b.z - vm.z)).toBeGreaterThan(4.0);
+      }
+      for (const r of interactables.getRifts()) {
+        expect(Math.hypot(b.x - r.x, b.z - r.z)).toBeGreaterThan(4.0);
+      }
+
+      const bGroup = interactables.getGroup().getObjectByName(`WeaponBunker_${b.id}`) as THREE.Group;
+      expect(bGroup).toBeDefined();
+      const door = bGroup.getObjectByName(`WeaponBunkerDoor_${b.id}`) as THREE.Group;
+      const cache = bGroup.getObjectByName(`WeaponBunkerCache_${b.id}`) as THREE.Group;
+      expect(door).toBeDefined();
+      expect(cache).toBeDefined();
+      expect(cache.visible).toBe(true);
+    }
+
+    const b0 = bunkers[0];
+    const b0Group = interactables.getGroup().getObjectByName(`WeaponBunker_${b0.id}`) as THREE.Group;
+    const b0Door = b0Group.getObjectByName(`WeaponBunkerDoor_${b0.id}`) as THREE.Group;
+    const b0Cache = b0Group.getObjectByName(`WeaponBunkerCache_${b0.id}`) as THREE.Group;
+    const b0ClosedY = b0Door.position.y;
+    const b0BeaconOrb = b0Group.children.find(
+      (ch) =>
+        ch instanceof THREE.Mesh &&
+        (ch.material as THREE.MeshStandardMaterial).color?.getHexString() === 'f59e0b',
+    ) as THREE.Mesh;
+    expect(b0BeaconOrb).toBeDefined();
+
+    // Locked in Storm Phase 1
+    expect(interactables.unlockBunkersForPhase(1)).toHaveLength(0);
+    expect(b0.unlocked).toBe(false);
+    expect(interactables.lootWeaponBunker(b0.id)).toBeNull();
+    expect(soundSpy).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'bunker_unlock' }));
+
+    // Unlocks at Storm Phase 2 -> opens blast door, flips beacon green, emits sound
+    const unlockedList = interactables.unlockBunkersForPhase(2);
+    expect(unlockedList).toHaveLength(8);
+    expect(bunkers.every((b) => b.unlocked)).toBe(true);
+    expect(interactables.getWeaponBunkerColliders()).toHaveLength(32); // 8 * 4 walls/roof (doors open)
+    expect((b0BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString()).toBe('22c55e');
+    expect(b0Door.position.y).toBeGreaterThan(b0ClosedY);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'bunker_unlock' }));
+
+    // Animate blast door fully open
+    for (let i = 0; i < 30; i++) {
+      interactables.update(0.05, i * 0.05);
+    }
+    expect(b0Door.position.y).toBeGreaterThan(b0ClosedY + 2.5);
+
+    // Subsequent phase call does not re-unlock or double-emit
+    soundSpy.mockClear();
+    expect(interactables.unlockBunkersForPhase(3)).toHaveLength(0);
+    expect(soundSpy).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'bunker_unlock' }));
+
+    // Looting Weapon Bunker returns valid payload & hides cache
+    const lootRes = interactables.lootWeaponBunker(b0.id);
+    expect(lootRes).not.toBeNull();
+    expect(['combat_smg', 'boom_bow', 'tactical_dmr']).toContain(lootRes!.weaponId);
+    expect(['epic', 'legendary']).toContain(lootRes!.rarity);
+    expect(lootRes!.gold).toBeGreaterThan(0);
+    expect(lootRes!.shieldRestore).toBeGreaterThan(0);
+    expect(b0.looted).toBe(true);
+    expect(b0Cache.visible).toBe(false);
+    expect(interactables.lootWeaponBunker(b0.id)).toBeNull();
+
+    // 2. 6 Slurp Tanker Trucks along roads
+    const tankers = interactables.getSlurpTankers();
+    expect(tankers).toHaveLength(6);
+    expect(interactables.getSlurpTankerColliders()).toHaveLength(6);
+
+    for (const t of tankers) {
+      expect(t.hp).toBe(220);
+      expect(t.maxHp).toBe(220);
+      expect(t.healRadius).toBe(10);
+      expect(t.healAmount).toBe(60);
+      expect(t.destroyed).toBe(false);
+      expect(terrain.isWater(t.x, t.z)).toBe(false);
+      expect(t.y).toBeCloseTo(terrain.getHeightAt(t.x, t.z), 4);
+      expect(terrain.getNormalAt(t.x, t.z).y).toBeGreaterThan(0.85);
+      expect(isClearOfBuildings(t.x, t.y, t.z, 1.2)).toBe(true);
+      expect(isClearOfProps(t.x, t.z, 1.2)).toBe(true);
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(t.x - veh.x, t.z - veh.z)).toBeGreaterThan(4.0);
+      }
+
+      const tGroup = interactables.getGroup().getObjectByName(`SlurpTanker_${t.id}`) as THREE.Group;
+      const intact = tGroup.getObjectByName(`SlurpTankerIntact_${t.id}`) as THREE.Group;
+      const ruptured = tGroup.getObjectByName(`SlurpTankerRuptured_${t.id}`) as THREE.Group;
+      expect(intact.visible).toBe(true);
+      expect(ruptured.visible).toBe(false);
+    }
+
+    const t0 = tankers[0];
+    const t0Group = interactables.getGroup().getObjectByName(`SlurpTanker_${t0.id}`) as THREE.Group;
+    const t0Intact = t0Group.getObjectByName(`SlurpTankerIntact_${t0.id}`) as THREE.Group;
+    const t0Ruptured = t0Group.getObjectByName(`SlurpTankerRuptured_${t0.id}`) as THREE.Group;
+
+    // Non-lethal damage
+    const chipRes = interactables.damageSlurpTanker(t0.id, 80);
+    expect(chipRes).toEqual({
+      exploded: false,
+      x: t0.x,
+      y: t0.y,
+      z: t0.z,
+      radius: 10,
+      healAmount: 0,
+    });
+    expect(t0.hp).toBe(140);
+    expect(t0.destroyed).toBe(false);
+    expect(t0Intact.visible).toBe(true);
+    expect(t0Ruptured.visible).toBe(false);
+    interactables.update(0.05, 2.0);
+
+    // Lethal damage ruptures tank, swaps visuals, emits VFX + SFX, removes collider
+    const burstRes = interactables.damageSlurpTanker(t0.id, 150);
+    expect(burstRes).toEqual({
+      exploded: true,
+      x: t0.x,
+      y: t0.y,
+      z: t0.z,
+      radius: 10,
+      healAmount: 60,
+    });
+    expect(t0.hp).toBe(0);
+    expect(t0.destroyed).toBe(true);
+    expect(t0Intact.visible).toBe(false);
+    expect(t0Ruptured.visible).toBe(true);
+    expect(interactables.getSlurpTankerColliders()).toHaveLength(5);
+    expect(tankerVfxSpy).toHaveBeenCalledWith({
+      position: { x: t0.x, y: t0.y + 1.5, z: t0.z },
+      radius: 10,
+    });
+    expect(soundSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'slurp_tanker_burst' }),
+    );
+    expect(interactables.damageSlurpTanker(t0.id, 10)).toBeNull();
+    expect(interactables.damageSlurpTanker('nonexistent_tanker', 10)).toBeNull();
+
+    // 3. Reset restores all bunkers and tankers
+    interactables.reset();
+    expect(interactables.getWeaponBunkers()).toHaveLength(8);
+    expect(
+      interactables.getWeaponBunkers().every((b) => !b.unlocked && !b.looted),
+    ).toBe(true);
+    expect((b0BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString()).toBe('f59e0b');
+    expect(b0Door.position.y).toBeCloseTo(b0ClosedY, 4);
+    expect(b0Cache.visible).toBe(true);
+    expect(interactables.getWeaponBunkerColliders()).toHaveLength(40);
+
+    expect(interactables.getSlurpTankers()).toHaveLength(6);
+    expect(
+      interactables.getSlurpTankers().every((t) => t.hp === 220 && !t.destroyed),
+    ).toBe(true);
+    expect(t0Intact.visible).toBe(true);
+    expect(t0Ruptured.visible).toBe(false);
+    expect(interactables.getSlurpTankerColliders()).toHaveLength(6);
+
+    vehicles.dispose();
+    interactables.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('spawns and collects dynamic DroppedMedallions & DroppedCrowns, supports qaPlaceWave6Showcase, and clears on reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    expect(interactables.getDroppedMedallions()).toHaveLength(0);
+    expect(interactables.getDroppedCrowns()).toHaveLength(0);
+
+    // Spawn Dropped Medallions & verify 3D spinning golden mesh + light pillar
+    const m1 = interactables.spawnDroppedMedallion('medallion_siphon', 10, 12, 10);
+    const m2 = interactables.spawnDroppedMedallion('medallion_agility', 24, 12, 24);
+    expect(interactables.getDroppedMedallions()).toHaveLength(2);
+    expect(m1.collected).toBe(false);
+
+    const m1Group = interactables.getGroup().getObjectByName(`DroppedMedallion_${m1.id}`) as THREE.Group;
+    expect(m1Group).toBeDefined();
+    expect(m1Group.visible).toBe(true);
+    const m1Spin = m1Group.children.find((ch) => ch instanceof THREE.Group) as THREE.Group;
+    expect(m1Spin).toBeDefined();
+    const rotBefore = m1Spin.rotation.y;
+    interactables.update(0.25, 1.0);
+    expect(m1Spin.rotation.y).toBeGreaterThan(rotBefore);
+
+    // Out of range returns null; in range collects closest
+    expect(interactables.collectNearbyMedallion(0, 0, 2.5)).toBeNull();
+    const pickedM = interactables.collectNearbyMedallion(11, 10.5, 2.5);
+    expect(pickedM?.id).toBe(m1.id);
+    expect(pickedM?.medallionId).toBe('medallion_siphon');
+    expect(pickedM?.collected).toBe(true);
+    expect(m1Group.visible).toBe(false);
+    expect(interactables.collectNearbyMedallion(11, 10.5, 2.5)).toBeNull();
+    expect(m2.collected).toBe(false);
+
+    // Spawn Dropped Crown & verify 3D spinning golden mesh + light pillar
+    const c1 = interactables.spawnDroppedCrown(-15, 12, -15);
+    expect(interactables.getDroppedCrowns()).toHaveLength(1);
+    expect(c1.collected).toBe(false);
+
+    const c1Group = interactables.getGroup().getObjectByName(`DroppedCrown_${c1.id}`) as THREE.Group;
+    expect(c1Group).toBeDefined();
+    expect(c1Group.visible).toBe(true);
+    const c1Spin = c1Group.children.find((ch) => ch instanceof THREE.Group) as THREE.Group;
+    const crownRotBefore = c1Spin.rotation.y;
+    interactables.update(0.25, 1.25);
+    expect(c1Spin.rotation.y).toBeGreaterThan(crownRotBefore);
+
+    expect(interactables.collectNearbyCrown(0, 0, 2.5)).toBeNull();
+    const pickedC = interactables.collectNearbyCrown(-14.2, -15, 2.5);
+    expect(pickedC?.id).toBe(c1.id);
+    expect(pickedC?.collected).toBe(true);
+    expect(c1Group.visible).toBe(false);
+    expect(interactables.collectNearbyCrown(-14.2, -15, 2.5)).toBeNull();
+
+    // qaPlaceWave6Showcase places unlocked bunker, intact tanker, medallion, and crown grounded near centerPos
+    const center = { x: -75, y: terrain.getHeightAt(-75, -40), z: -40 };
+    const showcase = interactables.qaPlaceWave6Showcase(center);
+    expect(showcase.bunker.unlocked).toBe(true);
+    expect(showcase.bunker.looted).toBe(false);
+    expect(showcase.bunker.y).toBeCloseTo(terrain.getHeightAt(showcase.bunker.x, showcase.bunker.z), 4);
+    expect(terrain.isWater(showcase.bunker.x, showcase.bunker.z)).toBe(false);
+    expect(Math.hypot(showcase.bunker.x - center.x, showcase.bunker.z - center.z)).toBeLessThan(15);
+
+    expect(showcase.tanker.hp).toBe(220);
+    expect(showcase.tanker.destroyed).toBe(false);
+    expect(showcase.tanker.y).toBeCloseTo(terrain.getHeightAt(showcase.tanker.x, showcase.tanker.z), 4);
+    expect(terrain.isWater(showcase.tanker.x, showcase.tanker.z)).toBe(false);
+
+    expect(showcase.medallion.collected).toBe(false);
+    expect(showcase.medallion.y).toBeCloseTo(terrain.getHeightAt(showcase.medallion.x, showcase.medallion.z), 4);
+    expect(showcase.crown.collected).toBe(false);
+    expect(showcase.crown.y).toBeCloseTo(terrain.getHeightAt(showcase.crown.x, showcase.crown.z), 4);
+
+    // Calling qaPlaceWave6Showcase again replaces showcase bunker/tanker cleanly without leaking duplicates
+    interactables.qaPlaceWave6Showcase(center);
+    expect(interactables.getWeaponBunkers()).toHaveLength(9);
+    expect(interactables.getSlurpTankers()).toHaveLength(7);
+
+    // reset() clears dynamic medallions/crowns and removes QA showcase entities
+    interactables.reset();
+    expect(interactables.getDroppedMedallions()).toHaveLength(0);
+    expect(interactables.getDroppedCrowns()).toHaveLength(0);
+    expect(interactables.getWeaponBunkers()).toHaveLength(8);
+    expect(interactables.getSlurpTankers()).toHaveLength(6);
+
+    interactables.dispose();
+    terrain.dispose();
+  });
+
+  it('spawns combat_smg and boom_bow across PropsAndLoot floor, chest, and supply-drop pools', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 280; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('combat_smg')).toBe(true);
+    expect(floorIds.has('boom_bow')).toBe(true);
+    expect(chestIds.has('combat_smg')).toBe(true);
+    expect(chestIds.has('boom_bow')).toBe(true);
+
+    const supplyIds = new Set<string>();
+    for (let i = 0; i < 65; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    for (const drop of pal.getLootDrops()) {
+      if (drop.item) {
+        expect(WEAPONS[drop.item.weaponId].allowedRarities).toContain(drop.item.rarity);
+        supplyIds.add(drop.item.weaponId);
+      }
+    }
+    expect(supplyIds.has('combat_smg')).toBe(true);
+    expect(supplyIds.has('boom_bow')).toBe(true);
+
+    const bowDrop = pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'bow_test', weaponId: 'boom_bow', rarity: 'legendary', magAmmo: 1, stackCount: 1 } },
+    );
+    expect(bowDrop.item?.weaponId).toBe('boom_bow');
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('triggers pooled 3D lightning bolts, updates golden_hour sun corona, and keeps oceanMat/skyMat GLSL ES 1.00 valid', () => {
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const group = fx.getGroup();
+
+    // 1. Pooled 3D lightning bolts triggered on 'vfx:lightning_flash' & 'storm_front'
+    const boltsGroup = group.getObjectByName('LightningBolts') as THREE.Group;
+    expect(boltsGroup).toBeDefined();
+    expect(boltsGroup.children.length).toBeGreaterThanOrEqual(4);
+    expect(boltsGroup.children.every((b) => !b.visible)).toBe(true);
+
+    bus.emit('vfx:lightning_flash', { intensity: 0.95 });
+    expect(boltsGroup.children.some((b) => b.visible)).toBe(true);
+
+    // Advances & expires cleanly
+    for (let i = 0; i < 12; i++) {
+      fx.update(0.1, i * 0.1, { x: 0, y: 12, z: 0 }, 'grassland');
+    }
+    expect(boltsGroup.children.every((b) => !b.visible)).toBe(true);
+
+    // Storm front weather also triggers lightning bolts
+    fx.setWeather('storm_front');
+    let sawStormBolt = false;
+    for (let i = 0; i < 45; i++) {
+      fx.update(0.15, 2 + i * 0.15, { x: 0, y: 14, z: 0 }, 'grassland');
+      if (boltsGroup.children.some((b) => b.visible)) {
+        sawStormBolt = true;
+      }
+    }
+    expect(sawStormBolt).toBe(true);
+
+    // 2. Sun corona halo synced to sun elevation & golden_hour warmth
+    const corona = group.getObjectByName('SunCorona') as THREE.Group;
+    expect(corona).toBeDefined();
+    expect(corona.children.length).toBeGreaterThanOrEqual(2);
+
+    fx.setWeather('clear');
+    for (let i = 0; i < 20; i++) fx.update(0.2, 10 + i * 0.2);
+    const clearScale = corona.scale.x;
+    const clearInnerMat = (corona.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+    const clearOuterMat = (corona.children[1] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+    const clearOuterBlue = clearOuterMat.color.b;
+
+    fx.setWeather('golden_hour');
+    for (let i = 0; i < 20; i++) fx.update(0.2, 15 + i * 0.2);
+    const goldScale = corona.scale.x;
+    expect(goldScale).toBeGreaterThan(clearScale);
+    expect(clearOuterMat.color.b).toBeLessThan(clearOuterBlue);
+    expect(clearInnerMat.opacity).toBeGreaterThan(0.5);
+
+    const sunDir = fx.getSunDirection();
+    expect(corona.position.x / 1180).toBeCloseTo(sunDir.x, 3);
+    expect(corona.position.y / 1180).toBeCloseTo(sunDir.y, 3);
+    expect(corona.position.z / 1180).toBeCloseTo(sunDir.z, 3);
+
+    // 3. GLSL ES 1.00 validity & shoreline foam modulation check on skyMat and oceanMat
+    const skyMesh = group.getObjectByName('SkyDome') as THREE.Mesh;
+    const oceanMesh = group.getObjectByName('OceanWater') as THREE.Mesh;
+    const skyMat = skyMesh.material as THREE.ShaderMaterial;
+    const oceanMat = oceanMesh.material as THREE.ShaderMaterial;
+
+    for (const shader of [skyMat.fragmentShader, oceanMat.fragmentShader]) {
+      const smoothMatches = [...shader.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g)];
+      expect(smoothMatches.length).toBeGreaterThan(0);
+      for (const m of smoothMatches) {
+        expect(Number(m[1])).toBeLessThan(Number(m[2]));
+      }
+    }
+    expect(oceanMat.fragmentShader).toContain('shoreWarp');
+    expect(oceanMat.fragmentShader).toContain('surfCrestA');
+    expect(oceanMat.fragmentShader).toContain('foamLace');
+
+    fx.dispose();
   });
 });

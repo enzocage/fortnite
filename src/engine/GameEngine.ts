@@ -5,6 +5,7 @@ import {
   EMOTES,
   EventBus,
   GLIDERS,
+  MEDALLION_CIRCLE_RADII,
   PICKAXES,
   POIS,
   SKINS,
@@ -32,6 +33,7 @@ import type {
   LobbyConfig,
   MaterialType,
   MatchSummary,
+  MedallionId,
   MinimapBlip,
   NpcSpecialistEntity,
   Vec3Like,
@@ -113,6 +115,7 @@ export interface FortdropDebugAPI {
   setWeather(kind?: WeatherKind): WeatherKind;
   giveWave2Loadout(): void;
   giveWave5Loadout(): void;
+  giveWave6Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -203,6 +206,7 @@ export class GameEngine {
   private prevVehicleDistPos: Vec3Like | null = null;
   private vehicleDistAccum = 0;
   private lootIslandSpawnTriggered = false;
+  private bunkersUnlockedNotified = false;
   private lastPersistedGold = -1;
   private recentVisualNoises: Array<{
     id: string;
@@ -387,6 +391,12 @@ export class GameEngine {
       this.worldInteractables.getNpcSpecialists(),
       this.worldInteractables.getLootIslandState(),
     );
+    this.uiManager.setWorldChapterOverlay(
+      this.worldInteractables.getWeaponBunkers(),
+      this.worldInteractables.getSlurpTankers(),
+      this.worldInteractables.getDroppedMedallions(),
+      this.worldInteractables.getDroppedCrowns(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.gameMode = this.lobbyConfig.gameMode ?? 'solo';
@@ -416,6 +426,8 @@ export class GameEngine {
       ...this.worldInteractables.getExplosiveBarrelColliders(),
       ...this.worldInteractables.getVendingMachineColliders(),
       ...this.worldInteractables.getLootIslandColliders(),
+      ...this.worldInteractables.getWeaponBunkerColliders(),
+      ...this.worldInteractables.getSlurpTankerColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -431,6 +443,7 @@ export class GameEngine {
     this.weaponSystem.setVehicleBridge(this.vehicleSystem);
     this.weaponSystem.setStationBridge(this.worldInteractables);
     this.weaponSystem.setRiftCaptureBridge(this.worldInteractables);
+    this.weaponSystem.setChapterBridge(this.worldInteractables);
     this.weaponSystem.setOnSlurpBarrelBroken((actorId) => {
       if (actorId === 'player') {
         this.questTracker.record('slurp_break', 1);
@@ -455,6 +468,7 @@ export class GameEngine {
     this.playerController.setStationBridge(this.worldInteractables);
     this.playerController.setRiftCaptureBridge(this.worldInteractables);
     this.playerController.setEconomyBridge(this.worldInteractables);
+    this.playerController.setChapterBridge(this.worldInteractables);
     this.playerController.setAugmentManager(this.augmentManager);
     this.playerController.setOnWeaponUpgraded(() => {
       this.questTracker.record('weapon_upgrade', 1);
@@ -488,6 +502,42 @@ export class GameEngine {
       this.lobbyConfig.difficulty,
       9001,
     );
+    this.playerController.setDuoReviveBridge({
+      isPartnerAlive: () => {
+        const partner = this.botManager.getDuoPartner();
+        return Boolean(
+          partner &&
+            partner.alive &&
+            !partner.isKnocked &&
+            partner.state !== 'knocked',
+        );
+      },
+      getPartnerDownedNearby: (pos) => {
+        const partner = this.botManager.getDuoPartner();
+        if (!partner || !partner.alive || !(partner.isKnocked || partner.state === 'knocked')) {
+          return null;
+        }
+        return dist3D(pos, partner.position) <= 4.2
+          ? {
+              id: partner.id,
+              name: partner.name,
+              position: { ...partner.position },
+              bleedOutHp: partner.bleedOutHp,
+            }
+          : null;
+      },
+      completePartnerRevive: () => this.botManager.reviveDuoPartner(),
+    });
+    this.botManager.setOnPlayerRevived(() => {
+      this.playerController.completeRevive();
+      this.eventBus.emit('ui:banner', {
+        id: `revived_${Date.now()}`,
+        title: 'REVIVED BY DUO PARTNER!',
+        subtitle: 'BACK IN THE FIGHT WITH 30 HP',
+        tone: 'victory',
+        durationMs: 2800,
+      });
+    });
     this.botManager.setOnBossEliminatedByPlayer((rec) => {
       this.playerController.addVaultKey(1);
       this.eventBus.emit('ui:banner', {
@@ -516,9 +566,14 @@ export class GameEngine {
       if (qaPoi && POIS.some((p) => p.id === qaPoi)) {
         const qaModeParam = search.get('qaMode');
         const qaMode: GameModeId | undefined =
-          qaModeParam === 'zero_build' || qaModeParam === 'blitz' || qaModeParam === 'solo'
+          qaModeParam === 'zero_build' ||
+          qaModeParam === 'blitz' ||
+          qaModeParam === 'duos' ||
+          qaModeParam === 'solo'
             ? qaModeParam
-            : undefined;
+            : search.has('qaWave6')
+              ? 'duos'
+              : undefined;
         const qaWrap = search.get('qaWrap') ?? undefined;
         if (search.get('qaVisualAudio') === '1') {
           this.settings = { ...this.settings, visualAudio: true };
@@ -539,7 +594,53 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (search.has('qaWave5')) {
+        if (search.has('qaWave6')) {
+          window.__GAME__?.giveWave6Loadout();
+          this.playerController.setVictoryCrown(true);
+          this.playerController.addMedallion('medallion_siphon');
+          this.playerController.addMedallion('medallion_agility');
+          this.playerController.setGoldBars(750);
+          this.worldInteractables.unlockBunkersForPhase(2);
+          this.bunkersUnlockedNotified = true;
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const showcasePos = {
+            x: p.x + Math.sin(yaw) * 14,
+            y: p.y,
+            z: p.z + Math.cos(yaw) * 14,
+          };
+          this.worldInteractables.qaPlaceWave6Showcase(showcasePos);
+          const partner = this.botManager.getDuoPartner();
+          if (partner) {
+            const px = p.x + Math.sin(yaw) * 6.5 - Math.cos(yaw) * 2.4;
+            const pz = p.z + Math.cos(yaw) * 6.5 + Math.sin(yaw) * 2.4;
+            const py = this.terrain.getHeightAt(px, pz) + 0.2;
+            partner.position.x = px;
+            partner.position.y = py;
+            partner.position.z = pz;
+            partner.velocity.x = 0;
+            partner.velocity.y = 0;
+            partner.velocity.z = 0;
+            partner.yaw = yaw + Math.PI;
+            partner.state = 'rotating';
+            partner.gliderOpen = false;
+            partner.gliderFactor = 0;
+            partner.grounded = true;
+          }
+          this.collision.setPropColliders([
+            ...this.propsAndLoot.getActivePropColliders(),
+            ...this.propsAndLoot.getActiveLlamaColliders(),
+            ...this.worldInteractables.getColliders(),
+            ...this.vehicleSystem.getActiveVehicleColliders(),
+          ]);
+          this.uiManager.setWorldChapterOverlay(
+            this.worldInteractables.getWeaponBunkers(),
+            this.worldInteractables.getSlurpTankers(),
+            this.worldInteractables.getDroppedMedallions(),
+            this.worldInteractables.getDroppedCrowns(),
+          );
+          this.syncBotRigs(1 / 60);
+        } else if (search.has('qaWave5')) {
           window.__GAME__?.giveWave5Loadout();
           this.playerController.setGoldBars(600);
           const scout = this.worldInteractables.getNpcSpecialists().find((n) => !n.hiredBy);
@@ -788,6 +889,7 @@ export class GameEngine {
           pPhase !== 'bus'
         ) {
           const pActor = this.playerController.getCombatActor();
+          const pMeds = this.playerController.getMedallions();
           targets.push({
             id: pActor.id,
             name: pActor.name,
@@ -797,12 +899,18 @@ export class GameEngine {
             shield: pActor.shield,
             alive: pActor.alive,
             isPlayer: true,
+            squadId: this.gameMode === 'duos' ? 'player_squad' : undefined,
+            isKnocked: this.playerController.isPlayerKnocked(),
+            medallions: pMeds,
+            medallionCount: pMeds.length,
+            hasVictoryCrown: this.playerController.hasVictoryCrown(),
             radius: pActor.radius,
             height: pActor.height,
           });
         }
         for (const bot of this.botManager.getAliveBots()) {
           if (bot.state === 'bus') continue;
+          const bMeds = bot.medallions ?? [];
           targets.push({
             id: bot.id,
             name: bot.name,
@@ -817,6 +925,12 @@ export class GameEngine {
             alive: bot.alive,
             isPlayer: false,
             isAlly: Boolean(bot.isAlly),
+            isDuoPartner: Boolean(bot.isDuoPartner),
+            squadId: bot.squadId,
+            isKnocked: Boolean(bot.isKnocked || bot.state === 'knocked'),
+            medallions: bMeds,
+            medallionCount: bot.medallionCount ?? bMeds.length,
+            hasVictoryCrown: Boolean(bot.hasVictoryCrown),
             radius: bot.radius,
             height: bot.height,
           });
@@ -840,6 +954,27 @@ export class GameEngine {
       getExplosiveBarrels: () => this.worldInteractables.getExplosiveBarrels(),
       damageExplosiveBarrel: (id, dmg) =>
         this.worldInteractables.damageExplosiveBarrel(id, dmg),
+      get gameMode() {
+        return self.gameMode;
+      },
+      get playerKnocked() {
+        return self.playerController.isPlayerKnocked();
+      },
+      get playerAlive() {
+        return self.playerController.isAlive();
+      },
+      get playerRevivingPartner() {
+        return Boolean(
+          self.playerController.getHudSnapshot().reviveProgress !== null &&
+            !self.playerController.isPlayerKnocked(),
+        );
+      },
+      get playerMedallionCount() {
+        return self.playerController.getMedallions().length;
+      },
+      getSquadmates: (squadId: string) =>
+        this.botManager.getAliveBots().filter((b) => b.squadId === squadId),
+      getMedallionHolders: () => this.botManager.getMedallionHolders(),
       eventBus: this.eventBus,
     };
   }
@@ -941,11 +1076,12 @@ export class GameEngine {
         }
         if (ev.attackerId === 'player' && ev.targetId !== 'player') {
           this.questTracker.record('damage_dealt', Math.round(ev.damage));
+          const victim = this.botManager.getBotById(ev.targetId);
           if (ev.isElimination) {
             this.questTracker.record('elimination', 1);
             this.playerController.addKill();
-            this.grantPlayerGold(50, ev.hitPoint);
-            const victim = this.botManager.getBotById(ev.targetId);
+            const crownGold = this.playerController.hasVictoryCrown() ? 25 : 0;
+            this.grantPlayerGold(50 + crownGold, ev.hitPoint);
             this.eventBus.emit('ui:banner', {
               id: `elim_${Date.now()}`,
               title: `ELIMINATED ${victim?.name ?? 'OPPONENT'}`,
@@ -955,6 +1091,8 @@ export class GameEngine {
               tone: 'elim',
               durationMs: 2600,
             });
+          } else if (victim && (victim.isKnocked || victim.state === 'knocked')) {
+            this.playerController.addKnock();
           }
         } else if (
           ev.attackerId !== 'player' &&
@@ -1252,6 +1390,7 @@ export class GameEngine {
     this.prevVehicleDistPos = null;
     this.vehicleDistAccum = 0;
     this.lootIslandSpawnTriggered = false;
+    this.bunkersUnlockedNotified = false;
     this.recentVisualNoises = [];
     this.setWaypoint(null);
 
@@ -1317,6 +1456,7 @@ export class GameEngine {
     this.prevVehicleDistPos = null;
     this.vehicleDistAccum = 0;
     this.lootIslandSpawnTriggered = false;
+    this.bunkersUnlockedNotified = false;
     this.recentVisualNoises = [];
     this.setWaypoint(null);
 
@@ -1342,6 +1482,12 @@ export class GameEngine {
       this.worldInteractables.getNpcSpecialists(),
       this.worldInteractables.getLootIslandState(),
     );
+    this.uiManager.setWorldChapterOverlay(
+      this.worldInteractables.getWeaponBunkers(),
+      this.worldInteractables.getSlurpTankers(),
+      this.worldInteractables.getDroppedMedallions(),
+      this.worldInteractables.getDroppedCrowns(),
+    );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
       this.worldBuildResult.floorLootSpots,
@@ -1356,6 +1502,8 @@ export class GameEngine {
       ...this.worldInteractables.getExplosiveBarrelColliders(),
       ...this.worldInteractables.getVendingMachineColliders(),
       ...this.worldInteractables.getLootIslandColliders(),
+      ...this.worldInteractables.getWeaponBunkerColliders(),
+      ...this.worldInteractables.getSlurpTankerColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -1393,14 +1541,18 @@ export class GameEngine {
     this.clearBotVisuals();
     this.botManager.setDifficulty(config.difficulty);
     this.botManager.setGameMode(this.gameMode);
-    this.botManager.spawnBots(config.botCount, this.busDuration);
+    this.botManager.spawnBots(config.botCount, this.busDuration, this.gameMode);
     this.createBotVisuals();
     this.totalPlayers = config.botCount + 1;
 
     // Reset player controller & augments
     this.playerController.resetForMatch(this.busStart, config.playerName, this.gameMode);
-    const savedGold = loadCareerStats().goldBars;
-    this.playerController.setGoldBars(savedGold);
+    const savedCareer = loadCareerStats();
+    this.playerController.setGoldBars(savedCareer.goldBars);
+    this.playerController.setVictoryCrown(savedCareer.hasVictoryCrown);
+    if (savedCareer.hasVictoryCrown) {
+      this.grantPlayerGold(25, this.busStart);
+    }
     this.lastPersistedGold = this.playerController.getGoldBars();
     this.augmentManager.reset(this.matchSeed, this.gameMode);
     this.playerController.setSelectedEmote(config.selectedEmote);
@@ -1533,6 +1685,8 @@ export class GameEngine {
       ...this.worldInteractables.getExplosiveBarrelColliders(),
       ...this.worldInteractables.getVendingMachineColliders(),
       ...this.worldInteractables.getLootIslandColliders(),
+      ...this.worldInteractables.getWeaponBunkerColliders(),
+      ...this.worldInteractables.getSlurpTankerColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
     this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
@@ -1549,6 +1703,18 @@ export class GameEngine {
       this.worldInteractables.getVendingMachines(),
       this.worldInteractables.getNpcSpecialists(),
       this.worldInteractables.getLootIslandState(),
+    );
+    this.uiManager.setWorldChapterOverlay(
+      this.worldInteractables.getWeaponBunkers(),
+      this.worldInteractables.getSlurpTankers(),
+      this.worldInteractables.getDroppedMedallions(),
+      this.worldInteractables.getDroppedCrowns(),
+    );
+    this.uiManager.setWorldChapterOverlay(
+      this.worldInteractables.getWeaponBunkers(),
+      this.worldInteractables.getSlurpTankers(),
+      this.worldInteractables.getDroppedMedallions(),
+      this.worldInteractables.getDroppedCrowns(),
     );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
@@ -1570,8 +1736,22 @@ export class GameEngine {
       }
     }
 
-    // 3. Storm update + Player storm damage
+    // 3. Storm update + Player storm damage + Weapon Bunker Phase 2 Unlock
     const stormRes = this.stormSystem.update(dt);
+    const stormPhaseNow = this.stormSystem.getState().phase;
+    if (stormPhaseNow >= 2 && !this.bunkersUnlockedNotified) {
+      const unlockedBunkers = this.worldInteractables.unlockBunkersForPhase(stormPhaseNow);
+      if (unlockedBunkers.length > 0) {
+        this.bunkersUnlockedNotified = true;
+        this.eventBus.emit('ui:banner', {
+          id: `bunkers_unlock_${Date.now()}`,
+          title: 'WEAPON BUNKERS UNLOCKED!',
+          subtitle: `${unlockedBunkers.length} ARMORY BUNKERS OPENED ACROSS THE ISLAND`,
+          tone: 'victory',
+          durationMs: 3800,
+        });
+      }
+    }
     if (stormRes.shrinkStarted) {
       this.eventBus.emit('sound:play', { id: 'storm_warning' });
       this.eventBus.emit('ui:banner', {
@@ -1654,7 +1834,7 @@ export class GameEngine {
     const currGold = this.playerController.getGoldBars();
     if (
       currGold !== this.lastPersistedGold &&
-      (typeof window === 'undefined' || !window.location.search.includes('qaWave5'))
+      !this.isQaIsolationSession()
     ) {
       this.lastPersistedGold = currGold;
       updateGoldBars(currGold);
@@ -1765,6 +1945,13 @@ export class GameEngine {
       this.intenseCombatMusicActive = true;
       this.eventBus.emit('music:set', { track: 'combat_intense' });
     }
+    const dynamicIntensity =
+      aliveCountNow <= 5 && this.totalPlayers > 5
+        ? 0.9
+        : this.playerController.hasVictoryCrown() || this.playerController.getMedallions().length > 0
+          ? 0.65
+          : 0.25;
+    this.audioEngine.setDynamicIntensity(currPlayerPhase === 'playing' ? dynamicIntensity : 0.15);
 
     if (inStorm && this.playerController.isAlive()) {
       this.stormTickAccum += dt;
@@ -1784,9 +1971,53 @@ export class GameEngine {
       this.eventBus.emit('music:set', { track: 'none' });
     }
 
-    // 5. AI Bots update + Ally support + rigs + Dynamic Hunt Bounty
+    // 5. AI Bots update + Dropped Medallions/Crowns + Ally support + Duo Partner Revive sync
     this.botManager.update(dt, this.matchElapsed, this.busPos, pRender.position);
     this.botManager.applyStormDamage(dt);
+    const droppedRewards = this.botManager.consumeDroppedRewards();
+    for (const dm of droppedRewards.medallions) {
+      this.worldInteractables.spawnDroppedMedallion(
+        dm.medallionId,
+        dm.x,
+        dm.y,
+        dm.z,
+      );
+    }
+    for (const dc of droppedRewards.crowns) {
+      this.worldInteractables.spawnDroppedCrown(dc.x, dc.y, dc.z);
+    }
+    if (this.gameMode === 'duos') {
+      const partner = this.botManager.getDuoPartner();
+      if (this.playerController.isPlayerKnocked()) {
+        if (partner && partner.reviveTargetId === 'player' && partner.isReviving) {
+          this.playerController.setIncomingReviveProgress(
+            partner.reviveProgress ?? 0,
+            `REVIVING BY ${partner.name}...`,
+          );
+        } else {
+          this.playerController.setIncomingReviveProgress(null);
+        }
+        // If duo partner is dead or also knocked, squad is wiped immediately
+        if (!partner || !partner.alive || partner.isKnocked || partner.state === 'knocked') {
+          this.playerController.applyDamage({
+            targetId: 'player',
+            attackerId: this.lastPlayerDamageEvent?.attackerId ?? 'storm',
+            attackerName: this.lastPlayerDamageEvent?.attackerName ?? 'Squad Wipe',
+            weaponId: this.lastPlayerDamageEvent?.weaponId ?? 'pistol',
+            rarity: this.lastPlayerDamageEvent?.rarity ?? 'common',
+            damage: 9999,
+            hpDamage: 9999,
+            shieldDamage: 0,
+            isHeadshot: false,
+            isElimination: true,
+            hitPoint: { ...pRender.position },
+            distance: 0,
+          });
+        }
+      } else {
+        this.playerController.setIncomingReviveProgress(null);
+      }
+    }
     this.syncBotRigs(dt);
 
     const allyEvents = this.botManager.consumeAllySupportEvents();
@@ -1927,6 +2158,7 @@ export class GameEngine {
       }
     }
 
+    const lobbyHasCrown = loadCareerStats().hasVictoryCrown;
     const lobbyState: CharacterRenderState = {
       position: { ...this.lobbyPos },
       yaw: this.lobbyCharacterYaw,
@@ -1945,12 +2177,14 @@ export class GameEngine {
       shield: 0,
       recoilKick: 0,
       harvestSwingTimer: 0,
+      hasVictoryCrown: lobbyHasCrown,
     };
 
     this.playerRig.setVisible(true);
     this.playerRig.setGliderOpen(false, 0);
     this.playerRig.equipWeapon('pickaxe', false);
     this.playerRig.setWeaponWrap(this.lobbyConfig.weaponWrapId ?? 'factory_matte');
+    this.playerRig.setVictoryCrown(lobbyHasCrown, this.totalElapsed);
     this.characterAnimator.update(this.playerRig, lobbyState, dt);
 
     // Frame character cleanly in center with scenic island behind
@@ -1990,6 +2224,8 @@ export class GameEngine {
       contrailId: state.contrailId ?? this.lobbyConfig.contrailId ?? 'wind_stream',
     };
     this.playerRig.updateFromState(syncedState, groundY);
+    this.playerRig.setVictoryCrown(Boolean(syncedState.hasVictoryCrown), this.totalElapsed);
+    this.playerRig.setMedallionCount(syncedState.medallionCount ?? 0, this.totalElapsed);
     this.characterAnimator.update(this.playerRig, syncedState, dt);
 
     const muzzle = this.playerRig.getMuzzleWorldPosition();
@@ -2015,7 +2251,10 @@ export class GameEngine {
       visual.rig.setVisible(true);
       visual.rig.equipWeapon(bs.weaponId, bs.isBuilding);
       visual.rig.setGliderOpen(bs.gliderOpen, bs.gliderFactor);
-      visual.rig.setAllyAura(Boolean(bs.isAlly), bs.allyRole, this.totalElapsed);
+      visual.rig.setDuoPartnerAura(Boolean(bs.isDuoPartner), this.totalElapsed);
+      visual.rig.setAllyAura(Boolean(bs.isAlly) && !bs.isDuoPartner, bs.allyRole, this.totalElapsed);
+      visual.rig.setVictoryCrown(Boolean(bs.hasVictoryCrown), this.totalElapsed);
+      visual.rig.setMedallionCount(bs.medallionCount ?? 0, this.totalElapsed);
       this.characterAnimator.update(visual.rig, bs, dt);
     }
   }
@@ -2215,6 +2454,13 @@ export class GameEngine {
         ? Math.round((stats.shotsHit / stats.shotsFired) * 100)
         : 0;
 
+    const baseBonusXp = this.questTracker.getCompletedBonusXp() + (stats.poisCaptured ?? 0) * 300;
+    const isCrownedVictory = Boolean(victory && this.playerController.hasVictoryCrown());
+    const crownedXpBonus = isCrownedVictory
+      ? Math.max(250, Math.round((stats.damageDealt * 0.1 + this.playerController.getKills() * 100 + baseBonusXp) * 0.25))
+      : 0;
+    const medallionsHeld: MedallionId[] = this.playerController.getMedallions();
+
     const summary: MatchSummary = {
       victory,
       placement,
@@ -2231,16 +2477,20 @@ export class GameEngine {
       eliminatedBy,
       gameMode: this.gameMode,
       questsCompleted: this.questTracker.getCompletedCount(),
-      bonusXp: this.questTracker.getCompletedBonusXp() + (stats.poisCaptured ?? 0) * 300,
+      bonusXp: baseBonusXp + crownedXpBonus,
       activeAugments: this.augmentManager.getActiveAugments(),
       poisCaptured: stats.poisCaptured ?? 0,
       goldEarned: stats.goldEarned ?? 0,
+      crownedVictory: isCrownedVictory,
+      medallionsHeld,
+      revives: stats.revives ?? 0,
+      knocks: stats.knocks ?? 0,
     };
     this.lastMatchSummary = summary;
-    if (typeof window === 'undefined' || !window.location.search.includes('qaWave5')) {
+    if (!this.isQaIsolationSession()) {
       updateGoldBars(this.playerController.getGoldBars());
+      recordMatchCareerStats(summary);
     }
-    recordMatchCareerStats(summary);
     if (openOverlay) {
       this.spectatorSummaryOpen = true;
       this.uiManager.showMatchSummary(summary);
@@ -2271,11 +2521,17 @@ export class GameEngine {
     }
   }
 
+  private isQaIsolationSession(): boolean {
+    if (typeof window === 'undefined') return false;
+    const s = window.location.search;
+    return s.includes('qaWave5') || s.includes('qaWave6');
+  }
+
   private grantPlayerGold(amount: number, worldPos?: Vec3Like): void {
     if (amount <= 0) return;
     this.playerController.addGoldBars(amount, worldPos);
     const curr = this.playerController.getGoldBars();
-    if (typeof window === 'undefined' || !window.location.search.includes('qaWave5')) {
+    if (!this.isQaIsolationSession()) {
       this.lastPersistedGold = curr;
       updateGoldBars(curr);
     }
@@ -2619,6 +2875,55 @@ export class GameEngine {
           z: li.z,
           distance: Math.round(dist2D(snap.playerPos.x, snap.playerPos.z, li.x, li.z)),
         };
+      })(),
+      medallions: snap.medallions ?? [],
+      hasVictoryCrown: snap.hasVictoryCrown ?? false,
+      bowCharge: snap.bowCharge ?? null,
+      isKnocked: snap.isKnocked ?? false,
+      bleedOutHp: snap.bleedOutHp ?? 0,
+      reviveProgress: snap.reviveProgress ?? null,
+      reviveLabel: snap.reviveLabel ?? null,
+      duoPartner: (() => {
+        const dp = this.botManager.getDuoPartnerHudState(snap.playerPos);
+        if (!dp) return null;
+        return {
+          name: dp.name,
+          hp: Math.ceil(dp.hp),
+          maxHp: dp.maxHp,
+          shield: Math.ceil(dp.shield),
+          maxShield: dp.maxShield,
+          knocked: dp.knocked,
+          alive: dp.alive,
+          bleedOutHp: dp.bleedOutHp,
+          distance: Math.round(dp.distance),
+        };
+      })(),
+      medallionCircles: (() => {
+        const circles: NonNullable<HUDState['medallionCircles']> = [];
+        const pMeds = snap.medallions ?? [];
+        if (pMeds.length > 0 && this.playerController.isAlive()) {
+          const rad =
+            MEDALLION_CIRCLE_RADII[
+              Math.min(MEDALLION_CIRCLE_RADII.length - 1, pMeds.length - 1)
+            ];
+          circles.push({
+            x: snap.playerPos.x,
+            z: snap.playerPos.z,
+            radius: rad,
+            isPlayer: true,
+            count: pMeds.length,
+          });
+        }
+        for (const holder of this.botManager.getMedallionHolders()) {
+          circles.push({
+            x: holder.x,
+            z: holder.z,
+            radius: holder.circleRadius,
+            isPlayer: false,
+            count: holder.count,
+          });
+        }
+        return circles;
       })(),
     };
 
@@ -2993,6 +3298,8 @@ export class GameEngine {
           vendingMachines: engine.worldInteractables.getVendingMachines().length,
           npcSpecialists: engine.worldInteractables.getNpcSpecialists().length,
           lootIslandActive: engine.worldInteractables.getLootIslandState().active,
+          weaponBunkers: engine.worldInteractables.getWeaponBunkers().length,
+          slurpTankers: engine.worldInteractables.getSlurpTankers().length,
           vehicles: engine.vehicleSystem.getVehicles().length,
           vaults: engine.worldInteractables.getVaults().length,
           fps: Math.round(engine.fps),
@@ -3109,6 +3416,34 @@ export class GameEngine {
         });
         inv.addAmmo('medium', 120);
         inv.addAmmo('shells', 40);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
+      giveWave6Loadout() {
+        const inv = engine.playerController.getInventory();
+        const items: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic' | 'rare'; stack: number }> = [
+          { id: 'boom_bow', rarity: 'legendary', stack: 1 },
+          { id: 'combat_smg', rarity: 'mythic', stack: 1 },
+          { id: 'kinetic_blade', rarity: 'mythic', stack: 1 },
+          { id: 'shield_bubble', rarity: 'epic', stack: 2 },
+          { id: 'chug_splash', rarity: 'rare', stack: 4 },
+        ];
+        inv.reset();
+        items.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w6_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('light', 240);
+        inv.addAmmo('heavy', 32);
         inv.addMaterial('wood', 500);
         inv.addMaterial('brick', 500);
         inv.addMaterial('metal', 500);

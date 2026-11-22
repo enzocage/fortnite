@@ -1,23 +1,28 @@
 import * as THREE from 'three';
-import { EventBus, POIS, WEAPONS } from '../core';
+import { EventBus, MEDALLIONS, POIS, WEAPONS } from '../core';
 import type {
   CampfireEntity,
   CapturePointEntity,
   ColliderBox,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   ExplosiveBarrelEntity,
   ItemInstance,
   LaunchPadEntity,
   LootIslandState,
+  MedallionId,
   NpcSpecialistEntity,
   Rarity,
   RiftEntity,
   SlurpBarrelEntity,
+  SlurpTankerEntity,
   SpecialistRole,
   TerrainQuery,
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
   VendingMachineEntity,
+  WeaponBunkerEntity,
   WeaponId,
   ZiplineEntity,
 } from '../types';
@@ -86,6 +91,29 @@ export interface VendingPurchaseResult {
 export interface LootIslandCaptureResult {
   capturedNow: boolean;
   lootPos?: Vec3Like;
+}
+
+export interface WeaponBunkerLootResult {
+  weaponId: 'combat_smg' | 'boom_bow' | 'tactical_dmr';
+  rarity: 'epic' | 'legendary';
+  gold: number;
+  shieldRestore: number;
+}
+
+export interface SlurpTankerDamageResult {
+  exploded: boolean;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  healAmount: number;
+}
+
+export interface Wave6ShowcaseResult {
+  bunker: WeaponBunkerEntity;
+  tanker: SlurpTankerEntity;
+  medallion: DroppedMedallionEntity;
+  crown: DroppedCrownEntity;
 }
 
 interface VendingMachineVisual {
@@ -179,6 +207,48 @@ interface ExplosiveBarrelVisual {
   hitAnim: number;
 }
 
+interface WeaponBunkerVisual {
+  data: WeaponBunkerEntity;
+  group: THREE.Group;
+  blastDoor: THREE.Group;
+  beaconOrb: THREE.Mesh;
+  beaconHalo: THREE.Mesh;
+  cacheGroup: THREE.Group;
+  amberMat: THREE.Material;
+  greenMat: THREE.Material;
+  amberHaloMat: THREE.Material;
+  greenHaloMat: THREE.Material;
+  doorClosedY: number;
+  doorOpenY: number;
+  doorOpenProgress: number;
+  wallColliders: ColliderBox[];
+  doorCollider: ColliderBox;
+  rewardWeaponId: 'combat_smg' | 'boom_bow' | 'tactical_dmr';
+  rewardRarity: 'epic' | 'legendary';
+  rewardGold: number;
+  rewardShieldRestore: number;
+  isQaShowcase?: boolean;
+}
+
+interface SlurpTankerVisual {
+  data: SlurpTankerEntity;
+  group: THREE.Group;
+  bodyGroup: THREE.Group;
+  intactTankGroup: THREE.Group;
+  rupturedTankGroup: THREE.Group;
+  collider: ColliderBox;
+  hitAnim: number;
+  isQaShowcase?: boolean;
+}
+
+interface DroppedPickupVisual<T> {
+  data: T;
+  group: THREE.Group;
+  spinGroup: THREE.Group;
+  ringMesh: THREE.Mesh;
+  baseSpinY: number;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -195,6 +265,15 @@ const LOOT_ISLAND_RADIUS = 14;
 const LOOT_ISLAND_DECK_HALF_EXTENT = 12.5;
 const LOOT_ISLAND_DECK_THICKNESS = 0.6;
 const LOOT_ISLAND_CAPTURE_DURATION_SEC = 10;
+const WEAPON_BUNKER_UNLOCK_PHASE = 2;
+const SLURP_TANKER_HP = 220;
+const SLURP_TANKER_HEAL_RADIUS = 10;
+const SLURP_TANKER_HEAL_AMOUNT = 60;
+const BUNKER_LOOT_WEAPONS: readonly ('combat_smg' | 'boom_bow' | 'tactical_dmr')[] = [
+  'combat_smg',
+  'boom_bow',
+  'tactical_dmr',
+];
 
 export class WorldInteractables {
   private group = new THREE.Group();
@@ -221,6 +300,16 @@ export class WorldInteractables {
   private vendingItemCounter = 0;
   private npcSpecialists: NpcSpecialistEntity[] = [];
   private npcSpecialistsMap = new Map<string, NpcSpecialistVisual>();
+  private weaponBunkers: WeaponBunkerEntity[] = [];
+  private weaponBunkersMap = new Map<string, WeaponBunkerVisual>();
+  private slurpTankers: SlurpTankerEntity[] = [];
+  private slurpTankersMap = new Map<string, SlurpTankerVisual>();
+  private droppedMedallions: DroppedMedallionEntity[] = [];
+  private droppedMedallionsMap = new Map<string, DroppedPickupVisual<DroppedMedallionEntity>>();
+  private droppedMedallionCounter = 0;
+  private droppedCrowns: DroppedCrownEntity[] = [];
+  private droppedCrownsMap = new Map<string, DroppedPickupVisual<DroppedCrownEntity>>();
+  private droppedCrownCounter = 0;
   private lootIslandState: LootIslandState = {
     active: false,
     spawnedAtSec: 0,
@@ -253,6 +342,8 @@ export class WorldInteractables {
   private ziplineOrbs: ZiplineOrb[] = [];
   private geometries: THREE.BufferGeometry[] = [];
   private materials: THREE.Material[] = [];
+  private sharedGeos = new Map<string, THREE.BufferGeometry>();
+  private sharedMats = new Map<string, THREE.Material>();
 
   constructor(terrain: TerrainQuery, eventBus?: EventBus) {
     this.group.name = 'WorldInteractables';
@@ -269,6 +360,8 @@ export class WorldInteractables {
     this.buildExplosiveBarrels(terrain);
     this.buildVendingMachines(terrain);
     this.buildNpcSpecialists(terrain);
+    this.buildWeaponBunkers(terrain);
+    this.buildSlurpTankers(terrain);
     this.buildLootIsland();
   }
 
@@ -279,6 +372,24 @@ export class WorldInteractables {
 
   private addMat<T extends THREE.Material>(m: T): T {
     this.materials.push(m);
+    return m;
+  }
+
+  private getSharedGeo<T extends THREE.BufferGeometry>(key: string, factory: () => T): T {
+    let g = this.sharedGeos.get(key) as T | undefined;
+    if (!g) {
+      g = factory();
+      this.sharedGeos.set(key, g);
+    }
+    return g;
+  }
+
+  private getSharedMat<T extends THREE.Material>(key: string, factory: () => T): T {
+    let m = this.sharedMats.get(key) as T | undefined;
+    if (!m) {
+      m = factory();
+      this.sharedMats.set(key, m);
+    }
     return m;
   }
 
@@ -2210,6 +2321,569 @@ export class WorldInteractables {
     }
   }
 
+  private makeRotatedCollider(
+    id: string,
+    centerX: number,
+    centerZ: number,
+    localCx: number,
+    localCz: number,
+    localHalfW: number,
+    localHalfD: number,
+    minY: number,
+    maxY: number,
+    rotY: number,
+    material: 'metal' | 'brick' | 'wood',
+    tag: string,
+  ): ColliderBox {
+    const cos = Math.cos(rotY);
+    const sin = Math.sin(rotY);
+    const wx = centerX + localCx * cos + localCz * sin;
+    const wz = centerZ - localCx * sin + localCz * cos;
+    const halfX = localHalfW * Math.abs(cos) + localHalfD * Math.abs(sin);
+    const halfZ = localHalfW * Math.abs(sin) + localHalfD * Math.abs(cos);
+    return {
+      id,
+      minX: wx - halfX,
+      minY,
+      minZ: wz - halfZ,
+      maxX: wx + halfX,
+      maxY,
+      maxZ: wz + halfZ,
+      material,
+      tag,
+    };
+  }
+
+  private createWeaponBunkerEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    rotationY: number;
+    unlocked?: boolean;
+    rewardIndex: number;
+    isQaShowcase?: boolean;
+  }): WeaponBunkerVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const unlocked = Boolean(spec.unlocked);
+    const data: WeaponBunkerEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      y,
+      z: spec.z,
+      rotationY: spec.rotationY,
+      unlocked,
+      looted: false,
+      unlockAtStormPhase: WEAPON_BUNKER_UNLOCK_PHASE,
+    };
+    this.weaponBunkers.push(data);
+
+    const concreteMat = this.getSharedMat('bunker_concrete', () =>
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.72, metalness: 0.35 }),
+    );
+    const armorSteelMat = this.getSharedMat('bunker_steel', () =>
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.38, metalness: 0.82 }),
+    );
+    const blastDoorMat = this.getSharedMat('bunker_door', () =>
+      new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.32, metalness: 0.88 }),
+    );
+    const hazardStripeMat = this.getSharedMat('bunker_hazard', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#f59e0b',
+        emissive: '#b45309',
+        emissiveIntensity: 0.4,
+        roughness: 0.35,
+        metalness: 0.45,
+      }),
+    );
+    const goldCacheMat = this.getSharedMat('bunker_cache_gold', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#eab308',
+        emissiveIntensity: 0.9,
+        roughness: 0.22,
+        metalness: 0.78,
+      }),
+    );
+    const cacheGlowMat = this.getSharedMat('bunker_cache_glow', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#fef08a',
+        transparent: true,
+        opacity: 0.35,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const amberMat = this.getSharedMat('bunker_beacon_amber', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#f59e0b',
+        emissive: '#d97706',
+        emissiveIntensity: 1.55,
+        roughness: 0.2,
+        metalness: 0.3,
+      }),
+    );
+    const greenMat = this.getSharedMat('bunker_beacon_green', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#22c55e',
+        emissive: '#16a34a',
+        emissiveIntensity: 1.85,
+        roughness: 0.18,
+        metalness: 0.25,
+      }),
+    );
+    const amberHaloMat = this.getSharedMat('bunker_halo_amber', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#fbbf24',
+        transparent: true,
+        opacity: 0.55,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const greenHaloMat = this.getSharedMat('bunker_halo_green', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#4ade80',
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const floorGeo = this.getSharedGeo('bunker_floor', () => new THREE.BoxGeometry(5.0, 0.22, 4.4));
+    const sideWallGeo = this.getSharedGeo('bunker_side_wall', () => new THREE.BoxGeometry(0.68, 3.4, 4.4));
+    const backWallGeo = this.getSharedGeo('bunker_back_wall', () => new THREE.BoxGeometry(5.0, 3.4, 0.68));
+    const roofGeo = this.getSharedGeo('bunker_roof', () => new THREE.BoxGeometry(5.2, 0.44, 4.5));
+    const archRibGeo = this.getSharedGeo('bunker_arch_rib', () => new THREE.BoxGeometry(5.5, 0.52, 0.54));
+    const archButtressGeo = this.getSharedGeo('bunker_arch_buttress', () => new THREE.BoxGeometry(0.42, 3.85, 0.62));
+    const doorGeo = this.getSharedGeo('bunker_door_slab', () => new THREE.BoxGeometry(3.2, 3.05, 0.32));
+    const doorBarGeo = this.getSharedGeo('bunker_door_bar', () => new THREE.BoxGeometry(3.0, 0.22, 0.38));
+    const doorLockGeo = this.getSharedGeo('bunker_door_lock', () => new THREE.CylinderGeometry(0.32, 0.32, 0.42, 12));
+    doorLockGeo.rotateX(Math.PI * 0.5);
+    const mastGeo = this.getSharedGeo('bunker_mast', () => new THREE.CylinderGeometry(0.1, 0.14, 0.65, 8));
+    const beaconOrbGeo = this.getSharedGeo('bunker_beacon_orb', () => new THREE.SphereGeometry(0.28, 12, 10));
+    const beaconHaloGeo = this.getSharedGeo('bunker_beacon_halo', () => new THREE.TorusGeometry(0.48, 0.055, 8, 20));
+    beaconHaloGeo.rotateX(Math.PI * 0.5);
+    const cacheBoxGeo = this.getSharedGeo('bunker_cache_box', () => new THREE.BoxGeometry(1.5, 0.62, 0.92));
+    const cacheLidGeo = this.getSharedGeo('bunker_cache_lid', () => new THREE.BoxGeometry(1.56, 0.2, 0.98));
+    const cacheAuraGeo = this.getSharedGeo('bunker_cache_aura', () => new THREE.CylinderGeometry(0.68, 0.96, 2.2, 12, 1, true));
+
+    const bunkerGroup = new THREE.Group();
+    bunkerGroup.name = `WeaponBunker_${spec.id}`;
+    bunkerGroup.position.set(spec.x, y, spec.z);
+    bunkerGroup.rotation.y = spec.rotationY;
+
+    const floor = new THREE.Mesh(floorGeo, concreteMat);
+    floor.position.set(0, 0.11, 0);
+    floor.receiveShadow = true;
+    bunkerGroup.add(floor);
+
+    const leftWall = new THREE.Mesh(sideWallGeo, armorSteelMat);
+    leftWall.position.set(-2.16, 1.7, 0);
+    leftWall.castShadow = true;
+    leftWall.receiveShadow = true;
+    bunkerGroup.add(leftWall);
+
+    const rightWall = new THREE.Mesh(sideWallGeo, armorSteelMat);
+    rightWall.position.set(2.16, 1.7, 0);
+    rightWall.castShadow = true;
+    rightWall.receiveShadow = true;
+    bunkerGroup.add(rightWall);
+
+    const backWall = new THREE.Mesh(backWallGeo, armorSteelMat);
+    backWall.position.set(0, 1.7, -1.86);
+    backWall.castShadow = true;
+    backWall.receiveShadow = true;
+    bunkerGroup.add(backWall);
+
+    const roof = new THREE.Mesh(roofGeo, concreteMat);
+    roof.position.set(0, 3.62, 0);
+    roof.castShadow = true;
+    roof.receiveShadow = true;
+    bunkerGroup.add(roof);
+
+    // 3 Heavy Reinforced Bunker Arches
+    for (const rz of [-1.45, 0.1, 1.75]) {
+      const rib = new THREE.Mesh(archRibGeo, concreteMat);
+      rib.position.set(0, 3.92, rz);
+      rib.castShadow = true;
+      bunkerGroup.add(rib);
+
+      for (const sx of [-2.45, 2.45]) {
+        const buttress = new THREE.Mesh(archButtressGeo, armorSteelMat);
+        buttress.position.set(sx, 1.92, rz);
+        buttress.castShadow = true;
+        bunkerGroup.add(buttress);
+      }
+    }
+
+    // Beacon mast & amber->green beacon light
+    const mast = new THREE.Mesh(mastGeo, armorSteelMat);
+    mast.position.set(0, 4.35, 1.75);
+    bunkerGroup.add(mast);
+
+    const beaconOrb = new THREE.Mesh(beaconOrbGeo, unlocked ? greenMat : amberMat);
+    beaconOrb.position.set(0, 4.78, 1.75);
+    bunkerGroup.add(beaconOrb);
+
+    const beaconHalo = new THREE.Mesh(beaconHaloGeo, unlocked ? greenHaloMat : amberHaloMat);
+    beaconHalo.position.set(0, 4.78, 1.75);
+    bunkerGroup.add(beaconHalo);
+
+    // Sliding Armored Blast Door (moves upward along front gantry when unlocked)
+    const doorClosedY = 1.68;
+    const doorOpenY = 4.55;
+    const doorOpenProgress = unlocked ? 1 : 0;
+
+    const blastDoor = new THREE.Group();
+    blastDoor.name = `WeaponBunkerDoor_${spec.id}`;
+    blastDoor.position.set(0, unlocked ? doorOpenY : doorClosedY, 1.76);
+
+    const doorSlab = new THREE.Mesh(doorGeo, blastDoorMat);
+    doorSlab.castShadow = true;
+    doorSlab.receiveShadow = true;
+    blastDoor.add(doorSlab);
+
+    for (const by of [-0.75, 0.75]) {
+      const bar = new THREE.Mesh(doorBarGeo, hazardStripeMat);
+      bar.position.y = by;
+      blastDoor.add(bar);
+    }
+    const lockHub = new THREE.Mesh(doorLockGeo, hazardStripeMat);
+    blastDoor.add(lockHub);
+    bunkerGroup.add(blastDoor);
+
+    // Interior Weapon Cache visual
+    const cacheGroup = new THREE.Group();
+    cacheGroup.name = `WeaponBunkerCache_${spec.id}`;
+    cacheGroup.position.set(0, 0.22, -0.78);
+
+    const cacheBox = new THREE.Mesh(cacheBoxGeo, goldCacheMat);
+    cacheBox.position.y = 0.31;
+    cacheBox.castShadow = true;
+    cacheGroup.add(cacheBox);
+
+    const cacheLid = new THREE.Mesh(cacheLidGeo, armorSteelMat);
+    cacheLid.position.y = 0.72;
+    cacheGroup.add(cacheLid);
+
+    const cacheAura = new THREE.Mesh(cacheAuraGeo, cacheGlowMat);
+    cacheAura.position.y = 1.2;
+    cacheGroup.add(cacheAura);
+    bunkerGroup.add(cacheGroup);
+
+    this.group.add(bunkerGroup);
+
+    const wallColliders: ColliderBox[] = [
+      this.makeRotatedCollider(`${spec.id}_wall_l`, spec.x, spec.z, -2.16, 0, 0.42, 2.25, y, y + 3.9, spec.rotationY, 'metal', `weapon_bunker_wall:${spec.id}`),
+      this.makeRotatedCollider(`${spec.id}_wall_r`, spec.x, spec.z, 2.16, 0, 0.42, 2.25, y, y + 3.9, spec.rotationY, 'metal', `weapon_bunker_wall:${spec.id}`),
+      this.makeRotatedCollider(`${spec.id}_wall_back`, spec.x, spec.z, 0, -1.86, 2.55, 0.4, y, y + 3.9, spec.rotationY, 'metal', `weapon_bunker_wall:${spec.id}`),
+      this.makeRotatedCollider(`${spec.id}_roof`, spec.x, spec.z, 0, 0, 2.65, 2.3, y + 3.4, y + 4.1, spec.rotationY, 'metal', `weapon_bunker_roof:${spec.id}`),
+    ];
+    const doorCollider = this.makeRotatedCollider(
+      `${spec.id}_door`,
+      spec.x,
+      spec.z,
+      0,
+      1.76,
+      1.65,
+      0.24,
+      y + 0.15,
+      y + 3.3,
+      spec.rotationY,
+      'metal',
+      `weapon_bunker_door:${spec.id}`,
+    );
+
+    const weaponId = BUNKER_LOOT_WEAPONS[spec.rewardIndex % BUNKER_LOOT_WEAPONS.length];
+    const rarity: 'epic' | 'legendary' = spec.rewardIndex % 2 === 0 ? 'legendary' : 'epic';
+    const visual: WeaponBunkerVisual = {
+      data,
+      group: bunkerGroup,
+      blastDoor,
+      beaconOrb,
+      beaconHalo,
+      cacheGroup,
+      amberMat,
+      greenMat,
+      amberHaloMat,
+      greenHaloMat,
+      doorClosedY,
+      doorOpenY,
+      doorOpenProgress,
+      wallColliders,
+      doorCollider,
+      rewardWeaponId: weaponId,
+      rewardRarity: rarity,
+      rewardGold: 120 + (spec.rewardIndex % 3) * 30,
+      rewardShieldRestore: 50,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.weaponBunkersMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildWeaponBunkers(_terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      dx: number;
+      dz: number;
+      rotationY: number;
+    }> = [
+      { id: 'bunker_metro_towers', poiId: 'metro_towers', dx: 0, dz: -35, rotationY: 0 },
+      { id: 'bunker_sunny_suburbs', poiId: 'sunny_suburbs', dx: 36, dz: 8, rotationY: -Math.PI * 0.5 },
+      { id: 'bunker_market_row', poiId: 'market_row', dx: 0, dz: -35, rotationY: 0 },
+      { id: 'bunker_crater_depot', poiId: 'crater_depot', dx: -6, dz: -36, rotationY: 0 },
+      { id: 'bunker_whispering_pines', poiId: 'whispering_pines', dx: 14, dz: 36, rotationY: Math.PI },
+      { id: 'bunker_frostpeak_citadel', poiId: 'frostpeak_citadel', dx: 32, dz: -4, rotationY: -Math.PI * 0.5 },
+      { id: 'bunker_scorched_caldera', poiId: 'scorched_caldera', dx: 30, dz: -24, rotationY: 0 },
+      { id: 'bunker_sunken_oasis', poiId: 'sunken_oasis', dx: 16, dz: -32, rotationY: 0 },
+    ];
+
+    for (let i = 0; i < specs.length; i++) {
+      const spec = specs[i];
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+      this.createWeaponBunkerEntry({
+        id: spec.id,
+        poiId: spec.poiId,
+        x: poi.x + spec.dx,
+        z: poi.z + spec.dz,
+        rotationY: spec.rotationY,
+        rewardIndex: i,
+      });
+    }
+  }
+
+  private createSlurpTankerEntry(spec: {
+    id: string;
+    x: number;
+    z: number;
+    rotationY: number;
+    isQaShowcase?: boolean;
+  }): SlurpTankerVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: SlurpTankerEntity = {
+      id: spec.id,
+      x: spec.x,
+      y,
+      z: spec.z,
+      rotationY: spec.rotationY,
+      hp: SLURP_TANKER_HP,
+      maxHp: SLURP_TANKER_HP,
+      healRadius: SLURP_TANKER_HEAL_RADIUS,
+      healAmount: SLURP_TANKER_HEAL_AMOUNT,
+      destroyed: false,
+    };
+    this.slurpTankers.push(data);
+
+    const chassisMat = this.getSharedMat('tanker_chassis', () =>
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.5, metalness: 0.72 }),
+    );
+    const cabMat = this.getSharedMat('tanker_cab', () =>
+      new THREE.MeshStandardMaterial({ color: '#0e7490', roughness: 0.35, metalness: 0.55 }),
+    );
+    const glassMat = this.getSharedMat('tanker_glass', () =>
+      new THREE.MeshStandardMaterial({ color: '#7dd3fc', roughness: 0.15, metalness: 0.5 }),
+    );
+    const tireMat = this.getSharedMat('tanker_tire', () =>
+      new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.9 }),
+    );
+    const tankCyanMat = this.getSharedMat('tanker_slurp', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#06b6d4',
+        emissive: '#0ea5e9',
+        emissiveIntensity: 0.92,
+        roughness: 0.15,
+        metalness: 0.25,
+      }),
+    );
+    const tankCoreGlowMat = this.getSharedMat('tanker_slurp_glow', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#67e8f9',
+        emissive: '#22d3ee',
+        emissiveIntensity: 1.65,
+        roughness: 0.12,
+        metalness: 0.15,
+      }),
+    );
+    const rupturedMat = this.getSharedMat('tanker_ruptured', () =>
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.78, metalness: 0.6 }),
+    );
+    const puddleMat = this.getSharedMat('tanker_puddle', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#22d3ee',
+        transparent: true,
+        opacity: 0.55,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const chassisGeo = this.getSharedGeo('tanker_chassis_geo', () => new THREE.BoxGeometry(2.2, 0.34, 6.4));
+    const cabGeo = this.getSharedGeo('tanker_cab_geo', () => new THREE.BoxGeometry(2.1, 1.55, 1.85));
+    const windshieldGeo = this.getSharedGeo('tanker_windshield_geo', () => new THREE.BoxGeometry(1.88, 0.65, 0.1));
+    const wheelGeo = this.getSharedGeo('tanker_wheel_geo', () => {
+      const g = new THREE.CylinderGeometry(0.48, 0.48, 0.36, 12);
+      g.rotateZ(Math.PI * 0.5);
+      return g;
+    });
+    const tankCylGeo = this.getSharedGeo('tanker_cyl_geo', () => {
+      const g = new THREE.CylinderGeometry(0.95, 0.95, 3.6, 16);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const domeGeo = this.getSharedGeo('tanker_dome_geo', () => new THREE.SphereGeometry(0.95, 14, 10));
+    const ringGeo = this.getSharedGeo('tanker_ring_geo', () => new THREE.TorusGeometry(0.98, 0.06, 8, 20));
+    const stripGeo = this.getSharedGeo('tanker_strip_geo', () => new THREE.BoxGeometry(0.14, 0.32, 3.3));
+    const valveGeo = this.getSharedGeo('tanker_valve_geo', () => new THREE.CylinderGeometry(0.22, 0.28, 0.28, 10));
+    const rupturedShellGeo = this.getSharedGeo('tanker_ruptured_geo', () => new THREE.BoxGeometry(1.6, 0.42, 3.4));
+    const puddleGeo = this.getSharedGeo('tanker_puddle_geo', () => {
+      const g = new THREE.CircleGeometry(2.6, 20);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+
+    const tankerGroup = new THREE.Group();
+    tankerGroup.name = `SlurpTanker_${spec.id}`;
+    tankerGroup.position.set(spec.x, y, spec.z);
+    tankerGroup.rotation.y = spec.rotationY;
+
+    const bodyGroup = new THREE.Group();
+
+    const chassis = new THREE.Mesh(chassisGeo, chassisMat);
+    chassis.position.set(0, 0.62, 0);
+    chassis.castShadow = true;
+    chassis.receiveShadow = true;
+    bodyGroup.add(chassis);
+
+    const cab = new THREE.Mesh(cabGeo, cabMat);
+    cab.position.set(0, 1.48, 2.12);
+    cab.castShadow = true;
+    cab.receiveShadow = true;
+    bodyGroup.add(cab);
+
+    const windshield = new THREE.Mesh(windshieldGeo, glassMat);
+    windshield.position.set(0, 1.68, 3.04);
+    bodyGroup.add(windshield);
+
+    for (const wx of [-1.08, 1.08]) {
+      for (const wz of [-2.25, -0.85, 2.05]) {
+        const wheel = new THREE.Mesh(wheelGeo, tireMat);
+        wheel.position.set(wx, 0.48, wz);
+        wheel.castShadow = true;
+        bodyGroup.add(wheel);
+      }
+    }
+
+    // Intact pressurized glowing cyan tank
+    const intactTankGroup = new THREE.Group();
+    intactTankGroup.name = `SlurpTankerIntact_${spec.id}`;
+
+    const tankBody = new THREE.Mesh(tankCylGeo, tankCyanMat);
+    tankBody.position.set(0, 1.68, -0.95);
+    tankBody.castShadow = true;
+    tankBody.receiveShadow = true;
+    intactTankGroup.add(tankBody);
+
+    for (const dz of [-2.75, 0.85]) {
+      const dome = new THREE.Mesh(domeGeo, tankCyanMat);
+      dome.position.set(0, 1.68, dz);
+      dome.scale.set(1, 1, 0.55);
+      intactTankGroup.add(dome);
+    }
+
+    for (const rz of [-2.1, -0.95, 0.2]) {
+      const ring = new THREE.Mesh(ringGeo, chassisMat);
+      ring.position.set(0, 1.68, rz);
+      intactTankGroup.add(ring);
+    }
+
+    for (const sx of [-0.94, 0.94]) {
+      const strip = new THREE.Mesh(stripGeo, tankCoreGlowMat);
+      strip.position.set(sx, 1.68, -0.95);
+      intactTankGroup.add(strip);
+    }
+
+    const topValve = new THREE.Mesh(valveGeo, tankCoreGlowMat);
+    topValve.position.set(0, 2.72, -0.95);
+    intactTankGroup.add(topValve);
+
+    bodyGroup.add(intactTankGroup);
+
+    // Ruptured state (shown when hp <= 0)
+    const rupturedTankGroup = new THREE.Group();
+    rupturedTankGroup.name = `SlurpTankerRuptured_${spec.id}`;
+    rupturedTankGroup.visible = false;
+
+    const rupturedHull = new THREE.Mesh(rupturedShellGeo, rupturedMat);
+    rupturedHull.position.set(0, 0.98, -0.95);
+    rupturedHull.castShadow = true;
+    rupturedTankGroup.add(rupturedHull);
+
+    for (const rz of [-2.0, 0.1]) {
+      const brokenRing = new THREE.Mesh(ringGeo, rupturedMat);
+      brokenRing.position.set(0, 1.22, rz);
+      brokenRing.scale.set(1, 0.5, 1);
+      rupturedTankGroup.add(brokenRing);
+    }
+
+    const puddle = new THREE.Mesh(puddleGeo, puddleMat);
+    puddle.position.set(0, 0.08, -0.8);
+    rupturedTankGroup.add(puddle);
+
+    bodyGroup.add(rupturedTankGroup);
+    tankerGroup.add(bodyGroup);
+    this.group.add(tankerGroup);
+
+    const collider = this.makeRotatedCollider(
+      `${spec.id}_col`,
+      spec.x,
+      spec.z,
+      0,
+      0,
+      1.25,
+      3.25,
+      y,
+      y + 2.85,
+      spec.rotationY,
+      'metal',
+      `slurp_tanker:${spec.id}`,
+    );
+
+    const visual: SlurpTankerVisual = {
+      data,
+      group: tankerGroup,
+      bodyGroup,
+      intactTankGroup,
+      rupturedTankGroup,
+      collider,
+      hitAnim: 0,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.slurpTankersMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildSlurpTankers(_terrain: TerrainQuery): void {
+    const specs: Array<{ id: string; x: number; z: number; rotationY: number }> = [
+      { id: 'tanker_suburbs_metro', x: -115, z: -90, rotationY: Math.atan2(20, 40) },
+      { id: 'tanker_suburbs_frostpeak', x: -138, z: -181, rotationY: Math.atan2(53, -51) },
+      { id: 'tanker_frostpeak_pines', x: 89, z: -211, rotationY: Math.atan2(58, 30) },
+      { id: 'tanker_oasis_corridor', x: -213.5, z: -51.5, rotationY: Math.atan2(-23, 73) },
+      { id: 'tanker_caldera_crater', x: -66, z: 140, rotationY: Math.atan2(72, -4) },
+      { id: 'tanker_market_pines', x: 178.5, z: -5, rotationY: Math.atan2(7, -80) },
+    ];
+
+    for (const spec of specs) {
+      this.createSlurpTankerEntry(spec);
+    }
+  }
+
   private buildLootIsland(): void {
     const rockMat = this.addMat(
       new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.88, metalness: 0.1 }),
@@ -2927,6 +3601,450 @@ export class WorldInteractables {
     ];
   }
 
+  getWeaponBunkers(): WeaponBunkerEntity[] {
+    return this.weaponBunkers;
+  }
+
+  getWeaponBunkerColliders(): ColliderBox[] {
+    const out: ColliderBox[] = [];
+    for (const b of this.weaponBunkersMap.values()) {
+      out.push(...b.wallColliders);
+      if (!b.data.unlocked) {
+        out.push(b.doorCollider);
+      }
+    }
+    return out;
+  }
+
+  unlockBunkersForPhase(phase: number): WeaponBunkerEntity[] {
+    const unlockedNow: WeaponBunkerEntity[] = [];
+    for (const entry of this.weaponBunkersMap.values()) {
+      if (!entry.data.unlocked && phase >= entry.data.unlockAtStormPhase) {
+        entry.data.unlocked = true;
+        entry.beaconOrb.material = entry.greenMat;
+        entry.beaconHalo.material = entry.greenHaloMat;
+        entry.doorOpenProgress = Math.max(entry.doorOpenProgress, 0.25);
+        const eased = 1 - Math.pow(1 - entry.doorOpenProgress, 3);
+        entry.blastDoor.position.y =
+          entry.doorClosedY + (entry.doorOpenY - entry.doorClosedY) * eased;
+        unlockedNow.push(entry.data);
+      }
+    }
+    if (unlockedNow.length > 0) {
+      this.eventBus?.emit('sound:play', {
+        id: 'bunker_unlock',
+        position: {
+          x: unlockedNow[0].x,
+          y: unlockedNow[0].y + 1.8,
+          z: unlockedNow[0].z,
+        },
+        volume: 0.85,
+        spatial: false,
+      });
+    }
+    return unlockedNow;
+  }
+
+  lootWeaponBunker(id: string): WeaponBunkerLootResult | null {
+    const entry = this.weaponBunkersMap.get(id);
+    if (!entry || !entry.data.unlocked || entry.data.looted) {
+      return null;
+    }
+    entry.data.looted = true;
+    entry.cacheGroup.visible = false;
+    this.eventBus?.emit('vfx:chest_open', {
+      position: { x: entry.data.x, y: entry.data.y + 0.8, z: entry.data.z },
+    });
+    return {
+      weaponId: entry.rewardWeaponId,
+      rarity: entry.rewardRarity,
+      gold: entry.rewardGold,
+      shieldRestore: entry.rewardShieldRestore,
+    };
+  }
+
+  getSlurpTankers(): SlurpTankerEntity[] {
+    return this.slurpTankers;
+  }
+
+  getSlurpTankerColliders(): ColliderBox[] {
+    const out: ColliderBox[] = [];
+    for (const entry of this.slurpTankersMap.values()) {
+      if (!entry.data.destroyed) {
+        out.push(entry.collider);
+      }
+    }
+    return out;
+  }
+
+  damageSlurpTanker(id: string, dmg: number): SlurpTankerDamageResult | null {
+    const entry = this.slurpTankersMap.get(id);
+    if (!entry || entry.data.destroyed) {
+      return null;
+    }
+    const { x, y, z, healRadius, healAmount } = entry.data;
+    if (dmg <= 0) {
+      return {
+        exploded: false,
+        x,
+        y,
+        z,
+        radius: healRadius,
+        healAmount: 0,
+      };
+    }
+
+    entry.data.hp = Math.max(0, entry.data.hp - dmg);
+    if (entry.data.hp <= 0) {
+      entry.data.hp = 0;
+      entry.data.destroyed = true;
+      entry.intactTankGroup.visible = false;
+      entry.rupturedTankGroup.visible = true;
+      entry.hitAnim = 0;
+
+      const burstPos: Vec3Like = { x, y: y + 1.5, z };
+      this.eventBus?.emit('vfx:slurp_tanker_burst', {
+        position: burstPos,
+        radius: healRadius,
+      });
+      this.eventBus?.emit('sound:play', {
+        id: 'slurp_tanker_burst',
+        position: burstPos,
+        volume: 0.9,
+        spatial: true,
+      });
+
+      return {
+        exploded: true,
+        x,
+        y,
+        z,
+        radius: healRadius,
+        healAmount,
+      };
+    }
+
+    entry.hitAnim = 1.0;
+    return {
+      exploded: false,
+      x,
+      y,
+      z,
+      radius: healRadius,
+      healAmount: 0,
+    };
+  }
+
+  private createPickupPillarAndRing(colorHex: string): {
+    pillar: THREE.Mesh;
+    ring: THREE.Mesh;
+  } {
+    const pillarGeo = this.getSharedGeo('pickup_pillar_geo', () =>
+      new THREE.CylinderGeometry(0.16, 0.34, 7.2, 12, 1, true),
+    );
+    const ringGeo = this.getSharedGeo('pickup_ring_geo', () => {
+      const g = new THREE.RingGeometry(0.55, 0.85, 24);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    const pillarMat = this.getSharedMat(`pickup_pillar_${colorHex}`, () =>
+      new THREE.MeshBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: 0.34,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const ringMat = this.getSharedMat(`pickup_ring_${colorHex}`, () =>
+      new THREE.MeshBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const pillar = new THREE.Mesh(pillarGeo, pillarMat);
+    pillar.position.y = 3.6;
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.y = 0.05;
+    return { pillar, ring };
+  }
+
+  spawnDroppedMedallion(
+    medallionId: MedallionId,
+    x: number,
+    y: number,
+    z: number,
+  ): DroppedMedallionEntity {
+    const id = `medallion_drop_${++this.droppedMedallionCounter}`;
+    const data: DroppedMedallionEntity = {
+      id,
+      medallionId,
+      x,
+      y,
+      z,
+      collected: false,
+    };
+    this.droppedMedallions.push(data);
+
+    const def = MEDALLIONS.find((m) => m.id === medallionId);
+    const accentColor = def?.accentColor ?? '#facc15';
+
+    const goldMat = this.getSharedMat('pickup_gold_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#d97706',
+        emissiveIntensity: 0.75,
+        roughness: 0.18,
+        metalness: 0.88,
+      }),
+    );
+    const gemMat = this.getSharedMat(`medallion_gem_${accentColor}`, () =>
+      new THREE.MeshStandardMaterial({
+        color: accentColor,
+        emissive: accentColor,
+        emissiveIntensity: 1.5,
+        roughness: 0.15,
+        metalness: 0.3,
+      }),
+    );
+
+    const discGeo = this.getSharedGeo('medallion_disc_geo', () => {
+      const g = new THREE.CylinderGeometry(0.36, 0.36, 0.09, 16);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const rimGeo = this.getSharedGeo('medallion_rim_geo', () => new THREE.TorusGeometry(0.38, 0.055, 8, 20));
+    const gemGeo = this.getSharedGeo('medallion_gem_geo', () => new THREE.OctahedronGeometry(0.18, 0));
+
+    const pickupGroup = new THREE.Group();
+    pickupGroup.name = `DroppedMedallion_${id}`;
+    pickupGroup.position.set(x, y, z);
+
+    const { pillar, ring } = this.createPickupPillarAndRing('#facc15');
+    pickupGroup.add(pillar, ring);
+
+    const baseSpinY = 0.85;
+    const spinGroup = new THREE.Group();
+    spinGroup.position.y = baseSpinY;
+    const disc = new THREE.Mesh(discGeo, goldMat);
+    const rim = new THREE.Mesh(rimGeo, goldMat);
+    const gem = new THREE.Mesh(gemGeo, gemMat);
+    gem.scale.set(1, 1, 1.35);
+    spinGroup.add(disc, rim, gem);
+    pickupGroup.add(spinGroup);
+
+    this.group.add(pickupGroup);
+    this.droppedMedallionsMap.set(id, {
+      data,
+      group: pickupGroup,
+      spinGroup,
+      ringMesh: ring,
+      baseSpinY,
+    });
+    return data;
+  }
+
+  collectNearbyMedallion(
+    x: number,
+    z: number,
+    maxDist = 2.5,
+  ): DroppedMedallionEntity | null {
+    let best: DroppedPickupVisual<DroppedMedallionEntity> | null = null;
+    let bestDist = maxDist;
+    for (const entry of this.droppedMedallionsMap.values()) {
+      if (entry.data.collected) continue;
+      const d = Math.hypot(entry.data.x - x, entry.data.z - z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = entry;
+      }
+    }
+    if (!best) return null;
+    best.data.collected = true;
+    best.group.visible = false;
+    return best.data;
+  }
+
+  getDroppedMedallions(): DroppedMedallionEntity[] {
+    return this.droppedMedallions;
+  }
+
+  spawnDroppedCrown(x: number, y: number, z: number): DroppedCrownEntity {
+    const id = `crown_drop_${++this.droppedCrownCounter}`;
+    const data: DroppedCrownEntity = {
+      id,
+      x,
+      y,
+      z,
+      collected: false,
+    };
+    this.droppedCrowns.push(data);
+
+    const goldMat = this.getSharedMat('pickup_gold_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#d97706',
+        emissiveIntensity: 0.75,
+        roughness: 0.18,
+        metalness: 0.88,
+      }),
+    );
+    const jewelMat = this.getSharedMat('crown_jewel_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#fef08a',
+        emissive: '#fde047',
+        emissiveIntensity: 1.75,
+        roughness: 0.12,
+        metalness: 0.35,
+      }),
+    );
+
+    const bandGeo = this.getSharedGeo('crown_band_geo', () => new THREE.CylinderGeometry(0.34, 0.3, 0.18, 16, 1, true));
+    const baseTorusGeo = this.getSharedGeo('crown_torus_geo', () => {
+      const g = new THREE.TorusGeometry(0.32, 0.05, 8, 20);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const peakGeo = this.getSharedGeo('crown_peak_geo', () => new THREE.ConeGeometry(0.085, 0.28, 6));
+    const jewelGeo = this.getSharedGeo('crown_jewel_geo', () => new THREE.OctahedronGeometry(0.11, 0));
+
+    const pickupGroup = new THREE.Group();
+    pickupGroup.name = `DroppedCrown_${id}`;
+    pickupGroup.position.set(x, y, z);
+
+    const { pillar, ring } = this.createPickupPillarAndRing('#fde047');
+    pickupGroup.add(pillar, ring);
+
+    const baseSpinY = 0.85;
+    const spinGroup = new THREE.Group();
+    spinGroup.position.y = baseSpinY;
+    const band = new THREE.Mesh(bandGeo, goldMat);
+    const baseTorus = new THREE.Mesh(baseTorusGeo, goldMat);
+    baseTorus.position.y = -0.09;
+    spinGroup.add(band, baseTorus);
+
+    for (let p = 0; p < 5; p++) {
+      const a = (p / 5) * Math.PI * 2;
+      const peak = new THREE.Mesh(peakGeo, goldMat);
+      peak.position.set(Math.cos(a) * 0.32, 0.2, Math.sin(a) * 0.32);
+      spinGroup.add(peak);
+    }
+    const jewel = new THREE.Mesh(jewelGeo, jewelMat);
+    jewel.position.y = 0.08;
+    spinGroup.add(jewel);
+    pickupGroup.add(spinGroup);
+
+    this.group.add(pickupGroup);
+    this.droppedCrownsMap.set(id, {
+      data,
+      group: pickupGroup,
+      spinGroup,
+      ringMesh: ring,
+      baseSpinY,
+    });
+    return data;
+  }
+
+  collectNearbyCrown(x: number, z: number, maxDist = 2.5): DroppedCrownEntity | null {
+    let best: DroppedPickupVisual<DroppedCrownEntity> | null = null;
+    let bestDist = maxDist;
+    for (const entry of this.droppedCrownsMap.values()) {
+      if (entry.data.collected) continue;
+      const d = Math.hypot(entry.data.x - x, entry.data.z - z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = entry;
+      }
+    }
+    if (!best) return null;
+    best.data.collected = true;
+    best.group.visible = false;
+    return best.data;
+  }
+
+  getDroppedCrowns(): DroppedCrownEntity[] {
+    return this.droppedCrowns;
+  }
+
+  private findDryGroundNear(centerPos: Vec3Like, dx: number, dz: number): { x: number; y: number; z: number } {
+    const baseX = centerPos.x + dx;
+    const baseZ = centerPos.z + dz;
+    if (!this.terrain.isWater(baseX, baseZ)) {
+      return { x: baseX, y: this.terrain.getHeightAt(baseX, baseZ), z: baseZ };
+    }
+    const radius = Math.max(3, Math.hypot(dx, dz));
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      const tx = centerPos.x + Math.cos(a) * radius;
+      const tz = centerPos.z + Math.sin(a) * radius;
+      if (!this.terrain.isWater(tx, tz)) {
+        return { x: tx, y: this.terrain.getHeightAt(tx, tz), z: tz };
+      }
+    }
+    return { x: baseX, y: this.terrain.getHeightAt(baseX, baseZ), z: baseZ };
+  }
+
+  private removeQaShowcaseDynamicEntities(): void {
+    const qaBunkerId = 'bunker_qa_showcase';
+    const qaBunker = this.weaponBunkersMap.get(qaBunkerId);
+    if (qaBunker) {
+      this.group.remove(qaBunker.group);
+      this.weaponBunkersMap.delete(qaBunkerId);
+      const idx = this.weaponBunkers.findIndex((b) => b.id === qaBunkerId);
+      if (idx >= 0) this.weaponBunkers.splice(idx, 1);
+    }
+
+    const qaTankerId = 'tanker_qa_showcase';
+    const qaTanker = this.slurpTankersMap.get(qaTankerId);
+    if (qaTanker) {
+      this.group.remove(qaTanker.group);
+      this.slurpTankersMap.delete(qaTankerId);
+      const idx = this.slurpTankers.findIndex((t) => t.id === qaTankerId);
+      if (idx >= 0) this.slurpTankers.splice(idx, 1);
+    }
+  }
+
+  qaPlaceWave6Showcase(centerPos: Vec3Like): Wave6ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities();
+
+    const bSpot = this.findDryGroundNear(centerPos, 6.5, -3.5);
+    const bunkerVisual = this.createWeaponBunkerEntry({
+      id: 'bunker_qa_showcase',
+      poiId: 'qa_showcase',
+      x: bSpot.x,
+      z: bSpot.z,
+      rotationY: -Math.PI * 0.25,
+      unlocked: true,
+      rewardIndex: 0,
+      isQaShowcase: true,
+    });
+
+    const tSpot = this.findDryGroundNear(centerPos, -6.5, -3.5);
+    const tankerVisual = this.createSlurpTankerEntry({
+      id: 'tanker_qa_showcase',
+      x: tSpot.x,
+      z: tSpot.z,
+      rotationY: Math.PI * 0.25,
+      isQaShowcase: true,
+    });
+
+    const mSpot = this.findDryGroundNear(centerPos, -2.5, 4.0);
+    const medallion = this.spawnDroppedMedallion('medallion_combat', mSpot.x, mSpot.y, mSpot.z);
+
+    const cSpot = this.findDryGroundNear(centerPos, 2.5, 4.0);
+    const crown = this.spawnDroppedCrown(cSpot.x, cSpot.y, cSpot.z);
+
+    return {
+      bunker: bunkerVisual.data,
+      tanker: tankerVisual.data,
+      medallion,
+      crown,
+    };
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -2942,10 +4060,14 @@ export class WorldInteractables {
       ...this.getExplosiveBarrelColliders(),
       ...this.getVendingMachineColliders(),
       ...this.getLootIslandColliders(),
+      ...this.getWeaponBunkerColliders(),
+      ...this.getSlurpTankerColliders(),
     ];
   }
 
   reset(): void {
+    this.removeQaShowcaseDynamicEntities();
+
     for (const v of this.vaultsMap.values()) {
       v.data.unlocked = false;
       v.data.opened = false;
@@ -3023,6 +4145,39 @@ export class WorldInteractables {
       npc.emblemGroup.position.y = npc.baseEmblemY;
       npc.emblemGroup.rotation.set(0, 0, 0);
     }
+
+    for (const wb of this.weaponBunkersMap.values()) {
+      wb.data.unlocked = false;
+      wb.data.looted = false;
+      wb.doorOpenProgress = 0;
+      wb.blastDoor.position.y = wb.doorClosedY;
+      wb.beaconOrb.material = wb.amberMat;
+      wb.beaconHalo.material = wb.amberHaloMat;
+      wb.cacheGroup.visible = true;
+    }
+
+    for (const st of this.slurpTankersMap.values()) {
+      st.data.hp = SLURP_TANKER_HP;
+      st.data.maxHp = SLURP_TANKER_HP;
+      st.data.destroyed = false;
+      st.intactTankGroup.visible = true;
+      st.rupturedTankGroup.visible = false;
+      st.bodyGroup.scale.set(1, 1, 1);
+      st.bodyGroup.rotation.set(0, 0, 0);
+      st.hitAnim = 0;
+    }
+
+    for (const dm of this.droppedMedallionsMap.values()) {
+      this.group.remove(dm.group);
+    }
+    this.droppedMedallionsMap.clear();
+    this.droppedMedallions = [];
+
+    for (const dc of this.droppedCrownsMap.values()) {
+      this.group.remove(dc.group);
+    }
+    this.droppedCrownsMap.clear();
+    this.droppedCrowns = [];
 
     this.lootIslandState = {
       active: false,
@@ -3283,6 +4438,50 @@ export class WorldInteractables {
         ring.scale.set(s, s, s);
       }
     }
+
+    // Animate 8 Weapon Bunker sliding blast doors & beacons
+    let bunkerIdx = 0;
+    for (const wb of this.weaponBunkersMap.values()) {
+      if (wb.data.unlocked && wb.doorOpenProgress < 1) {
+        wb.doorOpenProgress = Math.min(1, wb.doorOpenProgress + safeDt * 1.1);
+        const eased = 1 - Math.pow(1 - wb.doorOpenProgress, 3);
+        wb.blastDoor.position.y = wb.doorClosedY + (wb.doorOpenY - wb.doorClosedY) * eased;
+      }
+      const bPulse = 1.0 + Math.sin(elapsed * 3.4 + bunkerIdx * 0.8) * 0.12;
+      wb.beaconHalo.scale.set(bPulse, bPulse, bPulse);
+      if (!wb.data.looted) {
+        wb.cacheGroup.rotation.y = Math.sin(elapsed * 1.4 + bunkerIdx) * 0.08;
+      }
+      bunkerIdx++;
+    }
+
+    // Decay hit wobble on 6 Slurp Tanker trucks
+    for (const st of this.slurpTankersMap.values()) {
+      this.stepBarrelHitWobble(st, safeDt);
+    }
+
+    // Spin & hover dynamic Dropped Medallions and Dropped Crowns
+    let pickupIdx = 0;
+    for (const dm of this.droppedMedallionsMap.values()) {
+      if (!dm.data.collected) {
+        const t = elapsed + pickupIdx * 0.9;
+        dm.spinGroup.rotation.y += safeDt * 2.4;
+        dm.spinGroup.position.y = dm.baseSpinY + Math.sin(t * 2.8) * 0.1;
+        const rScale = 1.0 + Math.sin(t * 3.5) * 0.1;
+        dm.ringMesh.scale.set(rScale, rScale, rScale);
+      }
+      pickupIdx++;
+    }
+    for (const dc of this.droppedCrownsMap.values()) {
+      if (!dc.data.collected) {
+        const t = elapsed + pickupIdx * 0.9;
+        dc.spinGroup.rotation.y += safeDt * 2.2;
+        dc.spinGroup.position.y = dc.baseSpinY + Math.sin(t * 2.6) * 0.12;
+        const rScale = 1.0 + Math.sin(t * 3.2) * 0.12;
+        dc.ringMesh.scale.set(rScale, rScale, rScale);
+      }
+      pickupIdx++;
+    }
   }
 
   dispose(): void {
@@ -3291,6 +4490,10 @@ export class WorldInteractables {
     this.geometries = [];
     for (const m of this.materials) m.dispose();
     this.materials = [];
+    for (const g of this.sharedGeos.values()) g.dispose();
+    this.sharedGeos.clear();
+    for (const m of this.sharedMats.values()) m.dispose();
+    this.sharedMats.clear();
     this.padVisuals = [];
     this.ziplineOrbs = [];
     this.launchPads = [];
@@ -3313,6 +4516,14 @@ export class WorldInteractables {
     this.vendingMachinesMap.clear();
     this.npcSpecialists = [];
     this.npcSpecialistsMap.clear();
+    this.weaponBunkers = [];
+    this.weaponBunkersMap.clear();
+    this.slurpTankers = [];
+    this.slurpTankersMap.clear();
+    this.droppedMedallions = [];
+    this.droppedMedallionsMap.clear();
+    this.droppedCrowns = [];
+    this.droppedCrownsMap.clear();
     this.lootIslandGeyserRings = [];
     this.lootIslandState = {
       active: false,

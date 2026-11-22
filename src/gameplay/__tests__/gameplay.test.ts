@@ -8,6 +8,8 @@ import type {
   ChestEntity,
   ColliderBox,
   DamageEvent,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   ExplosiveBarrelEntity,
   HarvestableProp,
   ItemInstance,
@@ -16,11 +18,13 @@ import type {
   LootIslandState,
   LootLlamaEntity,
   MatchQuest,
+  MedallionId,
   NpcSpecialistEntity,
   POIDef,
   Rarity,
   RiftEntity,
   SlurpBarrelEntity,
+  SlurpTankerEntity,
   SoundEventId,
   SupplyDrop,
   TerrainQuery,
@@ -29,10 +33,13 @@ import type {
   Vec3Like,
   VehicleEntity,
   VendingMachineEntity,
+  WeaponBunkerEntity,
   ZiplineEntity,
 } from '../../types';
 import {
   AUGMENTS,
+  DBNO_BLEED_DPS,
+  DBNO_MAX_HP,
   DEFAULT_SETTINGS,
   EventBus,
   GLIDER_FORCE_HEIGHT,
@@ -44,6 +51,7 @@ import {
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   RARITY_MULTIPLIER,
+  REVIVE_DURATION_SEC,
   STARTING_GOLD_BARS,
   UPGRADE_COSTS,
   WEAPONS,
@@ -61,15 +69,18 @@ import {
   PlayerController,
   QuestTracker,
   ROOF_HEIGHT,
+  WEAPON_SOUND_MAP,
   WeaponSystem,
   classifyEditMask,
   computeWeaponDamage,
   getRampHeightAtLocal,
   getRoofHeightAtLocal,
   type CombatActor,
+  type DuoReviveBridge,
   type PropsInteractionBridge,
   type VaultBridge,
   type VehicleBridge,
+  type WorldChapterBridge,
   type WorldEconomyBridge,
   type WorldRiftCaptureBridge,
   type WorldStationBridge,
@@ -4078,5 +4089,846 @@ describe('Wave 5 Gameplay Systems (Gold Economy, Kinetic Blade, Tactical DMR, Lo
     expect(flagVfx[0].poiName).toBe('Loot Island');
     expect(capturedPositions.length).toBe(1);
     expect(capturedPositions[0]).toEqual({ x: 40, y: 24.8, z: 40 });
+  });
+});
+
+describe('Wave 6 Gameplay Systems (Medallions, Twin-Mag, Boom Bow, Slurp Tanker, Victory Crown, Duos DBNO/Revive)', () => {
+  function setupWave6Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'Wave6Tester');
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockChapterBridge(init?: {
+    bunkers?: WeaponBunkerEntity[];
+    tankers?: SlurpTankerEntity[];
+    droppedMedallions?: DroppedMedallionEntity[];
+    droppedCrowns?: DroppedCrownEntity[];
+  }): WorldChapterBridge & {
+    bunkers: WeaponBunkerEntity[];
+    tankers: SlurpTankerEntity[];
+    droppedMedallions: DroppedMedallionEntity[];
+    droppedCrowns: DroppedCrownEntity[];
+  } {
+    const bunkers = init?.bunkers ?? [];
+    const tankers = init?.tankers ?? [];
+    const droppedMedallions = init?.droppedMedallions ?? [];
+    const droppedCrowns = init?.droppedCrowns ?? [];
+    return {
+      bunkers,
+      tankers,
+      droppedMedallions,
+      droppedCrowns,
+      getWeaponBunkers: () => bunkers,
+      lootWeaponBunker: (id) => {
+        const b = bunkers.find((item) => item.id === id);
+        if (!b || !b.unlocked || b.looted) return null;
+        b.looted = true;
+        return {
+          weaponId: 'combat_smg',
+          rarity: 'legendary',
+          gold: 180,
+          shieldRestore: 40,
+        };
+      },
+      getSlurpTankers: () => tankers,
+      damageSlurpTanker: (id, dmg) => {
+        const st = tankers.find((item) => item.id === id);
+        if (!st || st.destroyed || st.hp <= 0) return null;
+        st.hp = Math.max(0, st.hp - dmg);
+        const exploded = st.hp <= 0;
+        if (exploded) st.destroyed = true;
+        return {
+          exploded,
+          x: st.x,
+          y: st.y + 1.5,
+          z: st.z,
+          radius: st.healRadius,
+          healAmount: exploded ? st.healAmount : 0,
+        };
+      },
+      getDroppedMedallions: () => droppedMedallions,
+      collectNearbyMedallion: (x, z, maxDist) => {
+        let best: DroppedMedallionEntity | null = null;
+        let bestDist = maxDist;
+        for (const dm of droppedMedallions) {
+          if (dm.collected) continue;
+          const d = Math.hypot(dm.x - x, dm.z - z);
+          if (d <= bestDist) {
+            bestDist = d;
+            best = dm;
+          }
+        }
+        if (!best) return null;
+        best.collected = true;
+        return best;
+      },
+      getDroppedCrowns: () => droppedCrowns,
+      collectNearbyCrown: (x, z, maxDist) => {
+        let best: DroppedCrownEntity | null = null;
+        let bestDist = maxDist;
+        for (const dc of droppedCrowns) {
+          if (dc.collected) continue;
+          const d = Math.hypot(dc.x - x, dc.z - z);
+          if (d <= bestDist) {
+            bestDist = d;
+            best = dc;
+          }
+        }
+        if (!best) return null;
+        best.collected = true;
+        return best;
+      },
+    };
+  }
+
+  it('supports all 3 Boss Medallions (siphon, agility, combat) with duplicate protection and stat buffs', () => {
+    // 1. Medallion Siphon: passive +2/s shield up to 50 after >=4s out of combat & +25 siphon on elim
+    {
+      const { bus, weapons, player } = setupWave6Harness();
+      const sounds: SoundEventId[] = [];
+      const siphonAmounts: number[] = [];
+      bus.on('sound:play', (ev) => sounds.push(ev.id));
+      bus.on('combat:siphon', (ev) => siphonAmounts.push(ev.amount));
+
+      player.teleport({ x: 0, y: 0, z: 0 });
+      player.update(0.05, 1.0);
+      expect(player.addMedallion('medallion_siphon')).toBe(true);
+      expect(player.addMedallion('medallion_siphon')).toBe(false);
+      expect(player.hasMedallion('medallion_siphon')).toBe(true);
+      expect(player.getMedallions()).toEqual(['medallion_siphon']);
+      expect(player.getHudSnapshot().medallions).toEqual(['medallion_siphon']);
+      expect(player.getCharacterRenderState().medallionCount).toBe(1);
+      expect(sounds).toContain('medallion_pickup');
+
+      player.applyDamage({
+        targetId: 'player',
+        attackerId: 'bot_1',
+        attackerName: 'Bot1',
+        weaponId: 'ar',
+        rarity: 'common',
+        damage: 40,
+        hpDamage: 40,
+        shieldDamage: 0,
+        isHeadshot: false,
+        isElimination: false,
+        hitPoint: { x: 0, y: 1, z: -5 },
+        distance: 5,
+      }); // HP = 60, lastDamageTime = 1.0
+
+      // At t = 4.5s (3.5s < 4s) -> no shield regen yet
+      let t = 1.0;
+      for (let i = 0; i < 70; i++) {
+        t += 0.05;
+        player.update(0.05, t);
+      }
+      expect(player.getShield()).toBe(0);
+
+      // Advance 0.5s to reach the exact 4.0s out-of-combat threshold (t = 5.0s)
+      for (let i = 0; i < 10; i++) {
+        t += 0.05;
+        player.update(0.05, t);
+      }
+
+      // Next 5s out of combat -> regens +10 shield at +2/s
+      for (let i = 0; i < 100; i++) {
+        t += 0.05;
+        player.update(0.05, t);
+      }
+      expect(player.getShield()).toBeCloseTo(10, 1);
+
+      // Cap at 50 shield
+      for (let i = 0; i < 500; i++) {
+        t += 0.05;
+        player.update(0.05, t);
+      }
+      expect(player.getShield()).toBe(50);
+
+      // Elimination siphon grants 50 + 25 = 75 total (+40 HP to 100, +35 Shield to 85)
+      const target: CombatActor = {
+        id: 'bot_siphon_m',
+        name: 'Target',
+        position: { x: 0, y: 0, z: -10 },
+        eyePos: { x: 0, y: 1.6, z: -10 },
+        hp: 20,
+        shield: 0,
+        radius: 0.42,
+        height: 1.85,
+        alive: true,
+      };
+      weapons.registerActorsProvider(() => [player.getCombatActor(), target]);
+      weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: { uid: 'ar_s', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 },
+        origin: { x: 0, y: 1.1, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+      });
+      expect(target.alive).toBe(false);
+      expect(player.getHealth()).toBe(100);
+      expect(player.getShield()).toBe(85);
+      expect(siphonAmounts[0]).toBe(75);
+    }
+
+    // 2. Medallion Agility: +15% sprint speed, +25% stamina regen, +22% sprint jump impulse
+    {
+      const base = setupWave6Harness();
+      const agile = setupWave6Harness();
+      agile.player.addMedallion('medallion_agility');
+
+      base.player.teleport({ x: 0, y: 0, z: 0 });
+      agile.player.teleport({ x: 0, y: 0, z: 0 });
+      base.player.setLook(Math.PI, 0);
+      agile.player.setLook(Math.PI, 0);
+
+      base.player.pressKey('ShiftLeft');
+      base.player.pressKey('KeyW');
+      agile.player.pressKey('ShiftLeft');
+      agile.player.pressKey('KeyW');
+      for (let i = 0; i < 60; i++) {
+        base.player.update(0.05, (i + 1) * 0.05);
+        agile.player.update(0.05, (i + 1) * 0.05);
+      }
+      const baseSpeed = base.player.getCharacterRenderState().moveSpeed;
+      const agileSpeed = agile.player.getCharacterRenderState().moveSpeed;
+      expect(agileSpeed).toBeGreaterThan(baseSpeed * 1.12);
+
+      // Sprint jump +22% impulse
+      base.player.pressKey('Space');
+      agile.player.pressKey('Space');
+      const baseVy = base.player.getCharacterRenderState().velocityY ?? 0;
+      const agileVy = agile.player.getCharacterRenderState().velocityY ?? 0;
+      expect(agileVy).toBeCloseTo(baseVy * 1.22, 2);
+
+      // Wait out staminaRegenDelay (1.15s) then compare regen over 1.0s
+      base.player.releaseKey('ShiftLeft');
+      base.player.releaseKey('KeyW');
+      agile.player.releaseKey('ShiftLeft');
+      agile.player.releaseKey('KeyW');
+      let t = 1.0;
+      for (let i = 0; i < 30; i++) {
+        t += 0.05;
+        base.player.update(0.05, t);
+        agile.player.update(0.05, t);
+      }
+      const baseStamBefore = base.player.getStamina();
+      const agileStamBefore = agile.player.getStamina();
+      for (let i = 0; i < 10; i++) {
+        t += 0.05;
+        base.player.update(0.05, t);
+        agile.player.update(0.05, t);
+      }
+      const baseGain = base.player.getStamina() - baseStamBefore;
+      const agileGain = agile.player.getStamina() - agileStamBefore;
+      expect(agileGain).toBeCloseTo(baseGain * 1.25, 1);
+    }
+
+    // 3. Medallion Combat: +12% weapon damage & +20% faster reload
+    {
+      const { weapons, player } = setupWave6Harness();
+      player.teleport({ x: 0, y: 0, z: 0 });
+      player.addMedallion('medallion_combat');
+      player.getInventory().addAmmo('medium', 60);
+      player.getInventory().addItem({
+        uid: 'ar_combat',
+        weaponId: 'ar',
+        rarity: 'common',
+        magAmmo: 15,
+        stackCount: 1,
+      });
+      player.pressKey('Digit2');
+
+      const enemy: CombatActor = {
+        id: 'bot_combat_m',
+        name: 'Target',
+        position: { x: 0, y: 0, z: -12 },
+        eyePos: { x: 0, y: 1.6, z: -12 },
+        hp: 200,
+        shield: 0,
+        maxHp: 200,
+        radius: 0.42,
+        height: 1.85,
+        alive: true,
+      };
+      weapons.registerActorsProvider(() => [player.getCombatActor(), enemy]);
+
+      const shotRes = weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: player.getInventory().getSlot(1)!,
+        origin: { x: 0, y: 1.1, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+      });
+      expect(shotRes.damageDealt).toBe(Math.round(30 * 1.12)); // 34 vs 30 baseline
+
+      // AR reloadTime = 2.1s -> with medallion_combat (0.8x) = 1.68s
+      player.pressKey('KeyR');
+      expect(player.getHudSnapshot().reloadProgress).not.toBeNull();
+      for (let i = 0; i < 32; i++) {
+        player.update(0.05, (i + 1) * 0.05); // 1.60s
+      }
+      expect(player.getHudSnapshot().reloadProgress).not.toBeNull();
+      for (let i = 0; i < 3; i++) {
+        player.update(0.05, 1.6 + (i + 1) * 0.05); // 1.75s
+      }
+      expect(player.getHudSnapshot().reloadProgress).toBeNull();
+      expect(player.getInventory().getSlot(1)?.magAmmo).toBe(WEAPONS.ar.magSize);
+    }
+  });
+
+  it('implements combat_smg Twin-Mag alternating fast reload per uid and WEAPON_SOUND_MAP entries', () => {
+    expect(WEAPON_SOUND_MAP.combat_smg).toBe('shot_combat_smg');
+    expect(WEAPON_SOUND_MAP.boom_bow).toBe('bow_release');
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+
+    const { weapons, player } = setupWave6Harness();
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.getInventory().addAmmo('light', 200);
+
+    const smgA: ItemInstance = {
+      uid: 'twin_a',
+      weaponId: 'combat_smg',
+      rarity: 'epic',
+      magAmmo: 20,
+      stackCount: 1,
+    };
+    const smgB: ItemInstance = {
+      uid: 'twin_b',
+      weaponId: 'combat_smg',
+      rarity: 'rare',
+      magAmmo: 20,
+      stackCount: 1,
+    };
+    player.getInventory().addItem(smgA);
+    player.getInventory().addItem(smgB);
+    const storedA = player.getInventory().getSlot(1)!;
+    const storedB = player.getInventory().getSlot(2)!;
+    player.pressKey('Digit2');
+
+    // Cancelled reload does NOT consume fast mag
+    player.pressKey('KeyR');
+    expect(weapons.getReloadTime(storedA)).toBeCloseTo(1.05, 2);
+    player.update(0.05, 0.05);
+    player.pressKey('Digit3'); // cancel
+    expect(weapons.isTwinMagFastReload(storedA)).toBe(true);
+    player.pressKey('Digit2');
+
+    // Reload #1 on storedA -> Fast (1.05s)
+    player.pressKey('KeyR');
+    let t = 0.1;
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.00s
+    }
+    expect(player.getHudSnapshot().reloadProgress).not.toBeNull();
+    player.update(0.05, t + 0.05);
+    player.update(0.05, t + 0.1);
+    expect(player.getHudSnapshot().reloadProgress).toBeNull();
+    expect(storedA.magAmmo).toBe(30);
+    expect(weapons.isTwinMagFastReload(storedA)).toBe(false);
+    expect(weapons.isTwinMagFastReload(storedB)).toBe(true); // independent uid
+
+    // Fire shots then Reload #2 on storedA -> Normal slow (1.85s)
+    storedA.magAmmo = 25;
+    player.pressKey('KeyR');
+    t = 2.0;
+    for (let i = 0; i < 23; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.15s > 1.05s, still reloading
+    }
+    expect(player.getHudSnapshot().reloadProgress).not.toBeNull();
+    for (let i = 0; i < 16; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.95s > 1.85s
+    }
+    expect(player.getHudSnapshot().reloadProgress).toBeNull();
+    expect(storedA.magAmmo).toBe(30);
+    expect(weapons.isTwinMagFastReload(storedA)).toBe(true);
+
+    // Reload #3 on storedA -> Back to Fast (1.05s)
+    storedA.magAmmo = 22;
+    player.pressKey('KeyR');
+    for (let i = 0; i < 22; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().reloadProgress).toBeNull();
+    expect(storedA.magAmmo).toBe(30);
+  });
+
+  it('supports Boom Bow hold-LMB draw charge, bow_draw/bow_release, scaled arrow, and 4.4m vfx:bow_explosion', () => {
+    const { bus, building, weapons, player } = setupWave6Harness();
+    const sounds: SoundEventId[] = [];
+    const bowExplosions: Array<{ position: Vec3Like; radius: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:bow_explosion', (ev) => bowExplosions.push(ev));
+
+    player.teleport({ x: 2, y: 0, z: 0 });
+    player.setLook(Math.PI, 0);
+    player.getInventory().addAmmo('heavy', 10);
+    player.getInventory().addItem({
+      uid: 'bow_1',
+      weaponId: 'boom_bow',
+      rarity: 'legendary',
+      magAmmo: 1,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+
+    // 1. Direct velocity & damage scaling comparison (low vs full bowCharge)
+    const farWall = building.placePieceForEntity('bot', 'wall', 'metal', -2, 0, -4, 'N', 0)!;
+    const lowTarget: CombatActor = {
+      id: 'bot_bow_low',
+      name: 'LowTarget',
+      position: { x: 2, y: 0, z: -15 },
+      eyePos: { x: 2, y: 1.6, z: -15 },
+      hp: 200,
+      shield: 0,
+      maxHp: 200,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const splashTarget: CombatActor = {
+      id: 'bot_bow_splash',
+      name: 'SplashTarget',
+      position: { x: 5.5, y: 0, z: -15 }, // 3.5m from arrow impact (< 4.4m)
+      eyePos: { x: 5.5, y: 1.6, z: -15 },
+      hp: 200,
+      shield: 0,
+      maxHp: 200,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const outOfRangeTarget: CombatActor = {
+      id: 'bot_bow_far',
+      name: 'FarTarget',
+      position: { x: 9.0, y: 0, z: -15 }, // 7.0m away (> 4.4m)
+      eyePos: { x: 9.0, y: 1.6, z: -15 },
+      hp: 200,
+      shield: 0,
+      maxHp: 200,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [
+      player.getCombatActor(),
+      lowTarget,
+      splashTarget,
+      outOfRangeTarget,
+    ]);
+
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'bow_low', weaponId: 'boom_bow', rarity: 'rare', magAmmo: 1, stackCount: 1 },
+      origin: { x: 2, y: 1.4, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+      bowCharge: 0.1,
+    });
+    const lowProj = weapons.getProjectiles()[0];
+    expect(lowProj.isBoomArrow).toBe(true);
+    expect(lowProj.splashRadius).toBeCloseTo(4.4, 2);
+    const lowSpeed = Math.hypot(lowProj.velocity.x, lowProj.velocity.y, lowProj.velocity.z);
+    const lowProjDamage = lowProj.damage;
+    weapons.clear();
+
+    // 2. PlayerController hold-LMB draw & release at full charge
+    player.setMouseButton(0, true);
+    expect(sounds).toContain('bow_draw');
+    expect(player.getHudSnapshot().bowCharge).toBe(0);
+
+    let t = 0;
+    for (let i = 0; i < 9; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().bowCharge).toBeCloseTo(0.5, 1);
+    expect(player.getCharacterRenderState().bowCharge).toBeCloseTo(0.5, 1);
+
+    for (let i = 0; i < 10; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().bowCharge).toBe(1);
+
+    player.setMouseButton(0, false);
+    expect(player.getHudSnapshot().bowCharge).toBeNull();
+    expect(sounds).toContain('bow_release');
+
+    const fullProj = weapons.getProjectiles()[0];
+    expect(fullProj).toBeDefined();
+    expect(fullProj.isBoomArrow).toBe(true);
+    const fullSpeed = Math.hypot(fullProj.velocity.x, fullProj.velocity.y, fullProj.velocity.z);
+    expect(fullSpeed).toBeGreaterThan(lowSpeed * 2.0);
+    expect(fullProj.damage).toBeGreaterThan(lowProjDamage * 2.0);
+
+    // Step projectile until impact on wall/actor
+    for (let i = 0; i < 20; i++) {
+      weapons.update(0.02);
+    }
+    expect(bowExplosions.length).toBe(1);
+    expect(bowExplosions[0].radius).toBeCloseTo(4.4, 2);
+    expect(sounds).toContain('explosion');
+    expect(lowTarget.hp).toBeLessThan(200);
+    expect(splashTarget.hp).toBeLessThan(200);
+    expect(outOfRangeTarget.hp).toBe(200);
+    expect(farWall.hp).toBe(farWall.maxHp);
+  });
+
+  it('damages Slurp Tankers via gunfire & melee and heals alive actors within 10m burst radius', () => {
+    const { bus, weapons, player } = setupWave6Harness();
+    const impacts: Array<{ material: string }> = [];
+    const sounds: SoundEventId[] = [];
+    bus.on('vfx:impact', (ev) => impacts.push({ material: ev.material }));
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    const chapterBridge = createMockChapterBridge({
+      tankers: [
+        {
+          id: 'tanker_1',
+          x: 0,
+          y: 0,
+          z: -8,
+          rotationY: 0,
+          hp: 220,
+          maxHp: 220,
+          healRadius: 10,
+          healAmount: 60,
+          destroyed: false,
+        },
+        {
+          id: 'tanker_melee',
+          x: 2.2,
+          y: 0,
+          z: 0,
+          rotationY: 0,
+          hp: 40,
+          maxHp: 220,
+          healRadius: 10,
+          healAmount: 60,
+          destroyed: false,
+        },
+      ],
+    });
+    player.setChapterBridge(chapterBridge);
+    player.teleport({ x: 0, y: 0, z: 0 });
+
+    // Wound player to 70 HP, 0 Shield
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Bot',
+      weaponId: 'ar',
+      rarity: 'common',
+      damage: 30,
+      hpDamage: 30,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1, z: -5 },
+      distance: 5,
+    });
+    expect(player.getHealth()).toBe(70);
+
+    const nearBot: CombatActor = {
+      id: 'bot_near_tanker',
+      name: 'NearBot',
+      position: { x: 3, y: 0, z: -8 },
+      eyePos: { x: 3, y: 1.6, z: -8 },
+      hp: 80,
+      shield: 10,
+      maxHp: 100,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const farBot: CombatActor = {
+      id: 'bot_far_tanker',
+      name: 'FarBot',
+      position: { x: 25, y: 0, z: -8 },
+      eyePos: { x: 25, y: 1.6, z: -8 },
+      hp: 50,
+      shield: 0,
+      maxHp: 100,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), nearBot, farBot]);
+
+    // Gunfire damages tanker_1
+    const smgItem: ItemInstance = {
+      uid: 'smg_t',
+      weaponId: 'combat_smg',
+      rarity: 'legendary',
+      magAmmo: 30,
+      stackCount: 1,
+    };
+    for (let i = 0; i < 10; i++) {
+      weapons.fireWeapon({
+        actor: player.getCombatActor(),
+        item: smgItem,
+        origin: { x: 0, y: 1.2, z: 0 },
+        aimDir: { x: 0, y: 0, z: -1 },
+        spreadRad: 0,
+        isPlayer: true,
+      });
+    }
+    expect(chapterBridge.tankers[0].destroyed).toBe(true);
+    expect(impacts.some((i) => i.material === 'shield')).toBe(true);
+    expect(sounds).toContain('shield_hit');
+    // Player 8m from tanker -> +30 HP (to 100) + +30 Shield!
+    expect(player.getHealth()).toBe(100);
+    expect(player.getShield()).toBe(30);
+    // NearBot (+20 HP to 100, +40 Shield to 50) & FarBot untouched
+    expect(nearBot.hp).toBe(100);
+    expect(nearBot.shield).toBe(50);
+    expect(farBot.hp).toBe(50);
+
+    // Pickaxe melee breaks tanker_melee and tops up shield (+60 -> 90)
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'pick_t', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+      origin: { x: 0, y: 1.0, z: 0 },
+      aimDir: { x: 1, y: 0, z: 0 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(chapterBridge.tankers[1].destroyed).toBe(true);
+    expect(player.getShield()).toBe(90);
+  });
+
+  it('tracks Victory Crown glints and chapterBridge interactions (Weapon Bunkers, Dropped Medallions, Dropped Crowns)', () => {
+    const { bus, player } = setupWave6Harness();
+    const sounds: SoundEventId[] = [];
+    const glints: Vec3Like[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:crown_glint', (ev) => glints.push(ev.position));
+
+    const chapterBridge = createMockChapterBridge({
+      bunkers: [
+        {
+          id: 'bunker_1',
+          poiId: 'metro_towers',
+          x: 0,
+          y: 0,
+          z: -3.2,
+          rotationY: 0,
+          unlocked: false,
+          looted: false,
+          unlockAtStormPhase: 2,
+        },
+      ],
+      droppedMedallions: [
+        {
+          id: 'dm_1',
+          medallionId: 'medallion_agility',
+          x: 10,
+          y: 0,
+          z: 0,
+          collected: false,
+        },
+      ],
+      droppedCrowns: [
+        {
+          id: 'dc_1',
+          x: 20,
+          y: 0,
+          z: 0,
+          collected: false,
+        },
+      ],
+    });
+    player.setChapterBridge(chapterBridge);
+
+    // 1. Locked bunker -> locked prompt & dryfire; unlocked -> loot weapon + gold + shield
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.016, 0.016);
+    expect(player.getInteractPrompt()?.label).toContain('LOCKED');
+    player.pressKey('KeyE');
+    expect(chapterBridge.bunkers[0].looted).toBe(false);
+    expect(sounds).toContain('dryfire');
+
+    chapterBridge.bunkers[0].unlocked = true;
+    player.update(0.016, 0.032);
+    expect(player.getInteractPrompt()?.label).toBe('OPEN WEAPON BUNKER');
+    const goldBefore = player.getGoldBars();
+    player.pressKey('KeyE');
+    expect(chapterBridge.bunkers[0].looted).toBe(true);
+    expect(player.getInventory().getSlot(1)?.weaponId).toBe('combat_smg');
+    expect(player.getGoldBars()).toBe(goldBefore + 180);
+    expect(player.getShield()).toBe(40);
+    expect(sounds).toContain('chest_open');
+
+    // 2. Dropped Medallion walkover pickup
+    player.teleport({ x: 10, y: 0, z: 0.8 });
+    player.update(0.016, 0.05);
+    expect(chapterBridge.droppedMedallions[0].collected).toBe(true);
+    expect(player.hasMedallion('medallion_agility')).toBe(true);
+    expect(sounds).toContain('medallion_pickup');
+
+    // 3. Dropped Victory Crown [E] pickup + periodic crown glint
+    player.teleport({ x: 20, y: 0, z: 2.6 });
+    player.update(0.016, 0.07);
+    expect(player.getInteractPrompt()?.label).toBe('Claim Victory Crown');
+    player.pressKey('KeyE');
+    expect(chapterBridge.droppedCrowns[0].collected).toBe(true);
+    expect(player.hasVictoryCrown()).toBe(true);
+    expect(player.getHudSnapshot().hasVictoryCrown).toBe(true);
+    expect(player.getCharacterRenderState().hasVictoryCrown).toBe(true);
+    expect(glints.length).toBe(1);
+    expect(sounds).toContain('crown_glint');
+
+    let t = 0.1;
+    for (let i = 0; i < 210; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(glints.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('handles Duos DBNO knocked crawl, bleed-out, completeRevive, and [E] hold partner revive channel', () => {
+    const { bus, player } = setupWave6Harness();
+    const sounds: SoundEventId[] = [];
+    const reviveBeams: Array<{ position: Vec3Like; progress: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:revive_beam', (ev) => reviveBeams.push(ev));
+
+    let partnerAlive = true;
+    let partnerDowned = false;
+    let partnerRevivedCalls = 0;
+    const duoBridge: DuoReviveBridge = {
+      isPartnerAlive: () => partnerAlive,
+      getPartnerDownedNearby: (pos) => {
+        if (!partnerDowned) return null;
+        const pPos = { x: 0, y: 0, z: -2.2 };
+        if (dist3D(pos, pPos) <= 3.5) {
+          return { id: 'duo_ally', name: 'APEX VALKYRIE', position: pPos, bleedOutHp: 85 };
+        }
+        return null;
+      },
+      completePartnerRevive: () => {
+        partnerRevivedCalls += 1;
+        partnerDowned = false;
+        return true;
+      },
+    };
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'DuosTester', 'duos');
+    player.setDuoReviveBridge(duoBridge);
+    player.teleport({ x: 0, y: 0, z: 0 });
+
+    // 1. Lethal damage in Duos with alive partner enters DBNO instead of eliminating
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Enemy',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 100,
+      hpDamage: 100,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: true,
+      hitPoint: { x: 0, y: 1, z: -5 },
+      distance: 5,
+    });
+    expect(player.isAlive()).toBe(true);
+    expect(player.getHudSnapshot().isKnocked).toBe(true);
+    expect(player.getHudSnapshot().bleedOutHp).toBe(DBNO_MAX_HP);
+    expect(player.getCharacterRenderState().animState).toBe('knocked');
+    expect(sounds).toContain('knocked_down');
+
+    // Knocked crawl speed (~2.1 m/s) and DBNO_BLEED_DPS (2/s)
+    player.pressKey('ShiftLeft');
+    player.pressKey('KeyW');
+    let t = 0;
+    for (let i = 0; i < 40; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 2.0s
+    }
+    expect(player.getCharacterRenderState().moveSpeed).toBeLessThan(2.5);
+    expect(player.getHudSnapshot().bleedOutHp).toBeCloseTo(
+      DBNO_MAX_HP - DBNO_BLEED_DPS * 2.0,
+      1,
+    );
+    player.releaseKey('ShiftLeft');
+    player.releaseKey('KeyW');
+
+    // completeRevive restores player to 30 HP & clears knocked
+    expect(player.completeRevive()).toBe(true);
+    expect(player.getHudSnapshot().isKnocked).toBe(false);
+    expect(player.getHealth()).toBe(30);
+    expect(sounds).toContain('revive_complete');
+
+    // 2. [E] hold REVIVE_DURATION_SEC (4.0s) Partner Revive channel
+    partnerDowned = true;
+    player.update(0.016, t + 0.016);
+    expect(player.getInteractPrompt()?.label).toContain('APEX VALKYRIE');
+
+    // Early release cancels revive
+    player.pressKey('KeyE');
+    player.update(0.05, t + 0.07);
+    expect(player.getCharacterRenderState().animState).toBe('reviving');
+    expect(player.getHudSnapshot().reviveProgress).toBeGreaterThan(0);
+    player.releaseKey('KeyE');
+    player.update(0.05, t + 0.12);
+    expect(player.getHudSnapshot().reviveProgress).toBeNull();
+    expect(partnerRevivedCalls).toBe(0);
+
+    // Full 4.0s hold completes revive
+    player.pressKey('KeyE');
+    for (let i = 0; i < 82; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(partnerRevivedCalls).toBe(1);
+    expect(player.getStats().revives).toBe(1);
+    expect(player.getHudSnapshot().reviveProgress).toBeNull();
+    expect(sounds).toContain('revive_tick');
+    expect(reviveBeams.some((b) => b.progress === 1)).toBe(true);
+
+    // 3. If partner is dead, lethal damage eliminates immediately instead of DBNO
+    partnerAlive = false;
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_1',
+      attackerName: 'Enemy',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 100,
+      hpDamage: 100,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: true,
+      hitPoint: { x: 0, y: 1, z: -5 },
+      distance: 5,
+    });
+    expect(player.getPhase()).toBe('eliminated');
+    expect(player.isAlive()).toBe(false);
   });
 });

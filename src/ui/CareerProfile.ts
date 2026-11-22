@@ -41,6 +41,9 @@ export interface CareerStats {
   damageDealt: number;
   bestPlacement: number | null;
   goldBars: number;
+  hasVictoryCrown: boolean;
+  crownWins: number;
+  totalRevives: number;
   lastMatchXp?: MatchXpBreakdown;
 }
 
@@ -63,6 +66,9 @@ function createDefaultCareerStats(): CareerStats {
     damageDealt: 0,
     bestPlacement: null,
     goldBars: STARTING_GOLD_BARS,
+    hasVictoryCrown: false,
+    crownWins: 0,
+    totalRevives: 0,
   };
 }
 
@@ -235,6 +241,15 @@ function sanitizeCareerStats(raw: Partial<CareerStats> | null | undefined): Care
       ? Math.floor(raw.bestPlacement)
       : null;
   const goldBars = clampGoldBars(raw.goldBars);
+  const hasVictoryCrown = raw.hasVictoryCrown === true;
+  const crownWins =
+    typeof raw.crownWins === 'number' && Number.isFinite(raw.crownWins) && raw.crownWins > 0
+      ? Math.floor(raw.crownWins)
+      : 0;
+  const totalRevives =
+    typeof raw.totalRevives === 'number' && Number.isFinite(raw.totalRevives) && raw.totalRevives > 0
+      ? Math.floor(raw.totalRevives)
+      : 0;
 
   return {
     xp,
@@ -245,6 +260,9 @@ function sanitizeCareerStats(raw: Partial<CareerStats> | null | undefined): Care
     damageDealt,
     bestPlacement,
     goldBars,
+    hasVictoryCrown,
+    crownWins,
+    totalRevives,
     lastMatchXp: raw.lastMatchXp,
   };
 }
@@ -295,10 +313,20 @@ export function recordMatchCareerStats(summary: MatchSummary): CareerStats {
       ? Math.round(summary.placement)
       : null;
 
+  const won = Boolean(summary.victory);
+  const isCrownedWin =
+    won &&
+    (summary.crownedVictory === true ||
+      (summary.crownedVictory === undefined && prev.hasVictoryCrown));
+  const safeRevives =
+    typeof summary.revives === 'number' && Number.isFinite(summary.revives) && summary.revives > 0
+      ? Math.floor(summary.revives)
+      : 0;
+
   const updated: CareerStats = {
     xp: nextXp,
     level: nextLevel,
-    wins: prev.wins + (summary.victory ? 1 : 0),
+    wins: prev.wins + (won ? 1 : 0),
     elims: prev.elims + safeKills,
     matchesPlayed: prev.matchesPlayed + 1,
     damageDealt: prev.damageDealt + safeDamage,
@@ -309,6 +337,9 @@ export function recordMatchCareerStats(summary: MatchSummary): CareerStats {
           ? safePlacement
           : Math.min(prev.bestPlacement, safePlacement),
     goldBars: clampGoldBars(prev.goldBars),
+    hasVictoryCrown: won,
+    crownWins: prev.crownWins + (isCrownedWin ? 1 : 0),
+    totalRevives: prev.totalRevives + safeRevives,
     lastMatchXp: {
       ...breakdown,
       newLevel: nextLevel,
@@ -316,6 +347,19 @@ export function recordMatchCareerStats(summary: MatchSummary): CareerStats {
     },
   };
 
+  saveCareerStats(updated);
+  return updated;
+}
+
+/**
+ * Updates active Victory Crown carry state cleanly.
+ */
+export function updateVictoryCrown(hasVictoryCrown: boolean): CareerStats {
+  const prev = loadCareerStats();
+  const updated: CareerStats = {
+    ...prev,
+    hasVictoryCrown: Boolean(hasVictoryCrown),
+  };
   saveCareerStats(updated);
   return updated;
 }

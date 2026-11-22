@@ -82,6 +82,8 @@ function hashMode(mode: GameModeId): number {
       return 1013;
     case 'blitz':
       return 2029;
+    case 'duos':
+      return 3049;
     case 'solo':
     default:
       return 17;

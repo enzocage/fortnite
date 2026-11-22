@@ -87,8 +87,10 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'tac_shotgun',
   'heavy_shotgun',
   'smg',
+  'combat_smg',
   'pistol',
   'sniper',
+  'boom_bow',
   'grappler',
   'kinetic_blade',
 ];
@@ -101,7 +103,9 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'tac_shotgun',
   'heavy_shotgun',
   'smg',
+  'combat_smg',
   'sniper',
+  'boom_bow',
   'rocket_launcher',
   'pistol',
   'grappler',
@@ -113,7 +117,9 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'tactical_dmr',
   'pump_shotgun',
   'heavy_shotgun',
+  'combat_smg',
   'sniper',
+  'boom_bow',
   'rocket_launcher',
   'burst_ar',
   'grappler',
@@ -1738,6 +1744,31 @@ export class PropsAndLoot {
         hilt.position.z = -0.48;
         bladeGroup.add(edge, guard, hilt);
         itemMesh = bladeGroup;
+      } else if (def.isBow) {
+        const bowGroup = new THREE.Group();
+        const riser = new THREE.Mesh(
+          this.getGeo('loot_bow_riser', () => new THREE.BoxGeometry(0.1, 0.42, 0.12)),
+          itemMat,
+        );
+        const limbTop = new THREE.Mesh(
+          this.getGeo('loot_bow_limb', () => new THREE.BoxGeometry(0.08, 0.34, 0.08)),
+          itemMat,
+        );
+        limbTop.position.set(0, 0.3, -0.1);
+        limbTop.rotation.x = 0.55;
+        const limbBot = new THREE.Mesh(
+          this.getGeo('loot_bow_limb', () => new THREE.BoxGeometry(0.08, 0.34, 0.08)),
+          itemMat,
+        );
+        limbBot.position.set(0, -0.3, -0.1);
+        limbBot.rotation.x = -0.55;
+        const arrowShaft = new THREE.Mesh(
+          this.getGeo('loot_bow_arrow', () => new THREE.BoxGeometry(0.05, 0.05, 0.62)),
+          itemMat,
+        );
+        arrowShaft.position.z = 0.14;
+        bowGroup.add(riser, limbTop, limbBot, arrowShaft);
+        itemMesh = bowGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),

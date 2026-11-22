@@ -145,7 +145,9 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
     weaponId === 'tac_shotgun' ||
     weaponId === 'heavy_shotgun' ||
     weaponId === 'smg' ||
+    weaponId === 'combat_smg' ||
     weaponId === 'sniper' ||
+    weaponId === 'boom_bow' ||
     weaponId === 'rocket_launcher' ||
     weaponId === 'mythic_blade_rifle'
   );
@@ -175,6 +177,8 @@ function isConsumable(weaponId: WeaponId): boolean {
 }
 
 function resolveAnimState(state: CharacterRenderState): AnimState {
+  if (state.isKnocked) return 'knocked';
+  if (state.isReviving) return 'reviving';
   const anim = state.animState;
   const isBaseLocomotion =
     anim === 'idle' ||
@@ -343,10 +347,22 @@ export class CharacterAnimator {
       case 'emote':
         this.applyEmotePose(p, t, state.emoteId ?? 'victory_groove');
         break;
+      case 'knocked':
+        this.applyKnockedPose(p, data, safeDt, speed);
+        break;
+      case 'reviving':
+        this.applyRevivingPose(p, t);
+        break;
     }
 
     // 2. Banking lean roll (carving turns during sprint, slide, glide, drive, swim, etc.)
-    if (lean !== 0 && anim !== 'emote' && anim !== 'heal') {
+    if (
+      lean !== 0 &&
+      anim !== 'emote' &&
+      anim !== 'heal' &&
+      anim !== 'knocked' &&
+      anim !== 'reviving'
+    ) {
       p.hipsRz += lean * 0.55;
       p.spineRz += lean * 0.35;
       p.chestRz += lean * 0.20;
@@ -367,6 +383,8 @@ export class CharacterAnimator {
       anim === 'build' ||
       anim === 'mantle' ||
       anim === 'swim' ||
+      anim === 'knocked' ||
+      anim === 'reviving' ||
       isSlideWithTrailingArm ||
       isZiplineUnfocused;
 
@@ -390,7 +408,13 @@ export class CharacterAnimator {
 
     // 5. Smoothly damp joints toward target pose (instant snap on dt === 0 for deterministic single-step tests)
     const blendLambda =
-      anim === 'emote' || anim === 'harvest' || anim === 'slide' || anim === 'mantle' || anim === 'drive'
+      anim === 'emote' ||
+      anim === 'harvest' ||
+      anim === 'slide' ||
+      anim === 'mantle' ||
+      anim === 'drive' ||
+      anim === 'knocked' ||
+      anim === 'reviving'
         ? 22
         : 16;
     this.applyPoseToJoints(rig, p, blendLambda, safeDt);
@@ -402,11 +426,32 @@ export class CharacterAnimator {
       rig.setBossAura(true, data.time);
     }
 
-    // 7. Sync Allied Specialist Tactical Aura state & animation if provided or active
+    // 7. Sync Duo Partner cyan-gold overhead chevron aura
+    if (state.isDuoPartner !== undefined) {
+      rig.setDuoPartnerAura(Boolean(state.isDuoPartner), data.time);
+    } else if (rig.isDuoPartnerAuraEnabled()) {
+      rig.setDuoPartnerAura(true, data.time);
+    }
+
+    // 8. Sync Allied Specialist Tactical Aura state & animation if provided or active (suppressed by Duo Partner aura)
     if (state.isAlly !== undefined) {
-      rig.setAllyAura(Boolean(state.isAlly), state.allyRole, data.time);
-    } else if (rig.isAllyAuraEnabled()) {
+      rig.setAllyAura(Boolean(state.isAlly) && !state.isDuoPartner, state.allyRole, data.time);
+    } else if (rig.isAllyAuraEnabled() && !rig.isDuoPartnerAuraEnabled()) {
       rig.setAllyAura(true, state.allyRole, data.time);
+    }
+
+    // 9. Sync Victory Crown Halo state & smooth bob animation
+    if (state.hasVictoryCrown !== undefined) {
+      rig.setVictoryCrown(Boolean(state.hasVictoryCrown), data.time);
+    } else if (rig.hasVictoryCrown()) {
+      rig.setVictoryCrown(true, data.time);
+    }
+
+    // 10. Sync Aspect Medallions orbital rotation around torso
+    if (state.medallionCount !== undefined) {
+      rig.setMedallionCount(state.medallionCount, data.time);
+    } else if (rig.getMedallionCount() > 0) {
+      rig.setMedallionCount(rig.getMedallionCount(), data.time);
     }
   }
 
@@ -865,6 +910,91 @@ export class CharacterAnimator {
     p.lElRx = -0.74 - tap;
   }
 
+  private applyKnockedPose(
+    p: PoseTarget,
+    data: RigAnimData,
+    dt: number,
+    speed: number,
+  ): void {
+    const isCrawling = speed > 0.1;
+    if (isCrawling) {
+      const pace = clamp(speed / 1.8, 0.7, 1.5);
+      data.gaitPhase += dt * 4.8 * pace;
+    }
+    const crawl = isCrawling ? Math.sin(data.gaitPhase) : 0;
+    const breath = Math.sin(data.time * 3.2) * 0.015;
+
+    // Hands-and-knees DBNO crawl posture close to ground
+    p.hipsY = 0.48 + breath + Math.abs(crawl) * 0.018;
+    p.hipsRx = 1.15;
+    p.hipsRz = crawl * 0.07;
+    p.spineRx = 0.08;
+    p.chestRx = 0.05;
+    p.chestRy = crawl * 0.15;
+    p.headRx = -0.92 + (isCrawling ? 0 : Math.sin(data.time * 2.4) * 0.05);
+    p.headRy = isCrawling ? -crawl * 0.08 : Math.sin(data.time * 1.8) * 0.12;
+
+    // Hands bracing & crawling forward
+    p.lShRx = -1.38 + crawl * 0.30;
+    p.lShRy = -0.08;
+    p.lShRz = 0.12;
+    p.lElRx = -0.22 - Math.max(0, crawl) * 0.28;
+    p.lHaRx = 0.42;
+
+    p.rShRx = -1.38 - crawl * 0.30;
+    p.rShRy = 0.08;
+    p.rShRz = -0.12;
+    p.rElRx = -0.22 - Math.max(0, -crawl) * 0.28;
+    p.rHaRx = 0.42;
+
+    // Kneeling legs alternating crawl behind hips
+    p.lHiRx = -1.04 - crawl * 0.26;
+    p.lHiRz = 0.08;
+    p.lKnRx = 1.38 + Math.max(0, -crawl) * 0.18;
+    p.lFoRx = 0.32;
+
+    p.rHiRx = -1.04 + crawl * 0.26;
+    p.rHiRz = -0.08;
+    p.rKnRx = 1.38 + Math.max(0, crawl) * 0.18;
+    p.rFoRx = 0.32;
+  }
+
+  private applyRevivingPose(p: PoseTarget, t: number): void {
+    const pulse = Math.sin(t * 5.0);
+    const breath = Math.sin(t * 2.6);
+
+    // Tactical kneeling healing stance leaning toward downed partner
+    p.hipsY = CROUCH_HIPS_Y + breath * 0.01;
+    p.hipsRx = 0.10;
+    p.spineRx = 0.26;
+    p.chestRx = 0.14 + pulse * 0.025;
+    p.headRx = 0.22;
+
+    // Half-kneeling leg base (left knee down, right foot planted)
+    p.lHiRx = -0.16;
+    p.lHiRz = 0.08;
+    p.lKnRx = 1.48;
+    p.lFoRx = 0.22;
+
+    p.rHiRx = -1.10;
+    p.rHiRz = -0.08;
+    p.rKnRx = 1.28;
+    p.rFoRx = -0.18;
+
+    // Both arms extended forward channeling healing energy
+    p.lShRx = -1.08 + pulse * 0.06;
+    p.lShRy = -0.28;
+    p.lShRz = 0.14;
+    p.lElRx = -0.56 - pulse * 0.06;
+    p.lHaRx = 0.15;
+
+    p.rShRx = -1.08 - pulse * 0.06;
+    p.rShRy = 0.28;
+    p.rShRz = -0.14;
+    p.rElRx = -0.56 + pulse * 0.06;
+    p.rHaRx = 0.15;
+  }
+
   private applyUpperBodyWeaponAim(
     p: PoseTarget,
     state: CharacterRenderState,
@@ -953,6 +1083,37 @@ export class CharacterAnimator {
         p.rShRy = 0.22;
         p.rShRz = -0.10;
         p.rElRx = -0.78;
+      }
+      return;
+    }
+
+    if (weapon === 'boom_bow') {
+      const bowCharge = clamp(finiteOr(state.bowCharge), 0, 1);
+      if (bowCharge > 0.01 || state.isAiming || state.isFiring) {
+        p.chestRy += 0.18 + 0.36 * bowCharge;
+        p.headRy -= 0.14 + 0.28 * bowCharge;
+        p.rElRx = -0.22 - bowCharge * 0.08;
+        p.rHaRx = 0;
+        p.rShRx = -Math.PI / 2 - torsoPitch - aimPitch - recoilTilt - p.rElRx;
+        p.rShRy = 0.08 + bowCharge * 0.18;
+        p.rShRz = -0.04;
+
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -1.26 + bowCharge * 0.42 - aimPitch * 0.45;
+          p.lShRy = -0.46 - bowCharge * 0.34;
+          p.lShRz = 0.16 + bowCharge * 0.24;
+          p.lElRx = -0.44 - bowCharge * 1.12;
+        }
+      } else {
+        p.rShRx = -0.72;
+        p.rShRy = 0.18;
+        p.rShRz = -0.10;
+        p.rElRx = -0.62;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -0.58;
+          p.lShRy = -0.32;
+          p.lElRx = -0.68;
+        }
       }
       return;
     }

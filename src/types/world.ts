@@ -2,6 +2,7 @@ import type {
   AmmoType,
   BiomeType,
   MaterialType,
+  MedallionId,
   Rarity,
   SpecialistRole,
   Vec3Like,
@@ -255,6 +256,48 @@ export interface LootIslandState {
   radius: number;
   captured: boolean;
   captureProgress: number;
+}
+
+export interface WeaponBunkerEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  unlocked: boolean;
+  looted: boolean;
+  unlockAtStormPhase: number;
+}
+
+export interface SlurpTankerEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  hp: number;
+  maxHp: number;
+  healRadius: number;
+  healAmount: number;
+  destroyed: boolean;
+}
+
+export interface DroppedMedallionEntity {
+  id: string;
+  medallionId: MedallionId;
+  x: number;
+  y: number;
+  z: number;
+  collected: boolean;
+}
+
+export interface DroppedCrownEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  collected: boolean;
 }
 
 export interface SupplyDrop {

@@ -10,7 +10,7 @@ import type {
   SpecialistRole,
   WeaponId,
 } from '../types';
-import { CONTRAILS, GLIDERS, PICKAXES, SKINS, WEAPON_WRAPS, clamp } from '../core';
+import { CONTRAILS, GLIDERS, MEDALLIONS, PICKAXES, SKINS, WEAPON_WRAPS, clamp } from '../core';
 import {
   applyWeaponWrap,
   createBlueprintModel,
@@ -275,6 +275,23 @@ export class CharacterRig {
   private allyRoleRingMat: THREE.MeshStandardMaterial | null = null;
   private allyRoleHaloMesh: THREE.Mesh | null = null;
   private allyRoleHaloMat: THREE.MeshBasicMaterial | null = null;
+  private victoryCrownEnabled = false;
+  private victoryCrownTime = 0;
+  private victoryCrownGroup: THREE.Group | null = null;
+  private victoryCrownMeshGroup: THREE.Group | null = null;
+  private victoryCrownHaloMesh: THREE.Mesh | null = null;
+  private victoryCrownHaloMat: THREE.MeshBasicMaterial | null = null;
+  private medallionCount = 0;
+  private medallionTime = 0;
+  private medallionOrbitGroup: THREE.Group | null = null;
+  private readonly medallionNodes: THREE.Group[] = [];
+  private duoPartnerAuraEnabled = false;
+  private duoPartnerAuraTime = 0;
+  private duoPartnerAuraGroup: THREE.Group | null = null;
+  private duoPartnerChevronGroup: THREE.Group | null = null;
+  private duoPartnerRingMesh: THREE.Mesh | null = null;
+  private duoPartnerHaloMesh: THREE.Mesh | null = null;
+  private duoPartnerHaloMat: THREE.MeshBasicMaterial | null = null;
   private contrailActive = false;
   private contrailTime = 0;
   private contrailPrimaryMat: THREE.MeshBasicMaterial | null = null;
@@ -1222,10 +1239,19 @@ export class CharacterRig {
     if (state.isBoss !== undefined) {
       this.setBossAura(Boolean(state.isBoss));
     }
+    if (state.isDuoPartner !== undefined) {
+      this.setDuoPartnerAura(Boolean(state.isDuoPartner));
+    }
     if (state.isAlly !== undefined) {
-      this.setAllyAura(Boolean(state.isAlly), state.allyRole);
+      this.setAllyAura(Boolean(state.isAlly) && !this.duoPartnerAuraEnabled, state.allyRole);
     } else if (state.allyRole !== undefined && this.allyAuraEnabled) {
       this.setAllyAura(true, state.allyRole);
+    }
+    if (state.hasVictoryCrown !== undefined) {
+      this.setVictoryCrown(Boolean(state.hasVictoryCrown));
+    }
+    if (state.medallionCount !== undefined) {
+      this.setMedallionCount(state.medallionCount);
     }
   }
 
@@ -1400,6 +1426,9 @@ export class CharacterRig {
     if (this.allyAuraEnabled) {
       this.setAllyAura(false);
     }
+    if (this.duoPartnerAuraEnabled) {
+      this.setDuoPartnerAura(false);
+    }
     if (elapsed !== undefined && Number.isFinite(elapsed)) {
       this.bossAuraTime = elapsed;
     }
@@ -1564,6 +1593,331 @@ export class CharacterRig {
     if (this.allyRoleHaloMesh && this.allyRoleHaloMat) {
       this.allyRoleHaloMesh.scale.setScalar(1 + 0.14 * Math.sin(t * 3.6));
       this.allyRoleHaloMat.opacity = 0.46 + 0.2 * Math.sin(t * 3.6);
+    }
+  }
+
+  private getAuraHeadTrackPosition(outOffsetY = 0): { x: number; y: number; z: number } {
+    const pitchCos = Math.max(0.45, Math.cos(this.joints.hips.rotation.x));
+    const forwardSin = Math.sin(this.joints.hips.rotation.x);
+    return {
+      x: this.joints.hips.position.x,
+      y: this.joints.hips.position.y + 0.26 + 0.92 * pitchCos + outOffsetY,
+      z: this.joints.hips.position.z + forwardSin * 0.42,
+    };
+  }
+
+  private buildVictoryCrownGroup(): void {
+    const group = new THREE.Group();
+    group.name = 'victory_crown_aura';
+
+    const crownMeshGroup = new THREE.Group();
+    crownMeshGroup.name = 'victory_crown_mesh';
+
+    const goldMat = makeMat('#fbbf24', 0.16, 0.88, '#f59e0b', 0.95);
+    const brightGoldMat = makeMat('#fef08a', 0.12, 0.45, '#fde047', 1.15);
+    const gemCyanMat = makeMat('#38bdf8', 0.1, 0.25, '#22d3ee', 1.1);
+
+    // Sculpted royal crown base band
+    const baseBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.155, 0.135, 0.044, 15, 1, true),
+      goldMat,
+    );
+    baseBand.castShadow = false;
+    crownMeshGroup.add(baseBand);
+
+    const rimTorus = new THREE.Mesh(new THREE.TorusGeometry(0.145, 0.016, 8, 20), brightGoldMat);
+    rimTorus.rotation.x = Math.PI / 2;
+    rimTorus.position.y = -0.022;
+    rimTorus.castShadow = false;
+    crownMeshGroup.add(rimTorus);
+
+    // 5 sculpted golden peaks around crown circlet + jewel tips
+    for (let i = 0; i < 5; i++) {
+      const ang = (i / 5) * Math.PI * 2;
+      const px = Math.sin(ang) * 0.145;
+      const pz = Math.cos(ang) * 0.145;
+
+      const peak = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.105, 4), goldMat);
+      peak.position.set(px, 0.068, pz);
+      peak.rotation.y = ang;
+      peak.castShadow = false;
+      crownMeshGroup.add(peak);
+
+      const jewel = new THREE.Mesh(new THREE.OctahedronGeometry(0.017, 0), brightGoldMat);
+      jewel.position.set(px, 0.128, pz);
+      jewel.castShadow = false;
+      crownMeshGroup.add(jewel);
+    }
+
+    // Center royal gem on front band
+    const frontGem = new THREE.Mesh(new THREE.OctahedronGeometry(0.022, 0), gemCyanMat);
+    frontGem.position.set(0, 0.012, 0.158);
+    frontGem.scale.set(0.9, 1.3, 0.6);
+    frontGem.castShadow = false;
+    crownMeshGroup.add(frontGem);
+
+    group.add(crownMeshGroup);
+
+    const haloMat = new THREE.MeshBasicMaterial({
+      color: 0xfde047,
+      transparent: true,
+      opacity: 0.58,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const haloMesh = new THREE.Mesh(new THREE.RingGeometry(0.18, 0.28, 24), haloMat);
+    haloMesh.name = 'victory_crown_halo';
+    haloMesh.rotation.x = -Math.PI / 2;
+    haloMesh.position.y = -0.035;
+    haloMesh.castShadow = false;
+    group.add(haloMesh);
+
+    this.joints.root.add(group);
+    this.victoryCrownGroup = group;
+    this.victoryCrownMeshGroup = crownMeshGroup;
+    this.victoryCrownHaloMesh = haloMesh;
+    this.victoryCrownHaloMat = haloMat;
+  }
+
+  public setVictoryCrown(active: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    if (!active) {
+      this.victoryCrownEnabled = false;
+      if (this.victoryCrownGroup) {
+        this.victoryCrownGroup.visible = false;
+        this.victoryCrownGroup.position.set(0, 1.0, 0);
+        this.victoryCrownGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.victoryCrownGroup) {
+      this.buildVictoryCrownGroup();
+    }
+
+    this.victoryCrownEnabled = true;
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.victoryCrownTime = elapsed;
+    }
+
+    const t = this.victoryCrownTime;
+    const bob = Math.sin(t * 2.8) * 0.042;
+    const anchor = this.getAuraHeadTrackPosition(bob);
+    const grp = this.victoryCrownGroup!;
+
+    grp.visible = true;
+    grp.position.set(anchor.x, anchor.y, anchor.z);
+    grp.scale.setScalar(1);
+
+    if (this.victoryCrownMeshGroup) {
+      this.victoryCrownMeshGroup.rotation.y = t * 1.25;
+      this.victoryCrownMeshGroup.scale.setScalar(1 + Math.sin(t * 4.0) * 0.04);
+    }
+    if (this.victoryCrownHaloMesh && this.victoryCrownHaloMat) {
+      this.victoryCrownHaloMesh.scale.setScalar(1 + 0.14 * Math.sin(t * 3.4));
+      this.victoryCrownHaloMat.opacity = 0.5 + 0.22 * Math.sin(t * 3.4);
+    }
+  }
+
+  private buildMedallionOrbitGroup(): void {
+    const orbitGroup = new THREE.Group();
+    orbitGroup.name = 'medallion_orbit_group';
+    orbitGroup.position.set(0, 0.08, 0);
+
+    const goldRingMat = makeMat('#fbbf24', 0.18, 0.86, '#f59e0b', 0.95);
+    const innerRingMat = makeMat('#fef08a', 0.14, 0.45, '#fde047', 1.15);
+
+    for (let i = 0; i < 3; i++) {
+      const node = new THREE.Group();
+      node.name = `medallion_ring_${i}`;
+
+      const outerRing = new THREE.Mesh(new THREE.TorusGeometry(0.082, 0.014, 8, 18), goldRingMat);
+      outerRing.castShadow = false;
+      node.add(outerRing);
+
+      const innerRing = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.008, 6, 14), innerRingMat);
+      innerRing.rotation.x = 0.35;
+      innerRing.castShadow = false;
+      node.add(innerRing);
+
+      const aspectColor = MEDALLIONS[i]?.accentColor ?? '#fde047';
+      const coreMat = makeMat(aspectColor, 0.12, 0.25, aspectColor, 1.05);
+      const coreGem = new THREE.Mesh(new THREE.OctahedronGeometry(0.032, 0), coreMat);
+      coreGem.scale.set(0.9, 1.2, 0.55);
+      coreGem.castShadow = false;
+      node.add(coreGem);
+
+      node.visible = false;
+      orbitGroup.add(node);
+      this.medallionNodes.push(node);
+    }
+
+    this.joints.chest.add(orbitGroup);
+    this.medallionOrbitGroup = orbitGroup;
+  }
+
+  public setMedallionCount(count: number, elapsed?: number): void {
+    if (this.disposed) return;
+
+    const clamped = Number.isFinite(count) ? clamp(Math.floor(count), 0, 3) : 0;
+    this.medallionCount = clamped;
+
+    if (clamped <= 0) {
+      if (this.medallionOrbitGroup) {
+        this.medallionOrbitGroup.visible = false;
+        this.medallionOrbitGroup.scale.setScalar(0.001);
+        for (const node of this.medallionNodes) {
+          node.visible = false;
+        }
+      }
+      return;
+    }
+
+    if (!this.medallionOrbitGroup) {
+      this.buildMedallionOrbitGroup();
+    }
+
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.medallionTime = elapsed;
+    }
+
+    const t = this.medallionTime;
+    const orbit = this.medallionOrbitGroup!;
+    orbit.visible = true;
+    orbit.scale.setScalar(1);
+    orbit.rotation.y = t * 1.85;
+
+    const orbitRadius = 0.42;
+    for (let i = 0; i < this.medallionNodes.length; i++) {
+      const node = this.medallionNodes[i];
+      const active = i < clamped;
+      node.visible = active;
+      if (!active) continue;
+
+      const ang = (i / clamped) * Math.PI * 2;
+      const bob = Math.sin(t * 3.2 + i * 2.1) * 0.045;
+      node.position.set(Math.cos(ang) * orbitRadius, bob, Math.sin(ang) * orbitRadius);
+      node.rotation.set(0, -ang + Math.PI / 2, t * 1.3 + i);
+    }
+  }
+
+  private buildDuoPartnerAuraGroup(): void {
+    const auraGroup = new THREE.Group();
+    auraGroup.name = 'duo_partner_aura';
+
+    const chevronGroup = new THREE.Group();
+    chevronGroup.name = 'duo_partner_chevron';
+
+    const cyanMat = makeMat('#22d3ee', 0.14, 0.28, '#22d3ee', 1.15);
+    const goldMat = makeMat('#fbbf24', 0.16, 0.8, '#f59e0b', 1.0);
+
+    // Central cyan-gold tactical diamond crest
+    const coreDiamond = new THREE.Mesh(new THREE.OctahedronGeometry(0.068, 0), goldMat);
+    coreDiamond.position.y = 0.12;
+    coreDiamond.scale.set(0.85, 1.35, 0.85);
+    coreDiamond.castShadow = false;
+    chevronGroup.add(coreDiamond);
+
+    // Dual-tone cyan outer + gold inner tactical V-chevron wings
+    const wingGeo = new THREE.BoxGeometry(0.125, 0.022, 0.024);
+    for (const side of [-1, 1] as const) {
+      const cyanWing = new THREE.Mesh(wingGeo, cyanMat);
+      cyanWing.position.set(side * 0.052, 0.028, 0);
+      cyanWing.rotation.z = side * 0.62;
+      cyanWing.castShadow = false;
+      chevronGroup.add(cyanWing);
+
+      const goldWing = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.018, 0.022), goldMat);
+      goldWing.position.set(side * 0.04, 0.068, 0);
+      goldWing.rotation.z = side * 0.62;
+      goldWing.castShadow = false;
+      chevronGroup.add(goldWing);
+    }
+
+    auraGroup.add(chevronGroup);
+
+    const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.016, 8, 24), cyanMat);
+    ringMesh.name = 'duo_partner_ring';
+    ringMesh.rotation.x = Math.PI / 2;
+    ringMesh.position.y = -0.025;
+    ringMesh.castShadow = false;
+    auraGroup.add(ringMesh);
+
+    const innerGoldRing = new THREE.Mesh(new THREE.TorusGeometry(0.165, 0.010, 6, 20), goldMat);
+    innerGoldRing.rotation.x = Math.PI / 2;
+    innerGoldRing.position.y = -0.025;
+    innerGoldRing.castShadow = false;
+    auraGroup.add(innerGoldRing);
+
+    const haloMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.48,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const haloMesh = new THREE.Mesh(new THREE.RingGeometry(0.18, 0.27, 24), haloMat);
+    haloMesh.rotation.x = -Math.PI / 2;
+    haloMesh.position.y = -0.025;
+    haloMesh.castShadow = false;
+    auraGroup.add(haloMesh);
+
+    this.joints.root.add(auraGroup);
+    this.duoPartnerAuraGroup = auraGroup;
+    this.duoPartnerChevronGroup = chevronGroup;
+    this.duoPartnerRingMesh = ringMesh;
+    this.duoPartnerHaloMesh = haloMesh;
+    this.duoPartnerHaloMat = haloMat;
+  }
+
+  public setDuoPartnerAura(active: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    const shouldEnable = Boolean(active) && !this.bossAuraEnabled;
+    if (!shouldEnable) {
+      this.duoPartnerAuraEnabled = false;
+      if (this.duoPartnerAuraGroup) {
+        this.duoPartnerAuraGroup.visible = false;
+        this.duoPartnerAuraGroup.position.set(0, 1.0, 0);
+        this.duoPartnerAuraGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.duoPartnerAuraGroup) {
+      this.buildDuoPartnerAuraGroup();
+    }
+
+    this.duoPartnerAuraEnabled = true;
+    if (this.allyAuraEnabled) {
+      this.setAllyAura(false);
+    }
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.duoPartnerAuraTime = elapsed;
+    }
+
+    const t = this.duoPartnerAuraTime;
+    const bob = Math.sin(t * 3.0) * 0.042;
+    const crownClearance = this.victoryCrownEnabled ? 0.24 : 0.05;
+    const anchor = this.getAuraHeadTrackPosition(bob + crownClearance);
+    const aura = this.duoPartnerAuraGroup!;
+
+    aura.visible = true;
+    aura.position.set(anchor.x, anchor.y, anchor.z);
+    aura.scale.setScalar(1);
+
+    if (this.duoPartnerChevronGroup) {
+      this.duoPartnerChevronGroup.rotation.y = t * 1.9;
+    }
+    if (this.duoPartnerRingMesh) {
+      this.duoPartnerRingMesh.scale.setScalar(1 + 0.06 * Math.sin(t * 3.8));
+    }
+    if (this.duoPartnerHaloMesh && this.duoPartnerHaloMat) {
+      this.duoPartnerHaloMesh.scale.setScalar(1 + 0.14 * Math.sin(t * 3.6));
+      this.duoPartnerHaloMat.opacity = 0.44 + 0.2 * Math.sin(t * 3.6);
     }
   }
 
@@ -1890,6 +2244,38 @@ export class CharacterRig {
     return this.allyRole;
   }
 
+  public hasVictoryCrown(): boolean {
+    return this.victoryCrownEnabled;
+  }
+
+  public isVictoryCrownEnabled(): boolean {
+    return this.victoryCrownEnabled;
+  }
+
+  public getVictoryCrownGroup(): THREE.Group | null {
+    return this.victoryCrownGroup;
+  }
+
+  public getMedallionCount(): number {
+    return this.medallionCount;
+  }
+
+  public getMedallionOrbitGroup(): THREE.Group | null {
+    return this.medallionOrbitGroup;
+  }
+
+  public getMedallionNodes(): readonly THREE.Group[] {
+    return this.medallionNodes;
+  }
+
+  public isDuoPartnerAuraEnabled(): boolean {
+    return this.duoPartnerAuraEnabled;
+  }
+
+  public getDuoPartnerAuraGroup(): THREE.Group | null {
+    return this.duoPartnerAuraGroup;
+  }
+
   public setVisible(visible: boolean): void {
     this.joints.root.visible = visible;
   }
@@ -1971,6 +2357,35 @@ export class CharacterRig {
       this.allyRoleHaloMesh = null;
       this.allyRoleHaloMat = null;
       this.allyAuraEnabled = false;
+    }
+
+    if (this.victoryCrownGroup) {
+      disposeObject3D(this.victoryCrownGroup);
+      this.victoryCrownGroup.parent?.remove(this.victoryCrownGroup);
+      this.victoryCrownGroup = null;
+      this.victoryCrownMeshGroup = null;
+      this.victoryCrownHaloMesh = null;
+      this.victoryCrownHaloMat = null;
+      this.victoryCrownEnabled = false;
+    }
+
+    if (this.medallionOrbitGroup) {
+      disposeObject3D(this.medallionOrbitGroup);
+      this.medallionOrbitGroup.parent?.remove(this.medallionOrbitGroup);
+      this.medallionOrbitGroup = null;
+      this.medallionNodes.length = 0;
+      this.medallionCount = 0;
+    }
+
+    if (this.duoPartnerAuraGroup) {
+      disposeObject3D(this.duoPartnerAuraGroup);
+      this.duoPartnerAuraGroup.parent?.remove(this.duoPartnerAuraGroup);
+      this.duoPartnerAuraGroup = null;
+      this.duoPartnerChevronGroup = null;
+      this.duoPartnerRingMesh = null;
+      this.duoPartnerHaloMesh = null;
+      this.duoPartnerHaloMat = null;
+      this.duoPartnerAuraEnabled = false;
     }
 
     disposeObject3D(this.joints.root);

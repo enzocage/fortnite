@@ -5,6 +5,8 @@ import type {
   CampfireEntity,
   CapturePointEntity,
   DamageNumberEvent,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   EmoteId,
   GamePhase,
   GameSettings,
@@ -17,10 +19,12 @@ import type {
   MatchSummary,
   NpcSpecialistEntity,
   RiftEntity,
+  SlurpTankerEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
   VendingMachineEntity,
+  WeaponBunkerEntity,
   ZiplineEntity,
 } from '../types';
 import { type CareerStats, loadCareerStats } from './CareerProfile';
@@ -28,7 +32,11 @@ import { FullMapOverlay } from './FullMapOverlay';
 import { HUDManager } from './HUDManager';
 import { LobbyScreen, saveStoredSettings } from './LobbyScreen';
 import { MatchOverlay } from './MatchOverlay';
-import { cloneSettings } from './UIHelpers';
+import {
+  cloneSettings,
+  resolveChapterOverlayArgs,
+  type WorldChapterOverlay,
+} from './UIHelpers';
 
 export interface UIManagerCallbacks {
   onStartMatch?: (config: LobbyConfig) => void;
@@ -177,6 +185,39 @@ export class UIManager {
     lootIsland: LootIslandState | null,
   ): void {
     this.fullMap.setWorldEconomy(vendingMachines, npcs, lootIsland);
+  }
+
+  setWorldChapterOverlay(
+    bunkers: WeaponBunkerEntity[],
+    tankers: SlurpTankerEntity[],
+    droppedMedallions?: DroppedMedallionEntity[],
+    droppedCrowns?: DroppedCrownEntity[],
+  ): void;
+  setWorldChapterOverlay(overlay: WorldChapterOverlay): void;
+  setWorldChapterOverlay(
+    bunkersOrOverlay: WeaponBunkerEntity[] | WorldChapterOverlay,
+    tankers?: SlurpTankerEntity[],
+    droppedMedallions?: DroppedMedallionEntity[],
+    droppedCrowns?: DroppedCrownEntity[],
+  ): void {
+    const resolved = resolveChapterOverlayArgs(
+      bunkersOrOverlay,
+      tankers,
+      droppedMedallions,
+      droppedCrowns,
+    );
+    this.fullMap.setWorldChapterOverlay(
+      resolved.bunkers,
+      resolved.tankers,
+      resolved.droppedMedallions,
+      resolved.droppedCrowns,
+    );
+    this.hud.setWorldChapterOverlay(
+      resolved.bunkers,
+      resolved.tankers,
+      resolved.droppedMedallions,
+      resolved.droppedCrowns,
+    );
   }
 
   setPhase(phase: GamePhase): void {

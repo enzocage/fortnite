@@ -12,7 +12,9 @@ export type BotAIState =
   | 'rotating'
   | 'combat'
   | 'healing'
-  | 'eliminated';
+  | 'eliminated'
+  | 'knocked'
+  | 'reviving';
 
 export interface KillFeedEntry {
   id: string;
@@ -42,4 +44,9 @@ export interface BotSummary {
   position: Vec3Like;
   isBoss?: boolean;
   bossPoiId?: string;
+  squadId?: string;
+  isDuoPartner?: boolean;
+  isKnocked?: boolean;
+  hasVictoryCrown?: boolean;
+  medallionCount?: number;
 }

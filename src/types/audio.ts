@@ -92,7 +92,17 @@ export type SoundEventId =
   | 'gold_pickup'
   | 'vending_buy'
   | 'ally_hired'
-  | 'loot_island_spawn';
+  | 'loot_island_spawn'
+  | 'shot_combat_smg'
+  | 'bow_draw'
+  | 'bow_release'
+  | 'knocked_down'
+  | 'revive_tick'
+  | 'revive_complete'
+  | 'medallion_pickup'
+  | 'crown_glint'
+  | 'bunker_unlock'
+  | 'slurp_tanker_burst';
 
 export type MusicTrackId =
   | 'none'

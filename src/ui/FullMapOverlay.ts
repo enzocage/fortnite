@@ -2,32 +2,43 @@ import { POIS, WORLD_SIZE } from '../core';
 import type {
   CampfireEntity,
   CapturePointEntity,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   GameSettings,
   HUDState,
   LaunchPadEntity,
   LootIslandState,
   NpcSpecialistEntity,
   RiftEntity,
+  SlurpTankerEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
   VendingMachineEntity,
+  WeaponBunkerEntity,
   ZiplineEntity,
 } from '../types';
 import {
   BOSS_POI_LABELS,
+  drawChapterMapOverlay,
   formatKeyCodeLabel,
   mapNormToWorld,
+  type ResolvedChapterOverlay,
+  resolveChapterOverlayArgs,
   resolveKeybinds,
+  type WorldChapterOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
   getAllyRoleSvg,
+  getBunkerSvg,
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getCrownSvg,
   getLootIslandIconSvg,
+  getMedallionSvg,
   getSkyRiftIconSvg,
+  getTankerSvg,
   getUpgradeBenchIconSvg,
   getVaultLockSvg,
   getVehicleIconSvg,
@@ -62,6 +73,12 @@ export class FullMapOverlay {
   private vendingMachines: VendingMachineEntity[] = [];
   private npcSpecialists: NpcSpecialistEntity[] = [];
   private lootIsland: LootIslandState | null = null;
+  private chapterOverlay: ResolvedChapterOverlay = {
+    bunkers: [],
+    tankers: [],
+    droppedMedallions: [],
+    droppedCrowns: [],
+  };
 
   private open = false;
   private lastState: HUDState | null = null;
@@ -201,6 +218,26 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch island">${getLootIslandIconSvg()}</span>
         <span>LOOT ISLAND</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch medallion-zone"></span>
+        <span>MEDALLION ZONE</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch bunker">${getBunkerSvg(true)}</span>
+        <span>WEAPON BUNKER</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch tanker">${getTankerSvg()}</span>
+        <span>SLURP TANKER</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch medallion">${getMedallionSvg('medallion_combat')}</span>
+        <span>DROPPED MEDALLION</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch crown">${getCrownSvg()}</span>
+        <span>DROPPED CROWN</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -278,6 +315,30 @@ export class FullMapOverlay {
     this.vendingMachines = vendingMachines;
     this.npcSpecialists = npcs;
     this.lootIsland = lootIsland;
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldChapterOverlay(
+    bunkers: WeaponBunkerEntity[],
+    tankers: SlurpTankerEntity[],
+    droppedMedallions?: DroppedMedallionEntity[],
+    droppedCrowns?: DroppedCrownEntity[],
+  ): void;
+  setWorldChapterOverlay(overlay: WorldChapterOverlay): void;
+  setWorldChapterOverlay(
+    bunkersOrOverlay: WeaponBunkerEntity[] | WorldChapterOverlay,
+    tankers?: SlurpTankerEntity[],
+    droppedMedallions?: DroppedMedallionEntity[],
+    droppedCrowns?: DroppedCrownEntity[],
+  ): void {
+    this.chapterOverlay = resolveChapterOverlayArgs(
+      bunkersOrOverlay,
+      tankers,
+      droppedMedallions,
+      droppedCrowns,
+    );
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -953,6 +1014,17 @@ export class FullMapOverlay {
 
       ctx.restore();
     }
+
+    // Wave-6 Chapter Overlay (Medallion Threat Circles, Bunkers, Slurp Tankers, Dropped Medallions & Crowns)
+    drawChapterMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      this.chapterOverlay,
+      state.medallionCircles,
+      performance.now(),
+    );
 
     // 10 POI Text Labels + Boss Tags (rendered AFTER stationary markers for crisp readability)
     ctx.save();

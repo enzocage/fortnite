@@ -3,6 +3,7 @@ import type {
   AugmentId,
   BuildPieceType,
   MaterialType,
+  MedallionId,
   SpecialistRole,
   VehicleKind,
   VisualSoundCue,
@@ -64,12 +65,34 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <rect x="21" y="29" width="16" height="2.6" rx="1" fill="#1e293b"/>
   </svg>`,
 
+  combat_smg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M7 30H16V37H7V30Z" fill="#475569" stroke="#0f172a" stroke-width="1.6"/>
+    <path d="M16 25H44V34H35L32 35H24L20 45H15L16 25Z" fill="#f8fafc" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M31 34H36L40 49H35L31 34Z" fill="#ffd000" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M37 34H42L46 48H41L37 34Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <rect x="33" y="39" width="10" height="3.5" rx="1" fill="#f97316" stroke="#0f172a" stroke-width="1.2"/>
+    <rect x="44" y="27" width="13" height="3.5" rx="1" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.5"/>
+    <rect x="25" y="20" width="10" height="5" rx="1.2" fill="#22d3ee" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="20" y="28" width="18" height="2.6" rx="1" fill="#0f172a"/>
+  </svg>`,
+
   sniper: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
     <path d="M21 21H37V25H21V21Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.6"/>
     <path d="M24 25V29M34 25V29" stroke="#f8fafc" stroke-width="2.2"/>
     <path d="M5 35L16 31H42V36H29L27 45H22L23 36H14L7 41L5 35Z" fill="#f8fafc" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
     <rect x="42" y="31.5" width="18" height="2.8" rx="1" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.4"/>
     <path d="M43 36L48 44M43 36L39 44" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
+
+  boom_bow: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M29 10C41 14 47 22 47 32C47 42 41 50 29 54" stroke="#f8fafc" stroke-width="4" stroke-linecap="round"/>
+    <path d="M29 10C38 15 43 23 43 32C43 41 38 49 29 54" stroke="#fb923c" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M29 11L17 32L29 53" stroke="#cbd5e1" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="42" y="25" width="6" height="14" rx="2" fill="#334155" stroke="#0f172a" stroke-width="1.6"/>
+    <path d="M12 32H49" stroke="#e2e8f0" stroke-width="2.8" stroke-linecap="round"/>
+    <path d="M48 26L59 32L48 38L51 32L48 26Z" fill="#ef4444" stroke="#ffd000" stroke-width="1.5" stroke-linejoin="round"/>
+    <circle cx="53" cy="32" r="2.6" fill="#ffd000"/>
+    <path d="M10 27L17 32L10 37" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`,
 
   pistol: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
@@ -613,5 +636,59 @@ export function getLootIslandIconSvg(): string {
     <path d="M7 16H25L20 25L16 27L12 25L7 16Z" fill="#475569" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
     <path d="M7 16C7 14 11 12.5 16 12.5C21 12.5 25 14 25 16H7Z" fill="#22d3ee" stroke="#e0f2fe" stroke-width="1.2"/>
     <path d="M16 4L19.5 10L16 14L12.5 10L16 4Z" fill="#ffd000" stroke="#78350f" stroke-width="1.2" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+export function getMedallionSvg(id: MedallionId): string {
+  switch (id) {
+    case 'medallion_siphon':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" fill="#ffd000" stroke="#78350f" stroke-width="2"/>
+        <circle cx="16" cy="16" r="9.5" fill="#064e3b" stroke="#fef08a" stroke-width="1.3"/>
+        <path d="M16 9L22 12V17C22 20.8 19.4 23.4 16 24.5C12.6 23.4 10 20.8 10 17V12L16 9Z" fill="#34d399" stroke="#ecfdf5" stroke-width="1.2" stroke-linejoin="round"/>
+        <path d="M16 13V19M13 16H19" stroke="#064e3b" stroke-width="2" stroke-linecap="round"/>
+      </svg>`;
+    case 'medallion_agility':
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" fill="#ffd000" stroke="#78350f" stroke-width="2"/>
+        <circle cx="16" cy="16" r="9.5" fill="#0c4a6e" stroke="#fef08a" stroke-width="1.3"/>
+        <path d="M17.5 8L11 17H16L14 24L21 15H16L17.5 8Z" fill="#38bdf8" stroke="#e0f2fe" stroke-width="1.2" stroke-linejoin="round"/>
+      </svg>`;
+    case 'medallion_combat':
+    default:
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="13" fill="#ffd000" stroke="#78350f" stroke-width="2"/>
+        <circle cx="16" cy="16" r="9.5" fill="#431407" stroke="#fef08a" stroke-width="1.3"/>
+        <path d="M16 8.5L18.5 13.5L24 14.5L20 18.5L21 24L16 21.2L11 24L12 18.5L8 14.5L13.5 13.5L16 8.5Z" fill="#fb923c" stroke="#ffedd5" stroke-width="1.2" stroke-linejoin="round"/>
+      </svg>`;
+  }
+}
+
+export function getBunkerSvg(unlocked = false): string {
+  const beacon = unlocked ? '#34eb5e' : '#f59e0b';
+  const door = unlocked ? '#15803d' : '#b45309';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M5 25L9 10H23L27 25H5Z" fill="#475569" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="10" y="15" width="12" height="10" rx="1.5" fill="${door}" stroke="#0f172a" stroke-width="1.6"/>
+    <path d="M16 15V25M10 20H22" stroke="#fef08a" stroke-width="1.4"/>
+    <circle cx="16" cy="7.5" r="3" fill="${beacon}" stroke="#0f172a" stroke-width="1.4"/>
+  </svg>`;
+}
+
+export function getTankerSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <rect x="4" y="11" width="18" height="11" rx="4.5" fill="#22d3ee" stroke="#0f172a" stroke-width="1.8"/>
+    <path d="M22 14H27L29 18V22H22V14Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <rect x="7" y="14" width="12" height="3.2" rx="1.2" fill="#a7f3d0"/>
+    <circle cx="10" cy="24" r="3" fill="#1e293b" stroke="#cbd5e1" stroke-width="1.4"/>
+    <circle cx="24" cy="24" r="3" fill="#1e293b" stroke="#cbd5e1" stroke-width="1.4"/>
+  </svg>`;
+}
+
+export function getReviveCrossSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="16" r="12.5" fill="#065f46" stroke="#34eb5e" stroke-width="2"/>
+    <rect x="13.2" y="7.5" width="5.6" height="17" rx="1.5" fill="#ffffff"/>
+    <rect x="7.5" y="13.2" width="17" height="5.6" rx="1.5" fill="#ffffff"/>
   </svg>`;
 }

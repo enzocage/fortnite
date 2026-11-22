@@ -4,6 +4,7 @@ import {
   CONTRAILS,
   CROSSHAIR_COLORS,
   CROSSHAIR_STYLES,
+  DBNO_MAX_HP,
   DEFAULT_KEYBINDS,
   DEFAULT_SETTINGS,
   EMOTES,
@@ -11,6 +12,7 @@ import {
   GAME_MODES,
   GLIDERS,
   MAX_GOLD_BARS,
+  MEDALLIONS,
   PICKAXES,
   POIS,
   RARITY_ORDER,
@@ -27,19 +29,24 @@ import type {
   BuildPieceType,
   CampfireEntity,
   CapturePointEntity,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   HUDState,
   LootIslandState,
   MaterialType,
   MatchQuest,
   MatchSummary,
+  MedallionId,
   NpcSpecialistEntity,
   RiftEntity,
+  SlurpTankerEntity,
   SpecialistRole,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
   VendingMachineEntity,
   VisualSoundCue,
+  WeaponBunkerEntity,
   WeaponId,
   WeatherKind,
 } from '../../types';
@@ -74,6 +81,7 @@ import {
   getBearingDeg,
   getBountyTargetSvg,
   getBuildIconSvg,
+  getBunkerSvg,
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getContextualHudHints,
@@ -85,13 +93,17 @@ import {
   getKillStreakCallout,
   getLootIslandIconSvg,
   getMaterialIconSvg,
+  getMedallionMeta,
+  getMedallionSvg,
   getOvershieldBoltSvg,
   getRarityMeta,
+  getReviveCrossSvg,
   getShortestAngleDiffDeg,
   getSkullSvg,
   getSkyRiftIconSvg,
   getStormEyeSvg,
   getTacticalPingIconSvg,
+  getTankerSvg,
   getTotalXpForLevel,
   getUpgradeBenchIconSvg,
   getVaultKeySvg,
@@ -114,11 +126,13 @@ import {
   recordMatchCareerStats,
   resetCareerStats,
   resolveKeybinds,
+  sanitizeGameMode,
   saveStoredLobbyConfig,
   saveStoredSettings,
   selectVisibleVisualSoundCues,
   UIManager,
   updateGoldBars,
+  updateVictoryCrown,
   worldToMapNorm,
   xpForLevelStep,
 } from '../index';
@@ -342,7 +356,12 @@ describe('UIHelpers', () => {
     expect(normalizeBoostChargePct(-0.5)).toBe(0);
 
     // Wave-3 helpers: game modes, overshield, quests, visual sound cues
-    expect(GAME_MODES.map((m) => m.id)).toEqual(['solo', 'zero_build', 'blitz']);
+    expect(GAME_MODES.map((m) => m.id)).toEqual([
+      'solo',
+      'zero_build',
+      'blitz',
+      'duos',
+    ]);
     expect(WEAPON_WRAPS.length).toBe(6);
     expect(DEFAULT_SETTINGS.visualAudio).toBe(true);
     expect(getGameModeMeta('zero_build').name).toBe('ZERO BUILD');
@@ -380,9 +399,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 23 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 25 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(23);
+    expect(weaponIds.length).toBe(25);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -394,7 +413,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all 5 Wave-1 + 2 Wave-2 + 2 Wave-5 icons have rich multi-element custom artwork
+    // Verify all 5 Wave-1 + 2 Wave-2 + 2 Wave-5 + 2 Wave-6 icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -405,6 +424,8 @@ describe('WeaponIcons & SVG assets', () => {
       'shield_bubble',
       'tactical_dmr',
       'kinetic_blade',
+      'combat_smg',
+      'boom_bow',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -1574,11 +1595,12 @@ describe('Wave 3 UI: Game Modes, Weapon Wraps, Overshield, Visual Audio, Match Q
 
     // 1. PLAY tab game mode selector cards
     const modeCards = root.findAllByClass('fdr-mode-select-card');
-    expect(modeCards.length).toBe(3);
+    expect(modeCards.length).toBe(4);
     expect(modeCards.map((c) => c.dataset.gameMode)).toEqual([
       'solo',
       'zero_build',
       'blitz',
+      'duos',
     ]);
     modeCards[1].click(); // ZERO BUILD
     expect(ui.getLobbyConfig().gameMode).toBe('zero_build');
@@ -2917,6 +2939,665 @@ describe('Wave 5 UI: Career Tab & Rank, Crosshair Studio, Gold Bars, Kinetic Das
     expect(firstPoiLabelIdx).toBeGreaterThan(vmIdx);
     expect(firstPoiLabelIdx).toBeGreaterThan(npcIdx);
     expect(firstPoiLabelIdx).toBeGreaterThan(liIdx);
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 6 UI: Victory Crowns, Medallions, Duos Lobby/HUD, Weapon Bunkers, Slurp Tankers, Boom Bow & Map Circles', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('persists CareerProfile Victory Crown, crownWins & totalRevives cleanly with safe localStorage defaults', () => {
+    const initial = loadCareerStats();
+    expect(initial.hasVictoryCrown).toBe(false);
+    expect(initial.crownWins).toBe(0);
+    expect(initial.totalRevives).toBe(0);
+
+    const store = new Map<string, string>();
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      writable: true,
+      value: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+    });
+
+    // Existing legacy Career localStorage without Wave 6 fields
+    store.set(
+      'fortdrop_career_v1',
+      JSON.stringify({
+        xp: 1200,
+        level: 3,
+        wins: 2,
+        elims: 11,
+        matchesPlayed: 5,
+        damageDealt: 2400,
+        bestPlacement: 1,
+        goldBars: 600,
+      }),
+    );
+    const hydrated = loadCareerStats();
+    expect(hydrated.hasVictoryCrown).toBe(false);
+    expect(hydrated.crownWins).toBe(0);
+    expect(hydrated.totalRevives).toBe(0);
+    expect(hydrated.goldBars).toBe(600);
+
+    // Match 1: Victory + 2 revives -> earns Victory Crown for next match
+    const baseMatch: MatchSummary = {
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 4,
+      damageDealt: 850,
+      shotsFired: 50,
+      shotsHit: 25,
+      accuracy: 50,
+      headshots: 2,
+      structuresBuilt: 6,
+      chestsOpened: 3,
+      survivalTimeSec: 180,
+      gameMode: 'duos',
+      revives: 2,
+    };
+    const afterWin1 = recordMatchCareerStats(baseMatch);
+    expect(afterWin1.hasVictoryCrown).toBe(true);
+    expect(afterWin1.crownWins).toBe(0);
+    expect(afterWin1.totalRevives).toBe(2);
+
+    // Match 2: Crowned Victory Royale + 1 revive -> increments crownWins & keeps Crown
+    const afterCrownedWin = recordMatchCareerStats({
+      ...baseMatch,
+      crownedVictory: true,
+      revives: 1,
+    });
+    expect(afterCrownedWin.hasVictoryCrown).toBe(true);
+    expect(afterCrownedWin.crownWins).toBe(1);
+    expect(afterCrownedWin.totalRevives).toBe(3);
+
+    // Match 3: Eliminated -> loses active Victory Crown, preserves crownWins & totalRevives
+    const afterLoss = recordMatchCareerStats({
+      ...baseMatch,
+      victory: false,
+      crownedVictory: false,
+      placement: 7,
+      revives: 1,
+    });
+    expect(afterLoss.hasVictoryCrown).toBe(false);
+    expect(afterLoss.crownWins).toBe(1);
+    expect(afterLoss.totalRevives).toBe(4);
+
+    // Direct helper toggle
+    expect(updateVictoryCrown(true).hasVictoryCrown).toBe(true);
+    expect(loadCareerStats().hasVictoryCrown).toBe(true);
+  });
+
+  it('provides Wave-6 WeaponIcons (combat_smg, boom_bow, medallions, bunker, tanker, revive cross) and Duos UIHelpers', () => {
+    expect(formatModeBadgeLabel('duos')).toBe('DUOS');
+    expect(getGameModeMeta('duos').name).toBe('DUOS SQUAD');
+    expect(getGameModeMeta('duos').badge).toBe('2V2 SQUADS');
+    expect(sanitizeGameMode('duos')).toBe('duos');
+    expect(sanitizeGameMode('zero_build')).toBe('zero_build');
+    expect(sanitizeGameMode('invalid_mode_xyz')).toBe('solo');
+    expect(sanitizeGameMode(null)).toBe('solo');
+
+    for (const id of ['combat_smg', 'boom_bow'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    const medIds: MedallionId[] = [
+      'medallion_siphon',
+      'medallion_agility',
+      'medallion_combat',
+    ];
+    expect(MEDALLIONS.length).toBe(3);
+    const medSvgs = new Set(medIds.map((id) => getMedallionSvg(id)));
+    expect(medSvgs.size).toBe(3);
+    for (const svg of medSvgs) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+    expect(getMedallionMeta('medallion_agility').shortLabel).toBe('AGILITY CREST');
+
+    for (const svg of [
+      getBunkerSvg(),
+      getBunkerSvg(true),
+      getTankerSvg(),
+      getReviveCrossSvg(),
+    ]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+    expect(getBunkerSvg(false)).not.toBe(getBunkerSvg(true));
+  });
+
+  it('renders Duos in 2x2 Lobby mode grid and shows active Victory Crown + CROWNED WINS in Lobby badge & Career tab', () => {
+    const store = new Map<string, string>();
+    (globalThis as Record<string, unknown>).window = {
+      innerWidth: 1280,
+      innerHeight: 720,
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    recordMatchCareerStats({
+      victory: true,
+      crownedVictory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 6,
+      damageDealt: 1300,
+      shotsFired: 70,
+      shotsHit: 40,
+      accuracy: 57,
+      headshots: 3,
+      structuresBuilt: 8,
+      chestsOpened: 5,
+      survivalTimeSec: 210,
+      revives: 3,
+    });
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. 2x2 grid holds all 4 modes & selects duos cleanly
+    const modeGrid = root.findByClass('fdr-mode-grid');
+    expect(modeGrid).not.toBeNull();
+    const cards = modeGrid?.findAllByClass('fdr-mode-select-card') ?? [];
+    expect(cards.map((c) => c.dataset.gameMode)).toEqual([
+      'solo',
+      'zero_build',
+      'blitz',
+      'duos',
+    ]);
+    cards[3].click();
+    expect(ui.getLobbyConfig().gameMode).toBe('duos');
+    expect(loadStoredLobbyConfig().gameMode).toBe('duos');
+    expect(root.findByClass('fdr-mode-card')?.textContent).toContain('DUOS SQUAD');
+
+    // 2. Lobby top-right badge shows active Victory Crown & CROWNED WINS
+    const lobbyBadge = root.findByClass('fdr-lobby-badge');
+    expect(lobbyBadge?.classList.contains('crown-active')).toBe(true);
+    expect(lobbyBadge?.dataset.hasVictoryCrown).toBe('true');
+    expect(lobbyBadge?.textContent).toContain('CROWN ACTIVE');
+    expect(lobbyBadge?.textContent).toContain('1 CROWNED WINS');
+
+    // 3. Career tab renders VICTORY CROWN ACTIVE, CROWNED WINS & REVIVES
+    const navTabs = root.findAllByClass('fdr-nav-tab');
+    navTabs[2].click(); // CAREER
+    const careerPanel = root.findByClass('fdr-career-panel');
+    expect(careerPanel?.textContent).toContain('VICTORY CROWN ACTIVE');
+    expect(careerPanel?.textContent).toContain('CROWNED WINS');
+    expect(careerPanel?.textContent).toContain('REVIVES');
+    expect(careerPanel?.textContent).toContain('3');
+
+    ui.dispose();
+  });
+
+  it('renders HUD Duo Partner card, Golden Medallion Rack, Victory Crown, Boom Bow draw arc, DBNO/Revive bars & Node-safe Minimap circles', () => {
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    // Minimal 2D canvas context WITHOUT fillText, strokeText, or ellipse to enforce Node mock safety!
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: () => {},
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => miniMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    const bunkers: WeaponBunkerEntity[] = [
+      {
+        id: 'b-1',
+        poiId: 'metro_towers',
+        x: 20,
+        y: 12,
+        z: 10,
+        rotationY: 0,
+        unlocked: false,
+        looted: false,
+        unlockAtStormPhase: 2,
+      },
+    ];
+    const tankers: SlurpTankerEntity[] = [
+      {
+        id: 't-1',
+        x: -25,
+        y: 10,
+        z: -15,
+        rotationY: 0,
+        hp: 220,
+        maxHp: 220,
+        healRadius: 10,
+        healAmount: 60,
+        destroyed: false,
+      },
+    ];
+    hud.setWorldChapterOverlay(bunkers, tankers, [], []);
+
+    hud.update(
+      makeBaseHUDState({
+        gameMode: 'duos',
+        hasVictoryCrown: true,
+        medallions: ['medallion_siphon', 'medallion_combat'],
+        bowCharge: 0.72,
+        isKnocked: true,
+        bleedOutHp: 75,
+        reviveProgress: 0.65,
+        reviveLabel: 'REVIVING APEX VALKYRIE',
+        duoPartner: {
+          name: 'Apex Valkyrie',
+          hp: 80,
+          maxHp: 100,
+          shield: 50,
+          maxShield: 100,
+          knocked: false,
+          alive: true,
+          distance: 14.3,
+        },
+        medallionCircles: [{ x: 15, z: -10, radius: 42, isPlayer: false, count: 2 }],
+      }),
+    );
+
+    // 1. Top-left Duo Partner card (alive)
+    const duoCard = hudRoot.findByClass('fdr-duo-card');
+    expect(duoCard?.classList.contains('fdr-hidden')).toBe(false);
+    expect(duoCard?.dataset.duoState).toBe('alive');
+    expect(duoCard?.textContent).toContain('APEX VALKYRIE');
+    expect(duoCard?.textContent).toContain('14M');
+    expect(duoCard?.findByClass('fdr-duo-fill')?.style.width).toBe('50.0%');
+
+    // 2. Victory Crown & Golden Medallion Rack in top-left stack
+    const topLeft = hudRoot.findByClass('fdr-top-left-stack');
+    const crownBadge = topLeft?.findByClass('fdr-hud-crown-badge');
+    const medRack = topLeft?.findByClass('fdr-medallion-rack');
+    expect(crownBadge?.classList.contains('fdr-hidden')).toBe(false);
+    expect(crownBadge?.textContent).toContain('VICTORY CROWN');
+    expect(medRack?.classList.contains('fdr-hidden')).toBe(false);
+    expect(medRack?.findAllByClass('fdr-medallion-chip').length).toBe(2);
+
+    // 3. Boom Bow crosshair draw arc
+    const bowArc = hudRoot.findByClass('fdr-bow-charge-arc');
+    expect(bowArc?.classList.contains('fdr-hidden')).toBe(false);
+    expect(bowArc?.dataset.bowCharge).toBe('0.72');
+    expect(bowArc?.innerHTML).toContain('stroke-dashoffset');
+
+    // 4. DBNO bleed-out & Revive bars inside .fdr-bottom-center
+    const bottomCenter = hudRoot.findByClass('fdr-bottom-center');
+    const dbnoBar = bottomCenter?.findByClass('fdr-dbno-bar');
+    const reviveBar = bottomCenter?.findByClass('fdr-revive-bar');
+    expect(dbnoBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(dbnoBar?.textContent).toContain('KNOCKED DOWN');
+    expect(dbnoBar?.textContent).toContain(`75 / ${DBNO_MAX_HP}`);
+    expect(dbnoBar?.findByClass('fdr-dbno-fill')?.style.width).toBe('75.0%');
+
+    expect(reviveBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(reviveBar?.textContent).toContain('REVIVING APEX VALKYRIE');
+    expect(reviveBar?.textContent).toContain('65%');
+    expect(reviveBar?.findByClass('fdr-revive-fill')?.style.width).toBe('65%');
+
+    // 5. Minimap drew medallion threat circles + bunkers + tankers without fillText/ellipse
+    expect(miniDrawCalls.some((c) => c.op === 'arc')).toBe(true);
+    expect(miniDrawCalls.some((c) => c.op === 'translate')).toBe(true);
+
+    // 6. Transition Duo Partner to KNOCKED & clear Boom Bow / DBNO / Revive
+    hud.update(
+      makeBaseHUDState({
+        gameMode: 'duos',
+        hasVictoryCrown: false,
+        medallions: [],
+        bowCharge: null,
+        isKnocked: false,
+        reviveProgress: null,
+        duoPartner: {
+          name: 'Apex Valkyrie',
+          hp: 0,
+          maxHp: 100,
+          shield: 0,
+          maxShield: 100,
+          knocked: true,
+          alive: true,
+          bleedOutHp: 62,
+          distance: 18,
+        },
+      }),
+    );
+    expect(duoCard?.dataset.duoState).toBe('knocked');
+    expect(duoCard?.classList.contains('knocked')).toBe(true);
+    expect(duoCard?.textContent).toContain('KNOCKED');
+    expect(duoCard?.textContent).toContain(`62 / ${DBNO_MAX_HP}`);
+    expect(duoCard?.findByClass('fdr-duo-bleed-fill')?.style.width).toBe('62.0%');
+    expect(bowArc?.classList.contains('fdr-hidden')).toBe(true);
+    expect(dbnoBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(reviveBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(hudRoot.findByClass('fdr-chapter-rack')?.classList.contains('fdr-hidden')).toBe(
+      true,
+    );
+
+    hud.dispose();
+  });
+
+  it('draws Medallion Threat Circles, Bunkers, Slurp Tankers, Dropped Crowns & Medallions on FullMapOverlay before POI labels and shows MatchOverlay Crowned Victory + stats', () => {
+    const drawCalls: Array<{ op: string; args: unknown[] }> = [];
+    // Notice: NO ellipse method defined on mockCtx to assert ellipse is never invoked!
+    const mockCtx = {
+      clearRect: (...args: unknown[]) => drawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => drawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => drawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => drawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => drawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      arc: (...args: unknown[]) => drawCalls.push({ op: 'arc', args }),
+      fill: () => drawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => drawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => drawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => drawCalls.push({ op: 'rotate', args }),
+      setLineDash: () => {},
+      fillText: (...args: unknown[]) => drawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => drawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => mockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. MatchOverlay CROWNED VICTORY ROYALE banner + MEDALLIONS + REVIVES stat chips
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      crownedVictory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 8,
+      damageDealt: 1720,
+      shotsFired: 90,
+      shotsHit: 52,
+      accuracy: 58,
+      headshots: 5,
+      structuresBuilt: 12,
+      chestsOpened: 5,
+      survivalTimeSec: 265,
+      gameMode: 'duos',
+      medallionsHeld: ['medallion_siphon', 'medallion_agility'],
+      revives: 3,
+    });
+
+    const crownedBanner = root.findByClass('fdr-crowned-victory-banner');
+    expect(crownedBanner).not.toBeNull();
+    expect(crownedBanner?.textContent).toContain('CROWNED VICTORY ROYALE!');
+    expect(root.findByClass('fdr-summary-mode-badge')?.textContent).toContain('DUOS SQUAD');
+
+    const statsGrid = root.findByClass('fdr-stats-grid');
+    expect(statsGrid?.textContent).toContain('MEDALLIONS');
+    expect(statsGrid?.textContent).toContain('2');
+    expect(statsGrid?.textContent).toContain('REVIVES');
+    expect(statsGrid?.textContent).toContain('3');
+
+    // Non-crowned summary hides golden banner
+    ui.showMatchSummary({
+      victory: false,
+      crownedVictory: false,
+      placement: 5,
+      totalPlayers: 30,
+      kills: 2,
+      damageDealt: 400,
+      shotsFired: 30,
+      shotsHit: 12,
+      accuracy: 40,
+      headshots: 0,
+      structuresBuilt: 3,
+      chestsOpened: 2,
+      survivalTimeSec: 120,
+      gameMode: 'duos',
+      medallionsHeld: [],
+      revives: 0,
+    });
+    expect(root.findByClass('fdr-crowned-victory-banner')).toBeNull();
+
+    // 2. FullMapOverlay Legend rows
+    const legend = root.findByClass('fdr-map-legend');
+    expect(legend?.textContent).toContain('MEDALLION ZONE');
+    expect(legend?.textContent).toContain('WEAPON BUNKER');
+    expect(legend?.textContent).toContain('SLURP TANKER');
+    expect(legend?.textContent).toContain('DROPPED MEDALLION');
+    expect(legend?.textContent).toContain('DROPPED CROWN');
+
+    // 3. FullMapOverlay.setWorldChapterOverlay + medallionCircles
+    const bunkers: WeaponBunkerEntity[] = [
+      {
+        id: 'wb-1',
+        poiId: 'metro_towers',
+        x: -95,
+        y: 12,
+        z: -60,
+        rotationY: 0,
+        unlocked: false,
+        looted: false,
+        unlockAtStormPhase: 2,
+      },
+      {
+        id: 'wb-2',
+        poiId: 'market_row',
+        x: 195,
+        y: 13,
+        z: 55,
+        rotationY: 0,
+        unlocked: true,
+        looted: false,
+        unlockAtStormPhase: 2,
+      },
+    ];
+    const tankers: SlurpTankerEntity[] = [
+      {
+        id: 'st-1',
+        x: 10,
+        y: 10,
+        z: 80,
+        rotationY: 0,
+        hp: 220,
+        maxHp: 220,
+        healRadius: 10,
+        healAmount: 60,
+        destroyed: false,
+      },
+      {
+        id: 'st-2',
+        x: -140,
+        y: 10,
+        z: 90,
+        rotationY: 0,
+        hp: 0,
+        maxHp: 220,
+        healRadius: 10,
+        healAmount: 60,
+        destroyed: true,
+      },
+    ];
+    const droppedMedallions: DroppedMedallionEntity[] = [
+      {
+        id: 'dm-1',
+        medallionId: 'medallion_combat',
+        x: -155,
+        y: 20,
+        z: 105,
+        collected: false,
+      },
+      {
+        id: 'dm-2',
+        medallionId: 'medallion_siphon',
+        x: 145,
+        y: 16,
+        z: 145,
+        collected: true,
+      },
+    ];
+    const droppedCrowns: DroppedCrownEntity[] = [
+      { id: 'dc-1', x: 55, y: 12, z: -90, collected: false },
+      { id: 'dc-2', x: -85, y: 12, z: 45, collected: true },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldChapterOverlay(bunkers, tankers, droppedMedallions, droppedCrowns);
+    ui.toggleFullMap(true);
+    drawCalls.length = 0;
+    ui.updateHUD(
+      makeBaseHUDState({
+        medallionCircles: [{ x: 160, z: 165, radius: 42, isPlayer: false, count: 2 }],
+      }),
+    );
+
+    const findTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return drawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const wb1Idx = findTranslateIdx(-95, -60);
+    const wb2Idx = findTranslateIdx(195, 55);
+    const st1Idx = findTranslateIdx(10, 80);
+    const st2Idx = findTranslateIdx(-140, 90);
+    const dm1Idx = findTranslateIdx(-155, 105);
+    const dm2Idx = findTranslateIdx(145, 145);
+    const dc1Idx = findTranslateIdx(55, -90);
+    const dc2Idx = findTranslateIdx(-85, 45);
+    const firstPoiLabelIdx = drawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+
+    expect(wb1Idx).toBeGreaterThanOrEqual(0);
+    expect(wb2Idx).toBeGreaterThanOrEqual(0);
+    expect(st1Idx).toBeGreaterThanOrEqual(0);
+    expect(st2Idx).toBe(-1); // destroyed tanker skipped
+    expect(dm1Idx).toBeGreaterThanOrEqual(0);
+    expect(dm2Idx).toBe(-1); // collected medallion skipped
+    expect(dc1Idx).toBeGreaterThanOrEqual(0);
+    expect(dc2Idx).toBe(-1); // collected crown skipped
+
+    // All Wave-6 chapter overlay markers draw BEFORE POI text labels
+    expect(firstPoiLabelIdx).toBeGreaterThan(wb1Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(wb2Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(st1Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(dm1Idx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(dc1Idx);
+
+    // Medallion threat circle arc drawn at Skyline Spire (160, 165)
+    const mcNorm = worldToMapNorm(160, 165);
+    const hasMedallionCircleArc = drawCalls.some(
+      (c) =>
+        c.op === 'arc' &&
+        Math.abs((c.args[0] as number) - mcNorm.nx * 640) < 0.5 &&
+        Math.abs((c.args[1] as number) - mcNorm.nz * 640) < 0.5 &&
+        (c.args[2] as number) > 20,
+    );
+    expect(hasMedallionCircleArc).toBe(true);
 
     ui.dispose();
   });

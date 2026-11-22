@@ -21,11 +21,16 @@ import type {
 } from '../../types';
 import {
   BUILD_COST,
+  DBNO_BLEED_DPS,
+  DBNO_MAX_HP,
   EventBus,
   GLIDER_FORCE_HEIGHT,
   GLIDERS,
+  MEDALLIONS,
+  MEDALLION_CIRCLE_RADII,
   PICKAXES,
   POIS,
+  REVIVE_DURATION_SEC,
   SKINS,
   dist2D,
 } from '../../core';
@@ -45,6 +50,7 @@ import {
   pickBotLoadoutCosmetics,
   segmentIntersectsSphere,
   selectBestWeaponForDistance,
+  selectBestWeaponForRange,
   selectCapturePointTarget,
   selectEscapeRift,
   selectExplosiveBarrelTarget,
@@ -3205,5 +3211,361 @@ describe('Wave 5 NPC Specialist Allies, Friendly-Fire Immunity & Support Events'
     expect(
       selectBestWeaponForDistance([makeItem('pickaxe', 'common', 0), makeItem('kinetic_blade', 'epic', 0)], 2.5, ammo)?.item.weaponId,
     ).toBe('kinetic_blade');
+  });
+});
+
+describe('Wave 6 Duos Squads, DBNO/Revive, Boss Medallions, Victory Crowns & New Weapons', () => {
+  it('spawns APEX VALKYRIE Duo Partner, pairs enemy bots into 2-bot squads, and excludes partner from getAliveCount & friendly fire', () => {
+    const ctx = makeMockContext({ gameMode: 'duos' });
+    const manager = new BotManager(ctx, 'standard', 4242, 'duos');
+    manager.spawnBots(6, 20, 'duos');
+
+    const partner = manager.getDuoPartner();
+    expect(partner).not.toBeNull();
+    expect(partner!.name).toBe('APEX VALKYRIE');
+    expect(partner!.isDuoPartner).toBe(true);
+    expect(partner!.squadId).toBe('player_squad');
+
+    // Hostile count excludes Duo Partner; total bots = 6 enemies + 1 partner
+    expect(manager.getAliveCount()).toBe(6);
+    expect(manager.getBots()).toHaveLength(7);
+
+    // Enemy bots paired into 2-bot squads squad_1, squad_2, squad_3
+    const enemies = manager.getBots().filter((b) => !b.isDuoPartner);
+    const bySquad = new Map<string, BotEntity[]>();
+    for (const enemy of enemies) {
+      expect(enemy.squadId).toMatch(/^squad_\d+$/);
+      const list = bySquad.get(enemy.squadId!) ?? [];
+      list.push(enemy);
+      bySquad.set(enemy.squadId!, list);
+    }
+    expect(Array.from(bySquad.keys()).sort()).toEqual(['squad_1', 'squad_2', 'squad_3']);
+    for (const members of bySquad.values()) {
+      expect(members).toHaveLength(2);
+      expect(members[0].targetPoiId).toBe(members[1].targetPoiId);
+      expect(members[0].dropJumpTime).toBe(members[1].dropJumpTime);
+    }
+
+    // Friendly-fire immune from player and same-squad enemy
+    expect(manager.damageBot(partner!.id, 150, 'player', 'Player', 10)).toBe(false);
+    expect(partner!.hp).toBe(100);
+    expect(partner!.shield).toBe(100);
+
+    const [s1a, s1b] = bySquad.get('squad_1')!;
+    expect(manager.damageBot(s1a.id, 90, s1b.id, s1b.name, 10)).toBe(false);
+    expect(s1a.hp).toBe(100);
+
+    // Duo Partner HUD state reports live distance and vitals
+    partner!.position = { x: 3, y: 10, z: 4 };
+    const hudState = manager.getDuoPartnerHudState({ x: 0, y: 10, z: 0 });
+    expect(hudState).toMatchObject({
+      name: 'APEX VALKYRIE',
+      hp: 100,
+      maxHp: 100,
+      shield: 100,
+      maxShield: 100,
+      knocked: false,
+      alive: true,
+    });
+    expect(hudState!.distance).toBeCloseTo(5, 3);
+
+    // Render state & summary expose Wave 6 fields
+    const partnerRender = manager.getRenderStates().find((r) => r.id === partner!.id);
+    expect(partnerRender?.isDuoPartner).toBe(true);
+    expect(partnerRender?.squadId).toBe('player_squad');
+
+    manager.dispose();
+  });
+
+  it('handles Duos DBNO knocking, thirsting, Squad Wipe elimination, slow crawl bleed-out, and reviveDuoPartner()', () => {
+    const ctx = makeMockContext({ gameMode: 'duos' });
+    const manager = new BotManager(ctx, 'standard', 6161, 'duos');
+    const sounds: string[] = [];
+    ctx.eventBus.on('sound:play', (s) => sounds.push(s.id));
+
+    manager.spawnBots(4, 20, 'duos');
+    const partner = manager.getDuoPartner()!;
+    const squad1 = manager.getBots().filter((b) => b.squadId === 'squad_1');
+    const squad2 = manager.getBots().filter((b) => b.squadId === 'squad_2');
+    expect(squad1).toHaveLength(2);
+    expect(squad2).toHaveLength(2);
+
+    // 1. Lethal hit on squad_1[0] while squad_1[1] is alive & standing -> DBNO ('knocked')
+    expect(manager.damageBot(squad1[0].id, 200, 'player', 'Player', 12)).toBe(true);
+    expect(squad1[0].isKnocked).toBe(true);
+    expect(squad1[0].state).toBe('knocked');
+    expect(squad1[0].alive).toBe(true);
+    expect(squad1[0].bleedOutHp).toBe(DBNO_MAX_HP);
+    expect(manager.getAliveCount()).toBe(4);
+    expect(sounds).toContain('knocked_down');
+
+    // 2. Lethal hit on squad_1[1] -> no non-knocked squadmates left -> Squad Wipe eliminates BOTH!
+    expect(manager.damageBot(squad1[1].id, 200, 'player', 'Player', 13)).toBe(true);
+    expect(squad1[1].alive).toBe(false);
+    expect(squad1[1].state).toBe('eliminated');
+    expect(squad1[0].alive).toBe(false);
+    expect(squad1[0].state).toBe('eliminated');
+    expect(squad1[0].isKnocked).toBe(false);
+    expect(manager.getAliveCount()).toBe(2);
+
+    // 3. Thirsting a knocked bot directly eliminates it once bleedOutHp reaches 0
+    expect(manager.damageBot(squad2[0].id, 200, 'player', 'Player', 14)).toBe(true);
+    expect(squad2[0].isKnocked).toBe(true);
+    expect(manager.damageBot(squad2[0].id, 60, 'player', 'Player', 14.5)).toBe(true);
+    expect(squad2[0].bleedOutHp).toBe(40);
+    expect(squad2[0].alive).toBe(true);
+    expect(manager.damageBot(squad2[0].id, 50, 'player', 'Player', 15)).toBe(true);
+    expect(squad2[0].alive).toBe(false);
+    expect(squad2[0].state).toBe('eliminated');
+
+    // 4. Knocking Duo Partner while player is alive -> slow crawl + bleed-out + reviveDuoPartner()
+    partner.position = { x: 10, y: 10, z: 0 };
+    expect(manager.damageBot(partner.id, 250, squad2[1].id, squad2[1].name, 16)).toBe(true);
+    expect(partner.isKnocked).toBe(true);
+    expect(partner.state).toBe('knocked');
+    expect(partner.bleedOutHp).toBe(DBNO_MAX_HP);
+
+    const startX = partner.position.x;
+    manager.update(0.1, 16.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    expect(partner.animState).toBe('knocked');
+    expect(partner.moveSpeed).toBeLessThanOrEqual(1.45);
+    expect(partner.position.x).toBeLessThan(startX);
+    expect(partner.bleedOutHp).toBeCloseTo(DBNO_MAX_HP - DBNO_BLEED_DPS * 0.1, 2);
+
+    const hudKnocked = manager.getDuoPartnerHudState({ x: 0, y: 10, z: 0 });
+    expect(hudKnocked?.knocked).toBe(true);
+    expect(hudKnocked?.bleedOutHp).toBeCloseTo(partner.bleedOutHp!, 2);
+
+    expect(manager.reviveDuoPartner()).toBe(true);
+    expect(partner.isKnocked).toBe(false);
+    expect(partner.state).toBe('rotating');
+    expect(partner.hp).toBe(30);
+    expect(sounds).toContain('revive_complete');
+
+    manager.dispose();
+  });
+
+  it('auto-revives knocked human player after 4s via Duo Partner and revives enemy squadmates only when safe', () => {
+    // 1. Duo Partner auto-revives knocked human player when ctx.playerKnocked === true
+    let playerKnocked = true;
+    const onPlayerRevived = vi.fn(() => {
+      playerKnocked = false;
+    });
+    const duoCtx = makeMockContext({
+      gameMode: 'duos',
+      get playerKnocked() {
+        return playerKnocked;
+      },
+      onPlayerRevived,
+    });
+    const reviveVfx: number[] = [];
+    duoCtx.eventBus.on('vfx:revive_beam', (ev) => reviveVfx.push(ev.progress));
+
+    const duoMgr = new BotManager(duoCtx, 'standard', 1111, 'duos');
+    duoMgr.spawnBots(2, 20, 'duos');
+    const partner = duoMgr.getDuoPartner()!;
+    partner.position = { x: 8, y: 10, z: 0 };
+    const playerPos: Vec3Like = { x: 0, y: 10, z: 0 };
+
+    // Step until partner sprints in (<3.4m) and finishes 4s revive channel
+    let t = 1.0;
+    for (let i = 0; i < 80 && playerKnocked; i++) {
+      t += 0.1;
+      duoMgr.update(0.1, t, { x: 0, y: 175, z: 0 }, playerPos);
+      if (partner.state === 'reviving') {
+        expect(partner.animState).toBe('reviving');
+        expect(partner.isReviving).toBe(true);
+        expect(partner.reviveTargetId).toBe('player');
+      }
+    }
+
+    expect(onPlayerRevived).toHaveBeenCalledTimes(1);
+    expect(playerKnocked).toBe(false);
+    expect(partner.isReviving).toBe(false);
+    expect(partner.state).toBe('rotating');
+    expect(reviveVfx.length).toBeGreaterThanOrEqual(2);
+    duoMgr.dispose();
+
+    // 2. Enemy squadmate revives knocked partner when safe, but interrupts when close LOS threat appears
+    let enemyTargets: BotCombatTarget[] = [];
+    const squadCtx = makeMockContext({
+      gameMode: 'duos',
+      getCombatTargets: () => enemyTargets,
+    });
+    const squadMgr = new BotManager(squadCtx, 'sweaty', 2222, 'duos');
+    squadMgr.spawnBots(2, 20, 'duos');
+    const [e1, e2] = squadMgr.getBots().filter((b) => !b.isDuoPartner);
+    e1.state = 'rotating';
+    e1.grounded = true;
+    e1.position = { x: 0, y: 10, z: 0 };
+    e2.state = 'rotating';
+    e2.grounded = true;
+    e2.position = { x: 2.0, y: 10, z: 0 };
+    e2.inventory.items[1] = makeItem('ar', 'rare', 30);
+    e2.inventory.ammo.medium = 60;
+
+    squadMgr.damageBot(e1.id, 200, 'player', 'Player', 5);
+    expect(e1.isKnocked).toBe(true);
+
+    // Unsafe threat at 9m -> e2 fights instead of reviving
+    enemyTargets = [
+      {
+        id: 'player',
+        name: 'Player',
+        position: { x: 0, y: 10, z: 9 },
+        eyePos: { x: 0, y: 11.6, z: 9 },
+        hp: 100,
+        shield: 50,
+        alive: true,
+        isPlayer: true,
+      },
+    ];
+    for (let i = 0; i < 6; i++) {
+      squadMgr.update(0.1, 6 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 9 });
+    }
+    expect(e2.isReviving).toBe(false);
+    expect(e1.isKnocked).toBe(true);
+
+    // Threat cleared -> e2 safely channels 4.0s revive and restores e1
+    enemyTargets = [];
+    for (let i = 0; i < Math.ceil(REVIVE_DURATION_SEC / 0.1) + 5 && e1.isKnocked; i++) {
+      squadMgr.update(0.1, 7 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 200, y: 10, z: 200 });
+    }
+    expect(e1.isKnocked).toBe(false);
+    expect(e1.state).toBe('rotating');
+    expect(e1.hp).toBe(30);
+    expect(e2.isReviving).toBe(false);
+
+    squadMgr.dispose();
+  });
+
+  it('assigns Boss Medallions & Victory Crowns, exposes getMedallionHolders/consumeDroppedRewards, and boosts Medallion aggro priority', () => {
+    const ctx = makeMockContext();
+    const manager = new BotManager(ctx, 'standard', 7373, 'solo');
+    manager.spawnBots(12, 20);
+
+    // Verify all 3 Boss Medallions match Config.ts MEDALLIONS POI assignments
+    const bosses = manager.getBots().filter((b) => b.isBoss);
+    expect(bosses).toHaveLength(3);
+    for (const med of MEDALLIONS) {
+      const boss = bosses.find((b) => b.bossPoiId === med.bossPoiId)!;
+      expect(boss).toBeDefined();
+      expect(boss.medallions).toEqual([med.id]);
+      expect(boss.medallionCount).toBe(1);
+    }
+
+    // Verify 2 top-tier bots carry Victory Crowns
+    const crownedBots = manager.getBots().filter((b) => b.hasVictoryCrown);
+    expect(crownedBots).toHaveLength(2);
+
+    // Verify getMedallionHolders() reports all 3 active holders with 65m single-medallion circle radius
+    const holders = manager.getMedallionHolders();
+    expect(holders).toHaveLength(3);
+    for (const h of holders) {
+      expect(h.count).toBe(1);
+      expect(h.circleRadius).toBe(MEDALLION_CIRCLE_RADII[0]);
+    }
+
+    // Render states and summaries expose crown & medallion counts
+    const renderById = new Map(manager.getRenderStates().map((r) => [r.id, r]));
+    expect(renderById.get(bosses[0].id)?.medallionCount).toBe(1);
+    expect(renderById.get(crownedBots[0].id)?.hasVictoryCrown).toBe(true);
+
+    // Eliminating a Boss and a Crowned bot queues dropped rewards once and drains on consume
+    expect(manager.damageBot(bosses[0].id, 400, 'player', 'Player', 20)).toBe(true);
+    expect(manager.damageBot(crownedBots[0].id, 200, 'player', 'Player', 21)).toBe(true);
+
+    const dropped = manager.consumeDroppedRewards();
+    expect(dropped.medallions).toHaveLength(1);
+    expect(dropped.medallions[0].medallionId).toBe(
+      MEDALLIONS.find((m) => m.bossPoiId === bosses[0].bossPoiId)!.id,
+    );
+    expect(dropped.crowns).toHaveLength(1);
+    expect(dropped.crowns[0].botId).toBe(crownedBots[0].id);
+
+    // Second consume drains cleanly & eliminated boss leaves getMedallionHolders()
+    expect(manager.consumeDroppedRewards()).toEqual({ medallions: [], crowns: [] });
+    expect(manager.getMedallionHolders()).toHaveLength(2);
+
+    manager.dispose();
+
+    // Medallion holder aggro priority boost in BotBrain
+    const normalTarget: BotCombatTarget = {
+      id: 'closer_enemy',
+      name: 'Closer',
+      position: { x: 0, y: 10, z: 16 },
+      eyePos: { x: 0, y: 11.6, z: 16 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+    };
+    const medallionTarget: BotCombatTarget = {
+      id: 'medallion_enemy',
+      name: 'MedallionHolder',
+      position: { x: 0, y: 10, z: 32 },
+      eyePos: { x: 0, y: 11.6, z: 32 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      medallions: ['medallion_combat'],
+      medallionCount: 1,
+    };
+    const aggroCtx = makeMockContext({
+      getCombatTargets: () => [normalTarget, medallionTarget],
+    });
+    const hunter = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      reactionTimer: 0,
+    });
+    hunter.inventory.items[1] = makeItem('ar', 'rare', 30);
+    hunter.inventory.ammo.medium = 60;
+
+    updateBot(hunter, aggroCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(hunter.targetEnemyId).toBe('medallion_enemy');
+  });
+
+  it('scores Wave 6 combat_smg and boom_bow cleanly in selectBestWeaponForRange', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 90, medium: 90, shells: 20, heavy: 16, rockets: 0 };
+
+    // combat_smg outscores regular smg at CQC/close-mid range
+    const smgVsCombat: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('smg', 'rare', 30),
+      makeItem('combat_smg', 'rare', 30),
+    ];
+    expect(selectBestWeaponForRange(smgVsCombat, 14, fullAmmo)?.item.weaponId).toBe(
+      'combat_smg',
+    );
+    expect(brain.selectBestWeaponForRange(smgVsCombat, 14, fullAmmo)?.item.weaponId).toBe(
+      'combat_smg',
+    );
+
+    // boom_bow scores well at mid-long range (55m) and yields to combat_smg at close range (8m)
+    const bowLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('combat_smg', 'rare', 30),
+      makeItem('boom_bow', 'epic', 1),
+    ];
+    expect(selectBestWeaponForRange(bowLoadout, 8, fullAmmo)?.item.weaponId).toBe(
+      'combat_smg',
+    );
+    expect(selectBestWeaponForRange(bowLoadout, 55, fullAmmo)?.item.weaponId).toBe(
+      'boom_bow',
+    );
+
+    // Skips empty boom_bow when heavy ammo is exhausted
+    const noHeavy = { ...fullAmmo, heavy: 0 };
+    const emptyBowLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('combat_smg', 'rare', 30),
+      makeItem('boom_bow', 'legendary', 0),
+    ];
+    expect(selectBestWeaponForRange(emptyBowLoadout, 55, noHeavy)?.item.weaponId).toBe(
+      'combat_smg',
+    );
   });
 });

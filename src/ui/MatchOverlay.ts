@@ -409,6 +409,11 @@ export class MatchOverlay {
 
   private renderMatchSummary(summary: MatchSummary): void {
     this.summaryCardEl.innerHTML = '';
+    const isCrownedVictory = Boolean(summary.crownedVictory);
+    this.summaryCardEl.classList.toggle(
+      'crowned-victory',
+      Boolean(summary.victory && isCrownedVictory),
+    );
 
     const header = document.createElement('div');
     header.className = 'fdr-modal-header';
@@ -424,6 +429,18 @@ export class MatchOverlay {
     title.textContent = summary.victory ? '#1 VICTORY ROYALE!' : 'ELIMINATED';
 
     header.append(iconWrap, title);
+
+    const crownedBannerEl = isCrownedVictory
+      ? document.createElement('div')
+      : null;
+    if (crownedBannerEl) {
+      crownedBannerEl.className = 'fdr-crowned-victory-banner';
+      crownedBannerEl.innerHTML = `
+        <span class="fdr-crowned-banner-icon">${getCrownSvg()}</span>
+        <span>CROWNED VICTORY ROYALE!</span>
+        <span class="fdr-crowned-banner-icon">${getCrownSvg()}</span>
+      `;
+    }
 
     const modeMeta = getGameModeMeta(summary.gameMode);
     const modeRow = document.createElement('div');
@@ -454,6 +471,10 @@ export class MatchOverlay {
     statsGrid.className = 'fdr-stats-grid';
     const poisCaptured = Math.max(0, Math.floor(summary.poisCaptured ?? 0));
     const goldEarned = Math.max(0, Math.round(summary.goldEarned ?? 0));
+    const medallionsCount = Array.isArray(summary.medallionsHeld)
+      ? summary.medallionsHeld.length
+      : 0;
+    const revivesCount = Math.max(0, Math.floor(summary.revives ?? 0));
     const statItems: Array<{
       k: string;
       v: string;
@@ -487,6 +508,16 @@ export class MatchOverlay {
         k: 'GOLD EARNED',
         v: String(goldEarned),
         highlight: goldEarned > 0,
+      },
+      {
+        k: 'MEDALLIONS',
+        v: String(medallionsCount),
+        highlight: medallionsCount > 0,
+      },
+      {
+        k: 'REVIVES',
+        v: String(revivesCount),
+        highlight: revivesCount > 0,
       },
     ];
 
@@ -635,19 +666,15 @@ export class MatchOverlay {
     });
 
     actions.append(playAgainBtn, lobbyBtn);
-    if (activeAugments.length > 0) {
-      this.summaryCardEl.append(
-        header,
-        modeRow,
-        sub,
-        statsGrid,
-        augmentsRow,
-        xpPanel,
-        actions,
-      );
-    } else {
-      this.summaryCardEl.append(header, modeRow, sub, statsGrid, xpPanel, actions);
+    this.summaryCardEl.append(header);
+    if (crownedBannerEl) {
+      this.summaryCardEl.append(crownedBannerEl);
     }
+    this.summaryCardEl.append(modeRow, sub, statsGrid);
+    if (activeAugments.length > 0) {
+      this.summaryCardEl.append(augmentsRow);
+    }
+    this.summaryCardEl.append(xpPanel, actions);
   }
 
   dispose(): void {

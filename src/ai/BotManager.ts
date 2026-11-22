@@ -4,6 +4,7 @@ import type {
   Difficulty,
   GameModeId,
   KillFeedEntry,
+  MedallionId,
   NpcSpecialistEntity,
   POIDef,
   Rarity,
@@ -11,6 +12,9 @@ import type {
   WeaponId,
 } from '../types';
 import {
+  DBNO_MAX_HP,
+  MEDALLIONS,
+  MEDALLION_CIRCLE_RADII,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   POIS,
@@ -36,6 +40,11 @@ import type {
   BotWorldContext,
   BountyReward,
   BountyTargetSummary,
+  DroppedCrownReward,
+  DroppedMedallionReward,
+  DroppedRewards,
+  DuoPartnerHudState,
+  MedallionHolderInfo,
   NamedBossSpec,
 } from './BotTypes';
 
@@ -131,6 +140,9 @@ export class BotManager {
   private unsubNoise: (() => void) | null = null;
   private allySeq = 0;
   private pendingAllySupportEvents: AllySupportEvent[] = [];
+  private pendingDroppedMedallions: DroppedMedallionReward[] = [];
+  private pendingDroppedCrowns: DroppedCrownReward[] = [];
+  private onPlayerRevivedCallback: ((reviverId: string) => void) | null = null;
 
   constructor(
     ctx: BotWorldContext,
@@ -150,11 +162,14 @@ export class BotManager {
     this.unsubNoise = this.ctx.eventBus.on('audio:noise', (payload) => {
       for (const bot of this.bots) {
         if (!bot.alive || bot.id === payload.sourceId) continue;
-        if (bot.isAlly && payload.sourceId === 'player') continue;
+        if ((bot.isAlly || bot.isDuoPartner) && payload.sourceId === 'player') continue;
         if (
           bot.state === 'bus' ||
           bot.state === 'skydiving' ||
-          bot.state === 'gliding'
+          bot.state === 'gliding' ||
+          bot.state === 'knocked' ||
+          bot.state === 'reviving' ||
+          bot.isKnocked
         ) {
           continue;
         }
@@ -176,6 +191,8 @@ export class BotManager {
     this.playerEliminatedBossIds.clear();
     this.playerEliminatedBosses = [];
     this.pendingVaultKeyBosses = [];
+    this.pendingDroppedMedallions = [];
+    this.pendingDroppedCrowns = [];
   }
 
   spawnBots(
@@ -196,13 +213,19 @@ export class BotManager {
     this.nextAutoBountyAt = Math.max(0, busTotalDuration) + 4.0;
 
     const total = Math.max(0, Math.floor(count));
-    if (total === 0) return;
-
     const matchSeed = (this.baseSeed + this.matchCounter * 7919) >>> 0;
     const rng = mulberry32(matchSeed);
 
     const terrainPois = this.ctx.terrain.getPOIs();
     const poiList: POIDef[] = terrainPois.length > 0 ? terrainPois : POIS;
+    const isDuos = this.gameMode === 'duos';
+
+    if (total === 0) {
+      if (isDuos) {
+        this.spawnDuoPartner(poiList, matchSeed);
+      }
+      return;
+    }
 
     const isZeroBuild = this.gameMode === 'zero_build';
     const isBlitz = this.gameMode === 'blitz';
@@ -218,45 +241,63 @@ export class BotManager {
     const bossCount = total >= 12 ? BOSS_SPECS.length : 0;
     const regularCount = total - bossCount;
 
+    const crownIndices = new Set<number>();
+    if (regularCount >= 2) {
+      crownIndices.add(regularCount - 1);
+      crownIndices.add(regularCount >= 4 ? regularCount - 3 : regularCount - 2);
+    }
+
     for (let i = 0; i < regularCount; i++) {
       const id = `bot_${i + 1}`;
       const cosmetics = pickBotLoadoutCosmetics(i, matchSeed);
-      const poi = poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length];
+      const squadPartner = isDuos && i % 2 === 1 ? this.bots[i - 1] : undefined;
+      const squadId = isDuos ? `squad_${Math.floor(i / 2) + 1}` : undefined;
 
-      // Pick landing offset around the target POI, avoiding water & volcano lava
-      let dropX = poi.x + (rng() - 0.5) * poi.radius * 1.1;
-      let dropZ = poi.z + (rng() - 0.5) * poi.radius * 1.1;
+      const poi = squadPartner
+        ? poiList.find((p) => p.id === squadPartner.targetPoiId) ??
+          poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length]
+        : poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length];
+
+      // Pick landing offset around the target POI (or near squadmate in Duos), avoiding water & volcano lava
+      let dropX = squadPartner
+        ? squadPartner.dropTarget.x + (rng() - 0.5) * 10 + 3.5
+        : poi.x + (rng() - 0.5) * poi.radius * 1.1;
+      let dropZ = squadPartner
+        ? squadPartner.dropTarget.z + (rng() - 0.5) * 10 + 3.5
+        : poi.z + (rng() - 0.5) * poi.radius * 1.1;
       if (isInVolcanoLavaHazard(dropX, dropZ, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
         const safe = clampOutsideVolcanoLava(dropX, dropZ, VOLCANO_LAVA_SAFE_RADIUS + 2.5);
         dropX = safe.x;
         dropZ = safe.z;
       }
       if (this.ctx.terrain.isWater(dropX, dropZ)) {
-        dropX = poi.x;
-        dropZ = poi.z;
+        dropX = squadPartner ? squadPartner.dropTarget.x : poi.x;
+        dropZ = squadPartner ? squadPartner.dropTarget.z : poi.z;
       }
       const dropY = this.ctx.terrain.getHeightAt(dropX, dropZ);
 
-      // Spread jump times smoothly across bus flight
+      // Spread jump times smoothly across bus flight (matching squad partner in Duos)
       const frac = regularCount > 1 ? i / (regularCount - 1) : 0.5;
       const jitter = (rng() - 0.5) * (isBlitz ? 0.9 : 1.8);
-      const dropJumpTime = clamp(
-        minJump + frac * (maxJump - minJump) + jitter,
-        minJump,
-        maxJump,
-      );
+      const dropJumpTime = squadPartner
+        ? squadPartner.dropJumpTime
+        : clamp(minJump + frac * (maxJump - minJump) + jitter, minJump, maxJump);
 
+      const hasVictoryCrown = crownIndices.has(i);
       const blitzWeaponId: WeaponId | null = isBlitz
         ? (i + (matchSeed & 1)) % 2 === 0
           ? 'ar'
           : 'smg'
         : null;
-      const blitzStarterItem = blitzWeaponId
+      const crownWeaponId: WeaponId | null =
+        !isBlitz && hasVictoryCrown ? (i === regularCount - 1 ? 'combat_smg' : 'ar') : null;
+      const starterWeaponId = blitzWeaponId ?? crownWeaponId;
+      const starterItem = starterWeaponId
         ? {
-            uid: `${id}_blitz_starter`,
-            weaponId: blitzWeaponId,
-            rarity: 'uncommon' as const,
-            magAmmo: WEAPONS[blitzWeaponId].magSize,
+            uid: `${id}_${blitzWeaponId ? 'blitz' : 'crown'}_starter`,
+            weaponId: starterWeaponId,
+            rarity: blitzWeaponId ? ('uncommon' as const) : ('rare' as const),
+            magAmmo: WEAPONS[starterWeaponId].magSize,
             stackCount: 1,
           }
         : null;
@@ -283,7 +324,7 @@ export class BotManager {
 
         hp: 100,
         maxHp: 100,
-        shield: 0,
+        shield: hasVictoryCrown ? 50 : 0,
         maxShield: 100,
         overshield: isZeroBuild ? 50 : 0,
         maxOvershield: isZeroBuild ? 50 : 0,
@@ -310,16 +351,16 @@ export class BotManager {
               magAmmo: 0,
               stackCount: 1,
             },
-            blitzStarterItem,
+            starterItem,
             null,
             null,
             null,
             null,
           ],
-          activeSlot: blitzStarterItem ? 1 : 0,
+          activeSlot: starterItem ? 1 : 0,
           ammo: {
-            light: blitzWeaponId === 'smg' ? 60 : 0,
-            medium: blitzWeaponId === 'ar' ? 60 : 0,
+            light: starterWeaponId === 'smg' || starterWeaponId === 'combat_smg' ? 90 : 0,
+            medium: starterWeaponId === 'ar' ? 90 : 0,
             shells: 0,
             heavy: 0,
             rockets: 0,
@@ -379,6 +420,15 @@ export class BotManager {
 
         rngState: ((matchSeed ^ ((i + 1) * 2654435761)) >>> 0) || 1,
         isBoss: false,
+        squadId,
+        isDuoPartner: false,
+        isKnocked: false,
+        reviveProgress: 0,
+        reviveTargetId: null,
+        isReviving: false,
+        hasVictoryCrown,
+        medallions: [],
+        medallionCount: 0,
         throwCooldown: 0,
         retreatTimer: 0,
         launchPadCooldown: 0,
@@ -418,6 +468,8 @@ export class BotManager {
         spawnZ = poi.z;
       }
       const spawnY = this.ctx.terrain.getHeightAt(spawnX, spawnZ);
+      const bossMedallion = MEDALLIONS.find((m) => m.bossPoiId === spec.poiId);
+      const bossMedallions: MedallionId[] = bossMedallion ? [bossMedallion.id] : [];
 
       const boss: BotEntity = {
         id: spec.id,
@@ -557,6 +609,14 @@ export class BotManager {
         isBoss: true,
         bossPoiId: spec.poiId,
         bossHomePos: { x: spawnX, y: spawnY, z: spawnZ },
+        isDuoPartner: false,
+        isKnocked: false,
+        reviveProgress: 0,
+        reviveTargetId: null,
+        isReviving: false,
+        hasVictoryCrown: false,
+        medallions: bossMedallions,
+        medallionCount: bossMedallions.length,
         throwCooldown: 0,
         retreatTimer: 0,
         launchPadCooldown: 0,
@@ -573,6 +633,200 @@ export class BotManager {
       this.bots.push(boss);
       this.botMap.set(spec.id, boss);
     }
+
+    if (isDuos) {
+      this.spawnDuoPartner(poiList, matchSeed);
+    }
+  }
+
+  private spawnDuoPartner(poiList: POIDef[], matchSeed: number): BotEntity {
+    const id = 'duo_partner';
+    let spawnX = 4;
+    let spawnZ = 4;
+    if (this.ctx.terrain.isWater(spawnX, spawnZ)) {
+      const dryPoi = poiList.find((p) => !this.ctx.terrain.isWater(p.x, p.z)) ?? poiList[0];
+      spawnX = dryPoi?.x ?? 0;
+      spawnZ = dryPoi?.z ?? 0;
+    }
+    if (isInVolcanoLavaHazard(spawnX, spawnZ, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
+      const safe = clampOutsideVolcanoLava(
+        spawnX,
+        spawnZ,
+        VOLCANO_LAVA_SAFE_RADIUS + 2.5,
+      );
+      spawnX = safe.x;
+      spawnZ = safe.z;
+    }
+    const spawnY = this.ctx.terrain.getHeightAt(spawnX, spawnZ);
+
+    const partner: BotEntity = {
+      id,
+      name: 'APEX VALKYRIE',
+      skinId: 'cyber_valkyrie',
+      pickaxeId: 'plasma_katana',
+      gliderId: 'cyber_falcon',
+      personality: 'builder',
+      state: 'rotating',
+
+      position: { x: spawnX, y: spawnY, z: spawnZ },
+      velocity: { x: 0, y: 0, z: 0 },
+      yaw: 0,
+      pitch: 0,
+      grounded: true,
+      isCrouching: false,
+      isSprinting: false,
+      moveSpeed: 0,
+      radius: PLAYER_RADIUS,
+      height: PLAYER_HEIGHT,
+
+      hp: 100,
+      maxHp: 100,
+      shield: 100,
+      maxShield: 100,
+      overshield: 0,
+      maxOvershield: 0,
+      alive: true,
+      kills: 0,
+      damageDealt: 0,
+
+      animState: 'idle',
+      isAiming: false,
+      isFiring: false,
+      isBuilding: false,
+      emoteId: null,
+      recoilKick: 0,
+      harvestSwingTimer: 0,
+      gliderOpen: false,
+      gliderFactor: 0,
+
+      inventory: {
+        items: [
+          {
+            uid: `${id}_pickaxe`,
+            weaponId: 'pickaxe',
+            rarity: 'common',
+            magAmmo: 0,
+            stackCount: 1,
+          },
+          {
+            uid: `${id}_ar`,
+            weaponId: 'ar',
+            rarity: 'rare',
+            magAmmo: WEAPONS.ar.magSize,
+            stackCount: 1,
+          },
+          {
+            uid: `${id}_combat_smg`,
+            weaponId: 'combat_smg',
+            rarity: 'rare',
+            magAmmo: WEAPONS.combat_smg.magSize,
+            stackCount: 1,
+          },
+          {
+            uid: `${id}_pump`,
+            weaponId: 'pump_shotgun',
+            rarity: 'rare',
+            magAmmo: WEAPONS.pump_shotgun.magSize,
+            stackCount: 1,
+          },
+          {
+            uid: `${id}_chug_splash`,
+            weaponId: 'chug_splash',
+            rarity: 'rare',
+            magAmmo: 0,
+            stackCount: 4,
+          },
+          null,
+        ],
+        activeSlot: 1,
+        ammo: {
+          light: 180,
+          medium: 180,
+          shells: 24,
+          heavy: 0,
+          rockets: 0,
+        },
+        materials: {
+          wood: 100,
+          brick: 0,
+          metal: 0,
+        },
+      },
+
+      targetPoiId: null,
+      dropJumpTime: 0,
+      dropTarget: { x: spawnX, y: spawnY, z: spawnZ },
+      moveTarget: { x: spawnX, y: spawnY, z: spawnZ },
+      patrolAngle: 0.75,
+
+      targetEnemyId: null,
+      lastKnownEnemyPos: null,
+      enemyLostTimer: 0,
+      lastHeardNoisePos: null,
+      lastHeardNoiseTime: -999,
+      lastDamageTime: -999,
+      lastDamagerId: null,
+      lastAttackerName: null,
+      lastDamageWeaponId: null,
+      lastDamageRarity: null,
+      lastDamageHeadshot: false,
+      reactionTimer: 0,
+
+      fireCooldown: 0,
+      burstQueue: 0,
+      burstTimer: 0,
+      reloadTimer: 0,
+      reloadSlot: 0,
+      healTimer: 0,
+      healSlot: 0,
+      buildCooldown: 0,
+      buildAnimTimer: 0,
+      harvestCooldown: 0,
+
+      strafeDir: 1,
+      strafeTimer: 0.75,
+      jumpCooldown: 0,
+      crouchToggleTimer: 0.9,
+      stateTimer: 0,
+      thinkCooldown: 0,
+      scanCooldown: 0,
+
+      harvestTargetId: null,
+      lootTargetId: null,
+      chestTargetId: null,
+      ignoredTargetId: null,
+      ignoredTargetUntil: 0,
+      stuckTimer: 0,
+      lastStuckCheckPos: { x: spawnX, y: spawnY, z: spawnZ },
+
+      rngState: ((matchSeed ^ 0x51a7b3c9) >>> 0) || 1,
+      isBoss: false,
+      isAlly: false,
+      squadId: 'player_squad',
+      isDuoPartner: true,
+      isKnocked: false,
+      reviveProgress: 0,
+      reviveTargetId: null,
+      isReviving: false,
+      hasVictoryCrown: false,
+      medallions: [],
+      medallionCount: 0,
+      throwCooldown: 0,
+      retreatTimer: 0,
+      launchPadCooldown: 0,
+      launchPadTargetId: null,
+      shieldBubbleCooldown: 0,
+      recentDamageTaken: 0,
+      recentDamageWindowStart: -999,
+      eliminatedByPlayer: false,
+      riftCooldown: 0,
+      riftTargetId: null,
+      captureTargetId: null,
+    };
+
+    this.bots.push(partner);
+    this.botMap.set(id, partner);
+    return partner;
   }
 
   /**
@@ -840,6 +1094,104 @@ export class BotManager {
     return null;
   }
 
+  getDuoPartner(): BotEntity | null {
+    for (const bot of this.bots) {
+      if (bot.isDuoPartner && bot.alive && bot.state !== 'eliminated') {
+        return bot;
+      }
+    }
+    return null;
+  }
+
+  getDuoPartnerHudState(playerPos: Vec3Like): DuoPartnerHudState | null {
+    const partner = this.bots.find((b) => b.isDuoPartner);
+    if (!partner) return null;
+    const knocked = Boolean(partner.isKnocked || partner.state === 'knocked');
+    return {
+      name: partner.name,
+      hp: partner.hp,
+      maxHp: partner.maxHp,
+      shield: partner.shield,
+      maxShield: partner.maxShield,
+      knocked,
+      alive: partner.alive,
+      bleedOutHp: knocked ? partner.bleedOutHp : undefined,
+      distance: dist3D(playerPos, partner.position),
+    };
+  }
+
+  reviveDuoPartner(): boolean {
+    const partner = this.bots.find(
+      (b) =>
+        b.isDuoPartner &&
+        b.alive &&
+        (b.isKnocked || b.state === 'knocked'),
+    );
+    if (!partner) return false;
+    partner.isKnocked = false;
+    partner.bleedOutHp = undefined;
+    partner.hp = Math.min(partner.maxHp, 30);
+    partner.shield = 0;
+    partner.state = 'rotating';
+    partner.animState = 'idle';
+    partner.isReviving = false;
+    partner.reviveProgress = 0;
+    partner.reviveTargetId = null;
+    partner.isCrouching = false;
+
+    this.ctx.eventBus.emit('sound:play', {
+      id: 'revive_complete',
+      position: { ...partner.position },
+      spatial: true,
+    });
+    this.ctx.eventBus.emit('vfx:revive_beam', {
+      position: { ...partner.position },
+      progress: 1,
+    });
+    return true;
+  }
+
+  setOnPlayerRevived(cb: ((reviverId: string) => void) | null): void {
+    this.onPlayerRevivedCallback = cb;
+  }
+
+  consumeDroppedRewards(): DroppedRewards {
+    const medallions = [...this.pendingDroppedMedallions];
+    const crowns = [...this.pendingDroppedCrowns];
+    this.pendingDroppedMedallions.length = 0;
+    this.pendingDroppedCrowns.length = 0;
+    return { medallions, crowns };
+  }
+
+  getMedallionHolders(): MedallionHolderInfo[] {
+    const holders: MedallionHolderInfo[] = [];
+    for (const bot of this.bots) {
+      if (!bot.alive || bot.state === 'eliminated') continue;
+      const meds = bot.medallions ?? [];
+      const count = Math.max(meds.length, bot.medallionCount ?? 0);
+      if (count <= 0) continue;
+      const circleRadius =
+        MEDALLION_CIRCLE_RADII[
+          Math.min(MEDALLION_CIRCLE_RADII.length - 1, Math.max(0, count - 1))
+        ];
+      holders.push({
+        id: bot.id,
+        botId: bot.id,
+        name: bot.name,
+        x: bot.position.x,
+        y: bot.position.y,
+        z: bot.position.z,
+        position: { ...bot.position },
+        medallions: [...meds],
+        medallionCount: count,
+        count,
+        circleRadius,
+        isBoss: Boolean(bot.isBoss),
+      });
+    }
+    return holders;
+  }
+
   consumeAllySupportEvents(): AllySupportEvent[] {
     if (this.pendingAllySupportEvents.length === 0) return [];
     const copy = [...this.pendingAllySupportEvents];
@@ -859,10 +1211,33 @@ export class BotManager {
       this.pendingAllySupportEvents.push(ev);
       this.ctx.onAllySupportEvent?.(ev);
     };
+    const emitPlayerRevived = (reviverId: string): void => {
+      this.onPlayerRevivedCallback?.(reviverId);
+      this.ctx.onPlayerRevived?.(reviverId);
+    };
+
+    const squadMap = new Map<string, BotEntity[]>();
+    const medallionHolderIds = new Set<string>();
+    for (const bot of this.bots) {
+      if (!bot.alive || bot.state === 'eliminated') continue;
+      if (bot.squadId) {
+        let list = squadMap.get(bot.squadId);
+        if (!list) {
+          list = [];
+          squadMap.set(bot.squadId, list);
+        }
+        list.push(bot);
+      }
+      if ((bot.medallions?.length ?? 0) > 0 || (bot.medallionCount ?? 0) > 0) {
+        medallionHolderIds.add(bot.id);
+      }
+    }
+
     for (const bot of this.bots) {
       if (!bot.alive || bot.state === 'eliminated') continue;
       const distToPlayer = dist3D(bot.position, playerPos);
-      const isFarLOD = !bot.isAlly && distToPlayer > 180;
+      const isFarLOD = !bot.isAlly && !bot.isDuoPartner && distToPlayer > 180;
+      const squadmates = bot.squadId ? squadMap.get(bot.squadId) : undefined;
       updateBot(
         bot,
         this.ctx,
@@ -874,10 +1249,28 @@ export class BotManager {
         this.gameMode,
         playerPos,
         emitAllySupport,
+        emitPlayerRevived,
+        squadmates,
+        medallionHolderIds,
       );
+      const isKnocked = Boolean(bot.isKnocked || bot.state === 'knocked');
+      if (bot.alive && (isKnocked ? (bot.bleedOutHp ?? bot.hp) <= 0 : bot.hp <= 0)) {
+        this.eliminateBot(bot, {
+          killerId: bot.lastDamagerId ?? 'bleed_out',
+          killerName: bot.lastAttackerName ?? 'Bleed Out',
+          weaponId: bot.lastDamageWeaponId ?? 'pistol',
+          rarity: bot.lastDamageRarity ?? 'common',
+          isHeadshot: bot.lastDamageHeadshot ?? false,
+          isStorm: false,
+          distance: 0,
+          timestamp: elapsed,
+        });
+        continue;
+      }
       if (
         this.gameMode === 'zero_build' &&
         !bot.isAlly &&
+        !bot.isDuoPartner &&
         bot.alive &&
         bot.hp > 0 &&
         bot.state !== 'bus' &&
@@ -918,6 +1311,7 @@ export class BotManager {
         (b) =>
           b.alive &&
           !b.isAlly &&
+          !b.isDuoPartner &&
           b.state !== 'eliminated' &&
           b.state !== 'bus' &&
           b.state !== 'skydiving' &&
@@ -977,7 +1371,7 @@ export class BotManager {
     }
 
     const aliveBots = this.bots.filter(
-      (b) => b.alive && !b.isAlly && b.state !== 'eliminated',
+      (b) => b.alive && !b.isAlly && !b.isDuoPartner && b.state !== 'eliminated',
     );
     if (aliveBots.length === 0) return null;
 
@@ -1092,31 +1486,178 @@ export class BotManager {
     this.onBossEliminatedCallback = cb;
   }
 
+  private hasAliveNonKnockedSquadmate(bot: BotEntity): boolean {
+    if (!bot.squadId) return false;
+
+    if (bot.squadId === 'player_squad' || bot.isDuoPartner) {
+      const playerTarget = this.ctx
+        .getCombatTargets()
+        .find((t) => t.isPlayer || t.id === 'player');
+      const playerAlive =
+        this.ctx.playerAlive !== false && (playerTarget ? playerTarget.alive : true);
+      if (playerAlive && !this.ctx.playerKnocked) {
+        return true;
+      }
+      return this.bots.some(
+        (m) =>
+          m.id !== bot.id &&
+          (m.squadId === 'player_squad' || m.isDuoPartner) &&
+          m.alive &&
+          m.state !== 'eliminated' &&
+          !m.isKnocked &&
+          m.state !== 'knocked',
+      );
+    }
+
+    return this.bots.some(
+      (m) =>
+        m.id !== bot.id &&
+        m.squadId === bot.squadId &&
+        m.alive &&
+        m.state !== 'eliminated' &&
+        !m.isKnocked &&
+        m.state !== 'knocked',
+    );
+  }
+
+  private knockBot(bot: BotEntity): void {
+    bot.isKnocked = true;
+    bot.state = 'knocked';
+    bot.animState = 'knocked';
+    bot.bleedOutHp = DBNO_MAX_HP;
+    bot.hp = DBNO_MAX_HP;
+    bot.shield = 0;
+    bot.moveSpeed = 0;
+    bot.isFiring = false;
+    bot.isAiming = false;
+    bot.isBuilding = false;
+    bot.isSprinting = false;
+    bot.isCrouching = false;
+    bot.burstQueue = 0;
+    bot.reloadTimer = 0;
+    bot.healTimer = 0;
+    bot.isReviving = false;
+    bot.reviveProgress = 0;
+    bot.reviveTargetId = null;
+
+    this.ctx.eventBus.emit('sound:play', {
+      id: 'knocked_down',
+      position: { ...bot.position },
+      spatial: true,
+    });
+  }
+
+  private handleZeroHp(bot: BotEntity, meta: EliminationMeta): void {
+    if (this.gameMode === 'duos' && this.hasAliveNonKnockedSquadmate(bot)) {
+      this.knockBot(bot);
+      return;
+    }
+    this.eliminateBot(bot, meta);
+  }
+
   /**
-   * Applies incoming damage to a bot. Returns `true` if the bot existed and was alive
-   * when damaged, or `false` if the bot was not found or already eliminated.
+   * Applies incoming damage (either a `DamageEvent` or numeric amount) to a bot,
+   * enforcing friendly-fire immunity and Duos DBNO / Squad Wipe rules.
    */
-  onBotDamaged(
+  damageBot(botId: string, damageEvent: DamageEvent, nowSec?: number): boolean;
+  damageBot(
     botId: string,
-    damageEvent: DamageEvent,
-    nowSec: number,
+    damageAmount: number,
+    attackerId?: string,
+    attackerName?: string,
+    nowSec?: number,
+  ): boolean;
+  damageBot(
+    botId: string,
+    damageOrEvent: DamageEvent | number,
+    attackerIdOrNow?: string | number,
+    attackerName?: string,
+    nowSecArg?: number,
   ): boolean {
     const bot = this.botMap.get(botId);
     if (!bot || !bot.alive || bot.state === 'eliminated') {
       return false;
     }
 
+    let damageEvent: DamageEvent;
+    let nowSec: number;
+    if (typeof damageOrEvent === 'number') {
+      const attackerId =
+        typeof attackerIdOrNow === 'string' ? attackerIdOrNow : 'player';
+      nowSec = nowSecArg ?? this.lastElapsed;
+      damageEvent = {
+        targetId: botId,
+        attackerId,
+        attackerName: attackerName ?? (attackerId === 'player' ? 'Player' : attackerId),
+        weaponId: 'ar',
+        rarity: 'common',
+        damage: Math.max(0, damageOrEvent),
+        hpDamage: 0,
+        shieldDamage: 0,
+        isHeadshot: false,
+        isElimination: false,
+        hitPoint: { ...bot.position },
+        distance: 10,
+      };
+    } else {
+      damageEvent = damageOrEvent;
+      nowSec = typeof attackerIdOrNow === 'number' ? attackerIdOrNow : this.lastElapsed;
+    }
+
+    const attackerBot =
+      damageEvent.attackerId && damageEvent.attackerId !== bot.id
+        ? this.botMap.get(damageEvent.attackerId)
+        : undefined;
+
     if (
-      bot.isAlly &&
-      (damageEvent.attackerId === 'player' || damageEvent.attackerId === bot.id)
+      (bot.isAlly || bot.isDuoPartner || bot.squadId === 'player_squad') &&
+      (damageEvent.attackerId === 'player' ||
+        damageEvent.attackerId === bot.id ||
+        attackerBot?.isAlly ||
+        attackerBot?.isDuoPartner ||
+        attackerBot?.squadId === 'player_squad')
     ) {
       return false;
+    }
+
+    if (bot.squadId && attackerBot && attackerBot.squadId === bot.squadId) {
+      return false;
+    }
+
+    const isStorm = damageEvent.attackerId === 'storm';
+
+    if (bot.isKnocked || bot.state === 'knocked') {
+      const incoming =
+        damageEvent.shieldDamage > 0 || damageEvent.hpDamage > 0
+          ? Math.max(0, damageEvent.shieldDamage + damageEvent.hpDamage)
+          : Math.max(0, damageEvent.damage);
+      bot.bleedOutHp = Math.max(0, (bot.bleedOutHp ?? DBNO_MAX_HP) - incoming);
+      bot.hp = bot.bleedOutHp;
+      bot.lastDamageTime = nowSec;
+      bot.lastDamagerId = damageEvent.attackerId;
+      bot.lastAttackerName = damageEvent.attackerName;
+      bot.lastDamageWeaponId = damageEvent.weaponId;
+      bot.lastDamageRarity = damageEvent.rarity;
+      bot.lastDamageHeadshot = damageEvent.isHeadshot;
+
+      if (bot.bleedOutHp <= 0) {
+        this.eliminateBot(bot, {
+          killerId: damageEvent.attackerId,
+          killerName: damageEvent.attackerName,
+          weaponId: damageEvent.weaponId,
+          rarity: damageEvent.rarity,
+          isHeadshot: damageEvent.isHeadshot,
+          isStorm,
+          distance: damageEvent.distance,
+          timestamp: nowSec,
+        });
+      }
+      return true;
     }
 
     const prevHp = bot.hp;
     const prevShield = bot.shield;
     const prevOvershield = bot.overshield ?? 0;
-    const isStorm = damageEvent.attackerId === 'storm';
 
     if (!isStorm && prevOvershield > 0) {
       const totalIncoming = Math.max(
@@ -1169,13 +1710,13 @@ export class BotManager {
     bot.lastDamageHeadshot = damageEvent.isHeadshot;
 
     if (bot.hp <= 0) {
-      this.eliminateBot(bot, {
+      this.handleZeroHp(bot, {
         killerId: damageEvent.attackerId,
         killerName: damageEvent.attackerName,
         weaponId: damageEvent.weaponId,
         rarity: damageEvent.rarity,
         isHeadshot: damageEvent.isHeadshot,
-        isStorm: false,
+        isStorm,
         distance: damageEvent.distance,
         timestamp: nowSec,
       });
@@ -1199,6 +1740,18 @@ export class BotManager {
     return true;
   }
 
+  /**
+   * Applies incoming damage to a bot. Returns `true` if the bot existed and was alive
+   * when damaged, or `false` if the bot was not found or already eliminated.
+   */
+  onBotDamaged(
+    botId: string,
+    damageEvent: DamageEvent,
+    nowSec: number = this.lastElapsed,
+  ): boolean {
+    return this.damageBot(botId, damageEvent, nowSec);
+  }
+
   applyStormDamage(dt: number): void {
     const storm = this.ctx.storm;
     if (dt <= 0 || storm.dps <= 0) return;
@@ -1213,18 +1766,35 @@ export class BotManager {
         storm.currentCenterZ,
       );
       if (d > storm.currentRadius) {
-        bot.hp = Math.max(0, bot.hp - dmg);
-        if (bot.hp <= 0) {
-          this.eliminateBot(bot, {
-            killerId: 'storm',
-            killerName: 'The Storm',
-            weaponId: bot.lastDamageWeaponId ?? 'pistol',
-            rarity: bot.lastDamageRarity ?? 'common',
-            isHeadshot: false,
-            isStorm: true,
-            distance: 0,
-            timestamp: this.lastElapsed,
-          });
+        if (bot.isKnocked || bot.state === 'knocked') {
+          bot.bleedOutHp = Math.max(0, (bot.bleedOutHp ?? DBNO_MAX_HP) - dmg);
+          bot.hp = bot.bleedOutHp;
+          if (bot.bleedOutHp <= 0) {
+            this.eliminateBot(bot, {
+              killerId: 'storm',
+              killerName: 'The Storm',
+              weaponId: bot.lastDamageWeaponId ?? 'pistol',
+              rarity: bot.lastDamageRarity ?? 'common',
+              isHeadshot: false,
+              isStorm: true,
+              distance: 0,
+              timestamp: this.lastElapsed,
+            });
+          }
+        } else {
+          bot.hp = Math.max(0, bot.hp - dmg);
+          if (bot.hp <= 0) {
+            this.handleZeroHp(bot, {
+              killerId: 'storm',
+              killerName: 'The Storm',
+              weaponId: bot.lastDamageWeaponId ?? 'pistol',
+              rarity: bot.lastDamageRarity ?? 'common',
+              isHeadshot: false,
+              isStorm: true,
+              distance: 0,
+              timestamp: this.lastElapsed,
+            });
+          }
         }
       }
     }
@@ -1235,12 +1805,52 @@ export class BotManager {
     bot.alive = false;
     bot.hp = 0;
     bot.state = 'eliminated';
+    bot.isKnocked = false;
+    bot.bleedOutHp = undefined;
+    bot.isReviving = false;
+    bot.reviveProgress = 0;
+    bot.reviveTargetId = null;
     bot.moveSpeed = 0;
     bot.isFiring = false;
     bot.isAiming = false;
     bot.isBuilding = false;
     bot.gliderOpen = false;
     bot.gliderFactor = 0;
+
+    if (bot.medallions && bot.medallions.length > 0) {
+      for (let m = 0; m < bot.medallions.length; m++) {
+        const offsetAng = (m / bot.medallions.length) * Math.PI * 2;
+        const dx = bot.medallions.length > 1 ? Math.cos(offsetAng) * 0.8 : 0;
+        const dz = bot.medallions.length > 1 ? Math.sin(offsetAng) * 0.8 : 0;
+        const pos = {
+          x: bot.position.x + dx,
+          y: bot.position.y,
+          z: bot.position.z + dz,
+        };
+        this.pendingDroppedMedallions.push({
+          medallionId: bot.medallions[m],
+          botId: bot.id,
+          position: pos,
+          x: pos.x,
+          y: pos.y,
+          z: pos.z,
+        });
+      }
+      bot.medallions = [];
+      bot.medallionCount = 0;
+    }
+
+    if (bot.hasVictoryCrown) {
+      const pos = { ...bot.position };
+      this.pendingDroppedCrowns.push({
+        botId: bot.id,
+        position: pos,
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+      });
+      bot.hasVictoryCrown = false;
+    }
 
     const killedByPlayer = !meta.isStorm && meta.killerId === 'player';
     bot.eliminatedByPlayer = killedByPlayer;
@@ -1337,9 +1947,30 @@ export class BotManager {
         meta.killerId === 'player' ||
         bot.id === 'player' ||
         Boolean(bot.isAlly) ||
-        Boolean(killerBot?.isAlly),
+        Boolean(bot.isDuoPartner) ||
+        Boolean(killerBot?.isAlly) ||
+        Boolean(killerBot?.isDuoPartner),
     };
     this.ctx.eventBus.emit('combat:killfeed', entry);
+
+    if (
+      this.gameMode === 'duos' &&
+      bot.squadId &&
+      !this.hasAliveNonKnockedSquadmate(bot)
+    ) {
+      const knockedMates = this.bots.filter(
+        (m) =>
+          m.id !== bot.id &&
+          m.squadId === bot.squadId &&
+          m.alive &&
+          m.state !== 'eliminated' &&
+          (m.isKnocked || m.state === 'knocked'),
+      );
+      for (const mate of knockedMates) {
+        this.eliminateBot(mate, meta);
+      }
+    }
+
     return bountyReward;
   }
 
@@ -1391,7 +2022,7 @@ export class BotManager {
   getAliveCount(): number {
     let count = 0;
     for (const bot of this.bots) {
-      if (bot.alive && !bot.isAlly) count++;
+      if (bot.alive && !bot.isAlly && !bot.isDuoPartner) count++;
     }
     return count;
   }
@@ -1407,6 +2038,10 @@ export class BotManager {
   getRenderStates(): BotRenderState[] {
     return this.bots.map((bot) => {
       const activeItem = bot.inventory.items[bot.inventory.activeSlot];
+      const meds = bot.medallions ? [...bot.medallions] : [];
+      const medallionCount = Math.max(meds.length, bot.medallionCount ?? 0);
+      const isKnocked = Boolean(bot.isKnocked || bot.state === 'knocked');
+      const isReviving = Boolean(bot.isReviving || bot.state === 'reviving');
       return {
         id: bot.id,
         name: bot.name,
@@ -1439,25 +2074,47 @@ export class BotManager {
         bossPoiId: bot.bossPoiId,
         isAlly: Boolean(bot.isAlly),
         allyRole: bot.allyRole,
+        squadId: bot.squadId,
+        isDuoPartner: Boolean(bot.isDuoPartner),
+        isKnocked,
+        bleedOutHp: isKnocked ? bot.bleedOutHp : undefined,
+        reviveProgress: bot.reviveProgress,
+        reviveTargetId: bot.reviveTargetId,
+        hasVictoryCrown: Boolean(bot.hasVictoryCrown),
+        medallions: meds,
+        medallionCount,
+        isReviving,
+        bowCharge: bot.bowCharge,
       };
     });
   }
 
   getBotSummaries(): BotSummary[] {
-    return this.bots.map((bot) => ({
-      id: bot.id,
-      name: bot.name,
-      state: bot.state,
-      personality: bot.personality,
-      skinId: bot.skinId,
-      hp: bot.hp,
-      shield: bot.shield,
-      alive: bot.alive,
-      kills: bot.kills,
-      position: { ...bot.position },
-      isBoss: Boolean(bot.isBoss),
-      bossPoiId: bot.bossPoiId,
-    }));
+    return this.bots.map((bot) => {
+      const medallionCount = Math.max(
+        bot.medallions?.length ?? 0,
+        bot.medallionCount ?? 0,
+      );
+      return {
+        id: bot.id,
+        name: bot.name,
+        state: bot.state,
+        personality: bot.personality,
+        skinId: bot.skinId,
+        hp: bot.hp,
+        shield: bot.shield,
+        alive: bot.alive,
+        kills: bot.kills,
+        position: { ...bot.position },
+        isBoss: Boolean(bot.isBoss),
+        bossPoiId: bot.bossPoiId,
+        squadId: bot.squadId,
+        isDuoPartner: Boolean(bot.isDuoPartner),
+        isKnocked: Boolean(bot.isKnocked || bot.state === 'knocked'),
+        hasVictoryCrown: Boolean(bot.hasVictoryCrown),
+        medallionCount,
+      };
+    });
   }
 
   setDifficulty(d: Difficulty): void {
@@ -1473,7 +2130,9 @@ export class BotManager {
     this.gameMode = mode;
     if (!changed) return;
     for (const bot of this.bots) {
-      if (!bot.alive || bot.state === 'eliminated' || bot.isAlly) continue;
+      if (!bot.alive || bot.state === 'eliminated' || bot.isAlly || bot.isDuoPartner) {
+        continue;
+      }
       if (mode === 'zero_build') {
         bot.maxOvershield = 50;
         bot.overshield = 50;

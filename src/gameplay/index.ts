@@ -11,7 +11,7 @@ export {
   type DroppedLootPayload,
 } from './InventorySystem';
 export { BuildingSystem, classifyEditMask } from './BuildingSystem';
-export { WeaponSystem, computeWeaponDamage } from './WeaponSystem';
+export { WeaponSystem, WEAPON_SOUND_MAP, computeWeaponDamage } from './WeaponSystem';
 export { PlayerController } from './PlayerController';
 export { QuestTracker, type QuestEventKind } from './QuestTracker';
 export {

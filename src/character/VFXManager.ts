@@ -549,6 +549,107 @@ interface LootIslandRiftSlot {
   shards: LootIslandShard[];
 }
 
+interface BowExplosionSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface BowExplosionSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  blastMesh: THREE.Mesh;
+  blastMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  tiltRingMesh: THREE.Mesh;
+  tiltRingMat: THREE.MeshBasicMaterial;
+  sparks: BowExplosionSpark[];
+}
+
+interface SlurpTankerDroplet {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface SlurpTankerBurstSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  innerDomeMesh: THREE.Mesh;
+  innerDomeMat: THREE.MeshBasicMaterial;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  limeRingMesh: THREE.Mesh;
+  limeRingMat: THREE.MeshBasicMaterial;
+  geyserMesh: THREE.Mesh;
+  geyserMat: THREE.MeshBasicMaterial;
+  droplets: SlurpTankerDroplet[];
+}
+
+interface CrownGlintSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  baseScale: number;
+}
+
+interface CrownGlintSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  flareGroup: THREE.Group;
+  flareMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  sparks: CrownGlintSpark[];
+}
+
+interface ReviveBeamSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  baseScale: number;
+}
+
+interface ReviveBeamSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  progress: number;
+  group: THREE.Group;
+  outerBeamMesh: THREE.Mesh;
+  outerBeamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  baseRingMesh: THREE.Mesh;
+  baseRingMat: THREE.MeshBasicMaterial;
+  pulseRingMesh: THREE.Mesh;
+  pulseRingMat: THREE.MeshBasicMaterial;
+  sparks: ReviveBeamSpark[];
+}
+
 function getTacticalPingColor(kind: 'move' | 'danger' | 'loot'): string {
   switch (kind) {
     case 'danger':
@@ -662,6 +763,14 @@ const GOLD_BURST_POOL_SIZE = 10;
 const GOLD_BURST_BAR_COUNT = 14;
 const LOOT_ISLAND_RIFT_POOL_SIZE = 4;
 const LOOT_ISLAND_SHARD_COUNT = 8;
+const BOW_EXPLOSION_POOL_SIZE = 10;
+const BOW_EXPLOSION_SPARK_COUNT = 12;
+const SLURP_TANKER_BURST_POOL_SIZE = 8;
+const SLURP_TANKER_DROPLET_COUNT = 22;
+const CROWN_GLINT_POOL_SIZE = 12;
+const CROWN_GLINT_SPARK_COUNT = 8;
+const REVIVE_BEAM_POOL_SIZE = 8;
+const REVIVE_BEAM_SPARK_COUNT = 10;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -725,6 +834,10 @@ export class VFXManager {
   private readonly kineticDashes: KineticDashSlot[] = [];
   private readonly goldBursts: GoldBurstSlot[] = [];
   private readonly lootIslandRifts: LootIslandRiftSlot[] = [];
+  private readonly bowExplosions: BowExplosionSlot[] = [];
+  private readonly slurpTankerBursts: SlurpTankerBurstSlot[] = [];
+  private readonly crownGlints: CrownGlintSlot[] = [];
+  private readonly reviveBeams: ReviveBeamSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -768,6 +881,10 @@ export class VFXManager {
   private kineticDashCursor = 0;
   private goldBurstCursor = 0;
   private lootIslandRiftCursor = 0;
+  private bowExplosionCursor = 0;
+  private slurpTankerBurstCursor = 0;
+  private crownGlintCursor = 0;
+  private reviveBeamCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -2701,6 +2818,417 @@ export class VFXManager {
         shards,
       });
     }
+
+    // 26. Boom Bow Explosion (concussive orange-red-gold arrow blast + cross shockwave rings + embers)
+    for (let i = 0; i < BOW_EXPLOSION_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_bow_explosion';
+      group.visible = false;
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMesh = new THREE.Mesh(this.unitSphereGeo, coreMat);
+      group.add(coreMesh);
+
+      const blastMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.82,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const blastMesh = new THREE.Mesh(this.unitSphereGeo, blastMat);
+      group.add(blastMesh);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfb923c,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const tiltRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xef4444,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const tiltRingMesh = new THREE.Mesh(this.unitRingGeo, tiltRingMat);
+      tiltRingMesh.rotation.set(Math.PI / 3, 0, Math.PI / 5);
+      group.add(tiltRingMesh);
+
+      const sparks: BowExplosionSpark[] = [];
+      for (let s = 0; s < BOW_EXPLOSION_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xfef08a : s % 2 === 0 ? 0xf97316 : 0xef4444,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = s % 2 === 0 ? this.unitCrystalGeo : this.unitBoxGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.16,
+        });
+      }
+
+      this.root.add(group);
+      this.bowExplosions.push({
+        active: false,
+        age: 0,
+        duration: 0.62,
+        radius: 4.4,
+        group,
+        coreMesh,
+        coreMat,
+        blastMesh,
+        blastMat,
+        ringMesh,
+        ringMat,
+        tiltRingMesh,
+        tiltRingMat,
+        sparks,
+      });
+    }
+
+    // 27. Slurp Tanker Burst (huge pressurized cyan/lime healing mist explosion + geyser + droplets)
+    for (let i = 0; i < SLURP_TANKER_BURST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_slurp_tanker_burst';
+      group.visible = false;
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x06b6d4,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.unitSphereGeo, domeMat);
+      group.add(domeMesh);
+
+      const innerDomeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x67e8f9,
+          transparent: true,
+          opacity: 0.56,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const innerDomeMesh = new THREE.Mesh(this.unitSphereGeo, innerDomeMat);
+      group.add(innerDomeMesh);
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+      outerRingMesh.rotation.x = -Math.PI / 2;
+      group.add(outerRingMesh);
+
+      const limeRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa3e635,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const limeRingMesh = new THREE.Mesh(this.unitRingGeo, limeRingMat);
+      limeRingMesh.rotation.x = -Math.PI / 2;
+      limeRingMesh.position.y = 0.14;
+      group.add(limeRingMesh);
+
+      const geyserMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x67e8f9,
+          transparent: true,
+          opacity: 0.52,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const geyserMesh = new THREE.Mesh(this.beamCylGeo, geyserMat);
+      group.add(geyserMesh);
+
+      const droplets: SlurpTankerDroplet[] = [];
+      for (let d = 0; d < SLURP_TANKER_DROPLET_COUNT; d++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: d % 4 === 0 ? 0xa3e635 : d % 2 === 0 ? 0x67e8f9 : 0x22d3ee,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = d % 2 === 0 ? this.unitSphereGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        droplets.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.18,
+        });
+      }
+
+      this.root.add(group);
+      this.slurpTankerBursts.push({
+        active: false,
+        age: 0,
+        duration: 1.25,
+        radius: 10.0,
+        group,
+        domeMesh,
+        domeMat,
+        innerDomeMesh,
+        innerDomeMat,
+        outerRingMesh,
+        outerRingMat,
+        limeRingMesh,
+        limeRingMat,
+        geyserMesh,
+        geyserMat,
+        droplets,
+      });
+    }
+
+    // 28. Crown Glint (golden 4-point star flare + halo ring + ascending sparkle motes)
+    for (let i = 0; i < CROWN_GLINT_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_crown_glint';
+      group.visible = false;
+
+      const flareGroup = new THREE.Group();
+      const flareMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.98,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+
+      const starHoriz = new THREE.Mesh(this.unitCrystalGeo, flareMat);
+      starHoriz.scale.set(0.85, 0.14, 0.14);
+      flareGroup.add(starHoriz);
+
+      const starVert = new THREE.Mesh(this.unitCrystalGeo, flareMat);
+      starVert.scale.set(0.14, 0.85, 0.14);
+      flareGroup.add(starVert);
+
+      const starDepth = new THREE.Mesh(this.unitCrystalGeo, flareMat);
+      starDepth.scale.set(0.14, 0.14, 0.85);
+      flareGroup.add(starDepth);
+
+      group.add(flareGroup);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfde047,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const sparks: CrownGlintSpark[] = [];
+      for (let s = 0; s < CROWN_GLINT_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 2 === 0 ? 0xfef08a : 0xfbbf24,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / CROWN_GLINT_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.3,
+          speedY: 1.2,
+          baseScale: 0.08,
+        });
+      }
+
+      this.root.add(group);
+      this.crownGlints.push({
+        active: false,
+        age: 0,
+        duration: 0.78,
+        group,
+        flareGroup,
+        flareMat,
+        ringMesh,
+        ringMat,
+        sparks,
+      });
+    }
+
+    // 29. Revive Beam (emerald-cyan healing column + progress ground ring + ascending healing sparkles)
+    for (let i = 0; i < REVIVE_BEAM_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_revive_beam';
+      group.visible = false;
+
+      const outerBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x34d399,
+          transparent: true,
+          opacity: 0.36,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerBeamMesh = new THREE.Mesh(this.beamCylGeo, outerBeamMat);
+      outerBeamMesh.position.y = 1.6;
+      outerBeamMesh.scale.set(0.65, 3.2, 0.65);
+      group.add(outerBeamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa7f3d0,
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      coreBeamMesh.position.y = 1.75;
+      coreBeamMesh.scale.set(0.22, 3.5, 0.22);
+      group.add(coreBeamMesh);
+
+      const baseRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const baseRingMesh = new THREE.Mesh(this.unitRingGeo, baseRingMat);
+      baseRingMesh.rotation.x = -Math.PI / 2;
+      baseRingMesh.position.y = 0.05;
+      group.add(baseRingMesh);
+
+      const pulseRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x4ade80,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const pulseRingMesh = new THREE.Mesh(this.unitRingGeo, pulseRingMat);
+      pulseRingMesh.rotation.x = -Math.PI / 2;
+      pulseRingMesh.position.y = 0.2;
+      group.add(pulseRingMesh);
+
+      const sparks: ReviveBeamSpark[] = [];
+      for (let s = 0; s < REVIVE_BEAM_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xffffff : s % 2 === 0 ? 0x4ade80 : 0x22d3ee,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / REVIVE_BEAM_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.55,
+          speedY: 1.5,
+          baseScale: 0.09,
+        });
+      }
+
+      this.root.add(group);
+      this.reviveBeams.push({
+        active: false,
+        age: 0,
+        duration: 0.55,
+        progress: 0,
+        group,
+        outerBeamMesh,
+        outerBeamMat,
+        coreBeamMesh,
+        coreBeamMat,
+        baseRingMesh,
+        baseRingMat,
+        pulseRingMesh,
+        pulseRingMat,
+        sparks,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -2866,6 +3394,12 @@ export class VFXManager {
       this.eventBus.on('vfx:kinetic_dash', (e) => this.spawnKineticDash(e.from, e.to)),
       this.eventBus.on('vfx:gold_burst', (e) => this.spawnGoldBurst(e.position, e.amount)),
       this.eventBus.on('vfx:loot_island_rift', (e) => this.spawnLootIslandRift(e.position)),
+      this.eventBus.on('vfx:bow_explosion', (e) => this.spawnBowExplosion(e.position, e.radius)),
+      this.eventBus.on('vfx:slurp_tanker_burst', (e) =>
+        this.spawnSlurpTankerBurst(e.position, e.radius),
+      ),
+      this.eventBus.on('vfx:crown_glint', (e) => this.spawnCrownGlint(e.position)),
+      this.eventBus.on('vfx:revive_beam', (e) => this.spawnReviveBeam(e.position, e.progress)),
     );
   }
 
@@ -2938,6 +3472,12 @@ export class VFXManager {
     } else if (weaponId === 'grappler') {
       scale = 1.05;
       color = 0x22d3ee;
+    } else if (weaponId === 'combat_smg') {
+      scale = 0.88;
+      color = 0xfbbf24;
+    } else if (weaponId === 'boom_bow') {
+      scale = 0.95;
+      color = 0xf97316;
     } else if (weaponId === 'smg' || weaponId === 'pistol') {
       scale = 0.78;
     }
@@ -2955,13 +3495,14 @@ export class VFXManager {
     slot.material.opacity = 0.95;
     slot.group.visible = true;
 
-    // Eject spinning brass casing or shotgun shell for bullet/shell firearms
+    // Eject spinning brass casing or shotgun shell for bullet/shell firearms (not arrows)
     const ammoType = WEAPONS[weaponId]?.ammoType;
     if (
-      ammoType === 'light' ||
-      ammoType === 'medium' ||
-      ammoType === 'heavy' ||
-      ammoType === 'shells'
+      weaponId !== 'boom_bow' &&
+      (ammoType === 'light' ||
+        ammoType === 'medium' ||
+        ammoType === 'heavy' ||
+        ammoType === 'shells')
     ) {
       this.spawnCasing(position, direction, ammoType);
     }
@@ -4368,6 +4909,175 @@ export class VFXManager {
         sh.material.opacity = 0.95 * fade;
       }
     }
+
+    // 27. Boom Bow Explosion
+    for (let i = 0; i < BOW_EXPLOSION_POOL_SIZE; i++) {
+      const be = this.bowExplosions[i];
+      if (!be.active) continue;
+      be.age += safeDt;
+      const t = be.age / be.duration;
+      if (t >= 1) {
+        be.active = false;
+        be.group.visible = false;
+        continue;
+      }
+
+      const expand = 1 - Math.pow(1 - Math.min(1, t * 2.5), 2);
+      const fade = 1 - t;
+
+      be.coreMesh.scale.setScalar(be.radius * 0.62 * expand);
+      be.coreMat.opacity = Math.max(0, 1 - t * 1.55);
+
+      be.blastMesh.scale.setScalar(be.radius * 1.15 * expand);
+      be.blastMat.opacity = 0.82 * fade;
+
+      be.ringMesh.scale.setScalar(be.radius * (0.35 + 1.45 * expand));
+      be.ringMat.opacity = 0.92 * fade;
+
+      be.tiltRingMesh.rotation.y += 4.5 * safeDt;
+      be.tiltRingMesh.scale.setScalar(be.radius * (0.28 + 1.25 * expand));
+      be.tiltRingMat.opacity = 0.85 * fade * fade;
+
+      for (let s = 0; s < BOW_EXPLOSION_SPARK_COUNT; s++) {
+        const sp = be.sparks[s];
+        sp.vy -= 13.5 * safeDt;
+        sp.mesh.position.x += sp.vx * safeDt;
+        sp.mesh.position.y += sp.vy * safeDt;
+        sp.mesh.position.z += sp.vz * safeDt;
+        sp.mesh.rotation.x += 9 * safeDt;
+        sp.mesh.rotation.y += 7 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * fade);
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 28. Slurp Tanker Burst
+    for (let i = 0; i < SLURP_TANKER_BURST_POOL_SIZE; i++) {
+      const st = this.slurpTankerBursts[i];
+      if (!st.active) continue;
+      st.age += safeDt;
+      const t = st.age / st.duration;
+      if (t >= 1) {
+        st.active = false;
+        st.group.visible = false;
+        continue;
+      }
+
+      const expand = 1 - Math.pow(1 - Math.min(1, t * 1.65), 2);
+      const fade = 1 - t;
+
+      st.domeMesh.scale.set(
+        st.radius * (0.35 + 0.72 * expand),
+        st.radius * (0.32 + 0.58 * expand),
+        st.radius * (0.35 + 0.72 * expand),
+      );
+      st.domeMat.opacity = 0.42 * fade;
+
+      st.innerDomeMesh.scale.setScalar(st.radius * (0.25 + 0.52 * expand));
+      st.innerDomeMat.opacity = 0.56 * fade * fade;
+
+      st.outerRingMesh.scale.setScalar(st.radius * (0.35 + 1.05 * expand));
+      st.outerRingMat.opacity = 0.92 * fade;
+
+      st.limeRingMesh.scale.setScalar(st.radius * (0.25 + 0.85 * expand));
+      st.limeRingMat.opacity = 0.85 * fade;
+
+      const geyserH = st.radius * (0.6 + 0.85 * Math.sin(Math.min(1, t * 1.5) * Math.PI * 0.5));
+      const geyserW = st.radius * 0.24 * (1 - 0.55 * t);
+      st.geyserMesh.position.y = geyserH * 0.5;
+      st.geyserMesh.scale.set(Math.max(0.2, geyserW), Math.max(0.4, geyserH), Math.max(0.2, geyserW));
+      st.geyserMat.opacity = 0.52 * fade;
+
+      for (let d = 0; d < SLURP_TANKER_DROPLET_COUNT; d++) {
+        const dr = st.droplets[d];
+        dr.vy -= 9.2 * safeDt;
+        dr.mesh.position.x += dr.vx * safeDt;
+        dr.mesh.position.y = Math.max(0.05, dr.mesh.position.y + dr.vy * safeDt);
+        dr.mesh.position.z += dr.vz * safeDt;
+        dr.mesh.rotation.y += 5 * safeDt;
+        dr.mesh.scale.setScalar(dr.baseScale * (1 - 0.45 * t));
+        dr.material.opacity = fade;
+      }
+    }
+
+    // 29. Crown Glint
+    for (let i = 0; i < CROWN_GLINT_POOL_SIZE; i++) {
+      const cg = this.crownGlints[i];
+      if (!cg.active) continue;
+      cg.age += safeDt;
+      const t = cg.age / cg.duration;
+      if (t >= 1) {
+        cg.active = false;
+        cg.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const pulse = Math.sin(t * Math.PI);
+      const fade = 1 - t;
+
+      cg.flareGroup.position.y = 2.08 + 0.32 * t;
+      cg.flareGroup.rotation.y += 3.6 * safeDt;
+      cg.flareGroup.scale.setScalar(0.55 + 0.95 * pulse);
+      cg.flareMat.opacity = 0.98 * fade;
+
+      cg.ringMesh.position.y = 1.98 + 0.35 * easeOut;
+      cg.ringMesh.scale.setScalar(0.28 + 0.85 * easeOut);
+      cg.ringMat.opacity = 0.9 * fade;
+
+      for (let s = 0; s < CROWN_GLINT_SPARK_COUNT; s++) {
+        const sp = cg.sparks[s];
+        const ang = sp.angle + cg.age * 3.8;
+        const rad = sp.radius * (1 + 0.55 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 6 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.5 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 30. Revive Beam
+    for (let i = 0; i < REVIVE_BEAM_POOL_SIZE; i++) {
+      const rb = this.reviveBeams[i];
+      if (!rb.active) continue;
+      rb.age += safeDt;
+      const t = rb.age / rb.duration;
+      if (t >= 1) {
+        rb.active = false;
+        rb.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const pulse = 1 + 0.1 * Math.sin(rb.age * 10);
+      const beamW = (0.52 + 0.28 * rb.progress) * pulse;
+      rb.outerBeamMesh.scale.set(beamW, 3.2, beamW);
+      rb.outerBeamMat.opacity = (0.28 + 0.16 * rb.progress) * fade;
+
+      rb.coreBeamMesh.scale.set(0.18 + 0.1 * rb.progress, 3.5, 0.18 + 0.1 * rb.progress);
+      rb.coreBeamMat.opacity = 0.72 * fade;
+
+      rb.baseRingMesh.scale.setScalar((0.65 + 0.85 * rb.progress) * pulse);
+      rb.baseRingMat.opacity = 0.92 * fade;
+
+      const riseFrac = (rb.age * 2.2) % 1;
+      rb.pulseRingMesh.position.y = 0.1 + riseFrac * 2.2;
+      rb.pulseRingMesh.scale.setScalar(0.55 + 0.55 * (1 - riseFrac));
+      rb.pulseRingMat.opacity = 0.88 * (1 - riseFrac) * fade;
+
+      for (let s = 0; s < REVIVE_BEAM_SPARK_COUNT; s++) {
+        const sp = rb.sparks[s];
+        const ang = sp.angle + rb.age * 3.4;
+        sp.mesh.position.x = Math.cos(ang) * sp.radius;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * sp.radius;
+        sp.mesh.rotation.y += 5 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.45 * t));
+        sp.material.opacity = fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -4953,6 +5663,179 @@ export class VFXManager {
     }
   }
 
+  private spawnBowExplosion(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.bowExplosions[this.bowExplosionCursor];
+    this.bowExplosionCursor = (this.bowExplosionCursor + 1) % BOW_EXPLOSION_POOL_SIZE;
+
+    const safeRadius = Math.max(1.4, Number.isFinite(radius) ? radius : 4.4);
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.62;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.coreMesh.scale.setScalar(0.24 * safeRadius);
+    slot.coreMat.opacity = 0.96;
+    slot.blastMesh.scale.setScalar(0.35 * safeRadius);
+    slot.blastMat.opacity = 0.82;
+    slot.ringMesh.scale.setScalar(0.35 * safeRadius);
+    slot.ringMat.opacity = 0.92;
+    slot.tiltRingMesh.rotation.set(Math.PI / 3, this.nextRand() * Math.PI, Math.PI / 5);
+    slot.tiltRingMesh.scale.setScalar(0.28 * safeRadius);
+    slot.tiltRingMat.opacity = 0.85;
+
+    for (let s = 0; s < BOW_EXPLOSION_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      const ang = (s / BOW_EXPLOSION_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const spd = safeRadius * (1.25 + this.nextRand() * 1.45);
+      sp.vx = Math.cos(ang) * spd;
+      sp.vy = safeRadius * (0.9 + this.nextRand() * 1.5);
+      sp.vz = Math.sin(ang) * spd;
+      sp.baseScale = Math.max(0.12, safeRadius * 0.048);
+      sp.mesh.position.set(0, 0.1, 0);
+      sp.mesh.rotation.set(0, 0, 0);
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 1;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnSlurpTankerBurst(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.slurpTankerBursts[this.slurpTankerBurstCursor];
+    this.slurpTankerBurstCursor = (this.slurpTankerBurstCursor + 1) % SLURP_TANKER_BURST_POOL_SIZE;
+
+    const safeRadius = Math.max(2.0, Number.isFinite(radius) ? radius : 10.0);
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.25;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.08, position.z);
+    slot.group.visible = true;
+
+    slot.domeMesh.scale.set(safeRadius * 0.35, safeRadius * 0.32, safeRadius * 0.35);
+    slot.domeMat.opacity = 0.42;
+    slot.innerDomeMesh.scale.setScalar(safeRadius * 0.25);
+    slot.innerDomeMat.opacity = 0.56;
+    slot.outerRingMesh.scale.setScalar(safeRadius * 0.35);
+    slot.outerRingMat.opacity = 0.92;
+    slot.limeRingMesh.scale.setScalar(safeRadius * 0.25);
+    slot.limeRingMat.opacity = 0.85;
+    slot.geyserMesh.position.y = safeRadius * 0.3;
+    slot.geyserMesh.scale.set(safeRadius * 0.24, safeRadius * 0.6, safeRadius * 0.24);
+    slot.geyserMat.opacity = 0.52;
+
+    for (let d = 0; d < SLURP_TANKER_DROPLET_COUNT; d++) {
+      const dr = slot.droplets[d];
+      const ang = (d / SLURP_TANKER_DROPLET_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const horiz = (1.1 + this.nextRand() * 2.2) * Math.min(3.5, safeRadius * 0.42);
+      dr.vx = Math.cos(ang) * horiz;
+      dr.vy = 4.2 + this.nextRand() * 4.4;
+      dr.vz = Math.sin(ang) * horiz;
+      dr.baseScale = 0.14 + this.nextRand() * 0.10;
+      dr.mesh.position.set(Math.cos(ang) * 0.6, 0.4 + this.nextRand() * 0.8, Math.sin(ang) * 0.6);
+      dr.mesh.scale.setScalar(dr.baseScale);
+      dr.material.opacity = 1;
+      dr.mesh.visible = true;
+    }
+  }
+
+  private spawnCrownGlint(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.crownGlints[this.crownGlintCursor];
+    this.crownGlintCursor = (this.crownGlintCursor + 1) % CROWN_GLINT_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.78;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.flareGroup.position.set(0, 2.08, 0);
+    slot.flareGroup.rotation.set(0, this.nextRand() * Math.PI, 0);
+    slot.flareGroup.scale.setScalar(0.6);
+    slot.flareMat.opacity = 0.98;
+
+    slot.ringMesh.position.set(0, 1.98, 0);
+    slot.ringMesh.scale.setScalar(0.28);
+    slot.ringMat.opacity = 0.9;
+
+    for (let s = 0; s < CROWN_GLINT_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / CROWN_GLINT_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      sp.radius = 0.18 + this.nextRand() * 0.22;
+      sp.speedY = 0.9 + this.nextRand() * 1.1;
+      sp.baseScale = 0.065 + this.nextRand() * 0.04;
+      sp.mesh.position.set(Math.cos(sp.angle) * sp.radius, 1.95 + this.nextRand() * 0.2, Math.sin(sp.angle) * sp.radius);
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.95;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnReviveBeam(position: Vec3Like, progress: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const safeProgress = clamp(Number.isFinite(progress) ? progress : 0, 0, 1);
+
+    // Reuse an active beam near the same target to keep continuous revive channels clean
+    let slot = this.reviveBeams.find((rb) => {
+      if (!rb.active) return false;
+      const dx = rb.group.position.x - position.x;
+      const dy = rb.group.position.y - position.y;
+      const dz = rb.group.position.z - position.z;
+      return dx * dx + dy * dy + dz * dz < 1.44;
+    });
+
+    if (!slot) {
+      slot =
+        this.reviveBeams.find((rb) => !rb.active) ??
+        this.reviveBeams[this.reviveBeamCursor];
+      this.reviveBeamCursor = (this.reviveBeamCursor + 1) % REVIVE_BEAM_POOL_SIZE;
+    }
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.55;
+    slot.progress = safeProgress;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.outerBeamMesh.scale.set(0.52 + 0.28 * safeProgress, 3.2, 0.52 + 0.28 * safeProgress);
+    slot.outerBeamMat.opacity = 0.28 + 0.16 * safeProgress;
+    slot.coreBeamMesh.scale.set(0.18 + 0.1 * safeProgress, 3.5, 0.18 + 0.1 * safeProgress);
+    slot.coreBeamMat.opacity = 0.72;
+
+    slot.baseRingMat.color.setHex(safeProgress > 0.75 ? 0x4ade80 : 0x22d3ee);
+    slot.baseRingMesh.scale.setScalar(0.65 + 0.85 * safeProgress);
+    slot.baseRingMat.opacity = 0.92;
+
+    slot.pulseRingMesh.position.y = 0.1;
+    slot.pulseRingMesh.scale.setScalar(0.55);
+    slot.pulseRingMat.opacity = 0.88;
+
+    for (let s = 0; s < REVIVE_BEAM_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / REVIVE_BEAM_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      sp.radius = 0.38 + this.nextRand() * 0.35;
+      sp.speedY = 1.2 + this.nextRand() * 1.4;
+      sp.baseScale = 0.075 + this.nextRand() * 0.04;
+      sp.mesh.position.set(Math.cos(sp.angle) * sp.radius, 0.15 + this.nextRand() * 0.5, Math.sin(sp.angle) * sp.radius);
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.95;
+      sp.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -5080,6 +5963,10 @@ export class VFXManager {
     for (const kd of this.kineticDashes) if (kd.active) count++;
     for (const gb of this.goldBursts) if (gb.active) count++;
     for (const lr of this.lootIslandRifts) if (lr.active) count++;
+    for (const be of this.bowExplosions) if (be.active) count++;
+    for (const st of this.slurpTankerBursts) if (st.active) count++;
+    for (const cg of this.crownGlints) if (cg.active) count++;
+    for (const rb of this.reviveBeams) if (rb.active) count++;
     return count;
   }
 
@@ -5201,6 +6088,30 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveBowExplosionCount(): number {
+    let count = 0;
+    for (const be of this.bowExplosions) if (be.active) count++;
+    return count;
+  }
+
+  public getActiveSlurpTankerBurstCount(): number {
+    let count = 0;
+    for (const st of this.slurpTankerBursts) if (st.active) count++;
+    return count;
+  }
+
+  public getActiveCrownGlintCount(): number {
+    let count = 0;
+    for (const cg of this.crownGlints) if (cg.active) count++;
+    return count;
+  }
+
+  public getActiveReviveBeamCount(): number {
+    let count = 0;
+    for (const rb of this.reviveBeams) if (rb.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -5303,6 +6214,22 @@ export class VFXManager {
     for (const lr of this.lootIslandRifts) {
       lr.active = false;
       lr.group.visible = false;
+    }
+    for (const be of this.bowExplosions) {
+      be.active = false;
+      be.group.visible = false;
+    }
+    for (const st of this.slurpTankerBursts) {
+      st.active = false;
+      st.group.visible = false;
+    }
+    for (const cg of this.crownGlints) {
+      cg.active = false;
+      cg.group.visible = false;
+    }
+    for (const rb of this.reviveBeams) {
+      rb.active = false;
+      rb.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

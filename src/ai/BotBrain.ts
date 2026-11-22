@@ -18,11 +18,14 @@ import type {
 } from '../types';
 import {
   BUILD_COST,
+  DBNO_BLEED_DPS,
+  DBNO_MAX_HP,
   GLIDER_FORCE_HEIGHT,
   MAX_MATS,
   POIS,
   RARITY_MULTIPLIER,
   RARITY_ORDER,
+  REVIVE_DURATION_SEC,
   WATER_LEVEL,
   WEAPONS,
   WORLD_HALF,
@@ -129,6 +132,11 @@ const ALLY_SCOUT_PING_RANGE = 55.0;
 const ALLY_SCOUT_PING_COOLDOWN = 16.0;
 const ALLY_MEDIC_HEAL_COOLDOWN = 18.0;
 const ALLY_MEDIC_HEAL_AMOUNT = 25;
+const KNOCKED_CRAWL_SPEED = 1.4;
+const REVIVE_REACH_DIST = 3.4;
+const SQUAD_REVIVE_RANGE = 55.0;
+const SQUAD_UNSAFE_ENEMY_DIST = 16.0;
+const playerReviveCompletedLatch = new WeakMap<BotEntity, boolean>();
 
 const SCORCHED_CALDERA_POI = POIS.find((p) => p.id === 'scorched_caldera');
 export const VOLCANO_LAVA_CENTER_X = SCORCHED_CALDERA_POI
@@ -190,6 +198,36 @@ function getBotEyePos(bot: BotEntity): Vec3Like {
     y: bot.position.y + (bot.isCrouching ? 1.05 : 1.55),
     z: bot.position.z,
   };
+}
+
+function isFriendlyTarget(
+  bot: Pick<BotEntity, 'id' | 'isAlly' | 'isDuoPartner' | 'squadId'>,
+  t: Pick<BotCombatTarget, 'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId'>,
+  squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+): boolean {
+  if (t.id === bot.id) return true;
+  const botInPlayerSquad =
+    Boolean(bot.isAlly) ||
+    Boolean(bot.isDuoPartner) ||
+    bot.squadId === 'player_squad';
+  if (botInPlayerSquad) {
+    if (
+      t.isPlayer ||
+      t.id === 'player' ||
+      t.isAlly ||
+      t.isDuoPartner ||
+      t.squadId === 'player_squad'
+    ) {
+      return true;
+    }
+  }
+  if (bot.squadId && t.squadId && bot.squadId === t.squadId) {
+    return true;
+  }
+  if (squadmates && squadmates.some((m) => m.id === t.id)) {
+    return true;
+  }
+  return false;
 }
 
 function getTotalMaterials(bot: Pick<BotEntity, 'inventory'>): number {
@@ -274,6 +312,10 @@ function scoreWeaponForDistance(
       if (distance > def.range) return 0.5;
       base = distance <= 18 ? 94 - distance * 0.7 : Math.max(5, 81 - (distance - 18) * 1.15);
       break;
+    case 'combat_smg':
+      if (distance > def.range) return 0.5;
+      base = distance <= 22 ? 102 - distance * 0.65 : Math.max(6, 87.7 - (distance - 22) * 1.1);
+      break;
     case 'pistol':
       if (distance > def.range) return 0.5;
       base = distance <= 28 ? 64 - distance * 0.45 : Math.max(5, 51 - (distance - 28) * 0.45);
@@ -306,6 +348,13 @@ function scoreWeaponForDistance(
       if (distance < 22) base = 18;
       else if (distance < 60) base = 64 + (distance - 22) * 1.0;
       else base = Math.min(126, 104 + (distance - 60) * 0.25);
+      break;
+    case 'boom_bow':
+      if (distance > def.range) return 0.5;
+      if (distance < 14) base = 14;
+      else if (distance < 30) base = 58 + (distance - 14) * 2.2;
+      else if (distance <= 95) base = 106;
+      else base = Math.max(30, 106 - (distance - 95) * 0.48);
       break;
     case 'rocket_launcher':
       if (distance < 8) base = 8;
@@ -364,6 +413,17 @@ export function selectBestWeaponForDistance(
   return { slotIndex: bestSlot, item: bestItem };
 }
 
+/**
+ * Alias for `selectBestWeaponForDistance` returning the highest-scoring weapon slot for range.
+ */
+export function selectBestWeaponForRange(
+  items: (ItemInstance | null)[],
+  distance: number,
+  ammo?: Record<AmmoType, number>,
+): { slotIndex: number; item: ItemInstance } | null {
+  return selectBestWeaponForDistance(items, distance, ammo);
+}
+
 export interface ThrowableDecision {
   slotIndex: number;
   item: ItemInstance;
@@ -375,19 +435,23 @@ export interface ThrowableDecision {
  * against clustered enemies or a boxed/occluded target.
  */
 export function selectThrowableForCombat(
-  bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'> & { isAlly?: boolean },
+  bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'> & {
+    isAlly?: boolean;
+    isDuoPartner?: boolean;
+    squadId?: string;
+  },
   target: BotCombatTarget,
   allTargets: BotCombatTarget[],
   hasLOS: boolean,
   buildPieces?: BuildPiece[],
+  squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
 ): ThrowableDecision | null {
   if ((bot.throwCooldown ?? 0) > 0) return null;
   if (
-    bot.isAlly &&
     allTargets.some(
       (other) =>
         other.alive &&
-        (other.isPlayer || other.id === 'player') &&
+        isFriendlyTarget(bot, other, squadmates) &&
         dist3D(other.position, target.position) <= 9.0,
     )
   ) {
@@ -534,7 +598,9 @@ export function selectCloseQuartersWeapon(
           ? 112
           : item.weaponId === 'tac_shotgun'
             ? 104
-            : 92;
+            : item.weaponId === 'combat_smg'
+              ? 98
+              : 92;
     const rarityMult = RARITY_MULTIPLIER[item.rarity] ?? 1.0;
     const score = base * rarityMult + (item.magAmmo > 0 ? 15 : 0);
     if (score > bestScore) {
@@ -957,9 +1023,11 @@ function getWeaponOverallValue(item: ItemInstance): number {
     heavy_shotgun: 56,
     rocket_launcher: 54,
     tactical_dmr: 53,
+    boom_bow: 53,
     sniper: 52,
     pump_shotgun: 50,
     ar: 48,
+    combat_smg: 47,
     burst_ar: 45,
     tac_shotgun: 44,
     smg: 40,
@@ -1351,6 +1419,14 @@ function updateAnimState(bot: BotEntity): void {
     bot.animState = 'glide';
     return;
   }
+  if (bot.state === 'knocked' || bot.isKnocked) {
+    bot.animState = 'knocked';
+    return;
+  }
+  if (bot.state === 'reviving' || bot.isReviving) {
+    bot.animState = 'reviving';
+    return;
+  }
   if (bot.state === 'healing' && bot.healTimer > 0) {
     bot.animState = 'heal';
     return;
@@ -1386,16 +1462,48 @@ function updateAnimState(bot: BotEntity): void {
   }
 }
 
+function getTargetMedallionCount(
+  t: BotCombatTarget,
+  ctx: BotWorldContext,
+  medallionHolderIds?: ReadonlySet<string>,
+): number {
+  let count = Math.max(t.medallionCount ?? 0, t.medallions?.length ?? 0);
+  if (
+    count === 0 &&
+    (t.isPlayer || t.id === 'player') &&
+    (ctx.playerMedallionCount ?? 0) > 0
+  ) {
+    count = ctx.playerMedallionCount ?? 0;
+  }
+  if (count === 0 && medallionHolderIds?.has(t.id)) {
+    count = 1;
+  }
+  if (count === 0 && ctx.getMedallionHolders) {
+    const holder = ctx
+      .getMedallionHolders()
+      .find((h) => h.id === t.id || h.botId === t.id);
+    if (holder) {
+      count = Math.max(1, holder.medallionCount ?? holder.count ?? holder.medallions.length);
+    }
+  }
+  return count;
+}
+
 function selectEnemyTarget(
   bot: BotEntity,
   ctx: BotWorldContext,
   profile: DifficultyProfile,
   elapsed: number,
   isFarLOD: boolean,
+  squadmates?: ReadonlyArray<BotEntity>,
+  medallionHolderIds?: ReadonlySet<string>,
 ): { target: BotCombatTarget; hasLOS: boolean; distance: number } | null {
   const targets = ctx.getCombatTargets();
   const eye = getBotEyePos(bot);
   const losLimit = isFarLOD ? 55 : profile.visionRange;
+  const isPlayerSide = Boolean(
+    bot.isAlly || bot.isDuoPartner || bot.squadId === 'player_squad',
+  );
 
   let bestTarget: BotCombatTarget | null = null;
   let bestHasLOS = false;
@@ -1404,7 +1512,7 @@ function selectEnemyTarget(
 
   for (const t of targets) {
     if (!t.alive || t.id === bot.id) continue;
-    if (bot.isAlly && (t.isPlayer || t.id === 'player' || t.isAlly)) continue;
+    if (isFriendlyTarget(bot, t, squadmates)) continue;
 
     const d = dist3D(eye, t.eyePos);
     const wasAttacker =
@@ -1412,15 +1520,25 @@ function selectEnemyTarget(
       bot.lastDamageTime >= 0 &&
       elapsed - bot.lastDamageTime < 5.0;
     const wasCurrent = bot.targetEnemyId === t.id;
+    const medCount = getTargetMedallionCount(t, ctx, medallionHolderIds);
 
-    if (bot.isAlly) {
+    if (isPlayerSide) {
       if (d > ALLY_COMBAT_RANGE) continue;
-    } else if (d > profile.visionRange && !wasAttacker) {
-      continue;
+    } else {
+      const effectiveRange =
+        medCount > 0 ? profile.visionRange * 1.25 : profile.visionRange;
+      if (d > effectiveRange && !wasAttacker) {
+        continue;
+      }
     }
 
     let los = false;
-    if (d <= (bot.isAlly ? ALLY_COMBAT_RANGE : losLimit)) {
+    const effectiveLosLimit = isPlayerSide
+      ? ALLY_COMBAT_RANGE
+      : medCount > 0 && !isFarLOD
+        ? profile.visionRange * 1.25
+        : losLimit;
+    if (d <= effectiveLosLimit) {
       los = ctx.hasLineOfSight(eye, t.eyePos);
     }
 
@@ -1428,15 +1546,23 @@ function selectEnemyTarget(
       continue;
     }
 
+    const medBoost = medCount > 0 ? 65 + Math.min(2, medCount - 1) * 25 : 0;
+    const knockedPenalty = t.isKnocked ? (isPlayerSide ? -120 : -85) : 0;
+
     let score: number;
-    if (bot.isAlly) {
-      score = (los ? 1000 : 400) - d + (wasCurrent ? 1.5 : 0);
+    if (isPlayerSide) {
+      score =
+        (los ? 1000 : 400) -
+        d +
+        (wasCurrent ? 1.5 : 0) +
+        (medCount > 0 ? 35 : 0) +
+        knockedPenalty;
     } else {
-      score = 200 - d;
+      score = 200 - d + medBoost + knockedPenalty;
       if (los) score += 120;
       if (wasAttacker) score += 90;
       if (wasCurrent) score += 30;
-      if (t.hp + t.shield < 60) score += 25;
+      if (t.hp + t.shield < 60 && !t.isKnocked) score += 25;
     }
 
     if (score > bestScore) {
@@ -1501,8 +1627,9 @@ function handleFireAndBurst(
   distance: number,
   hasLOS: boolean,
   dt: number,
+  squadmates?: ReadonlyArray<BotEntity>,
 ): void {
-  if (bot.isAlly && (target.isPlayer || target.id === 'player' || target.isAlly)) {
+  if (isFriendlyTarget(bot, target, squadmates)) {
     return;
   }
   const activeItem = bot.inventory.items[bot.inventory.activeSlot];
@@ -1536,6 +1663,10 @@ function handleFireAndBurst(
       aimTargetX += targetVel.x * leadSec;
       aimTargetY += targetVel.y * leadSec * 0.35;
       aimTargetZ += targetVel.z * leadSec;
+    }
+    if (def.isBow && def.projectileSpeed > 0 && def.projectileGravity > 0) {
+      const flightT = distance / def.projectileSpeed;
+      aimTargetY += 0.5 * def.projectileGravity * flightT * flightT;
     }
   }
 
@@ -2189,6 +2320,7 @@ function tryShootExplosiveBarrel(
   target: BotCombatTarget,
   activeBubbles: ReadonlyArray<ShieldBubbleZone>,
   safeDt: number,
+  squadmates?: ReadonlyArray<BotEntity>,
 ): boolean {
   if (!ctx.getExplosiveBarrels || !ctx.damageExplosiveBarrel) return false;
   const barrels = ctx.getExplosiveBarrels();
@@ -2203,14 +2335,14 @@ function tryShootExplosiveBarrel(
   );
   if (!candidate) return false;
 
-  if (bot.isAlly) {
-    const playerNearBlast = ctx.getCombatTargets().some(
+  if (bot.isAlly || bot.isDuoPartner || bot.squadId) {
+    const friendlyNearBlast = ctx.getCombatTargets().some(
       (t) =>
         t.alive &&
-        (t.isPlayer || t.id === 'player') &&
+        isFriendlyTarget(bot, t, squadmates) &&
         dist3D(t.position, candidate.barrel) <= candidate.barrel.blastRadius + 2.0,
     );
-    if (playerNearBlast) return false;
+    if (friendlyNearBlast) return false;
   }
 
   const { barrel, aimPoint, distToBot, firearm } = candidate;
@@ -2312,8 +2444,11 @@ function getPreferredCombatRange(
   ) {
     return { min: weaponId === 'heavy_shotgun' ? 6 : 5, max: weaponId === 'heavy_shotgun' ? 15 : 13 };
   }
-  if (weaponId === 'smg') {
-    return { min: 9, max: 20 };
+  if (weaponId === 'smg' || weaponId === 'combat_smg') {
+    return { min: 8, max: 22 };
+  }
+  if (weaponId === 'boom_bow') {
+    return { min: 22, max: 62 };
   }
   if (weaponId === 'sniper' || personality === 'sniper') {
     return { min: 42, max: 88 };
@@ -2334,6 +2469,7 @@ function stepCombatState(
   elapsed: number,
   safeDt: number,
   isFarLOD: boolean,
+  squadmates?: ReadonlyArray<BotEntity>,
 ): MoveIntent {
   if (!combatMatch) {
     if (bot.lastKnownEnemyPos) {
@@ -2395,7 +2531,7 @@ function stepCombatState(
     }
   } else if (
     !isFarLOD &&
-    tryShootExplosiveBarrel(bot, ctx, profile, target, activeBubbles, safeDt)
+    tryShootExplosiveBarrel(bot, ctx, profile, target, activeBubbles, safeDt, squadmates)
   ) {
     // Prioritized explosive barrel near target enemy
   } else if (bothInsideSameBubble && cqcWeapon) {
@@ -2403,7 +2539,7 @@ function stepCombatState(
       bot.inventory.activeSlot = cqcWeapon.slotIndex;
       bot.burstQueue = 0;
     }
-    handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
+    handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
   } else {
     // Check tactical throwables (`frag_grenade` / `shockwave_grenade`) against clustered or boxed enemies
     const throwDecision =
@@ -2414,6 +2550,7 @@ function stepCombatState(
             ctx.getCombatTargets(),
             hasLOS,
             ctx.getBuildPieces?.(),
+            squadmates,
           )
         : null;
 
@@ -2422,7 +2559,7 @@ function stepCombatState(
         bot.inventory.activeSlot = throwDecision.slotIndex;
         bot.burstQueue = 0;
       }
-      handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
+      handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
     } else {
       const chosen = selectBestWeaponForDistance(
         bot.inventory.items,
@@ -2434,7 +2571,7 @@ function stepCombatState(
           bot.inventory.activeSlot = chosen.slotIndex;
           bot.burstQueue = 0;
         }
-        handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt);
+        handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
       }
     }
   }
@@ -2820,6 +2957,7 @@ function stepRotatingState(
   elapsed: number,
   safeDt: number,
   isFarLOD: boolean,
+  squadmates?: ReadonlyArray<BotEntity>,
 ): MoveIntent {
   bot.isCrouching = false;
 
@@ -2869,7 +3007,33 @@ function stepRotatingState(
   ) {
     destination = bot.lastHeardNoisePos;
     bot.launchPadTargetId = null;
-  } else {
+  } else if (
+    !needRotateStorm &&
+    !bot.isBoss &&
+    !bot.isAlly &&
+    !bot.isDuoPartner &&
+    squadmates &&
+    squadmates.length > 0
+  ) {
+    const aliveMate = squadmates.find(
+      (m) =>
+        m.id !== bot.id &&
+        m.alive &&
+        !m.isKnocked &&
+        m.state !== 'knocked' &&
+        m.state !== 'bus' &&
+        m.state !== 'skydiving' &&
+        m.state !== 'gliding' &&
+        dist2D(bot.position.x, bot.position.z, m.position.x, m.position.z) > 18 &&
+        dist2D(bot.position.x, bot.position.z, m.position.x, m.position.z) <= 85 &&
+        !isInVolcanoLavaHazard(m.position.x, m.position.z, VOLCANO_LAVA_SAFE_RADIUS + 1.5),
+    );
+    if (aliveMate) {
+      destination = { ...aliveMate.position };
+      bot.launchPadTargetId = null;
+    }
+  }
+  if (!destination) {
     const moveTargetOutsideSafe =
       needRotateStorm &&
       bot.moveTarget &&
@@ -3667,7 +3831,7 @@ function resolveEffectivePlayerPos(
   if (playerPos) return playerPos;
   const playerTarget = ctx
     .getCombatTargets()
-    .find((t) => t.alive && (t.isPlayer || t.id === 'player'));
+    .find((t) => (t.alive || t.isKnocked) && (t.isPlayer || t.id === 'player'));
   return playerTarget ? playerTarget.position : null;
 }
 
@@ -3868,6 +4032,415 @@ function enforceAllyCombatLeash(
   return intent;
 }
 
+function emitReviveBeamAndTick(
+  ctx: BotWorldContext,
+  pos: Vec3Like,
+  prevProg: number,
+  newProg: number,
+): void {
+  const prevStep = Math.floor(prevProg * 4);
+  const newStep = Math.floor(newProg * 4);
+  if (prevProg === 0 || newStep > prevStep) {
+    ctx.eventBus.emit('vfx:revive_beam', {
+      position: { ...pos },
+      progress: newProg,
+    });
+    ctx.eventBus.emit('sound:play', {
+      id: 'revive_tick',
+      position: { ...pos },
+      spatial: true,
+    });
+  }
+}
+
+function stepKnockedBot(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  effectivePlayerPos: Vec3Like | null,
+  squadmates: ReadonlyArray<BotEntity>,
+  safeDt: number,
+  isFarLOD: boolean,
+): void {
+  bot.isKnocked = true;
+  bot.state = 'knocked';
+  bot.isFiring = false;
+  bot.isAiming = false;
+  bot.isBuilding = false;
+  bot.isSprinting = false;
+  bot.isCrouching = false;
+  bot.isReviving = false;
+  bot.reviveProgress = 0;
+  bot.reviveTargetId = null;
+  bot.burstQueue = 0;
+  bot.reloadTimer = 0;
+  bot.healTimer = 0;
+
+  if (bot.bleedOutHp === undefined) {
+    bot.bleedOutHp = Math.min(DBNO_MAX_HP, Math.max(1, bot.hp || DBNO_MAX_HP));
+  }
+
+  const mateReviving = squadmates.some(
+    (m) =>
+      m.id !== bot.id &&
+      m.alive &&
+      !m.isKnocked &&
+      (m.isReviving || m.state === 'reviving') &&
+      m.reviveTargetId === bot.id,
+  );
+  const playerReviving = Boolean(bot.isDuoPartner && ctx.playerRevivingPartner);
+  if (!mateReviving && !playerReviving) {
+    bot.bleedOutHp = Math.max(0, bot.bleedOutHp - DBNO_BLEED_DPS * safeDt);
+    bot.hp = bot.bleedOutHp;
+  }
+
+  let intent = emptyMoveIntent();
+  let crawlToward: Vec3Like | null = null;
+  if (bot.isDuoPartner && effectivePlayerPos) {
+    crawlToward = effectivePlayerPos;
+  } else {
+    let bestMateDist = Infinity;
+    for (const mate of squadmates) {
+      if (
+        mate.id === bot.id ||
+        !mate.alive ||
+        mate.isKnocked ||
+        mate.state === 'knocked' ||
+        mate.state === 'eliminated'
+      ) {
+        continue;
+      }
+      const d = dist2D(bot.position.x, bot.position.z, mate.position.x, mate.position.z);
+      if (d < bestMateDist) {
+        bestMateDist = d;
+        crawlToward = mate.position;
+      }
+    }
+  }
+
+  if (crawlToward) {
+    const dx = crawlToward.x - bot.position.x;
+    const dz = crawlToward.z - bot.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 2.0) {
+      const dirX = dx / d;
+      const dirZ = dz / d;
+      bot.yaw = lerpAngle(bot.yaw, Math.atan2(dirX, dirZ), clamp(6 * safeDt, 0, 1));
+      intent = { dirX, dirZ, speed: KNOCKED_CRAWL_SPEED, wantsJump: false };
+    }
+  } else {
+    let threatPos = bot.lastKnownEnemyPos;
+    if (!threatPos) {
+      let bestEnemyDist = 35;
+      for (const t of ctx.getCombatTargets()) {
+        if (!t.alive || t.isKnocked || isFriendlyTarget(bot, t, squadmates)) continue;
+        const d = dist2D(bot.position.x, bot.position.z, t.position.x, t.position.z);
+        if (d < bestEnemyDist) {
+          bestEnemyDist = d;
+          threatPos = t.position;
+        }
+      }
+    }
+    if (threatPos) {
+      const awayX = bot.position.x - threatPos.x;
+      const awayZ = bot.position.z - threatPos.z;
+      const awayD = Math.hypot(awayX, awayZ);
+      if (awayD > 0.05) {
+        const dirX = awayX / awayD;
+        const dirZ = awayZ / awayD;
+        bot.yaw = lerpAngle(bot.yaw, Math.atan2(dirX, dirZ), clamp(6 * safeDt, 0, 1));
+        intent = { dirX, dirZ, speed: KNOCKED_CRAWL_SPEED, wantsJump: false };
+      }
+    }
+  }
+
+  intent = applyVolcanoLavaAvoidance(bot, intent);
+  bot.isSprinting = false;
+  bot.isCrouching = false;
+  applyMovementStep(
+    bot,
+    ctx,
+    intent.dirX,
+    intent.dirZ,
+    Math.min(intent.speed, KNOCKED_CRAWL_SPEED),
+    false,
+    safeDt,
+    isFarLOD,
+  );
+  updateAnimState(bot);
+}
+
+function stepDuoPartnerRevive(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  effectivePlayerPos: Vec3Like | null,
+  safeDt: number,
+  isFarLOD: boolean,
+  onPlayerRevived?: (reviverId: string) => void,
+): boolean {
+  if (!ctx.playerKnocked) {
+    playerReviveCompletedLatch.delete(bot);
+    if (bot.reviveTargetId === 'player') {
+      bot.isReviving = false;
+      bot.reviveProgress = 0;
+      bot.reviveTargetId = null;
+      if (bot.state === 'reviving') bot.state = 'rotating';
+    }
+    return false;
+  }
+
+  if (playerReviveCompletedLatch.get(bot) || !effectivePlayerPos) {
+    return false;
+  }
+
+  const d = dist2D(
+    bot.position.x,
+    bot.position.z,
+    effectivePlayerPos.x,
+    effectivePlayerPos.z,
+  );
+  const dy = Math.abs(bot.position.y - effectivePlayerPos.y);
+
+  if (d <= REVIVE_REACH_DIST && dy <= 3.5) {
+    bot.state = 'reviving';
+    bot.isReviving = true;
+    bot.reviveTargetId = 'player';
+    bot.isSprinting = false;
+    bot.isCrouching = false;
+    bot.isFiring = false;
+    bot.isAiming = false;
+    bot.burstQueue = 0;
+    bot.reloadTimer = 0;
+    bot.healTimer = 0;
+
+    const dx = effectivePlayerPos.x - bot.position.x;
+    const dz = effectivePlayerPos.z - bot.position.z;
+    if (Math.hypot(dx, dz) > 0.05) {
+      bot.yaw = lerpAngle(bot.yaw, Math.atan2(dx, dz), clamp(10 * safeDt, 0, 1));
+    }
+
+    const prevProg = bot.reviveProgress ?? 0;
+    const nextProg = clamp(prevProg + safeDt / REVIVE_DURATION_SEC, 0, 1);
+    bot.reviveProgress = nextProg;
+    emitReviveBeamAndTick(ctx, effectivePlayerPos, prevProg, nextProg);
+
+    if (nextProg >= 1 - 1e-6) {
+      bot.reviveProgress = 0;
+      bot.isReviving = false;
+      bot.reviveTargetId = null;
+      bot.state = 'rotating';
+      playerReviveCompletedLatch.set(bot, true);
+      ctx.eventBus.emit('sound:play', {
+        id: 'revive_complete',
+        position: { ...effectivePlayerPos },
+        spatial: true,
+      });
+      ctx.eventBus.emit('vfx:revive_beam', {
+        position: { ...effectivePlayerPos },
+        progress: 1,
+      });
+      if (onPlayerRevived) {
+        onPlayerRevived(bot.id);
+      } else {
+        ctx.onPlayerRevived?.(bot.id);
+      }
+    }
+
+    applyMovementStep(bot, ctx, 0, 0, 0, false, safeDt, isFarLOD);
+    updateAnimState(bot);
+    return true;
+  }
+
+  if (bot.isReviving && bot.reviveTargetId === 'player') {
+    bot.isReviving = false;
+    bot.reviveProgress = 0;
+    bot.reviveTargetId = null;
+    if (bot.state === 'reviving') bot.state = 'rotating';
+  }
+
+  let intent = moveTowardPoint(
+    bot,
+    effectivePlayerPos.x,
+    effectivePlayerPos.z,
+    safeDt,
+    0,
+  );
+  bot.isSprinting = true;
+  intent.speed = SPRINT_SPEED;
+  intent = applyVolcanoLavaAvoidance(bot, intent);
+  applyMovementStep(
+    bot,
+    ctx,
+    intent.dirX,
+    intent.dirZ,
+    intent.speed,
+    intent.wantsJump,
+    safeDt,
+    isFarLOD,
+  );
+  updateAnimState(bot);
+  return true;
+}
+
+function isSafeToReviveSquadmate(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  squadmates: ReadonlyArray<BotEntity>,
+  elapsed: number,
+  isFarLOD: boolean,
+): boolean {
+  const eye = getBotEyePos(bot);
+  const recentlyHit =
+    bot.lastDamageTime >= 0 && elapsed - bot.lastDamageTime < 2.0;
+
+  for (const t of ctx.getCombatTargets()) {
+    if (!t.alive || t.isKnocked || isFriendlyTarget(bot, t, squadmates)) continue;
+    const d = dist3D(bot.position, t.position);
+    if (d <= 10) return false;
+    if (d <= SQUAD_UNSAFE_ENEMY_DIST) {
+      if (isFarLOD || ctx.hasLineOfSight(eye, t.eyePos)) {
+        return false;
+      }
+    }
+    if (recentlyHit && d <= 28 && (!isFarLOD && ctx.hasLineOfSight(eye, t.eyePos))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function stepSquadmateRevive(
+  bot: BotEntity,
+  ctx: BotWorldContext,
+  squadmates: ReadonlyArray<BotEntity>,
+  elapsed: number,
+  safeDt: number,
+  isFarLOD: boolean,
+): boolean {
+  const knockedMate = squadmates.find(
+    (m) =>
+      m.id !== bot.id &&
+      m.alive &&
+      (m.isKnocked || m.state === 'knocked') &&
+      dist2D(bot.position.x, bot.position.z, m.position.x, m.position.z) <= SQUAD_REVIVE_RANGE,
+  );
+
+  if (!knockedMate) {
+    if (bot.isReviving || bot.state === 'reviving') {
+      bot.isReviving = false;
+      bot.reviveProgress = 0;
+      bot.reviveTargetId = null;
+      if (bot.state === 'reviving') bot.state = 'rotating';
+    }
+    return false;
+  }
+
+  if (!isSafeToReviveSquadmate(bot, ctx, squadmates, elapsed, isFarLOD)) {
+    if (bot.isReviving || bot.state === 'reviving') {
+      bot.isReviving = false;
+      bot.reviveProgress = 0;
+      bot.reviveTargetId = null;
+      if (bot.state === 'reviving') bot.state = 'combat';
+    }
+    return false;
+  }
+
+  const d = dist2D(
+    bot.position.x,
+    bot.position.z,
+    knockedMate.position.x,
+    knockedMate.position.z,
+  );
+  const dy = Math.abs(bot.position.y - knockedMate.position.y);
+
+  if (d <= REVIVE_REACH_DIST && dy <= 3.0) {
+    if (bot.reviveTargetId && bot.reviveTargetId !== knockedMate.id) {
+      bot.reviveProgress = 0;
+    }
+    bot.state = 'reviving';
+    bot.isReviving = true;
+    bot.reviveTargetId = knockedMate.id;
+    bot.isSprinting = false;
+    bot.isCrouching = false;
+    bot.isFiring = false;
+    bot.isAiming = false;
+    bot.burstQueue = 0;
+    bot.reloadTimer = 0;
+    bot.healTimer = 0;
+
+    const dx = knockedMate.position.x - bot.position.x;
+    const dz = knockedMate.position.z - bot.position.z;
+    if (Math.hypot(dx, dz) > 0.05) {
+      bot.yaw = lerpAngle(bot.yaw, Math.atan2(dx, dz), clamp(10 * safeDt, 0, 1));
+    }
+
+    const prevProg = bot.reviveProgress ?? 0;
+    const nextProg = clamp(prevProg + safeDt / REVIVE_DURATION_SEC, 0, 1);
+    bot.reviveProgress = nextProg;
+    emitReviveBeamAndTick(ctx, knockedMate.position, prevProg, nextProg);
+
+    if (nextProg >= 1 - 1e-6) {
+      knockedMate.isKnocked = false;
+      knockedMate.bleedOutHp = undefined;
+      knockedMate.hp = Math.min(knockedMate.maxHp, 30);
+      knockedMate.state = 'rotating';
+      knockedMate.animState = 'idle';
+      knockedMate.isReviving = false;
+      knockedMate.reviveProgress = 0;
+      knockedMate.reviveTargetId = null;
+      knockedMate.isCrouching = false;
+
+      bot.reviveProgress = 0;
+      bot.isReviving = false;
+      bot.reviveTargetId = null;
+      bot.state = 'rotating';
+
+      ctx.eventBus.emit('sound:play', {
+        id: 'revive_complete',
+        position: { ...knockedMate.position },
+        spatial: true,
+      });
+      ctx.eventBus.emit('vfx:revive_beam', {
+        position: { ...knockedMate.position },
+        progress: 1,
+      });
+    }
+
+    applyMovementStep(bot, ctx, 0, 0, 0, false, safeDt, isFarLOD);
+    updateAnimState(bot);
+    return true;
+  }
+
+  if (bot.isReviving || bot.reviveTargetId !== null) {
+    bot.isReviving = false;
+    bot.reviveProgress = 0;
+    bot.reviveTargetId = null;
+    if (bot.state === 'reviving') bot.state = 'rotating';
+  }
+
+  let intent = moveTowardPoint(
+    bot,
+    knockedMate.position.x,
+    knockedMate.position.z,
+    safeDt,
+    0,
+  );
+  bot.isSprinting = true;
+  intent.speed = SPRINT_SPEED;
+  intent = applyVolcanoLavaAvoidance(bot, intent);
+  applyMovementStep(
+    bot,
+    ctx,
+    intent.dirX,
+    intent.dirZ,
+    intent.speed,
+    intent.wantsJump,
+    safeDt,
+    isFarLOD,
+  );
+  updateAnimState(bot);
+  return true;
+}
+
 /**
  * Advances a single bot's state machine, physics, perception, combat, building, and animations.
  */
@@ -3879,13 +4452,23 @@ export function updateBot(
   elapsed: number,
   dt: number,
   isFarLOD: boolean,
-  gameMode: GameModeId = 'solo',
+  gameMode?: GameModeId,
   playerPos?: Vec3Like,
   onAllySupport?: (event: AllySupportEvent) => void,
+  onPlayerRevived?: (reviverId: string) => void,
+  squadmates?: ReadonlyArray<BotEntity>,
+  medallionHolderIds?: ReadonlySet<string>,
 ): void {
-  if (!bot.alive || bot.hp <= 0 || bot.state === 'eliminated') {
+  const effectiveMode: GameModeId = gameMode ?? ctx.gameMode ?? 'solo';
+  const isKnockedState = bot.state === 'knocked' || Boolean(bot.isKnocked);
+  const effectiveHp = isKnockedState ? (bot.bleedOutHp ?? bot.hp) : bot.hp;
+  if (!bot.alive || effectiveHp <= 0 || bot.state === 'eliminated') {
     bot.alive = false;
     bot.hp = 0;
+    bot.isKnocked = false;
+    bot.isReviving = false;
+    bot.reviveProgress = 0;
+    bot.reviveTargetId = null;
     bot.state = 'eliminated';
     bot.moveSpeed = 0;
     bot.isFiring = false;
@@ -3897,6 +4480,10 @@ export function updateBot(
 
   const safeDt = clamp(dt, 0, 0.1);
   if (safeDt <= 0) return;
+
+  const isPlayerCompanion = Boolean(bot.isAlly || bot.isDuoPartner);
+  const effectiveSquadmates =
+    squadmates ?? (bot.squadId ? ctx.getSquadmates?.(bot.squadId) : undefined) ?? [];
 
   // Decay transient timers
   bot.isFiring = false;
@@ -3931,7 +4518,7 @@ export function updateBot(
     bot.isBuilding = false;
   }
 
-  if (bot.isAlly) {
+  if (isPlayerCompanion) {
     if (
       bot.state === 'bus' ||
       bot.state === 'skydiving' ||
@@ -3960,12 +4547,18 @@ export function updateBot(
     }
   }
 
-  // Grounded states
-  handleReloading(bot, safeDt);
-  const effectivePlayerPos = bot.isAlly
+  const effectivePlayerPos = isPlayerCompanion
     ? resolveEffectivePlayerPos(ctx, playerPos)
     : null;
-  if (bot.isAlly && effectivePlayerPos) {
+
+  if (isKnockedState) {
+    stepKnockedBot(bot, ctx, effectivePlayerPos, effectiveSquadmates, safeDt, isFarLOD);
+    return;
+  }
+
+  // Grounded states
+  handleReloading(bot, safeDt);
+  if (isPlayerCompanion && effectivePlayerPos) {
     const dist2dToPlayer = dist2D(
       bot.position.x,
       bot.position.z,
@@ -4002,6 +4595,26 @@ export function updateBot(
   if (bot.isAlly) {
     stepAllySupportAbility(bot, ctx, onAllySupport);
   }
+  if (
+    bot.isDuoPartner &&
+    stepDuoPartnerRevive(
+      bot,
+      ctx,
+      effectivePlayerPos,
+      safeDt,
+      isFarLOD,
+      onPlayerRevived,
+    )
+  ) {
+    return;
+  }
+  if (
+    !isPlayerCompanion &&
+    effectiveSquadmates.length > 0 &&
+    stepSquadmateRevive(bot, ctx, effectiveSquadmates, elapsed, safeDt, isFarLOD)
+  ) {
+    return;
+  }
 
   const profile = DIFFICULTY_PROFILES[difficulty];
   bot.thinkCooldown = Math.max(0, bot.thinkCooldown - safeDt);
@@ -4036,10 +4649,18 @@ export function updateBot(
 
   let combatMatch: { target: BotCombatTarget; hasLOS: boolean; distance: number } | null = null;
   if (shouldThink) {
-    combatMatch = selectEnemyTarget(bot, ctx, profile, elapsed, isFarLOD);
+    combatMatch = selectEnemyTarget(
+      bot,
+      ctx,
+      profile,
+      elapsed,
+      isFarLOD,
+      effectiveSquadmates,
+      medallionHolderIds,
+    );
     if (combatMatch) {
       if (bot.targetEnemyId !== combatMatch.target.id) {
-        const reactBase = bot.isAlly
+        const reactBase = isPlayerCompanion
           ? Math.min(profile.reactionTimeSec, 0.18)
           : profile.reactionTimeSec;
         bot.reactionTimer = reactBase * (0.75 + nextBotRand(bot) * 0.5);
@@ -4049,9 +4670,22 @@ export function updateBot(
       bot.enemyLostTimer = 0;
     } else if (bot.targetEnemyId) {
       bot.enemyLostTimer += isFarLOD ? 0.45 : safeDt;
-      if (bot.isAlly || bot.enemyLostTimer > 4.5) {
+      if (isPlayerCompanion || bot.enemyLostTimer > 4.5) {
         bot.targetEnemyId = null;
         bot.lastKnownEnemyPos = null;
+      }
+    } else if (!isPlayerCompanion && effectiveSquadmates.length > 0 && !bot.lastKnownEnemyPos) {
+      const engagedMate = effectiveSquadmates.find(
+        (m) =>
+          m.id !== bot.id &&
+          m.alive &&
+          !m.isKnocked &&
+          m.lastKnownEnemyPos &&
+          dist2D(bot.position.x, bot.position.z, m.lastKnownEnemyPos.x, m.lastKnownEnemyPos.z) <=
+            profile.visionRange,
+      );
+      if (engagedMate?.lastKnownEnemyPos) {
+        bot.lastKnownEnemyPos = { ...engagedMate.lastKnownEnemyPos };
       }
     }
   } else if (bot.targetEnemyId && bot.lastKnownEnemyPos) {
@@ -4059,11 +4693,8 @@ export function updateBot(
       (t) =>
         t.id === bot.targetEnemyId &&
         t.alive &&
-        (!bot.isAlly ||
-          (!t.isPlayer &&
-            t.id !== 'player' &&
-            !t.isAlly &&
-            dist3D(bot.position, t.position) <= ALLY_COMBAT_RANGE)),
+        !isFriendlyTarget(bot, t, effectiveSquadmates) &&
+        (!isPlayerCompanion || dist3D(bot.position, t.position) <= ALLY_COMBAT_RANGE),
     );
     if (existing) {
       combatMatch = {
@@ -4074,7 +4705,7 @@ export function updateBot(
     }
   }
 
-  if (gameMode === 'zero_build' || bot.isAlly) {
+  if (effectiveMode === 'zero_build' || bot.isAlly) {
     bot.isBuilding = false;
     bot.buildAnimTimer = 0;
   } else if (
@@ -4084,7 +4715,7 @@ export function updateBot(
       elapsed,
       combatMatch ? combatMatch.distance : 30,
       undefined,
-      gameMode,
+      effectiveMode,
     )
   ) {
     const threatPos =
@@ -4124,7 +4755,7 @@ export function updateBot(
     }
   }
 
-  const riftIntent = bot.isAlly
+  const riftIntent = isPlayerCompanion
     ? null
     : tryRiftEscape(bot, ctx, inStormNow, elapsed, safeDt);
   if (riftIntent?.warpedGliding) {
@@ -4166,7 +4797,7 @@ export function updateBot(
     healChoice !== null &&
     lowHpForHeal &&
     (!closeThreat ||
-      gameMode === 'zero_build' ||
+      effectiveMode === 'zero_build' ||
       bot.buildCooldown > 0 ||
       getTotalMaterials(bot) < BUILD_COST ||
       healChoice.item.weaponId === 'chug_splash' ||
@@ -4184,13 +4815,13 @@ export function updateBot(
     bot.healTimer =
       WEAPONS[healChoice.item.weaponId].consumeTime ??
       (healChoice.item.weaponId === 'chug_splash' ? 0.55 : 3.0);
-    bot.retreatTimer = !bot.isAlly && combatMatch ? 0.75 : 0;
+    bot.retreatTimer = !isPlayerCompanion && combatMatch ? 0.75 : 0;
     bot.stateTimer = 0;
   }
 
   const weaponCount = countWeapons(bot);
   if (!riftIntent && bot.state !== 'healing') {
-    if (bot.isAlly) {
+    if (isPlayerCompanion) {
       if (combatMatch) {
         if (bot.state !== 'combat') {
           bot.state = 'combat';
@@ -4229,7 +4860,7 @@ export function updateBot(
   }
 
   let intent: MoveIntent | null = riftIntent ?? null;
-  if (!intent && !bot.isAlly && bot.state !== 'healing') {
+  if (!intent && !isPlayerCompanion && bot.state !== 'healing') {
     intent = trySlurpBarrelRecovery(
       bot,
       ctx,
@@ -4264,7 +4895,7 @@ export function updateBot(
   }
 
   if (!intent) {
-    if (bot.isAlly) {
+    if (isPlayerCompanion) {
       if (bot.state === 'healing') {
         intent = stepHealingState(
           bot,
@@ -4285,6 +4916,7 @@ export function updateBot(
           elapsed,
           safeDt,
           isFarLOD,
+          effectiveSquadmates,
         );
       } else {
         bot.state = 'rotating';
@@ -4320,6 +4952,7 @@ export function updateBot(
             elapsed,
             safeDt,
             isFarLOD,
+            effectiveSquadmates,
           );
           break;
         case 'looting':
@@ -4331,7 +4964,7 @@ export function updateBot(
             elapsed,
             safeDt,
             isFarLOD,
-            gameMode,
+            effectiveMode,
           );
           break;
         case 'harvesting':
@@ -4348,6 +4981,7 @@ export function updateBot(
             elapsed,
             safeDt,
             isFarLOD,
+            effectiveSquadmates,
           );
           if (intent.launchedGliding) {
             updateAnimState(bot);
@@ -4425,14 +5059,34 @@ export class BotBrain {
     return selectBestWeaponForDistance(items, distance, ammo);
   }
 
+  selectBestWeaponForRange(
+    items: (ItemInstance | null)[],
+    distance: number,
+    ammo?: Record<AmmoType, number>,
+  ): { slotIndex: number; item: ItemInstance } | null {
+    return selectBestWeaponForRange(items, distance, ammo);
+  }
+
   selectThrowableForCombat(
-    bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'>,
+    bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'> & {
+      isAlly?: boolean;
+      isDuoPartner?: boolean;
+      squadId?: string;
+    },
     target: BotCombatTarget,
     allTargets: BotCombatTarget[],
     hasLOS: boolean,
     buildPieces?: BuildPiece[],
+    squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
   ): ThrowableDecision | null {
-    return selectThrowableForCombat(bot, target, allTargets, hasLOS, buildPieces);
+    return selectThrowableForCombat(
+      bot,
+      target,
+      allTargets,
+      hasLOS,
+      buildPieces,
+      squadmates,
+    );
   }
 
   segmentIntersectsSphere(
@@ -4594,9 +5248,12 @@ export class BotBrain {
     elapsed: number,
     dt: number,
     isFarLOD: boolean,
-    gameMode: GameModeId = 'solo',
+    gameMode?: GameModeId,
     playerPos?: Vec3Like,
     onAllySupport?: (event: AllySupportEvent) => void,
+    onPlayerRevived?: (reviverId: string) => void,
+    squadmates?: ReadonlyArray<BotEntity>,
+    medallionHolderIds?: ReadonlySet<string>,
   ): void {
     updateBot(
       bot,
@@ -4609,6 +5266,9 @@ export class BotBrain {
       gameMode,
       playerPos,
       onAllySupport,
+      onPlayerRevived,
+      squadmates,
+      medallionHolderIds,
     );
   }
 }

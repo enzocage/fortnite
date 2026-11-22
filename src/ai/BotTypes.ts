@@ -11,11 +11,13 @@ import type {
   ChestEntity,
   EmoteId,
   ExplosiveBarrelEntity,
+  GameModeId,
   HarvestableProp,
   ItemInstance,
   LaunchPadEntity,
   LootDrop,
   MaterialType,
+  MedallionId,
   Rarity,
   RiftEntity,
   SlurpBarrelEntity,
@@ -47,10 +49,65 @@ export interface BotCombatTarget {
   alive: boolean;
   isPlayer?: boolean;
   isAlly?: boolean;
+  isDuoPartner?: boolean;
+  squadId?: string;
+  isKnocked?: boolean;
+  medallions?: MedallionId[];
+  medallionCount?: number;
+  hasVictoryCrown?: boolean;
   radius?: number;
   height?: number;
   velocity?: Vec3Like;
   inVehicle?: boolean;
+}
+
+export interface DuoPartnerHudState {
+  name: string;
+  hp: number;
+  maxHp: number;
+  shield: number;
+  maxShield: number;
+  knocked: boolean;
+  alive: boolean;
+  bleedOutHp?: number;
+  distance: number;
+}
+
+export interface MedallionHolderInfo {
+  id: string;
+  botId: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  position: Vec3Like;
+  medallions: MedallionId[];
+  medallionCount: number;
+  count: number;
+  circleRadius: number;
+  isBoss: boolean;
+}
+
+export interface DroppedMedallionReward {
+  medallionId: MedallionId;
+  botId: string;
+  position: Vec3Like;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface DroppedCrownReward {
+  botId: string;
+  position: Vec3Like;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface DroppedRewards {
+  medallions: DroppedMedallionReward[];
+  crowns: DroppedCrownReward[];
 }
 
 export type AllySupportEvent = {
@@ -105,6 +162,16 @@ export interface BotRenderState extends CharacterRenderState {
   bossPoiId?: string;
   isAlly?: boolean;
   allyRole?: SpecialistRole;
+  squadId?: string;
+  isDuoPartner?: boolean;
+  isKnocked?: boolean;
+  bleedOutHp?: number;
+  reviveProgress?: number;
+  reviveTargetId?: string | null;
+  hasVictoryCrown?: boolean;
+  medallions?: MedallionId[];
+  medallionCount?: number;
+  isReviving?: boolean;
 }
 
 export interface NamedBossSpec {
@@ -236,6 +303,17 @@ export interface BotEntity {
   isAlly?: boolean;
   allyRole?: SpecialistRole;
   allyAbilityCooldown?: number;
+  squadId?: string;
+  isDuoPartner?: boolean;
+  isKnocked?: boolean;
+  bleedOutHp?: number;
+  reviveProgress?: number;
+  reviveTargetId?: string | null;
+  hasVictoryCrown?: boolean;
+  medallions?: MedallionId[];
+  medallionCount?: number;
+  isReviving?: boolean;
+  bowCharge?: number;
 }
 
 export interface BotWorldContext {
@@ -319,6 +397,14 @@ export interface BotWorldContext {
     dmg: number,
   ) => { exploded: boolean; position: Vec3Like; blastRadius: number; blastDamage: number } | null;
   onAllySupportEvent?: (event: AllySupportEvent) => void;
+  gameMode?: GameModeId;
+  playerKnocked?: boolean;
+  playerAlive?: boolean;
+  playerRevivingPartner?: boolean;
+  playerMedallionCount?: number;
+  onPlayerRevived?: (reviverId: string) => void;
+  getSquadmates?: (squadId: string) => BotEntity[];
+  getMedallionHolders?: () => MedallionHolderInfo[];
   dropBotLoot(bot: BotEntity): void;
   eventBus: EventBus;
 }

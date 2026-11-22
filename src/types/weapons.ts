@@ -9,7 +9,9 @@ export type WeaponId =
   | 'tac_shotgun'
   | 'heavy_shotgun'
   | 'smg'
+  | 'combat_smg'
   | 'sniper'
+  | 'boom_bow'
   | 'pistol'
   | 'rocket_launcher'
   | 'mythic_blade_rifle'
@@ -30,7 +32,9 @@ export type WeaponCategory =
   | 'rifle'
   | 'shotgun'
   | 'smg'
+  | 'combat_smg'
   | 'sniper'
+  | 'boom_bow'
   | 'pistol'
   | 'launcher'
   | 'throwable'
@@ -84,6 +88,10 @@ export interface WeaponDef {
   isKineticBlade?: boolean;
   dashCharges?: number;
   dashCooldownSec?: number;
+  isBow?: boolean;
+  bowMinChargeSec?: number;
+  bowMaxChargeSec?: number;
+  twinMagFastReloadTime?: number;
   allowedRarities: Rarity[];
 }
 
@@ -131,4 +139,5 @@ export interface ProjectileState {
   isShockwave?: boolean;
   isSplashHeal?: boolean;
   isShieldBubble?: boolean;
+  isBoomArrow?: boolean;
 }

@@ -38,6 +38,7 @@ import {
   resolveCrosshairColor,
   resolveCrosshairStyle,
   resolveKeybinds,
+  sanitizeGameMode,
 } from './UIHelpers';
 import { getCrownSvg, getGoldBarSvg, getWeaponSvg } from './WeaponIcons';
 
@@ -124,9 +125,7 @@ export function loadStoredLobbyConfig(): LobbyConfig {
     const raw = storage.getItem(LOBBY_STORAGE_KEY);
     if (!raw) return { ...DEFAULT_LOBBY_CONFIG };
     const parsed = JSON.parse(raw) as Partial<LobbyConfig>;
-    const gameMode = GAME_MODES.some((m) => m.id === parsed.gameMode)
-      ? parsed.gameMode
-      : DEFAULT_LOBBY_CONFIG.gameMode;
+    const gameMode = sanitizeGameMode(parsed.gameMode);
     const weaponWrapId =
       typeof parsed.weaponWrapId === 'string' &&
       WEAPON_WRAPS.some((w) => w.id === parsed.weaponWrapId)
@@ -187,7 +186,9 @@ export class LobbyScreen {
   private containerEl: HTMLDivElement;
   private contentEl: HTMLDivElement;
   private tabButtons = new Map<LobbyTabId, HTMLButtonElement>();
+  private badgeEl: HTMLDivElement;
   private badgeTextEl: HTMLSpanElement;
+  private badgeCrownMetaEl: HTMLSpanElement;
   private careerLevelEl: HTMLSpanElement;
   private careerMetaEl: HTMLSpanElement;
   private careerXpTextEl: HTMLSpanElement;
@@ -289,12 +290,17 @@ export class LobbyScreen {
     const badge = document.createElement('div');
     badge.className = 'fdr-lobby-badge';
     const crownSpan = document.createElement('span');
-    crownSpan.style.width = '18px';
-    crownSpan.style.height = '18px';
-    crownSpan.style.display = 'inline-flex';
+    crownSpan.className = 'fdr-lobby-badge-crown';
     crownSpan.innerHTML = getCrownSvg();
+    const badgeBody = document.createElement('div');
+    badgeBody.className = 'fdr-lobby-badge-body';
     this.badgeTextEl = document.createElement('span');
-    badge.append(crownSpan, this.badgeTextEl);
+    this.badgeTextEl.className = 'fdr-lobby-badge-main';
+    this.badgeCrownMetaEl = document.createElement('span');
+    this.badgeCrownMetaEl.className = 'fdr-lobby-crown-meta';
+    badgeBody.append(this.badgeTextEl, this.badgeCrownMetaEl);
+    badge.append(crownSpan, badgeBody);
+    this.badgeEl = badge;
 
     rightGroup.append(careerBox, badge);
     topBar.append(brand, navTabs, rightGroup);
@@ -330,6 +336,11 @@ export class LobbyScreen {
       ? `MAX • ${stats.xp} XP`
       : `${prog.xpIntoLevel} / ${prog.xpRequiredForNext} XP`;
     this.careerXpFillEl.style.width = `${Math.round(prog.progressRatio * 100)}%`;
+    this.badgeEl.classList.toggle('crown-active', stats.hasVictoryCrown);
+    this.badgeEl.dataset.hasVictoryCrown = stats.hasVictoryCrown ? 'true' : 'false';
+    this.badgeCrownMetaEl.textContent = stats.hasVictoryCrown
+      ? `CROWN ACTIVE • ${stats.crownWins} CROWNED WINS`
+      : `${stats.crownWins} CROWNED WINS`;
     if (this.activeTab === 'career') {
       this.renderTab();
     }
@@ -493,6 +504,9 @@ export class LobbyScreen {
     }
     if (mode.id === 'blitz') {
       return `${mode.name} • ${players} • 2X STORM PACE`;
+    }
+    if (mode.id === 'duos') {
+      return `${mode.name} • ${players} • AI PARTNER & DBNO`;
     }
     return `${mode.name} • ${players} • 6 STORM PHASES`;
   }
@@ -701,7 +715,9 @@ export class LobbyScreen {
     const modeSelectorHead = document.createElement('div');
     modeSelectorHead.className = 'fdr-mode-selector-head';
     modeSelectorHead.textContent = 'SELECT GAME MODE';
-    modeSelectorWrap.appendChild(modeSelectorHead);
+    const modeGrid = document.createElement('div');
+    modeGrid.className = 'fdr-mode-grid';
+    modeSelectorWrap.append(modeSelectorHead, modeGrid);
 
     for (const mode of GAME_MODES) {
       const selected = (this.config.gameMode ?? 'solo') === mode.id;
@@ -722,7 +738,7 @@ export class LobbyScreen {
         saveStoredLobbyConfig(this.config);
         this.renderTab();
       });
-      modeSelectorWrap.appendChild(btn);
+      modeGrid.appendChild(btn);
     }
 
     const modeCard = document.createElement('div');
@@ -1085,8 +1101,16 @@ export class LobbyScreen {
     totalXpSub.className = 'fdr-career-hero-sub';
     totalXpSub.textContent = `${stats.xp} TOTAL SEASON XP • RANK TIER: ${rank.tier}`;
 
+    const crownStatusPill = document.createElement('div');
+    crownStatusPill.className = `fdr-career-crown-badge${stats.hasVictoryCrown ? ' active' : ''}`;
+    crownStatusPill.dataset.hasVictoryCrown = stats.hasVictoryCrown ? 'true' : 'false';
+    crownStatusPill.innerHTML = `
+      <span class="fdr-career-crown-icon">${getCrownSvg()}</span>
+      <span>${stats.hasVictoryCrown ? 'VICTORY CROWN ACTIVE' : 'NO ACTIVE CROWN'}</span>
+    `;
+
     levelCol.append(levelHead, xpTrack, totalXpSub);
-    hero.append(emblem, levelCol);
+    hero.append(emblem, levelCol, crownStatusPill);
 
     // Gold Bars Vault Balance Card
     const goldCard = document.createElement('div');
@@ -1105,12 +1129,14 @@ export class LobbyScreen {
       </div>
     `;
 
-    // 6 Career Stat Cards
+    // 8 Career Stat Cards (4x2 Grid)
     const statsGrid = document.createElement('div');
     statsGrid.className = 'fdr-career-stats-grid';
     const cards: Array<{ label: string; value: string; accent?: boolean }> = [
       { label: 'TOTAL WINS', value: String(stats.wins), accent: true },
+      { label: 'CROWNED WINS', value: String(stats.crownWins), accent: true },
       { label: 'ELIMINATIONS', value: String(stats.elims), accent: true },
+      { label: 'REVIVES', value: String(stats.totalRevives) },
       { label: 'WIN RATE %', value: winRateStr },
       { label: 'MATCHES PLAYED', value: String(stats.matchesPlayed) },
       { label: 'BEST PLACEMENT', value: bestPlacementStr },

@@ -30,6 +30,15 @@ interface RainDrop {
   streakLen: number;
 }
 
+interface LightningBoltEntry {
+  group: THREE.Group;
+  coreMat: THREE.MeshBasicMaterial;
+  glowMat: THREE.MeshBasicMaterial;
+  life: number;
+  maxLife: number;
+  intensity: number;
+}
+
 interface WeatherProfile {
   intensity: number;
   sunElevation: number;
@@ -128,6 +137,15 @@ export class EnvironmentFX {
   private rainDrops: RainDrop[] = [];
 
   private sunDir = new THREE.Vector3(0.55, 0.52, -0.65).normalize();
+  private sunCoronaGroup!: THREE.Group;
+  private sunCoronaInnerMat!: THREE.MeshBasicMaterial;
+  private sunCoronaOuterMat!: THREE.MeshBasicMaterial;
+  private sunCoronaRayMat!: THREE.MeshBasicMaterial;
+
+  private lightningGroup!: THREE.Group;
+  private lightningBolts: LightningBoltEntry[] = [];
+  private lightningUnsub?: () => void;
+  private lastPlayerPos?: Vec3Like;
 
   private weatherState: WeatherState = {
     kind: 'clear',
@@ -207,7 +225,7 @@ export class EnvironmentFX {
           vec3 col = mix(horizon, midSky, smoothstep(0.0, 0.35, h));
           col = mix(col, zenith, smoothstep(0.28, 0.95, h));
           if (h < 0.0) {
-            col = mix(horizon, below, smoothstep(0.0, -0.2, h));
+            col = mix(horizon, below, smoothstep(0.0, 0.2, -h));
           }
 
           float sunVis = 1.0 - uOvercast * 0.88;
@@ -315,13 +333,22 @@ export class EnvironmentFX {
           float caustics = clamp((causticA + causticB) * 0.55, 0.0, 1.0) * causticMask * (1.0 - uOvercast * 0.55);
           col += vec3(0.45, 0.90, 0.98) * caustics * 0.36;
 
-          float coastRing = smoothstep(16.0, 0.0, abs(r - uIslandRadius));
-          float foamWave = 0.5 + 0.5 * sin(r * 0.42 - uTime * 2.5);
-          float basinShore = clamp(smoothstep(4.5, 0.0, abs(basinDist - 45.0)) + smoothstep(3.5, 0.0, abs(basinDist - 19.0)), 0.0, 1.0);
-          float riverBank = smoothstep(2.6, 0.0, abs(riverDist - 4.4));
+          float shoreWarp = sin(xz.x * 0.032) * cos(xz.y * 0.032) * 5.5 + sin((xz.x + xz.y) * 0.055) * 2.5;
+          float coastDist = abs((r + shoreWarp) - uIslandRadius);
+          float coastRing = 1.0 - smoothstep(0.0, 18.0, coastDist);
+          float surfCrestA = pow(0.5 + 0.5 * sin(coastDist * 0.55 - uTime * 2.6 + sin(xz.x * 0.12) * 1.4), 2.5);
+          float surfCrestB = pow(0.5 + 0.5 * cos(coastDist * 0.92 - uTime * 3.4 + cos(xz.y * 0.14) * 1.2), 3.0);
+          float foamLace = 0.55 + 0.45 * sin(xz.x * 0.36 + cos(xz.y * 0.31) * 1.8 + uTime * 1.3) * cos(xz.y * 0.34 - uTime * 1.1);
+          float stormChop = 1.0 + uOvercast * 0.35;
+          float coastFoam = coastRing * (surfCrestA * 0.65 + surfCrestB * 0.45) * foamLace * 0.44 * stormChop;
+
+          float basinShore = clamp((1.0 - smoothstep(0.0, 5.0, abs(basinDist - 45.0))) + (1.0 - smoothstep(0.0, 3.8, abs(basinDist - 19.0))), 0.0, 1.0);
+          float basinFoam = basinShore * (0.42 + 0.58 * surfCrestA) * foamLace * 0.34 * stormChop;
+          float riverBank = 1.0 - smoothstep(0.0, 2.8, abs(riverDist - 4.4));
           float riverFlowFoam = riverMask * pow(0.5 + 0.5 * sin(xz.y * 0.45 - uTime * 4.8 + sin(xz.x * 0.8) * 2.0), 4.0);
-          float foamAmount = clamp(coastRing * foamWave * 0.34 + basinShore * (0.45 + 0.4 * foamWave) * 0.28 + riverBank * 0.32 + riverFlowFoam * 0.24, 0.0, 0.72);
-          col = mix(col, vec3(0.76, 0.98, 1.0), foamAmount);
+          float foamAmount = clamp(coastFoam + basinFoam + riverBank * (0.28 + 0.16 * foamLace) + riverFlowFoam * 0.26, 0.0, 0.82);
+          vec3 foamTint = mix(vec3(0.82, 0.98, 1.0), vec3(0.68, 0.80, 0.88), uOvercast * 0.45);
+          col = mix(col, foamTint, foamAmount);
 
           vec3 viewDir = normalize(cameraPosition - vWorldPos);
           float fresnel = pow(1.0 - max(dot(viewDir, waterNormal), 0.0), 3.4);
@@ -445,6 +472,241 @@ export class EnvironmentFX {
     this.burnerGlow = burnerGlow;
     this.busGroup.visible = false;
     this.group.add(this.busGroup);
+
+    // 8. Dynamic Sun Corona Halo (synced to sunElevation & golden_hour warmth)
+    this.buildSunCorona();
+    this.syncSunCorona(0);
+
+    // 9. Pooled 3D Jagged Sky Lightning Bolt Meshes
+    this.buildLightningBoltPool(seed);
+    this.lightningUnsub = this.eventBus?.on('vfx:lightning_flash', (ev) => {
+      const safeIntensity = Number.isFinite(ev.intensity) ? clamp(ev.intensity, 0.25, 1.5) : 0.9;
+      this.lightningIntensity = Math.max(this.lightningIntensity, safeIntensity);
+      this.triggerLightningBolt(safeIntensity, this.lastPlayerPos);
+    });
+  }
+
+  private buildSunCorona(): void {
+    this.sunCoronaGroup = new THREE.Group();
+    this.sunCoronaGroup.name = 'SunCorona';
+
+    this.sunCoronaInnerMat = new THREE.MeshBasicMaterial({
+      color: '#fef9c3',
+      transparent: true,
+      opacity: 0.52,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.sunCoronaOuterMat = new THREE.MeshBasicMaterial({
+      color: '#fde68a',
+      transparent: true,
+      opacity: 0.28,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.sunCoronaRayMat = new THREE.MeshBasicMaterial({
+      color: '#fed7aa',
+      transparent: true,
+      opacity: 0.18,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.materials.push(this.sunCoronaInnerMat, this.sunCoronaOuterMat, this.sunCoronaRayMat);
+
+    const innerGeo = new THREE.CircleGeometry(72, 28);
+    const outerGeo = new THREE.RingGeometry(48, 175, 32);
+    const rayGeo = new THREE.PlaneGeometry(360, 22);
+    this.geometries.push(innerGeo, outerGeo, rayGeo);
+
+    const innerDisc = new THREE.Mesh(innerGeo, this.sunCoronaInnerMat);
+    const outerRing = new THREE.Mesh(outerGeo, this.sunCoronaOuterMat);
+    outerRing.position.z = -1;
+    this.sunCoronaGroup.add(innerDisc, outerRing);
+
+    for (let r = 0; r < 3; r++) {
+      const ray = new THREE.Mesh(rayGeo, this.sunCoronaRayMat);
+      ray.rotation.z = (r / 3) * Math.PI;
+      ray.position.z = -2;
+      this.sunCoronaGroup.add(ray);
+    }
+
+    this.group.add(this.sunCoronaGroup);
+  }
+
+  private syncSunCorona(elapsed: number): void {
+    this.sunCoronaGroup.position.copy(this.sunDir).multiplyScalar(1180);
+    this.sunCoronaGroup.lookAt(0, 0, 0);
+
+    const lowSun = clamp((0.56 - this.weatherState.sunElevation) / 0.38, 0, 1);
+    const warmMix = clamp(Math.max(this.currentWarmth, lowSun * 0.72), 0, 1);
+    const visFactor = clamp(1 - this.currentOvercast * 0.88, 0.08, 1);
+
+    this.sunCoronaInnerMat.color
+      .set('#fef9c3')
+      .lerp(new THREE.Color('#fed7aa'), warmMix);
+    this.sunCoronaOuterMat.color
+      .set('#fde68a')
+      .lerp(new THREE.Color('#fb923c'), warmMix);
+    this.sunCoronaRayMat.color
+      .set('#fef08a')
+      .lerp(new THREE.Color('#f97316'), warmMix);
+
+    this.sunCoronaInnerMat.opacity = (0.46 + warmMix * 0.36) * visFactor;
+    this.sunCoronaOuterMat.opacity = (0.24 + warmMix * 0.34) * visFactor;
+    this.sunCoronaRayMat.opacity = (0.14 + warmMix * 0.24) * visFactor;
+
+    const scale = 1.0 + warmMix * 0.5 + Math.sin(elapsed * 1.4) * 0.025;
+    this.sunCoronaGroup.scale.setScalar(scale);
+    this.sunCoronaGroup.rotation.z = elapsed * 0.04;
+    this.sunCoronaGroup.visible = this.sunCoronaInnerMat.opacity > 0.02;
+  }
+
+  private buildLightningBoltPool(seed: number): void {
+    this.lightningGroup = new THREE.Group();
+    this.lightningGroup.name = 'LightningBolts';
+
+    const rand = mulberry32(seed + 7331);
+    const coreSegGeo = new THREE.CylinderGeometry(0.45, 0.32, 1, 5);
+    const glowSegGeo = new THREE.CylinderGeometry(1.15, 0.9, 1, 5);
+    this.geometries.push(coreSegGeo, glowSegGeo);
+
+    const up = new THREE.Vector3(0, 1, 0);
+    const pA = new THREE.Vector3();
+    const pB = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    const mid = new THREE.Vector3();
+
+    const addBoltSegment = (
+      parent: THREE.Group,
+      ax: number,
+      ay: number,
+      az: number,
+      bx: number,
+      by: number,
+      bz: number,
+      coreMat: THREE.MeshBasicMaterial,
+      glowMat: THREE.MeshBasicMaterial,
+      thicknessScale = 1,
+    ) => {
+      pA.set(ax, ay, az);
+      pB.set(bx, by, bz);
+      dir.subVectors(pB, pA);
+      const len = dir.length();
+      if (len <= 0.01) return;
+      mid.addVectors(pA, pB).multiplyScalar(0.5);
+      const q = new THREE.Quaternion().setFromUnitVectors(up, dir.normalize());
+
+      const core = new THREE.Mesh(coreSegGeo, coreMat);
+      core.position.copy(mid);
+      core.quaternion.copy(q);
+      core.scale.set(thicknessScale, len, thicknessScale);
+      parent.add(core);
+
+      const glow = new THREE.Mesh(glowSegGeo, glowMat);
+      glow.position.copy(mid);
+      glow.quaternion.copy(q);
+      glow.scale.set(thicknessScale, len, thicknessScale);
+      parent.add(glow);
+    };
+
+    const poolSize = 5;
+    for (let i = 0; i < poolSize; i++) {
+      const coreMat = new THREE.MeshBasicMaterial({
+        color: '#f0f9ff',
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      this.materials.push(coreMat, glowMat);
+
+      const boltGroup = new THREE.Group();
+      boltGroup.name = `LightningBolt_${i}`;
+      boltGroup.visible = false;
+      boltGroup.frustumCulled = false;
+
+      // 8 jagged descending trunk segments + 3 forked side branches
+      const segments = 8;
+      let curX = 0;
+      let curY = 190;
+      let curZ = 0;
+      for (let s = 0; s < segments; s++) {
+        const nextY = 190 - ((s + 1) / segments) * 172;
+        const nextX = curX + (rand() - 0.5) * 18;
+        const nextZ = curZ + (rand() - 0.5) * 14;
+        addBoltSegment(boltGroup, curX, curY, curZ, nextX, nextY, nextZ, coreMat, glowMat, 1.0);
+
+        if (s === 2 || s === 4 || s === 5) {
+          const branchMidX = nextX + (rand() - 0.5) * 22;
+          const branchMidY = nextY - 14 - rand() * 12;
+          const branchMidZ = nextZ + (rand() - 0.5) * 18;
+          addBoltSegment(boltGroup, nextX, nextY, nextZ, branchMidX, branchMidY, branchMidZ, coreMat, glowMat, 0.58);
+
+          const branchEndX = branchMidX + (rand() - 0.5) * 14;
+          const branchEndY = branchMidY - 12 - rand() * 10;
+          const branchEndZ = branchMidZ + (rand() - 0.5) * 12;
+          addBoltSegment(boltGroup, branchMidX, branchMidY, branchMidZ, branchEndX, branchEndY, branchEndZ, coreMat, glowMat, 0.4);
+        }
+
+        curX = nextX;
+        curY = nextY;
+        curZ = nextZ;
+      }
+
+      this.lightningGroup.add(boltGroup);
+      this.lightningBolts.push({
+        group: boltGroup,
+        coreMat,
+        glowMat,
+        life: 0,
+        maxLife: 0.35,
+        intensity: 1,
+      });
+    }
+
+    this.group.add(this.lightningGroup);
+  }
+
+  private triggerLightningBolt(intensity: number, centerPos?: Vec3Like): void {
+    if (this.lightningBolts.length === 0) return;
+
+    let chosen = this.lightningBolts[0];
+    for (let i = 0; i < this.lightningBolts.length; i++) {
+      const candidate = this.lightningBolts[i];
+      if (candidate.life <= 0) {
+        chosen = candidate;
+        break;
+      }
+      if (candidate.life < chosen.life) {
+        chosen = candidate;
+      }
+    }
+
+    const ang = this.weatherRand() * Math.PI * 2;
+    const dist = 95 + this.weatherRand() * 175;
+    const cx = centerPos?.x ?? 0;
+    const cz = centerPos?.z ?? 0;
+    chosen.group.position.set(cx + Math.cos(ang) * dist, 0, cz + Math.sin(ang) * dist);
+    chosen.group.rotation.y = this.weatherRand() * Math.PI * 2;
+    const sXZ = 0.85 + this.weatherRand() * 0.55;
+    chosen.group.scale.set(sXZ, 0.9 + this.weatherRand() * 0.22, sXZ);
+
+    chosen.maxLife = 0.32 + this.weatherRand() * 0.14;
+    chosen.life = chosen.maxLife;
+    chosen.intensity = intensity;
+    chosen.coreMat.opacity = clamp(intensity, 0.72, 1.0);
+    chosen.glowMat.opacity = clamp(intensity * 0.54, 0.32, 0.68);
+    chosen.group.visible = true;
   }
 
   private buildDistantArchipelago(seed: number): void {
@@ -784,6 +1046,16 @@ export class EnvironmentFX {
       this.rainLines.visible = false;
       this.lightningIntensity = 0;
     }
+
+    const dayPhase = clamp((0.58 - this.weatherState.sunElevation) / 0.4, 0, 1);
+    this.sunDir
+      .set(
+        0.55 - dayPhase * 0.26,
+        clamp(this.weatherState.sunElevation, 0.14, 0.72),
+        -0.65 + dayPhase * 0.22,
+      )
+      .normalize();
+    this.syncSunCorona(0);
   }
 
   setBusTransform(pos: Vec3Like, yaw: number, active: boolean): void {
@@ -833,6 +1105,9 @@ export class EnvironmentFX {
     biome?: string,
   ): void {
     const safeDt = Math.max(0, dt);
+    if (playerPos) {
+      this.lastPlayerPos = { ...playerPos };
+    }
     this.skyMat.uniforms.uTime.value = elapsed;
     this.oceanMat.uniforms.uTime.value = elapsed;
 
@@ -868,24 +1143,45 @@ export class EnvironmentFX {
     this.currentOvercast = lerp(this.currentOvercast, targetOvercast, blendStep);
     this.currentRainStrength = lerp(this.currentRainStrength, targetRain, blendStep);
 
-    // Lightning flashes during 'storm_front'
+    // Lightning flashes & pooled 3D jagged sky bolts during 'storm_front'
     if (this.weatherState.kind === 'storm_front') {
       this.lightningCooldown -= safeDt;
       if (this.lightningCooldown <= 0) {
         this.lightningIntensity = 0.78 + this.weatherRand() * 0.22;
         this.lightningCooldown = 5.5 + this.weatherRand() * 4.2;
-        this.eventBus?.emit('vfx:lightning_flash', {
-          intensity: this.lightningIntensity,
-        });
-        this.eventBus?.emit('sound:play', {
-          id: 'weather_thunder',
-          volume: 0.74,
-          spatial: false,
-        });
+        if (this.eventBus) {
+          this.eventBus.emit('vfx:lightning_flash', {
+            intensity: this.lightningIntensity,
+          });
+          this.eventBus.emit('sound:play', {
+            id: 'weather_thunder',
+            volume: 0.74,
+            spatial: false,
+          });
+        } else {
+          this.triggerLightningBolt(this.lightningIntensity, playerPos);
+        }
       }
     }
     if (this.lightningIntensity > 0) {
       this.lightningIntensity = Math.max(0, this.lightningIntensity - safeDt * 4.2);
+    }
+
+    for (let i = 0; i < this.lightningBolts.length; i++) {
+      const bolt = this.lightningBolts[i];
+      if (bolt.life > 0) {
+        bolt.life = Math.max(0, bolt.life - safeDt);
+        if (bolt.life <= 0) {
+          bolt.group.visible = false;
+          bolt.coreMat.opacity = 0;
+          bolt.glowMat.opacity = 0;
+        } else {
+          const tNorm = bolt.life / bolt.maxLife;
+          const flicker = 0.68 + 0.32 * Math.sin(elapsed * 92 + i * 2.1);
+          bolt.coreMat.opacity = clamp(tNorm * bolt.intensity * flicker, 0, 1);
+          bolt.glowMat.opacity = clamp(tNorm * bolt.intensity * 0.54 * flicker, 0, 0.68);
+        }
+      }
     }
 
     // 2. Sky / Ocean / Sun Elevation Sync
@@ -908,6 +1204,7 @@ export class EnvironmentFX {
       .normalize();
     (this.skyMat.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
     (this.oceanMat.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
+    this.syncSunCorona(elapsed);
 
     // Tint clouds dynamically across weather states
     this.cloudTopMat.color
@@ -1048,6 +1345,8 @@ export class EnvironmentFX {
   }
 
   dispose(): void {
+    this.lightningUnsub?.();
+    this.lightningUnsub = undefined;
     this.group.clear();
     for (const g of this.geometries) g.dispose();
     this.geometries = [];
@@ -1058,5 +1357,6 @@ export class EnvironmentFX {
     this.ambientParticles = [];
     this.rainDrops = [];
     this.thrusterFlames = [];
+    this.lightningBolts = [];
   }
 }

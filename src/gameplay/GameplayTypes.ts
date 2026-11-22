@@ -5,6 +5,8 @@ import type {
   CampfireEntity,
   CapturePointEntity,
   DamageEvent,
+  DroppedCrownEntity,
+  DroppedMedallionEntity,
   EditModeState,
   ExplosiveBarrelEntity,
   GameModeId,
@@ -15,19 +17,22 @@ import type {
   LootDrop,
   LootIslandState,
   LootLlamaEntity,
+  MaterialType,
+  MedallionId,
   NpcSpecialistEntity,
+  Rarity,
   RiftEntity,
   SlurpBarrelEntity,
+  SlurpTankerEntity,
   SupplyDrop,
   ItemInstance,
-  MaterialType,
-  Rarity,
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
   VehicleEntity,
   VehicleKind,
   VendingMachineEntity,
+  WeaponBunkerEntity,
   WeaponId,
   ZiplineEntity,
 } from '../types';
@@ -101,6 +106,60 @@ export interface WorldEconomyBridge {
   advanceLootIslandCapture(
     dt: number,
   ): { capturedNow: boolean; lootPos?: Vec3Like };
+}
+
+export interface WorldChapterBridge {
+  getWeaponBunkers(): WeaponBunkerEntity[];
+  lootWeaponBunker(id: string): {
+    weaponId: WeaponId;
+    rarity: Rarity;
+    gold: number;
+    shieldRestore: number;
+  } | null;
+  getSlurpTankers(): SlurpTankerEntity[];
+  damageSlurpTanker(
+    id: string,
+    dmg: number,
+  ): {
+    exploded: boolean;
+    x: number;
+    y: number;
+    z: number;
+    radius: number;
+    healAmount: number;
+  } | null;
+  getDroppedMedallions(): DroppedMedallionEntity[];
+  collectNearbyMedallion(
+    x: number,
+    z: number,
+    maxDist: number,
+  ): DroppedMedallionEntity | { medallionId: MedallionId } | MedallionId | null;
+  getDroppedCrowns(): DroppedCrownEntity[];
+  collectNearbyCrown(
+    x: number,
+    z: number,
+    maxDist: number,
+  ): DroppedCrownEntity | boolean | null;
+  spawnDroppedMedallion?(
+    medallionId: MedallionId,
+    x: number,
+    y: number,
+    z: number,
+  ): void;
+  spawnDroppedCrown?(x: number, y: number, z: number): void;
+}
+
+export interface DownedPartnerInfo {
+  id?: string;
+  name?: string;
+  position: Vec3Like;
+  bleedOutHp?: number;
+}
+
+export interface DuoReviveBridge {
+  getPartnerDownedNearby(pos: Vec3Like): DownedPartnerInfo | null;
+  completePartnerRevive(): boolean | void;
+  isPartnerAlive?(): boolean;
 }
 
 export interface ShieldBubbleState {
@@ -177,6 +236,8 @@ export interface CombatActor {
   alive: boolean;
   hasDemolisher?: boolean;
   hasFirstAssault?: boolean;
+  hasCombatMedallion?: boolean;
+  isKnocked?: boolean;
   onDamage?: (ev: DamageEvent) => void;
   onHeal?: (hpAdded: number, shieldAdded: number) => void;
   onImpulse?: (impulse: Vec3Like, grantFallImmunity: boolean) => void;
@@ -218,8 +279,11 @@ export interface FireWeaponParams {
   vehicleBridge?: VehicleBridge | null;
   stationBridge?: WorldStationBridge | null;
   riftCaptureBridge?: WorldRiftCaptureBridge | null;
+  chapterBridge?: WorldChapterBridge | null;
   hasDemolisher?: boolean;
   hasFirstAssault?: boolean;
+  hasCombatMedallion?: boolean;
+  bowCharge?: number;
   onAmmoConsumed?: () => void;
   onHarvest?: (matType: MaterialType, amount: number, isCrit: boolean) => void;
 }
@@ -247,6 +311,8 @@ export interface PlayerMatchStats {
   questsCompleted?: number;
   poisCaptured?: number;
   goldEarned?: number;
+  knocks?: number;
+  revives?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -328,4 +394,11 @@ export interface PlayerHudSnapshot {
   } | null;
   goldBars: number;
   kineticDashCharges: number | null;
+  medallions: MedallionId[];
+  hasVictoryCrown: boolean;
+  bowCharge: number | null;
+  isKnocked: boolean;
+  bleedOutHp: number;
+  reviveProgress: number | null;
+  reviveLabel: string | null;
 }

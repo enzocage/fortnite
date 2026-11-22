@@ -520,6 +520,7 @@ export class MusicSequencer {
   private noiseBuffer: AudioBuffer | null = null;
 
   private currentTrack: MusicTrackId = 'none';
+  private intensity = 0;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private nextNoteTime = 0;
   private currentStep = 0;
@@ -573,10 +574,24 @@ export class MusicSequencer {
     return this.currentTrack;
   }
 
+  /**
+   * Sets dynamic combat intensity in [0, 1]. Values above 0.5 engage a crisp
+   * subtle tension/hi-hat drive pulse layer synchronized to the active pattern.
+   */
+  setIntensity(level: number): void {
+    if (this.disposed) return;
+    this.intensity = Number.isFinite(level) ? clamp(level, 0, 1) : 0;
+  }
+
+  getIntensity(): number {
+    return this.intensity;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.currentTrack = 'none';
+    this.intensity = 0;
     this.stopLoop();
     try {
       this.internalGain?.disconnect();
@@ -719,6 +734,37 @@ export class MusicSequencer {
     if (hatVel > 0) {
       this.playHat(dest, time, 0.065 * hatVel * scale);
     }
+
+    if (this.intensity > 0.5) {
+      const drive = clamp((this.intensity - 0.5) / 0.5, 0, 1);
+      // Crisp subtle 16th-note tension hi-hat drive layer (accented off-beats)
+      const hatPulseVel = step % 2 === 1 ? 0.85 : 0.48;
+      this.playHat(dest, time, (0.022 + 0.036 * drive) * hatPulseVel * scale, 6800, 0.026);
+
+      // Subtle rhythmic tension pulse locked to the track's active harmonic root
+      if (step % 2 === 0) {
+        const pulseMidi = this.resolvePatternRootMidi(pattern, step) + 12;
+        this.playSynthNote(
+          dest,
+          time,
+          midiToFreq(pulseMidi),
+          stepDur * 0.48,
+          (0.024 + 0.034 * drive) * scale,
+          'triangle',
+          920 + 680 * drive,
+        );
+      }
+    }
+  }
+
+  private resolvePatternRootMidi(pattern: TrackPattern, step: number): number {
+    for (let i = step; i >= 0; i--) {
+      const midi = pattern.bass[i];
+      if (midi !== null && midi !== undefined) {
+        return midi;
+      }
+    }
+    return pattern.chords[0]?.notes[0] ?? 40;
   }
 
   private playSynthNote(
@@ -810,26 +856,32 @@ export class MusicSequencer {
     }
   }
 
-  private playHat(target: AudioNode, time: number, gain: number): void {
+  private playHat(
+    target: AudioNode,
+    time: number,
+    gain: number,
+    cutoffHz = 5200,
+    decay = 0.038,
+  ): void {
     if (!this.ctx || !this.noiseBuffer) return;
     const src = this.ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
 
     const env = this.ctx.createGain();
     env.gain.setValueAtTime(Math.max(0.0002, gain), time);
-    env.gain.exponentialRampToValueAtTime(0.0001, time + 0.038);
+    env.gain.exponentialRampToValueAtTime(0.0001, time + decay);
 
     if (typeof this.ctx.createBiquadFilter === 'function') {
       const hp = this.ctx.createBiquadFilter();
       hp.type = 'highpass';
-      hp.frequency.setValueAtTime(5200, time);
+      hp.frequency.setValueAtTime(cutoffHz, time);
       src.connect(hp);
       hp.connect(env);
     } else {
       src.connect(env);
     }
     env.connect(target);
-    src.start(time, 0.05, 0.045);
+    src.start(time, 0.05, decay + 0.007);
   }
 
   private buildNoiseBuffer(ctx: AudioContext): AudioBuffer | null {

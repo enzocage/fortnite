@@ -6,6 +6,7 @@ import type {
   GameModeId,
   GamePhase,
   MaterialType,
+  MedallionId,
   Rarity,
   SpecialistRole,
   Vec3Like,
@@ -173,6 +174,31 @@ export interface HUDState {
     z: number;
     distance: number;
   } | null;
+  medallions?: MedallionId[];
+  hasVictoryCrown?: boolean;
+  bowCharge?: number | null;
+  isKnocked?: boolean;
+  bleedOutHp?: number;
+  reviveProgress?: number | null;
+  reviveLabel?: string | null;
+  duoPartner?: {
+    name: string;
+    hp: number;
+    maxHp: number;
+    shield: number;
+    maxShield: number;
+    knocked: boolean;
+    alive: boolean;
+    bleedOutHp?: number;
+    distance: number;
+  } | null;
+  medallionCircles?: Array<{
+    x: number;
+    z: number;
+    radius: number;
+    isPlayer: boolean;
+    count: number;
+  }>;
 }
 
 export interface MatchQuest {
@@ -236,6 +262,10 @@ export interface MatchSummary {
   activeAugments?: AugmentId[];
   poisCaptured?: number;
   goldEarned?: number;
+  crownedVictory?: boolean;
+  medallionsHeld?: MedallionId[];
+  revives?: number;
+  knocks?: number;
 }
 
 export interface BannerMessage {

@@ -26,8 +26,11 @@ export {
   type LootIslandCaptureResult,
   type RiftTriggerResult,
   type SlurpBarrelDamageResult,
+  type SlurpTankerDamageResult,
   type UnlockVaultResult,
   type VendingPurchaseResult,
+  type Wave6ShowcaseResult,
+  type WeaponBunkerLootResult,
 } from './WorldInteractables';
 export { EnvironmentDetail } from './EnvironmentDetail';
 export { VehicleSystem } from './VehicleSystem';

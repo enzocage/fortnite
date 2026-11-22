@@ -109,6 +109,16 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   vending_buy: true,
   ally_hired: true,
   loot_island_spawn: true,
+  shot_combat_smg: true,
+  bow_draw: true,
+  bow_release: true,
+  knocked_down: true,
+  revive_tick: true,
+  revive_complete: true,
+  medallion_pickup: true,
+  crown_glint: true,
+  bunker_unlock: true,
+  slurp_tanker_burst: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -439,14 +449,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 92 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 102 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(92);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(102);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -832,6 +842,150 @@ describe('SoundSynthesizer', () => {
     synth.dispose();
   });
 
+  it('creates bespoke multi-layered Wave 6 SFX with strictly positive ramps across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave6Ids: SoundEventId[] = [
+      'shot_combat_smg',
+      'bow_draw',
+      'bow_release',
+      'knocked_down',
+      'revive_tick',
+      'revive_complete',
+      'medallion_pickup',
+      'crown_glint',
+      'bunker_unlock',
+      'slurp_tanker_burst',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave6Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(3);
+      expect(srcCreated).toBeGreaterThanOrEqual(1);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(4);
+      expect(gainsCreated).toBeGreaterThanOrEqual(4);
+
+      if (id === 'medallion_pickup') {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.shot_combat_smg).toBeGreaterThan(0.08);
+    expect(durations.shot_combat_smg).toBeLessThan(0.2);
+    expect(durations.bow_draw).toBeGreaterThan(0.3);
+    expect(durations.bow_release).toBeGreaterThan(0.22);
+    expect(durations.knocked_down).toBeGreaterThan(0.45);
+    expect(durations.revive_tick).toBeGreaterThan(0.08);
+    expect(durations.revive_tick).toBeLessThan(0.2);
+    expect(durations.revive_complete).toBeGreaterThan(0.7);
+    expect(durations.medallion_pickup).toBeGreaterThan(0.85);
+    expect(durations.crown_glint).toBeGreaterThan(0.45);
+    expect(durations.bunker_unlock).toBeGreaterThan(0.85);
+    expect(durations.slurp_tanker_burst).toBeGreaterThan(0.7);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave6Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave6Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
   it('layers gunfire sub-thump & bolt tails cleanly across pitch/volume bounds', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
@@ -999,6 +1153,61 @@ describe('MusicSequencer', () => {
     expect(seq.getCurrentTrack()).toBe('none');
     seq.dispose();
     expect(seq.getCurrentTrack()).toBe('none');
+  });
+
+  it('adds subtle tension pulse and hi-hat drive layer when setIntensity > 0.5', () => {
+    vi.useFakeTimers();
+
+    const runWindow = (intensity: number): { oscs: number; srcs: number; minExp: number } => {
+      const mockCtx = new MockAudioContext();
+      const ctx = mockCtx as unknown as AudioContext;
+      const dest = ctx.createGain();
+      const seq = new MusicSequencer(ctx, dest);
+
+      seq.setIntensity(intensity);
+      seq.setTrack('lobby');
+      for (let i = 0; i < 4; i++) {
+        mockCtx.currentTime += 0.14;
+        vi.advanceTimersByTime(25);
+      }
+
+      let minExp = Number.POSITIVE_INFINITY;
+      for (const g of mockCtx.gains) {
+        for (const ev of g.gain.events) {
+          if (ev.kind === 'exp') minExp = Math.min(minExp, ev.value);
+        }
+      }
+      seq.dispose();
+      return {
+        oscs: mockCtx.oscillators.length,
+        srcs: mockCtx.bufferSources.length,
+        minExp,
+      };
+    };
+
+    const calm = runWindow(0.3);
+    const threshold = runWindow(0.5);
+    const intense = runWindow(0.85);
+
+    expect(threshold.oscs).toBe(calm.oscs);
+    expect(threshold.srcs).toBe(calm.srcs);
+
+    expect(intense.oscs).toBeGreaterThan(calm.oscs);
+    expect(intense.srcs).toBeGreaterThan(calm.srcs);
+    expect(intense.minExp).toBeGreaterThanOrEqual(0.0001);
+
+    const mockCtx = new MockAudioContext();
+    const seq = new MusicSequencer(mockCtx as unknown as AudioContext, mockCtx.createGain());
+    seq.setIntensity(1.8);
+    expect(seq.getIntensity()).toBe(1);
+    seq.setIntensity(-0.4);
+    expect(seq.getIntensity()).toBe(0);
+    seq.setIntensity(Number.NaN);
+    expect(seq.getIntensity()).toBe(0);
+    seq.setIntensity(0.75);
+    expect(seq.getIntensity()).toBe(0.75);
+    seq.dispose();
+    expect(seq.getIntensity()).toBe(0);
   });
 });
 
@@ -1943,5 +2152,104 @@ describe('AudioEngine', () => {
     expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
 
     engine.dispose();
+  });
+
+  it('assigns explicit Wave-6 priorities, max hear distances, spatial culling, and forwards setDynamicIntensity', async () => {
+    expect(getSoundPriority('knocked_down')).toBe(3);
+    expect(getSoundPriority('revive_complete')).toBe(3);
+    expect(getSoundPriority('medallion_pickup')).toBe(3);
+    expect(getSoundPriority('bunker_unlock')).toBe(3);
+    expect(getSoundPriority('slurp_tanker_burst')).toBe(3);
+    expect(getSoundPriority('shot_combat_smg')).toBe(2);
+    expect(getSoundPriority('bow_release')).toBe(2);
+    expect(getSoundPriority('crown_glint')).toBe(2);
+    expect(getSoundPriority('bow_draw')).toBe(1);
+    expect(getSoundPriority('revive_tick')).toBe(1);
+
+    expect(getMaxHearDistance('revive_tick')).toBe(45);
+    expect(getMaxHearDistance('bow_draw')).toBe(65);
+    expect(getMaxHearDistance('crown_glint')).toBe(75);
+    expect(getMaxHearDistance('revive_complete')).toBe(85);
+    expect(getMaxHearDistance('medallion_pickup')).toBe(115);
+    expect(getMaxHearDistance('knocked_down')).toBe(135);
+    expect(getMaxHearDistance('bow_release')).toBe(155);
+    expect(getMaxHearDistance('shot_combat_smg')).toBe(175);
+    expect(getMaxHearDistance('slurp_tanker_burst')).toBe(185);
+    expect(getMaxHearDistance('bunker_unlock')).toBe(240);
+
+    // Headless safety for setDynamicIntensity
+    const bus = new EventBus();
+    const headless = new AudioEngine(bus);
+    expect(() => headless.setDynamicIntensity(0.9)).not.toThrow();
+    expect(headless.getDynamicIntensity()).toBe(0.9);
+    headless.setDynamicIntensity(Number.NaN);
+    expect(headless.getDynamicIntensity()).toBe(0);
+    headless.dispose();
+
+    vi.useFakeTimers();
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'revive_tick', position: { x: 40, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'bow_draw', position: { x: 60, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'crown_glint', position: { x: 70, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'revive_complete', position: { x: 80, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'medallion_pickup', position: { x: 110, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'knocked_down', position: { x: 130, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'bow_release', position: { x: 150, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'shot_combat_smg', position: { x: 170, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'slurp_tanker_burst', position: { x: 180, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'bunker_unlock', position: { x: 230, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'revive_tick', position: { x: 55, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'bow_draw', position: { x: 75, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'crown_glint', position: { x: 85, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'revive_complete', position: { x: 95, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'medallion_pickup', position: { x: 125, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'knocked_down', position: { x: 145, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'bow_release', position: { x: 165, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'shot_combat_smg', position: { x: 185, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'slurp_tanker_burst', position: { x: 195, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'bunker_unlock', position: { x: 255, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // Forward setDynamicIntensity to MusicSequencer and engage tension drive layer
+    engine.setDynamicIntensity(0.2);
+    expect(engine.getDynamicIntensity()).toBe(0.2);
+    engine.setMusic('lobby');
+    const oscStart = mockCtx.oscillators.length;
+    const srcStart = mockCtx.bufferSources.length;
+    for (let i = 0; i < 4; i++) {
+      mockCtx.currentTime += 0.14;
+      vi.advanceTimersByTime(25);
+    }
+    const calmOscs = mockCtx.oscillators.length - oscStart;
+    const calmSrcs = mockCtx.bufferSources.length - srcStart;
+
+    engine.setMusic('none');
+    engine.setDynamicIntensity(0.95);
+    expect(engine.getDynamicIntensity()).toBe(0.95);
+    engine.setMusic('lobby');
+    const oscHotStart = mockCtx.oscillators.length;
+    const srcHotStart = mockCtx.bufferSources.length;
+    for (let i = 0; i < 4; i++) {
+      mockCtx.currentTime += 0.14;
+      vi.advanceTimersByTime(25);
+    }
+    const intenseOscs = mockCtx.oscillators.length - oscHotStart;
+    const intenseSrcs = mockCtx.bufferSources.length - srcHotStart;
+
+    expect(intenseOscs).toBeGreaterThan(calmOscs);
+    expect(intenseSrcs).toBeGreaterThan(calmSrcs);
+
+    engine.dispose();
+    expect(engine.getDynamicIntensity()).toBe(0);
+    engine.setDynamicIntensity(0.9);
+    expect(engine.getDynamicIntensity()).toBe(0);
   });
 });

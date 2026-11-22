@@ -306,18 +306,68 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 14px;
+  padding: 5px 12px;
   background: rgba(11, 20, 42, 0.82);
   border: 2px solid rgba(34, 211, 238, 0.48);
   border-radius: 5px;
   transform: skewX(-10deg);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #e2e8f0;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.fdr-lobby-badge > span {
+.fdr-lobby-badge > * {
   transform: skewX(10deg);
+}
+
+.fdr-lobby-badge.crown-active {
+  border-color: #ffd000;
+  background: linear-gradient(135deg, rgba(120, 53, 15, 0.72), rgba(14, 26, 54, 0.92));
+  box-shadow: 0 0 18px rgba(255, 208, 0, 0.45);
+}
+
+.fdr-lobby-badge-crown {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+
+.fdr-lobby-badge.crown-active .fdr-lobby-badge-crown {
+  opacity: 1;
+  filter: drop-shadow(0 0 6px rgba(255, 208, 0, 0.85));
+}
+
+.fdr-lobby-badge-crown svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-lobby-badge-body {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.fdr-lobby-badge-main {
+  font-size: 14px;
+  font-weight: 800;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+.fdr-lobby-crown-meta {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.fdr-lobby-badge.crown-active .fdr-lobby-crown-meta {
+  color: #ffd000;
 }
 
 .fdr-lobby-content {
@@ -1850,20 +1900,21 @@
 
 .fdr-map-legend {
   position: static;
-  padding: 10px 13px;
+  padding: 9px 12px;
   background: rgba(7, 13, 30, 0.9);
   border: 1.5px solid rgba(56, 189, 248, 0.55);
   border-radius: 7px;
   pointer-events: none;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 176px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 5px 12px;
+  min-width: 304px;
   flex-shrink: 0;
 }
 
 .fdr-map-legend-title {
+  grid-column: 1 / -1;
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -2006,14 +2057,19 @@
 }
 
 .fdr-modal-card {
-  width: min(520px, 92vw);
-  max-height: 90vh;
+  width: min(580px, 94vw);
+  max-height: 92vh;
   overflow-y: auto;
-  padding: 22px 26px;
+  padding: 18px 22px;
   background: linear-gradient(160deg, rgba(14, 26, 54, 0.96), rgba(8, 14, 30, 0.98));
   border: 2px solid rgba(255, 255, 255, 0.28);
   border-radius: 10px;
   box-shadow: 0 22px 54px rgba(0, 0, 0, 0.75);
+}
+
+.fdr-modal-card.crowned-victory {
+  border-color: #ffd000;
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.75), 0 0 36px rgba(255, 208, 0, 0.35);
 }
 
 .fdr-modal-header {
@@ -2049,13 +2105,13 @@
 
 .fdr-stats-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
-  margin-bottom: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 12px;
 }
 
 .fdr-stat-box {
-  padding: 9px 12px;
+  padding: 7px 10px;
   background: rgba(15, 28, 58, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-left: 4px solid #00b4ff;
@@ -2067,14 +2123,14 @@
 }
 
 .fdr-stat-k {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: #94a3b8;
   letter-spacing: 0.08em;
 }
 
 .fdr-stat-v {
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 800;
   color: #ffffff;
 }
@@ -3237,19 +3293,31 @@
   grid-column: 1 / -1;
 }
 
-/* Lobby Game Mode Selector (PLAY Tab) */
+/* Lobby Game Mode Selector (PLAY Tab — 2x2 Grid) */
 .fdr-mode-selector {
-  width: clamp(256px, 24vw, 326px);
+  width: clamp(356px, 33.5vw, 438px);
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 11px;
+  padding: 9px 10px;
   background: linear-gradient(155deg, rgba(10, 20, 44, 0.88), rgba(7, 13, 28, 0.92));
   border: 2px solid rgba(255, 255, 255, 0.2);
   border-right: 4px solid #ffd000;
   border-radius: 8px;
   backdrop-filter: blur(8px);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+
+.fdr-lobby-left .fdr-btn-cyan {
+  padding: 8px 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.fdr-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .fdr-mode-selector-head {
@@ -3261,10 +3329,11 @@
 }
 
 .fdr-mode-select-card {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 7px 11px;
+  gap: 3px;
+  padding: 7px 8px;
   border-radius: 6px;
   border: 1.5px solid rgba(255, 255, 255, 0.18);
   background: rgba(14, 26, 54, 0.82);
@@ -3276,7 +3345,7 @@
 }
 
 .fdr-mode-select-card:hover {
-  transform: translateX(-2px);
+  transform: translateY(-2px);
   border-color: #38bdf8;
   background: rgba(20, 40, 80, 0.92);
 }
@@ -3299,28 +3368,39 @@
   box-shadow: 0 0 16px rgba(249, 115, 22, 0.42);
 }
 
+.fdr-mode-select-card.mode-duos.active {
+  border-color: #34eb5e;
+  background: linear-gradient(135deg, rgba(6, 78, 59, 0.78), rgba(14, 30, 64, 0.95));
+  box-shadow: 0 0 16px rgba(52, 235, 94, 0.4);
+}
+
 .fdr-mode-select-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
 }
 
 .fdr-mode-select-title {
-  font-size: 16px;
+  font-size: 12.5px;
   font-weight: 900;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.02em;
   color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fdr-mode-select-badge {
-  padding: 1px 6px;
+  padding: 1px 4px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.14);
-  font-size: 10px;
+  font-size: 8.5px;
   font-weight: 900;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   color: #ffd000;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .fdr-mode-select-card.mode-zero_build .fdr-mode-select-badge {
@@ -3333,13 +3413,18 @@
   background: rgba(249, 115, 22, 0.32);
 }
 
+.fdr-mode-select-card.mode-duos .fdr-mode-select-badge {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.32);
+}
+
 .fdr-mode-select-sub {
   font-family: 'Montserrat', sans-serif;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
   color: #cbd5e1;
   text-transform: none;
-  line-height: 1.25;
+  line-height: 1.2;
 }
 
 .fdr-mode-card.mode-zero_build {
@@ -3348,6 +3433,10 @@
 
 .fdr-mode-card.mode-blitz {
   border-color: rgba(251, 146, 60, 0.78);
+}
+
+.fdr-mode-card.mode-duos {
+  border-color: rgba(52, 235, 94, 0.78);
 }
 
 /* Locker Weapon Wrap Swatch Cards */
@@ -4434,8 +4523,8 @@
 
 .fdr-career-stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .fdr-career-stat-card {
@@ -4841,4 +4930,485 @@
 
 .fdr-loot-island-text {
   color: #ffd000;
+}
+
+/* ============================================================================
+   WAVE 6 UI: DUOS PARTNER CARD, MEDALLION RACK, VICTORY CROWN, DBNO/REVIVE,
+   BOOM BOW DRAW ARC, MAP CHAPTER SWATCHES & CROWNED VICTORY BANNER
+   ============================================================================ */
+
+/* Lobby Career Victory Crown Status Pill */
+.fdr-career-crown-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1.5px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.78);
+  color: #94a3b8;
+  font-size: 11.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.fdr-career-crown-badge.active {
+  border-color: #ffd000;
+  background: linear-gradient(135deg, rgba(161, 98, 7, 0.62), rgba(20, 28, 52, 0.94));
+  color: #fef08a;
+  box-shadow: 0 0 16px rgba(255, 208, 0, 0.42);
+}
+
+.fdr-career-crown-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-career-crown-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Top-Right & Summary Duos Mode Chips */
+.fdr-zone-pill.mode.mode-duos {
+  background: rgba(6, 95, 70, 0.88);
+  border-color: #34eb5e;
+  color: #dcfce7;
+}
+
+.fdr-summary-mode-badge.mode-duos {
+  background: rgba(6, 95, 70, 0.55);
+  border-color: #34eb5e;
+  color: #dcfce7;
+}
+
+/* HUD Top-Left Duo Partner Card */
+.fdr-duo-card {
+  width: clamp(205px, 18vw, 256px);
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: linear-gradient(155deg, rgba(10, 22, 46, 0.9), rgba(7, 13, 28, 0.94));
+  border: 1.5px solid rgba(52, 235, 94, 0.58);
+  border-left: 4px solid #34eb5e;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fdr-duo-card.knocked {
+  border-color: rgba(239, 68, 68, 0.88);
+  border-left-color: #ef4444;
+  background: linear-gradient(155deg, rgba(69, 10, 10, 0.88), rgba(17, 12, 20, 0.94));
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
+}
+
+.fdr-duo-card.eliminated {
+  border-color: rgba(100, 116, 139, 0.5);
+  border-left-color: #64748b;
+  opacity: 0.72;
+}
+
+.fdr-duo-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fdr-duo-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-duo-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-duo-name {
+  font-size: 12.5px;
+  font-weight: 900;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.fdr-duo-status {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(52, 235, 94, 0.22);
+  color: #86efac;
+  font-size: 9.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.fdr-duo-card.knocked .fdr-duo-status {
+  background: rgba(239, 68, 68, 0.32);
+  color: #fecaca;
+}
+
+.fdr-duo-card.eliminated .fdr-duo-status {
+  background: rgba(100, 116, 139, 0.28);
+  color: #cbd5e1;
+}
+
+.fdr-duo-dist {
+  font-size: 11px;
+  font-weight: 900;
+  color: #ffd000;
+  flex-shrink: 0;
+}
+
+.fdr-duo-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fdr-duo-track {
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fdr-duo-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.1s ease-out;
+}
+
+.fdr-duo-fill.shield {
+  background: linear-gradient(90deg, #0284c7, #22d3ee);
+}
+
+.fdr-duo-fill.hp {
+  background: linear-gradient(90deg, #16a34a, #34eb5e);
+}
+
+.fdr-duo-bleed-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fdr-duo-bleed-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  font-weight: 900;
+  color: #fecaca;
+  letter-spacing: 0.06em;
+}
+
+.fdr-duo-bleed-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.fdr-duo-bleed-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ef4444, #f97316);
+  transition: width 0.1s ease-out;
+}
+
+.fdr-duo-stats {
+  font-size: 10px;
+  font-weight: 800;
+  color: #cbd5e1;
+  letter-spacing: 0.04em;
+}
+
+/* HUD Top-Left Victory Crown & Golden Medallion Rack */
+.fdr-chapter-rack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: clamp(205px, 18.5vw, 256px);
+}
+
+.fdr-hud-crown-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgba(161, 98, 7, 0.88), rgba(20, 28, 52, 0.92));
+  border: 1.5px solid #ffd000;
+  box-shadow: 0 3px 12px rgba(255, 208, 0, 0.42);
+  font-size: 11.5px;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  color: #fef08a;
+}
+
+.fdr-hud-crown-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-hud-crown-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-medallion-rack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fdr-medallion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, rgba(66, 32, 6, 0.92), rgba(15, 23, 42, 0.94));
+  border: 1.5px solid #ffd000;
+  box-shadow: 0 3px 10px rgba(255, 208, 0, 0.32);
+}
+
+.fdr-medallion-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-medallion-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-medallion-label {
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #fef08a;
+}
+
+/* HUD Boom Bow Draw Arc around Crosshair */
+.fdr-bow-charge-arc {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 54px;
+  height: 54px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.fdr-bow-arc-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.fdr-bow-charge-arc.full .fdr-bow-arc-svg {
+  filter: drop-shadow(0 0 8px rgba(255, 208, 0, 0.85));
+}
+
+/* HUD Bottom-Center DBNO Bleed-out & Partner Revive Bars */
+.fdr-dbno-bar,
+.fdr-revive-bar {
+  width: 100%;
+  padding: 5px 9px;
+  border-radius: 6px;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.55);
+}
+
+.fdr-dbno-bar {
+  background: rgba(69, 10, 10, 0.92);
+  border: 2px solid #ef4444;
+}
+
+.fdr-revive-bar {
+  background: rgba(6, 78, 59, 0.92);
+  border: 2px solid #34eb5e;
+}
+
+.fdr-dbno-top,
+.fdr-revive-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+
+.fdr-dbno-top {
+  color: #fecaca;
+}
+
+.fdr-revive-top {
+  color: #dcfce7;
+}
+
+.fdr-dbno-title,
+.fdr-revive-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fdr-dbno-icon,
+.fdr-revive-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-dbno-icon svg,
+.fdr-revive-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-dbno-track,
+.fdr-revive-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.fdr-dbno-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ef4444, #fb923c);
+  transition: width 0.08s linear;
+}
+
+.fdr-revive-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #34eb5e, #22d3ee);
+  transition: width 0.08s linear;
+}
+
+/* FullMapOverlay Wave-6 Legend Swatches */
+.fdr-legend-swatch.medallion-zone {
+  width: 12px;
+  height: 12px;
+  margin: 0 1px;
+  border-radius: 50%;
+  border: 2px dashed #ffd000;
+  background: rgba(255, 208, 0, 0.2);
+}
+
+.fdr-legend-swatch.bunker svg,
+.fdr-legend-swatch.tanker svg,
+.fdr-legend-swatch.medallion svg,
+.fdr-legend-swatch.crown svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* MatchOverlay CROWNED VICTORY ROYALE Golden Banner */
+.fdr-crowned-victory-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 auto 10px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #b45309 0%, #ffd000 35%, #fef9c3 50%, #ffd000 65%, #b45309 100%);
+  border: 2px solid #ffffff;
+  color: #161000;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  box-shadow: 0 0 24px rgba(255, 208, 0, 0.65);
+}
+
+.fdr-crowned-banner-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-crowned-banner-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Responsive 1280x720 Layout Tightening */
+@media (max-width: 1360px), (max-height: 760px) {
+  .fdr-lobby {
+    padding: 12px 18px 14px;
+  }
+
+  .fdr-lobby-topbar {
+    gap: 10px;
+  }
+
+  .fdr-brand {
+    padding: 5px 12px;
+  }
+
+  .fdr-nav-tabs {
+    gap: 5px;
+  }
+
+  .fdr-nav-tab {
+    padding: 6px 11px;
+    font-size: 15px;
+  }
+
+  .fdr-career-pill {
+    padding: 4px 10px;
+    gap: 8px;
+  }
+
+  .fdr-career-progress-col {
+    min-width: 132px;
+  }
+
+  .fdr-career-hero {
+    padding: 10px 12px;
+  }
+
+  .fdr-career-stat-card {
+    padding: 8px 10px;
+  }
+
+  .fdr-career-stat-val {
+    font-size: 20px;
+  }
+
+  .fdr-mode-select-card {
+    padding: 6px 8px;
+  }
+
+  .fdr-fullmap-canvas {
+    width: min(74vh, 62vw, 560px);
+    height: min(74vh, 62vw, 560px);
+  }
 }

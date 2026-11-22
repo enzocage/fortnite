@@ -81,9 +81,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 23 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 25 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(23);
+    expect(allIds).toHaveLength(25);
 
     const seenNames = new Set<string>();
 
@@ -369,7 +369,7 @@ describe('CharacterRig', () => {
 });
 
 describe('CharacterAnimator', () => {
-  it('animates all 20 AnimStates (including drive) and all 6 EmoteIds without NaN transforms or invalid bounding boxes', () => {
+  it('animates all 22 AnimStates (including drive, knocked, and reviving) and all 6 EmoteIds without NaN transforms or invalid bounding boxes', () => {
     const animator = new CharacterAnimator();
     const rig = new CharacterRig();
 
@@ -394,8 +394,10 @@ describe('CharacterAnimator', () => {
       'heal',
       'build',
       'emote',
+      'knocked',
+      'reviving',
     ];
-    expect(states).toHaveLength(20);
+    expect(states).toHaveLength(22);
     expect(EMOTES).toHaveLength(6);
 
     for (const animState of states) {
@@ -1217,7 +1219,9 @@ describe('Wave-3 Weapon Wraps, Ground Contact Shadow & Armor Rim Polish', () => 
       'tac_shotgun',
       'heavy_shotgun',
       'smg',
+      'combat_smg',
       'sniper',
+      'boom_bow',
       'pistol',
       'rocket_launcher',
       'mythic_blade_rifle',
@@ -2109,6 +2113,405 @@ describe('Wave-5 Tactical DMR, Kinetic Blade, Allied Aura & VFX Channels', () =>
     expect(vfx.getActiveKineticDashCount()).toBe(0);
     expect(vfx.getActiveGoldBurstCount()).toBe(0);
     expect(vfx.getActiveLootIslandVfxCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-6 Combat SMG, Boom Bow, Victory Crown, Medallions, Duo Aura, DBNO/Revive & VFX', () => {
+  it('builds bespoke Combat SMG (twin taped mags, reflex optic, laser rail) and Boom Bow (compound limbs, bowstring, explosive tip) with casing rules', () => {
+    const combatSmg = createWeaponModel('combat_smg');
+    expect(combatSmg.name).toBe('weapon_combat_smg');
+    expect(countMeshes(combatSmg)).toBeGreaterThanOrEqual(18);
+    expect(isRangedWeapon('combat_smg')).toBe(true);
+    expect(hasMuzzleOffset('combat_smg')).toBe(true);
+    const smgMuzzle = combatSmg.userData.muzzleOffset as THREE.Vector3;
+    expect(smgMuzzle.z).toBeGreaterThan(0.35);
+
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    const redLaserHex = new THREE.Color('#ef4444').getHex();
+    const tapeAmberHex = new THREE.Color('#fbbf24').getHex();
+    let hasReflexOptic = false;
+    let hasLaserEmitter = false;
+    let hasMagTape = false;
+    combatSmg.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.emissive.getHex() === cyanHex) hasReflexOptic = true;
+        if (child.material.emissive.getHex() === redLaserHex) hasLaserEmitter = true;
+        if (child.material.color.getHex() === tapeAmberHex) hasMagTape = true;
+      }
+    });
+    expect(hasReflexOptic).toBe(true);
+    expect(hasLaserEmitter).toBe(true);
+    expect(hasMagTape).toBe(true);
+    disposeObject3D(combatSmg);
+
+    const boomBow = createWeaponModel('boom_bow');
+    expect(boomBow.name).toBe('weapon_boom_bow');
+    expect(countMeshes(boomBow)).toBeGreaterThanOrEqual(18);
+    expect(isRangedWeapon('boom_bow')).toBe(true);
+    expect(hasMuzzleOffset('boom_bow')).toBe(true);
+    const bowMuzzle = boomBow.userData.muzzleOffset as THREE.Vector3;
+    expect(bowMuzzle.z).toBeGreaterThan(0.4);
+
+    const explosiveOrangeHex = new THREE.Color('#fb923c').getHex();
+    const tipEmberHex = new THREE.Color('#fef08a').getHex();
+    let hasExplosiveGlow = false;
+    let hasTipEmber = false;
+    boomBow.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.emissive.getHex() === explosiveOrangeHex) hasExplosiveGlow = true;
+        if (child.material.emissive.getHex() === tipEmberHex) hasTipEmber = true;
+      }
+    });
+    expect(hasExplosiveGlow).toBe(true);
+    expect(hasTipEmber).toBe(true);
+    disposeObject3D(boomBow);
+
+    // Muzzle VFX ejects casings for combat_smg but NOT for boom_bow arrows
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.5 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'boom_bow',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(0);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.5 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'combat_smg',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(1);
+    vfx.dispose();
+  });
+
+  it('adds, animates, reads, syncs, and disposes Victory Crown halo, Medallion orbital rings (1..3), and cyan-gold Duo Partner aura', () => {
+    const rig = new CharacterRig();
+    expect(rig.hasVictoryCrown()).toBe(false);
+    expect(rig.getMedallionCount()).toBe(0);
+    expect(rig.isDuoPartnerAuraEnabled()).toBe(false);
+
+    // 1. Victory Crown halo (5-peak golden crown floating above head)
+    rig.setVictoryCrown(true, 0.2);
+    expect(rig.hasVictoryCrown()).toBe(true);
+    expect(rig.isVictoryCrownEnabled()).toBe(true);
+    const crownAura = rig.getVictoryCrownGroup()!;
+    expect(crownAura).toBeInstanceOf(THREE.Group);
+    expect(crownAura.visible).toBe(true);
+    expect(crownAura.position.y).toBeGreaterThan(1.85);
+    const crownMesh = crownAura.getObjectByName('victory_crown_mesh') as THREE.Group;
+    expect(crownMesh).toBeInstanceOf(THREE.Group);
+    // Base band + rim torus + 5 peaks + 5 jewels + front gem = 13 meshes
+    expect(countMeshes(crownMesh)).toBeGreaterThanOrEqual(12);
+    const crownRotA = crownMesh.rotation.y;
+    const crownYA = crownAura.position.y;
+    rig.setVictoryCrown(true, 1.4);
+    expect(crownMesh.rotation.y).not.toBeCloseTo(crownRotA, 3);
+    expect(crownAura.position.y).not.toBeCloseTo(crownYA, 3);
+
+    rig.setVictoryCrown(false);
+    expect(rig.hasVictoryCrown()).toBe(false);
+    expect(crownAura.visible).toBe(false);
+
+    // 2. Aspect Medallion orbital rings (0..3 clamped cleanly)
+    rig.setMedallionCount(-2);
+    expect(rig.getMedallionCount()).toBe(0);
+    rig.setMedallionCount(Number.NaN);
+    expect(rig.getMedallionCount()).toBe(0);
+
+    rig.setMedallionCount(2, 0.1);
+    expect(rig.getMedallionCount()).toBe(2);
+    const orbitGroup = rig.getMedallionOrbitGroup()!;
+    expect(orbitGroup).toBeInstanceOf(THREE.Group);
+    expect(orbitGroup.visible).toBe(true);
+    const nodes = rig.getMedallionNodes();
+    expect(nodes).toHaveLength(3);
+    expect(nodes[0].visible).toBe(true);
+    expect(nodes[1].visible).toBe(true);
+    expect(nodes[2].visible).toBe(false);
+
+    rig.setMedallionCount(5, 0.9);
+    expect(rig.getMedallionCount()).toBe(3);
+    expect(nodes.every((n) => n.visible)).toBe(true);
+    const orbitRotA = orbitGroup.rotation.y;
+    rig.setMedallionCount(3, 1.8);
+    expect(orbitGroup.rotation.y).toBeGreaterThan(orbitRotA);
+
+    rig.setMedallionCount(0);
+    expect(rig.getMedallionCount()).toBe(0);
+    expect(orbitGroup.visible).toBe(false);
+
+    // 3. Duo Partner cyan-gold overhead chevron aura
+    rig.setDuoPartnerAura(true, 0.2);
+    expect(rig.isDuoPartnerAuraEnabled()).toBe(true);
+    const duoAura = rig.getDuoPartnerAuraGroup()!;
+    expect(duoAura).toBeInstanceOf(THREE.Group);
+    expect(duoAura.visible).toBe(true);
+    expect(duoAura.position.y).toBeGreaterThan(1.85);
+    const duoChevron = duoAura.getObjectByName('duo_partner_chevron') as THREE.Group;
+    expect(duoChevron).toBeInstanceOf(THREE.Group);
+
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    const goldHex = new THREE.Color('#fbbf24').getHex();
+    let hasCyan = false;
+    let hasGold = false;
+    duoChevron.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.color.getHex() === cyanHex) hasCyan = true;
+        if (child.material.color.getHex() === goldHex) hasGold = true;
+      }
+    });
+    expect(hasCyan).toBe(true);
+    expect(hasGold).toBe(true);
+
+    // Clearing via updateFromState & toggling via state fields
+    rig.updateFromState(
+      makeRenderState({
+        hasVictoryCrown: true,
+        medallionCount: 2,
+        isDuoPartner: true,
+      }),
+    );
+    expect(rig.hasVictoryCrown()).toBe(true);
+    expect(rig.getMedallionCount()).toBe(2);
+    expect(rig.isDuoPartnerAuraEnabled()).toBe(true);
+    // Duo Partner chevron offsets cleanly above Victory Crown when both active
+    expect(duoAura.position.y).toBeGreaterThan(crownAura.position.y);
+
+    rig.updateFromState(
+      makeRenderState({
+        hasVictoryCrown: false,
+        medallionCount: 0,
+        isDuoPartner: false,
+      }),
+    );
+    expect(rig.hasVictoryCrown()).toBe(false);
+    expect(rig.getMedallionCount()).toBe(0);
+    expect(rig.isDuoPartnerAuraEnabled()).toBe(false);
+
+    // Dispose cleans up all Wave-6 attachments
+    rig.dispose();
+    expect(rig.getGroup().getObjectByName('victory_crown_aura')).toBeUndefined();
+    expect(rig.getGroup().getObjectByName('medallion_orbit_group')).toBeUndefined();
+    expect(rig.getGroup().getObjectByName('duo_partner_aura')).toBeUndefined();
+  });
+
+  it('animates knocked crawl, reviving kneeling stance, bowCharge draw pose, and smooth Crown/Medallion motion', () => {
+    const animator = new CharacterAnimator();
+    const rig = new CharacterRig();
+
+    // 1. Knocked DBNO hands-and-knees crawl
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'knocked', moveSpeed: 1.5, grounded: true }),
+      0,
+    );
+    expect(rig.joints.hips.position.y).toBeLessThan(0.6);
+    expect(rig.joints.hips.rotation.x).toBeGreaterThan(0.9);
+    expect(rig.joints.head.rotation.x).toBeLessThan(-0.5);
+    expect(rig.joints.leftKnee.rotation.x).toBeGreaterThan(1.1);
+    const crawlShoulderStart = rig.joints.leftShoulder.rotation.x;
+    for (let i = 0; i < 8; i++) {
+      animator.update(
+        rig,
+        makeRenderState({ isKnocked: true, animState: 'idle', moveSpeed: 2.0, grounded: true }),
+        0.05,
+      );
+    }
+    expect(Math.abs(rig.joints.leftShoulder.rotation.x - crawlShoulderStart)).toBeGreaterThan(0.1);
+    assertFiniteBox(rig.getGroup());
+
+    // 2. Reviving kneeling healing stance
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'reviving', grounded: true }),
+      0,
+    );
+    expect(rig.joints.hips.position.y).toBeLessThan(0.7);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.8);
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.8);
+    expect(rig.joints.leftKnee.rotation.x).toBeGreaterThan(1.1);
+    const reviveArmA = rig.joints.leftShoulder.rotation.x;
+    for (let i = 0; i < 6; i++) {
+      animator.update(
+        rig,
+        makeRenderState({ isReviving: true, animState: 'idle', grounded: true }),
+        0.05,
+      );
+    }
+    expect(rig.joints.leftShoulder.rotation.x).not.toBeCloseTo(reviveArmA, 4);
+    assertFiniteBox(rig.getGroup());
+
+    // 3. Boom Bow draw pose scaled by bowCharge
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'boom_bow', bowCharge: 0 }),
+      0,
+    );
+    const relaxedLeftElbow = rig.joints.leftElbow.rotation.x;
+    const relaxedChestRy = rig.joints.chest.rotation.y;
+
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'boom_bow', bowCharge: 1.0 }),
+      0,
+    );
+    expect(rig.joints.leftElbow.rotation.x).toBeLessThan(relaxedLeftElbow - 0.5);
+    expect(rig.joints.chest.rotation.y).toBeGreaterThan(relaxedChestRy + 0.3);
+    const bowMuzzle = rig.getMuzzleWorldPosition(new THREE.Vector3());
+    expect(Number.isFinite(bowMuzzle.x)).toBe(true);
+    expect(bowMuzzle.z).toBeGreaterThan(0.2);
+
+    // 4. Smooth Crown bob, Medallion orbital rotation, and Duo Partner chevron motion
+    animator.update(
+      rig,
+      makeRenderState({
+        animState: 'idle',
+        hasVictoryCrown: true,
+        medallionCount: 3,
+        isDuoPartner: true,
+      }),
+      0.05,
+    );
+    const crownAura = rig.getVictoryCrownGroup()!;
+    const orbitGroup = rig.getMedallionOrbitGroup()!;
+    const crownYStart = crownAura.position.y;
+    const orbitRotStart = orbitGroup.rotation.y;
+
+    for (let i = 0; i < 8; i++) {
+      animator.update(
+        rig,
+        makeRenderState({
+          animState: 'run',
+          moveSpeed: 6.0,
+          hasVictoryCrown: true,
+          medallionCount: 3,
+          isDuoPartner: true,
+        }),
+        0.05,
+      );
+    }
+    expect(orbitGroup.rotation.y).toBeGreaterThan(orbitRotStart);
+    expect(crownAura.position.y).not.toBeCloseTo(crownYStart, 3);
+
+    rig.dispose();
+  });
+
+  it('spawns, updates, expires, guards NaN, clears, and disposes all 4 Wave-6 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:bow_explosion
+    bus.emit('vfx:bow_explosion', { position: { x: 4, y: 1, z: -6 }, radius: 4.4 });
+    expect(vfx.getActiveBowExplosionCount()).toBe(1);
+
+    // 2. vfx:slurp_tanker_burst
+    bus.emit('vfx:slurp_tanker_burst', { position: { x: -10, y: 0.5, z: 8 }, radius: 10 });
+    expect(vfx.getActiveSlurpTankerBurstCount()).toBe(1);
+
+    // 3. vfx:crown_glint
+    bus.emit('vfx:crown_glint', { position: { x: 2, y: 0, z: 3 } });
+    expect(vfx.getActiveCrownGlintCount()).toBe(1);
+
+    // 4. vfx:revive_beam (re-emitting at same spot updates progress without duplicating)
+    bus.emit('vfx:revive_beam', { position: { x: 0, y: 0, z: 0 }, progress: 0.25 });
+    bus.emit('vfx:revive_beam', { position: { x: 0, y: 0, z: 0 }, progress: 0.75 });
+    expect(vfx.getActiveReviveBeamCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    // Emitting a second revive beam at a distinct location allocates another slot
+    bus.emit('vfx:revive_beam', { position: { x: 12, y: 0, z: 12 }, progress: 0.5 });
+    expect(vfx.getActiveReviveBeamCount()).toBe(2);
+    expect(vfx.getActiveEffectCount()).toBe(5);
+
+    // Step 0.3s -> all remain active and transforms stay finite
+    for (let i = 0; i < 6; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveReviveBeamCount()).toBe(2);
+    expect(vfx.getActiveBowExplosionCount()).toBe(1);
+    expect(vfx.getActiveCrownGlintCount()).toBe(1);
+    expect(vfx.getActiveSlurpTankerBurstCount()).toBe(1);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Step past 0.85s -> revive_beam (0.55s), bow_explosion (0.62s), crown_glint (0.78s) expire while slurp_tanker_burst (1.25s) stays active
+    for (let i = 0; i < 12; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveReviveBeamCount()).toBe(0);
+    expect(vfx.getActiveBowExplosionCount()).toBe(0);
+    expect(vfx.getActiveCrownGlintCount()).toBe(0);
+    expect(vfx.getActiveSlurpTankerBurstCount()).toBe(1);
+
+    // Step past 1.25s -> all expired
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveSlurpTankerBurstCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Edge cases: NaN/Infinity positions & invalid radii/progress never produce NaN transforms
+    bus.emit('vfx:bow_explosion', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+      radius: 4.4,
+    });
+    bus.emit('vfx:slurp_tanker_burst', {
+      position: { x: 0, y: Number.POSITIVE_INFINITY, z: 0 },
+      radius: 10,
+    });
+    bus.emit('vfx:crown_glint', {
+      position: { x: 0, y: 0, z: Number.NaN },
+    });
+    bus.emit('vfx:revive_beam', {
+      position: { x: Number.NEGATIVE_INFINITY, y: 0, z: 0 },
+      progress: 0.5,
+    });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Negative / NaN radius or progress clamped safely
+    bus.emit('vfx:bow_explosion', { position: { x: 1, y: 1, z: 1 }, radius: -5 });
+    bus.emit('vfx:slurp_tanker_burst', { position: { x: 2, y: 0, z: 2 }, radius: Number.NaN });
+    bus.emit('vfx:revive_beam', { position: { x: 3, y: 0, z: 3 }, progress: Number.NaN });
+    expect(vfx.getActiveEffectCount()).toBe(3);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 4 Wave-6 pools immediately
+    bus.emit('vfx:crown_glint', { position: { x: 0, y: 0, z: 0 } });
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    vfx.clear();
+    expect(vfx.getActiveBowExplosionCount()).toBe(0);
+    expect(vfx.getActiveSlurpTankerBurstCount()).toBe(0);
+    expect(vfx.getActiveCrownGlintCount()).toBe(0);
+    expect(vfx.getActiveReviveBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 4 Wave-6 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:bow_explosion', { position: { x: 0, y: 0, z: 0 }, radius: 4.4 });
+    bus.emit('vfx:slurp_tanker_burst', { position: { x: 0, y: 0, z: 0 }, radius: 10 });
+    bus.emit('vfx:crown_glint', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:revive_beam', { position: { x: 0, y: 0, z: 0 }, progress: 0.8 });
+    expect(vfx.getActiveBowExplosionCount()).toBe(0);
+    expect(vfx.getActiveSlurpTankerBurstCount()).toBe(0);
+    expect(vfx.getActiveCrownGlintCount()).toBe(0);
+    expect(vfx.getActiveReviveBeamCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

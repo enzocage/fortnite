@@ -15,6 +15,7 @@ import type {
   KeybindMap,
   LootIslandState,
   MaterialType,
+  MedallionId,
   NpcSpecialistEntity,
   Rarity,
   RiftEntity,
@@ -27,16 +28,20 @@ import type {
 } from '../types';
 import {
   BUILD_COST,
+  DBNO_BLEED_DPS,
+  DBNO_MAX_HP,
   DEFAULT_KEYBINDS,
   EventBus,
   GLIDER_FORCE_HEIGHT,
   GRID_XZ,
   GRID_Y,
   MAX_GOLD_BARS,
+  MEDALLIONS,
   PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   RARITY_ORDER,
+  REVIVE_DURATION_SEC,
   STARTING_GOLD_BARS,
   UPGRADE_COSTS,
   WATER_LEVEL,
@@ -55,6 +60,7 @@ import type { BuildingSystem } from './BuildingSystem';
 import type { CollisionSystem } from './CollisionSystem';
 import type {
   CombatActor,
+  DuoReviveBridge,
   PlayerHudSnapshot,
   PlayerInteractPrompt,
   PlayerMatchStats,
@@ -62,6 +68,7 @@ import type {
   PropsInteractionBridge,
   VaultBridge,
   VehicleBridge,
+  WorldChapterBridge,
   WorldEconomyBridge,
   WorldRiftCaptureBridge,
   WorldStationBridge,
@@ -72,6 +79,7 @@ import type { WeaponSystem } from './WeaponSystem';
 
 const BUILD_CYCLE: BuildPieceType[] = ['wall', 'floor', 'ramp', 'roof'];
 const MAT_CYCLE: MaterialType[] = ['wood', 'brick', 'metal'];
+const CROWN_GLINT_INTERVAL_SEC = 10.0;
 
 export class PlayerController {
   private camera: THREE.PerspectiveCamera;
@@ -86,6 +94,8 @@ export class PlayerController {
   private stationBridge: WorldStationBridge | null = null;
   private riftCaptureBridge: WorldRiftCaptureBridge | null = null;
   private economyBridge: WorldEconomyBridge | null = null;
+  private chapterBridge: WorldChapterBridge | null = null;
+  private duoReviveBridge: DuoReviveBridge | null = null;
   private augmentManager: AugmentManager;
   private onVaultUnlocked: ((lootPos: Vec3Like, poiId: string) => void) | null = null;
   private onWeaponUpgraded: ((item: ItemInstance, cost: number) => void) | null = null;
@@ -101,6 +111,22 @@ export class PlayerController {
   private kineticDashRechargeTimer = 0;
   private lootIslandTickTimer = 0;
   private lootIslandUpdraftCooldown = 0;
+
+  private medallions: MedallionId[] = [];
+  private victoryCrown = false;
+  private crownGlintTimer = CROWN_GLINT_INTERVAL_SEC;
+  private isDrawingBow = false;
+  private bowDrawElapsed = 0;
+  private bowCharge = 0;
+  private isKnocked = false;
+  private bleedOutHp = 0;
+  private isRevivingPartner = false;
+  private reviveTimer = 0;
+  private reviveTickSoundTimer = 0;
+  private reviveLabel: string | null = null;
+  private incomingReviveProgress: number | null = null;
+  private incomingReviveLabel: string | null = null;
+  private bunkerItemSeq = 0;
 
   private gameMode: GameModeId = 'solo';
   private overshield = 0;
@@ -233,6 +259,8 @@ export class PlayerController {
     chestsOpened: 0,
     poisCaptured: 0,
     goldEarned: 0,
+    knocks: 0,
+    revives: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -280,6 +308,8 @@ export class PlayerController {
       stationBridge?: WorldStationBridge | null;
       riftCaptureBridge?: WorldRiftCaptureBridge | null;
       economyBridge?: WorldEconomyBridge | null;
+      chapterBridge?: WorldChapterBridge | null;
+      duoReviveBridge?: DuoReviveBridge | null;
       augmentManager?: AugmentManager | null;
       gameMode?: GameModeId;
       onVaultUnlocked?: ((lootPos: Vec3Like, poiId: string) => void) | null;
@@ -318,6 +348,12 @@ export class PlayerController {
     }
     if (options?.economyBridge !== undefined) {
       this.setEconomyBridge(options.economyBridge);
+    }
+    if (options?.chapterBridge !== undefined) {
+      this.setChapterBridge(options.chapterBridge);
+    }
+    if (options?.duoReviveBridge !== undefined) {
+      this.setDuoReviveBridge(options.duoReviveBridge);
     }
     if (options?.gameMode !== undefined) {
       this.setGameMode(options.gameMode);
@@ -423,6 +459,129 @@ export class PlayerController {
     } else if (this.weapons.getRiftCaptureBridge() === prev) {
       this.weapons.setRiftCaptureBridge(null);
     }
+  }
+
+  setChapterBridge(bridge: WorldChapterBridge | null): void {
+    const prev = this.chapterBridge;
+    this.chapterBridge = bridge;
+    if (bridge !== null) {
+      this.weapons.setChapterBridge(bridge);
+    } else if (this.weapons.getChapterBridge() === prev) {
+      this.weapons.setChapterBridge(null);
+    }
+  }
+
+  getChapterBridge(): WorldChapterBridge | null {
+    return this.chapterBridge;
+  }
+
+  setDuoReviveBridge(bridge: DuoReviveBridge | null): void {
+    this.duoReviveBridge = bridge;
+  }
+
+  getDuoReviveBridge(): DuoReviveBridge | null {
+    return this.duoReviveBridge;
+  }
+
+  addMedallion(id: MedallionId): boolean {
+    if (this.medallions.includes(id)) return false;
+    this.medallions.push(id);
+    this.eventBus.emit('sound:play', {
+      id: 'medallion_pickup',
+      position: { ...this.position },
+      spatial: true,
+    });
+    return true;
+  }
+
+  getMedallions(): MedallionId[] {
+    return [...this.medallions];
+  }
+
+  hasMedallion(id: MedallionId): boolean {
+    return this.medallions.includes(id);
+  }
+
+  setVictoryCrown(active: boolean): void {
+    const next = Boolean(active);
+    const turnedOn = next && !this.victoryCrown;
+    this.victoryCrown = next;
+    if (turnedOn) {
+      this.crownGlintTimer = CROWN_GLINT_INTERVAL_SEC;
+    }
+  }
+
+  hasVictoryCrown(): boolean {
+    return this.victoryCrown;
+  }
+
+  enterKnockedState(): boolean {
+    if (this.phase === 'eliminated' || this.phase === 'lobby' || this.isKnocked) {
+      return false;
+    }
+    if (this.activeVehicleId) {
+      this.exitActiveVehicle(false);
+    }
+    this.activeZipline = null;
+    this.isBuildMode = false;
+    this.building.setPreviewVisible(false);
+    this.building.cancelEdit();
+    this.lastBuildPreview = null;
+    this.cancelActionsOnModeChange();
+    this.cancelPartnerRevive();
+    this.isAiming = false;
+    this.isScoped = false;
+    this.isSprinting = false;
+    this.isSliding = false;
+    this.isCrouching = false;
+    this.isMantling = false;
+    this.isKnocked = true;
+    this.bleedOutHp = DBNO_MAX_HP;
+    this.overshield = 0;
+    this.overshieldRecharging = false;
+    this.shield = 0;
+    this.health = Math.max(1, Math.min(this.health, 30));
+    this.eventBus.emit('sound:play', {
+      id: 'knocked_down',
+      position: { ...this.position },
+      spatial: true,
+    });
+    return true;
+  }
+
+  completeRevive(): boolean {
+    if (!this.isKnocked || !this.isAlive()) return false;
+    this.isKnocked = false;
+    this.bleedOutHp = 0;
+    this.incomingReviveProgress = null;
+    this.incomingReviveLabel = null;
+    this.health = 30;
+    this.shield = 0;
+    this.eventBus.emit('sound:play', {
+      id: 'revive_complete',
+      position: { ...this.position },
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:revive_beam', {
+      position: { ...this.position },
+      progress: 1,
+    });
+    return true;
+  }
+
+  isPlayerKnocked(): boolean {
+    return this.isKnocked;
+  }
+
+  addKnock(): void {
+    this.stats.knocks = (this.stats.knocks ?? 0) + 1;
+  }
+
+  setIncomingReviveProgress(progress: number | null, label?: string | null): void {
+    this.incomingReviveProgress =
+      progress === null ? null : clamp(progress, 0, 1);
+    this.incomingReviveLabel =
+      progress === null ? null : label ?? 'BEING REVIVED...';
   }
 
   setAugmentManager(mgr: AugmentManager | null): void {
@@ -795,6 +954,10 @@ export class PlayerController {
       this.flagTickTimer = 0;
       this.lootIslandTickTimer = 0;
       this.lootIslandUpdraftCooldown = 0;
+      this.isDrawingBow = false;
+      this.bowDrawElapsed = 0;
+      this.bowCharge = 0;
+      this.cancelPartnerRevive();
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
       this.building.setPreviewVisible(false);
@@ -810,7 +973,7 @@ export class PlayerController {
 
   getEyePosition(): Vec3Like {
     const h =
-      this.isCrouching || this.isSliding
+      this.isCrouching || this.isSliding || this.isKnocked
         ? PLAYER_CROUCH_HEIGHT - 0.16
         : PLAYER_HEIGHT - 0.22;
     return {
@@ -851,7 +1014,11 @@ export class PlayerController {
   }
 
   isAlive(): boolean {
-    return this.health > 0 && this.phase !== 'eliminated' && this.phase !== 'lobby';
+    return (
+      (this.health > 0 || this.isKnocked) &&
+      this.phase !== 'eliminated' &&
+      this.phase !== 'lobby'
+    );
   }
 
   getKills(): number {
@@ -864,7 +1031,9 @@ export class PlayerController {
 
   private grantEliminationSiphon(): void {
     this.killStreak += 1;
-    const siphonTotal = this.augmentManager.hasAugment('siphon_master') ? 75 : 50;
+    const baseSiphon = this.augmentManager.hasAugment('siphon_master') ? 75 : 50;
+    const medallionBonus = this.hasMedallion('medallion_siphon') ? 25 : 0;
+    const siphonTotal = baseSiphon + medallionBonus;
     const healthNeeded = Math.max(0, this.maxHealth - this.health);
     const healthAdded = Math.min(siphonTotal, healthNeeded);
     this.health += healthAdded;
@@ -938,7 +1107,9 @@ export class PlayerController {
 
   getCombatActor(): CombatActor {
     const h =
-      this.isCrouching || this.isSliding ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
+      this.isCrouching || this.isSliding || this.isKnocked
+        ? PLAYER_CROUCH_HEIGHT
+        : PLAYER_HEIGHT;
     return {
       id: 'player',
       name: this.playerName,
@@ -955,9 +1126,11 @@ export class PlayerController {
       alive: this.isAlive(),
       hasDemolisher: this.augmentManager.hasAugment('demolisher'),
       hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
+      hasCombatMedallion: this.hasMedallion('medallion_combat'),
+      isKnocked: this.isKnocked,
       onDamage: (ev) => this.applyDamage(ev),
       onHeal: (hpAdded, shieldAdded) => {
-        if (!this.isAlive()) return;
+        if (!this.isAlive() || this.isKnocked) return;
         if (hpAdded > 0) {
           this.health = Math.min(this.maxHealth, this.health + hpAdded);
         }
@@ -1087,6 +1260,20 @@ export class PlayerController {
     this.kineticDashRechargeTimer = 0;
     this.lootIslandTickTimer = 0;
     this.lootIslandUpdraftCooldown = 0;
+    this.medallions = [];
+    this.victoryCrown = false;
+    this.crownGlintTimer = CROWN_GLINT_INTERVAL_SEC;
+    this.isDrawingBow = false;
+    this.bowDrawElapsed = 0;
+    this.bowCharge = 0;
+    this.isKnocked = false;
+    this.bleedOutHp = 0;
+    this.isRevivingPartner = false;
+    this.reviveTimer = 0;
+    this.reviveTickSoundTimer = 0;
+    this.reviveLabel = null;
+    this.incomingReviveProgress = null;
+    this.incomingReviveLabel = null;
     this.stats = {
       damageDealt: 0,
       shotsFired: 0,
@@ -1096,6 +1283,8 @@ export class PlayerController {
       chestsOpened: 0,
       poisCaptured: 0,
       goldEarned: 0,
+      knocks: 0,
+      revives: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -1146,7 +1335,7 @@ export class PlayerController {
   }
 
   toggleBuildMode(force?: boolean): void {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.isKnocked) return;
     if (this.gameMode === 'zero_build') {
       this.isBuildMode = false;
       this.building.setPreviewVisible(false);
@@ -1167,7 +1356,7 @@ export class PlayerController {
   }
 
   selectBuildPiece(type: BuildPieceType): void {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.isKnocked) return;
     if (this.gameMode === 'zero_build') {
       this.isBuildMode = false;
       this.building.setPreviewVisible(false);
@@ -1184,7 +1373,9 @@ export class PlayerController {
   }
 
   enterEditMode(): boolean {
-    if (this.phase !== 'playing' || this.gameMode === 'zero_build') return false;
+    if (this.phase !== 'playing' || this.gameMode === 'zero_build' || this.isKnocked) {
+      return false;
+    }
     const editState = this.building.getEditState();
     if (editState.active) {
       this.building.confirmEdit();
@@ -1210,7 +1401,10 @@ export class PlayerController {
   }
 
   enterTestEmote(emoteId?: EmoteId): void {
-    if (this.phase !== 'playing' && this.phase !== 'victory' && this.phase !== 'lobby') {
+    if (
+      this.isKnocked ||
+      (this.phase !== 'playing' && this.phase !== 'victory' && this.phase !== 'lobby')
+    ) {
       return;
     }
     const target = emoteId ?? this.selectedEmote;
@@ -1233,9 +1427,20 @@ export class PlayerController {
     if (isStorm) {
       const stormDmg =
         ev.hpDamage > 0 ? ev.hpDamage : Math.max(0, ev.damage);
+      if (this.isKnocked) {
+        this.bleedOutHp = Math.max(0, this.bleedOutHp - stormDmg);
+        if (this.bleedOutHp <= 0) {
+          this.handleEliminated();
+        }
+        return;
+      }
       this.health = Math.max(0, this.health - stormDmg);
       if (this.health <= 0) {
-        this.handleEliminated();
+        if (this.gameMode === 'duos' && this.duoReviveBridge?.isPartnerAlive?.()) {
+          this.enterKnockedState();
+        } else {
+          this.handleEliminated();
+        }
       }
       return;
     }
@@ -1247,6 +1452,21 @@ export class PlayerController {
       ev.damage > 0
         ? ev.damage
         : Math.max(0, ev.shieldDamage) + Math.max(0, ev.hpDamage);
+
+    if (this.isKnocked) {
+      this.bleedOutHp = Math.max(0, this.bleedOutHp - totalDmg);
+      const dx = ev.hitPoint.x - this.position.x;
+      const dz = ev.hitPoint.z - this.position.z;
+      const worldAngle = Math.atan2(dx, dz);
+      this.damageDirection = {
+        timestamp: Date.now(),
+        angleRad: worldAngle - this.yaw,
+      };
+      if (this.bleedOutHp <= 0) {
+        this.handleEliminated();
+      }
+      return;
+    }
 
     if (this.overshield > 0) {
       const osDmg = Math.min(this.overshield, totalDmg);
@@ -1294,15 +1514,30 @@ export class PlayerController {
     };
 
     if (this.health <= 0) {
-      this.handleEliminated();
+      if (this.gameMode === 'duos' && this.duoReviveBridge?.isPartnerAlive?.()) {
+        this.enterKnockedState();
+      } else {
+        this.handleEliminated();
+      }
     }
   }
 
   applyStormDamage(amount: number): void {
     if (!this.isAlive() || amount <= 0) return;
+    if (this.isKnocked) {
+      this.bleedOutHp = Math.max(0, this.bleedOutHp - amount);
+      if (this.bleedOutHp <= 0) {
+        this.handleEliminated();
+      }
+      return;
+    }
     this.health = Math.max(0, this.health - amount);
     if (this.health <= 0) {
-      this.handleEliminated();
+      if (this.gameMode === 'duos' && this.duoReviveBridge?.isPartnerAlive?.()) {
+        this.enterKnockedState();
+      } else {
+        this.handleEliminated();
+      }
     }
   }
 
@@ -1320,11 +1555,39 @@ export class PlayerController {
     this.isSliding = false;
     this.isMantling = false;
     this.isSwimming = false;
+    this.isKnocked = false;
+    this.bleedOutHp = 0;
+    this.isDrawingBow = false;
+    this.bowDrawElapsed = 0;
+    this.bowCharge = 0;
+    this.cancelPartnerRevive();
+    this.incomingReviveProgress = null;
+    this.incomingReviveLabel = null;
     this.activeZipline = null;
     this.killStreak = 0;
     this.building.setPreviewVisible(false);
     this.building.cancelEdit();
     this.clearHeldInputs();
+
+    if (this.chapterBridge) {
+      for (let i = 0; i < this.medallions.length; i++) {
+        this.chapterBridge.spawnDroppedMedallion?.(
+          this.medallions[i],
+          this.position.x + (i - 1) * 0.9,
+          this.position.y + 0.1,
+          this.position.z,
+        );
+      }
+      if (this.victoryCrown) {
+        this.chapterBridge.spawnDroppedCrown?.(
+          this.position.x + 0.8,
+          this.position.y + 0.1,
+          this.position.z + 0.6,
+        );
+      }
+    }
+    this.medallions = [];
+    this.victoryCrown = false;
 
     // Drop inventory items
     const dropped = this.inventory.dropAllLoot();
@@ -1413,6 +1676,9 @@ export class PlayerController {
 
   releaseKey(code: string): void {
     this.keysDown.delete(code);
+    if (this.isRevivingPartner && code === this.getResolvedKeybinds().interact) {
+      this.cancelPartnerRevive();
+    }
   }
 
   setMouseButton(button: 0 | 1 | 2, down: boolean): void {
@@ -1423,9 +1689,12 @@ export class PlayerController {
         this.leftMouseDown = false;
         this.isFiring = false;
         this.lastDraggedEditTile = -1;
+        if (this.isDrawingBow) {
+          this.releaseBowShot();
+        }
       }
     } else if (button === 1) {
-      if (down && this.phase === 'playing') {
+      if (down && this.phase === 'playing' && !this.isKnocked) {
         this.placeTacticalPing();
       }
     } else if (button === 2) {
@@ -1445,6 +1714,10 @@ export class PlayerController {
     this.isFiring = false;
     this.isAiming = false;
     this.isScoped = false;
+    this.isDrawingBow = false;
+    this.bowDrawElapsed = 0;
+    this.bowCharge = 0;
+    this.cancelPartnerRevive();
     this.lastDraggedEditTile = -1;
   }
 
@@ -1500,6 +1773,7 @@ export class PlayerController {
 
   private handlePrimaryButtonDown(): void {
     this.leftMouseDown = true;
+    if (this.isKnocked) return;
     if (this.isEmoting) {
       this.isEmoting = false;
       this.activeEmote = null;
@@ -1529,6 +1803,7 @@ export class PlayerController {
 
   private handleSecondaryButtonDown(): void {
     this.rightMouseDown = true;
+    if (this.isKnocked) return;
     if (this.phase === 'playing') {
       if (this.building.getEditState().active) {
         this.building.resetEditTiles();
@@ -1548,6 +1823,9 @@ export class PlayerController {
       this.leftMouseDown = false;
       this.isFiring = false;
       this.lastDraggedEditTile = -1;
+      if (this.isDrawingBow) {
+        this.releaseBowShot();
+      }
     } else if (e.button === 2) {
       this.rightMouseDown = false;
     }
@@ -1682,7 +1960,7 @@ export class PlayerController {
       return;
     }
 
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.isKnocked) return;
 
     if (code === 'Digit7') {
       this.selectAugmentChoice(0);
@@ -1832,11 +2110,15 @@ export class PlayerController {
               (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) &&
               !this.isAiming &&
               this.stamina > 1.5);
-          const jumpScale =
+          const augmentJumpScale =
             isSprintingNow && this.augmentManager.hasAugment('parkour_boost')
               ? 1.35
               : 1.0;
-          this.velocity.y = 8.4 * jumpScale;
+          const agilityJumpScale =
+            isSprintingNow && this.hasMedallion('medallion_agility')
+              ? 1.22
+              : 1.0;
+          this.velocity.y = 8.4 * augmentJumpScale * agilityJumpScale;
           this.grounded = false;
           this.wasAirborne = true;
           this.fallPeakY = this.position.y;
@@ -1877,6 +2159,9 @@ export class PlayerController {
 
   private handleKeyUp(e: KeyboardEvent): void {
     this.keysDown.delete(e.code);
+    if (this.isRevivingPartner && e.code === this.getResolvedKeybinds().interact) {
+      this.cancelPartnerRevive();
+    }
   }
 
   private selectSlot(slotIndex: number): void {
@@ -1900,6 +2185,16 @@ export class PlayerController {
     this.isEmoting = false;
     this.activeEmote = null;
     this.isFiring = false;
+    this.isDrawingBow = false;
+    this.bowDrawElapsed = 0;
+    this.bowCharge = 0;
+  }
+
+  private cancelPartnerRevive(): void {
+    this.isRevivingPartner = false;
+    this.reviveTimer = 0;
+    this.reviveTickSoundTimer = 0;
+    this.reviveLabel = null;
   }
 
   private cycleBuildMaterial(): void {
@@ -1946,7 +2241,7 @@ export class PlayerController {
   }
 
   private startReload(): void {
-    if (this.reloadTimer > 0) return;
+    if (this.reloadTimer > 0 || this.isKnocked) return;
     const slot = this.inventory.getActiveSlotIndex();
     const item = this.inventory.getActiveItem();
     if (!item) return;
@@ -1955,11 +2250,16 @@ export class PlayerController {
     if (item.magAmmo >= def.magSize) return;
     if (this.inventory.getAmmo(def.ammoType) <= 0) return;
 
-    const reloadScale = this.augmentManager.hasAugment('light_fingers') ? 0.7 : 1.0;
-    const reloadDur = def.reloadTime * reloadScale;
+    const reloadDur = this.weapons.getReloadTime(item, {
+      hasLightFingers: this.augmentManager.hasAugment('light_fingers'),
+      hasCombatMedallion: this.hasMedallion('medallion_combat'),
+    });
 
     this.healTimer = 0;
     this.healLabel = null;
+    this.isDrawingBow = false;
+    this.bowDrawElapsed = 0;
+    this.bowCharge = 0;
     this.reloadSlotIndex = slot;
     this.reloadDuration = reloadDur;
     this.reloadTimer = reloadDur;
@@ -1967,6 +2267,7 @@ export class PlayerController {
   }
 
   private tryUseActiveSlot(isInitialPress: boolean): void {
+    if (this.isKnocked || this.isRevivingPartner) return;
     const item = this.inventory.getActiveItem();
     if (!item) return;
     const def = WEAPONS[item.weaponId];
@@ -2004,6 +2305,24 @@ export class PlayerController {
       return;
     }
 
+    if (def.isBow || item.weaponId === 'boom_bow') {
+      if (!this.isDrawingBow) {
+        this.reloadTimer = 0;
+        this.healTimer = 0;
+        this.healLabel = null;
+        this.isDrawingBow = true;
+        this.bowDrawElapsed = 0;
+        this.bowCharge = 0;
+        this.isFiring = false;
+        this.eventBus.emit('sound:play', {
+          id: 'bow_draw',
+          position: { ...this.position },
+          spatial: true,
+        });
+      }
+      return;
+    }
+
     // Cancel active reload/heal on firing
     this.reloadTimer = 0;
     this.healTimer = 0;
@@ -2029,8 +2348,10 @@ export class PlayerController {
       vehicleBridge: this.vehicleBridge,
       stationBridge: this.stationBridge,
       riftCaptureBridge: this.riftCaptureBridge,
+      chapterBridge: this.chapterBridge,
       hasDemolisher: this.augmentManager.hasAugment('demolisher'),
       hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
+      hasCombatMedallion: this.hasMedallion('medallion_combat'),
       onAmmoConsumed: () => {
         if (def.magSize > 0 && item.magAmmo > 0) {
           item.magAmmo -= 1;
@@ -2063,6 +2384,75 @@ export class PlayerController {
       this.recoilKick = 1.0;
 
       if (def.magSize > 0 && item.magAmmo <= 0 && !def.isGrappler) {
+        this.startReload();
+      }
+    }
+  }
+
+  private releaseBowShot(): void {
+    const charge = clamp(this.bowCharge, 0, 1);
+    this.isDrawingBow = false;
+    this.bowDrawElapsed = 0;
+    this.bowCharge = 0;
+
+    if (
+      this.phase !== 'playing' ||
+      !this.isAlive() ||
+      this.isKnocked ||
+      this.activeVehicleId !== null ||
+      this.isBuildMode ||
+      this.building.getEditState().active
+    ) {
+      return;
+    }
+
+    const item = this.inventory.getActiveItem();
+    if (!item) return;
+    const def = WEAPONS[item.weaponId];
+    if (!def || (!def.isBow && item.weaponId !== 'boom_bow') || item.magAmmo <= 0) {
+      return;
+    }
+
+    const spreadRad = this.computeCurrentSpread(item.weaponId) * (1 - 0.7 * charge);
+    const eye = this.getEyePosition();
+    const aimDir = this.computeCrosshairParallaxAimDir(eye);
+
+    const res = this.weapons.fireWeapon({
+      actor: this.getCombatActor(),
+      item,
+      origin: eye,
+      aimDir,
+      muzzlePos: this.muzzleWorldPos ?? eye,
+      spreadRad,
+      isPlayer: true,
+      vehicleBridge: this.vehicleBridge,
+      stationBridge: this.stationBridge,
+      riftCaptureBridge: this.riftCaptureBridge,
+      chapterBridge: this.chapterBridge,
+      hasDemolisher: this.augmentManager.hasAugment('demolisher'),
+      hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
+      hasCombatMedallion: this.hasMedallion('medallion_combat'),
+      bowCharge: charge,
+      onAmmoConsumed: () => {
+        if (def.magSize > 0 && item.magAmmo > 0) {
+          item.magAmmo -= 1;
+        }
+      },
+    });
+
+    if (res.fired) {
+      this.fireCooldown = 1 / def.fireRate;
+      this.stats.shotsFired += 1;
+      if (res.shotsHit > 0) this.stats.shotsHit += 1;
+      this.stats.headshots += res.headshots;
+      this.stats.damageDealt += res.damageDealt;
+
+      this.bloom = Math.min(def.bloomMax, this.bloom + def.bloomPerShot);
+      this.pitch = clamp(this.pitch + def.recoilPitch, -1.28, 1.32);
+      this.yaw += (Math.random() - 0.5) * 2 * def.recoilYaw;
+      this.recoilKick = 1.0;
+
+      if (def.magSize > 0 && item.magAmmo <= 0) {
         this.startReload();
       }
     }
@@ -2166,7 +2556,9 @@ export class PlayerController {
       vehicleBridge: this.vehicleBridge,
       stationBridge: this.stationBridge,
       riftCaptureBridge: this.riftCaptureBridge,
+      chapterBridge: this.chapterBridge,
       hasDemolisher: this.augmentManager.hasAugment('demolisher'),
+      hasCombatMedallion: this.hasMedallion('medallion_combat'),
     });
 
     return true;
@@ -2247,6 +2639,7 @@ export class PlayerController {
   startSlide(): boolean {
     if (
       this.phase !== 'playing' ||
+      this.isKnocked ||
       !this.grounded ||
       this.isSliding ||
       this.isMantling ||
@@ -2296,6 +2689,7 @@ export class PlayerController {
   tryMantle(): boolean {
     if (
       this.phase !== 'playing' ||
+      this.isKnocked ||
       this.isMantling ||
       this.activeZipline ||
       this.isSwimming
@@ -2488,6 +2882,10 @@ export class PlayerController {
 
   private findNearestInteractable(): {
     kind:
+      | 'revive_partner'
+      | 'dropped_medallion'
+      | 'dropped_crown'
+      | 'weapon_bunker'
       | 'chest'
       | 'llama'
       | 'supply_drop'
@@ -2502,10 +2900,32 @@ export class PlayerController {
     id: string;
     prompt: PlayerInteractPrompt;
   } | null {
+    if (this.isKnocked) return null;
     const interactKey = this.formatKeyLabel(this.getResolvedKeybinds().interact);
+
+    if (this.duoReviveBridge) {
+      const downedPartner = this.duoReviveBridge.getPartnerDownedNearby(this.position);
+      if (downedPartner) {
+        const partnerName = downedPartner.name ?? 'PARTNER';
+        return {
+          kind: 'revive_partner',
+          id: downedPartner.id ?? 'duo_partner',
+          prompt: {
+            label: `HOLD [${interactKey}] REVIVE ${partnerName}`,
+            key: interactKey,
+            rarity: 'rare',
+          },
+        };
+      }
+    }
+
     let bestDist = Infinity;
     let best: {
       kind:
+        | 'revive_partner'
+        | 'dropped_medallion'
+        | 'dropped_crown'
+        | 'weapon_bunker'
         | 'chest'
         | 'llama'
         | 'supply_drop'
@@ -2520,6 +2940,71 @@ export class PlayerController {
       id: string;
       prompt: PlayerInteractPrompt;
     } | null = null;
+
+    if (this.chapterBridge) {
+      const droppedMeds = this.chapterBridge.getDroppedMedallions();
+      for (let i = 0; i < droppedMeds.length; i++) {
+        const dm = droppedMeds[i];
+        if (dm.collected || this.hasMedallion(dm.medallionId)) continue;
+        const d = dist3D(this.position, { x: dm.x, y: dm.y, z: dm.z });
+        if (d <= 3.0 && d < bestDist) {
+          bestDist = d;
+          const medName =
+            MEDALLIONS.find((m) => m.id === dm.medallionId)?.name ?? dm.medallionId;
+          best = {
+            kind: 'dropped_medallion',
+            id: dm.id,
+            prompt: {
+              label: `Equip ${medName}`,
+              key: interactKey,
+              rarity: 'mythic',
+            },
+          };
+        }
+      }
+
+      if (!this.victoryCrown) {
+        const droppedCrowns = this.chapterBridge.getDroppedCrowns();
+        for (let i = 0; i < droppedCrowns.length; i++) {
+          const dc = droppedCrowns[i];
+          if (dc.collected) continue;
+          const d = dist3D(this.position, { x: dc.x, y: dc.y, z: dc.z });
+          if (d <= 3.0 && d < bestDist) {
+            bestDist = d;
+            best = {
+              kind: 'dropped_crown',
+              id: dc.id,
+              prompt: {
+                label: 'Claim Victory Crown',
+                key: interactKey,
+                rarity: 'mythic',
+              },
+            };
+          }
+        }
+      }
+
+      const bunkers = this.chapterBridge.getWeaponBunkers();
+      for (let i = 0; i < bunkers.length; i++) {
+        const wb = bunkers[i];
+        if (wb.looted) continue;
+        const d = dist3D(this.position, { x: wb.x, y: wb.y, z: wb.z });
+        if (d <= 4.5 && d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'weapon_bunker',
+            id: wb.id,
+            prompt: {
+              label: wb.unlocked
+                ? 'OPEN WEAPON BUNKER'
+                : `WEAPON BUNKER LOCKED (STORM ${wb.unlockAtStormPhase})`,
+              key: interactKey,
+              rarity: wb.unlocked ? 'legendary' : 'epic',
+            },
+          };
+        }
+      }
+    }
 
     const chests = this.propsBridge.getChests();
     for (let i = 0; i < chests.length; i++) {
@@ -2755,7 +3240,7 @@ export class PlayerController {
   }
 
   private tryInteract(): void {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.isKnocked) return;
 
     if (this.activeVehicleId !== null) {
       this.exitActiveVehicle(true);
@@ -2769,6 +3254,133 @@ export class PlayerController {
 
     const candidate = this.findNearestInteractable();
     if (candidate) {
+      if (candidate.kind === 'revive_partner' && this.duoReviveBridge) {
+        const downedPartner = this.duoReviveBridge.getPartnerDownedNearby(this.position);
+        if (downedPartner && !this.isRevivingPartner) {
+          this.reloadTimer = 0;
+          this.healTimer = 0;
+          this.healLabel = null;
+          this.isDrawingBow = false;
+          this.bowDrawElapsed = 0;
+          this.bowCharge = 0;
+          this.isRevivingPartner = true;
+          this.reviveTimer = 0;
+          this.reviveTickSoundTimer = 0.5;
+          this.reviveLabel = `REVIVING ${downedPartner.name ?? 'PARTNER'}`;
+          this.eventBus.emit('sound:play', {
+            id: 'revive_tick',
+            position: { ...downedPartner.position },
+            spatial: true,
+          });
+          this.eventBus.emit('vfx:revive_beam', {
+            position: { ...downedPartner.position },
+            progress: 0,
+          });
+        }
+        return;
+      }
+
+      if (candidate.kind === 'dropped_medallion' && this.chapterBridge) {
+        const dm = this.chapterBridge
+          .getDroppedMedallions()
+          .find((m) => m.id === candidate.id);
+        const picked = this.chapterBridge.collectNearbyMedallion(
+          dm ? dm.x : this.position.x,
+          dm ? dm.z : this.position.z,
+          3.2,
+        );
+        if (picked) {
+          const medId = typeof picked === 'string' ? picked : picked.medallionId;
+          this.addMedallion(medId);
+          this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        }
+        return;
+      }
+
+      if (candidate.kind === 'dropped_crown' && this.chapterBridge) {
+        const dc = this.chapterBridge
+          .getDroppedCrowns()
+          .find((c) => c.id === candidate.id);
+        const picked = this.chapterBridge.collectNearbyCrown(
+          dc ? dc.x : this.position.x,
+          dc ? dc.z : this.position.z,
+          3.2,
+        );
+        if (picked) {
+          this.claimDroppedCrown();
+          this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        }
+        return;
+      }
+
+      if (candidate.kind === 'weapon_bunker' && this.chapterBridge) {
+        const bunker = this.chapterBridge
+          .getWeaponBunkers()
+          .find((b) => b.id === candidate.id);
+        if (!bunker || !bunker.unlocked || bunker.looted) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        const loot = this.chapterBridge.lootWeaponBunker(bunker.id);
+        if (!loot) return;
+        const def = WEAPONS[loot.weaponId];
+        const bunkerItem: ItemInstance = {
+          uid: `bunker_${bunker.id}_${++this.bunkerItemSeq}`,
+          weaponId: loot.weaponId,
+          rarity: loot.rarity,
+          magAmmo: def.magSize,
+          stackCount: 1,
+        };
+        const addRes = this.inventory.addItem(bunkerItem);
+        if (!addRes.added) {
+          this.propsBridge.spawnLootDrop(
+            { x: this.position.x, y: this.position.y + 0.8, z: this.position.z },
+            { item: bunkerItem },
+            { x: 0, y: 3.5, z: 0 },
+          );
+        } else {
+          if (addRes.swappedOut) {
+            const fwd = this.getLookDirection();
+            this.propsBridge.spawnLootDrop(
+              { x: this.position.x, y: this.position.y + 1.0, z: this.position.z },
+              { item: addRes.swappedOut },
+              { x: fwd.x * 2.5, y: 3.5, z: fwd.z * 2.5 },
+            );
+          }
+          if (this.inventory.getActiveSlotIndex() === 0 && addRes.slotIndex >= 1) {
+            this.inventory.setActiveSlot(addRes.slotIndex);
+          }
+        }
+        if (def.ammoType) {
+          this.inventory.addAmmo(
+            def.ammoType,
+            def.ammoType === 'heavy' ? 8 : Math.max(def.magSize, 30),
+          );
+        }
+        if (loot.gold > 0) {
+          this.addGoldBars(loot.gold, {
+            x: bunker.x,
+            y: bunker.y + 1.0,
+            z: bunker.z,
+          });
+        }
+        if (loot.shieldRestore > 0) {
+          this.shield = Math.min(this.maxShield, this.shield + loot.shieldRestore);
+        }
+        this.stats.chestsOpened += 1;
+        this.eventBus.emit('sound:play', {
+          id: 'chest_open',
+          position: { x: bunker.x, y: bunker.y, z: bunker.z },
+          spatial: true,
+        });
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        return;
+      }
+
       if (candidate.kind === 'chest') {
         if (this.propsBridge.openChest(candidate.id)) {
           this.stats.chestsOpened += 1;
@@ -3086,9 +3698,28 @@ export class PlayerController {
     this.eventBus.emit('sound:play', { id: 'loot_pickup' });
   }
 
+  private claimDroppedCrown(): void {
+    this.setVictoryCrown(true);
+    const glintPos = {
+      x: this.position.x,
+      y: this.position.y + PLAYER_HEIGHT + 0.35,
+      z: this.position.z,
+    };
+    this.eventBus.emit('sound:play', {
+      id: 'crown_glint',
+      position: glintPos,
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:crown_glint', { position: glintPos });
+    this.crownGlintTimer = CROWN_GLINT_INTERVAL_SEC;
+  }
+
   private updateAutoPickupAndPrompt(): void {
-    if (this.phase !== 'playing') {
+    if (this.phase !== 'playing' || this.isKnocked) {
       this.interactPrompt = null;
+      if (this.isKnocked) {
+        this.canRepairBuild = false;
+      }
       return;
     }
 
@@ -3105,6 +3736,51 @@ export class PlayerController {
       }
     }
 
+    // Walkover auto-pickup for Dropped Medallions & Dropped Victory Crowns
+    if (this.chapterBridge && this.isAlive()) {
+      const droppedMeds = this.chapterBridge.getDroppedMedallions();
+      for (let i = 0; i < droppedMeds.length; i++) {
+        const dm = droppedMeds[i];
+        if (dm.collected || this.hasMedallion(dm.medallionId)) continue;
+        if (
+          dist2D(this.position.x, this.position.z, dm.x, dm.z) <= 2.0 &&
+          Math.abs(this.position.y - dm.y) <= 2.2
+        ) {
+          const picked = this.chapterBridge.collectNearbyMedallion(
+            this.position.x,
+            this.position.z,
+            2.2,
+          );
+          if (picked) {
+            const medId = typeof picked === 'string' ? picked : picked.medallionId;
+            this.addMedallion(medId);
+          }
+        }
+      }
+
+      if (!this.victoryCrown) {
+        const droppedCrowns = this.chapterBridge.getDroppedCrowns();
+        for (let i = 0; i < droppedCrowns.length; i++) {
+          const dc = droppedCrowns[i];
+          if (dc.collected) continue;
+          if (
+            dist2D(this.position.x, this.position.z, dc.x, dc.z) <= 2.0 &&
+            Math.abs(this.position.y - dc.y) <= 2.2
+          ) {
+            const picked = this.chapterBridge.collectNearbyCrown(
+              this.position.x,
+              this.position.z,
+              2.2,
+            );
+            if (picked) {
+              this.claimDroppedCrown();
+              break;
+            }
+          }
+        }
+      }
+    }
+
     // Find nearest interact prompt
     const interactKey = this.formatKeyLabel(this.getResolvedKeybinds().interact);
     if (this.activeVehicleId !== null) {
@@ -3115,6 +3791,12 @@ export class PlayerController {
 
     if (this.activeZipline) {
       this.interactPrompt = { label: 'Drop Zipline', key: 'SPACE', rarity: 'rare' };
+      return;
+    }
+
+    if (this.isRevivingPartner) {
+      this.interactPrompt = null;
+      this.canRepairBuild = false;
       return;
     }
 
@@ -3822,7 +4504,10 @@ export class PlayerController {
     }
 
     const wantsSprint =
+      !this.isKnocked &&
       !this.isSliding &&
+      !this.isDrawingBow &&
+      !this.isRevivingPartner &&
       (this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight')) &&
       forwardInput > 0 &&
       !this.isAiming &&
@@ -3838,13 +4523,16 @@ export class PlayerController {
       if (this.staminaRegenDelay > 0) {
         this.staminaRegenDelay = Math.max(0, this.staminaRegenDelay - dt);
       } else {
-        this.stamina = Math.min(100, this.stamina + 24 * dt);
+        const staminaRegenRate =
+          24 * (this.hasMedallion('medallion_agility') ? 1.25 : 1.0);
+        this.stamina = Math.min(100, this.stamina + staminaRegenRate * dt);
       }
     }
 
     const activeItem = this.inventory.getActiveItem();
     const activeDef = activeItem ? WEAPONS[activeItem.weaponId] : WEAPONS.pickaxe;
     this.isAiming =
+      !this.isKnocked &&
       this.rightMouseDown &&
       !this.isBuildMode &&
       !this.building.getEditState().active &&
@@ -3877,9 +4565,17 @@ export class PlayerController {
       this.velocity.z = this.slideDir.z * this.slideSpeed;
     } else {
       let targetSpeed = 6.6;
-      if (this.isCrouching) targetSpeed = 3.6;
-      else if (this.isSprinting) targetSpeed = 9.6;
-      else if (this.isAiming || this.healTimer > 0) targetSpeed = 3.8;
+      if (this.isKnocked) {
+        targetSpeed = 2.1;
+      } else if (this.isCrouching) {
+        targetSpeed = 3.6;
+      } else if (this.isSprinting) {
+        targetSpeed = 9.6 * (this.hasMedallion('medallion_agility') ? 1.15 : 1.0);
+      } else if (this.isAiming || this.healTimer > 0 || this.isRevivingPartner) {
+        targetSpeed = 3.8;
+      } else if (this.isDrawingBow) {
+        targetSpeed = 4.6;
+      }
       if (inWater) targetSpeed *= 0.68;
 
       const targetVx = wishX * targetSpeed;
@@ -3909,7 +4605,9 @@ export class PlayerController {
     const prevGrounded = this.grounded;
     const prevVy = this.velocity.y;
     const charHeight =
-      this.isCrouching || this.isSliding ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
+      this.isCrouching || this.isSliding || this.isKnocked
+        ? PLAYER_CROUCH_HEIGHT
+        : PLAYER_HEIGHT;
 
     const res = this.collision.resolveCharacterMovement(
       this.position,
@@ -3982,7 +4680,7 @@ export class PlayerController {
     }
 
     // Check Launch Pads & Volcanic Geysers
-    if (this.launchPadCooldown <= 0 && this.traversalBridge) {
+    if (!this.isKnocked && this.launchPadCooldown <= 0 && this.traversalBridge) {
       const pads = this.traversalBridge.getLaunchPads();
       for (let i = 0; i < pads.length; i++) {
         const pad = pads[i];
@@ -4055,7 +4753,13 @@ export class PlayerController {
     }
 
     // Footstep sound cadence with surface & biome mapping
-    if (this.grounded && this.moveSpeed > 1.3 && !this.isCrouching && !this.isSliding) {
+    if (
+      this.grounded &&
+      !this.isKnocked &&
+      this.moveSpeed > 1.3 &&
+      !this.isCrouching &&
+      !this.isSliding
+    ) {
       this.footstepTimer -= dt * (this.isSprinting ? 1.45 : 1.0);
       if (this.footstepTimer <= 0) {
         this.footstepTimer = 0.36;
@@ -4246,6 +4950,51 @@ export class PlayerController {
   }
 
   private updateCombatAndTimers(dt: number): void {
+    // DBNO bleed-out while knocked
+    if (this.isKnocked && this.isAlive()) {
+      this.bleedOutHp = Math.max(0, this.bleedOutHp - DBNO_BLEED_DPS * dt);
+      if (this.bleedOutHp <= 0) {
+        this.handleEliminated();
+      }
+      this.building.setPreviewVisible(false);
+      this.lastBuildPreview = null;
+      this.isFiring = false;
+      this.isDrawingBow = false;
+      this.bowDrawElapsed = 0;
+      this.bowCharge = 0;
+      return;
+    }
+
+    // Victory Crown periodic glint
+    if (this.victoryCrown && this.isAlive() && !this.isKnocked) {
+      this.crownGlintTimer -= dt;
+      if (this.crownGlintTimer <= 0) {
+        this.crownGlintTimer = CROWN_GLINT_INTERVAL_SEC;
+        const glintPos = {
+          x: this.position.x,
+          y: this.position.y + PLAYER_HEIGHT + 0.35,
+          z: this.position.z,
+        };
+        this.eventBus.emit('vfx:crown_glint', { position: glintPos });
+        this.eventBus.emit('sound:play', {
+          id: 'crown_glint',
+          position: glintPos,
+          spatial: true,
+        });
+      }
+    }
+
+    // Siphon Aspect Medallion: +2/s shield regen up to 50 when out of combat >= 4s
+    if (
+      this.hasMedallion('medallion_siphon') &&
+      this.isAlive() &&
+      !this.isKnocked &&
+      this.shield < 50 &&
+      this.elapsedTime - this.lastDamageTime >= 4.0
+    ) {
+      this.shield = Math.min(50, this.shield + 2.0 * dt);
+    }
+
     // Slurp Juice HoT tick
     if (this.slurpHotRemaining > 0 && this.isAlive()) {
       const tick = Math.min(this.slurpHotRemaining, this.slurpHotRate * dt);
@@ -4330,9 +5079,79 @@ export class PlayerController {
       if (this.reloadTimer <= 0) {
         this.reloadTimer = 0;
         if (this.reloadSlotIndex >= 1) {
-          this.inventory.reloadSlot(this.reloadSlotIndex);
+          const reloadedItem = this.inventory.getSlot(this.reloadSlotIndex);
+          const loaded = this.inventory.reloadSlot(this.reloadSlotIndex);
+          if (reloadedItem && loaded > 0) {
+            this.weapons.completeTwinMagReload(reloadedItem);
+          }
         }
         this.reloadSlotIndex = -1;
+      }
+    }
+
+    // Duos Partner Revive channel (hold [E] for REVIVE_DURATION_SEC)
+    if (this.isRevivingPartner) {
+      const interactCode = this.getResolvedKeybinds().interact;
+      const partner = this.duoReviveBridge?.getPartnerDownedNearby(this.position) ?? null;
+      if (
+        !this.keysDown.has(interactCode) ||
+        !this.isAlive() ||
+        this.isKnocked ||
+        this.activeVehicleId !== null ||
+        this.activeZipline !== null ||
+        this.isBuildMode ||
+        this.isSliding ||
+        this.isMantling ||
+        !this.grounded ||
+        this.moveSpeed > 2.0 ||
+        !partner
+      ) {
+        this.cancelPartnerRevive();
+      } else {
+        this.reloadTimer = 0;
+        this.healTimer = 0;
+        this.healLabel = null;
+        this.isDrawingBow = false;
+        this.bowDrawElapsed = 0;
+        this.bowCharge = 0;
+        this.reviveTimer += dt;
+        const progress = clamp(this.reviveTimer / REVIVE_DURATION_SEC, 0, 1);
+        this.reviveLabel = `REVIVING ${partner.name ?? 'PARTNER'}`;
+        this.eventBus.emit('vfx:revive_beam', {
+          position: { ...partner.position },
+          progress,
+        });
+
+        this.reviveTickSoundTimer -= dt;
+        if (this.reviveTickSoundTimer <= 0 && this.reviveTimer < REVIVE_DURATION_SEC) {
+          this.reviveTickSoundTimer = 0.5;
+          this.eventBus.emit('sound:play', {
+            id: 'revive_tick',
+            position: { ...partner.position },
+            spatial: true,
+          });
+        }
+
+        if (this.reviveTimer >= REVIVE_DURATION_SEC - 1e-6) {
+          const completed = this.duoReviveBridge?.completePartnerRevive();
+          if (completed !== false) {
+            this.stats.revives = (this.stats.revives ?? 0) + 1;
+            this.eventBus.emit('sound:play', {
+              id: 'revive_complete',
+              position: { ...partner.position },
+              spatial: true,
+            });
+            this.eventBus.emit('vfx:revive_beam', {
+              position: { ...partner.position },
+              progress: 1,
+            });
+          }
+          this.cancelPartnerRevive();
+        }
+        this.building.setPreviewVisible(false);
+        this.lastBuildPreview = null;
+        this.isFiring = false;
+        return;
       }
     }
 
@@ -4391,7 +5210,26 @@ export class PlayerController {
     } else {
       this.building.setPreviewVisible(false);
       this.lastBuildPreview = null;
-      if (this.leftMouseDown) {
+      if (this.isDrawingBow) {
+        const activeItem = this.inventory.getActiveItem();
+        const activeDef = activeItem ? WEAPONS[activeItem.weaponId] : null;
+        if (
+          !activeItem ||
+          !activeDef ||
+          (!activeDef.isBow && activeItem.weaponId !== 'boom_bow') ||
+          activeItem.magAmmo <= 0
+        ) {
+          this.isDrawingBow = false;
+          this.bowDrawElapsed = 0;
+          this.bowCharge = 0;
+        } else if (this.leftMouseDown) {
+          const maxChargeSec = Math.max(0.1, activeDef.bowMaxChargeSec ?? 0.9);
+          this.bowDrawElapsed += dt;
+          this.bowCharge = clamp(this.bowDrawElapsed / maxChargeSec, 0, 1);
+        } else {
+          this.releaseBowShot();
+        }
+      } else if (this.leftMouseDown) {
         this.tryUseActiveSlot(false);
       } else {
         this.isFiring = false;
@@ -4486,7 +5324,8 @@ export class PlayerController {
       rightOffset = 0;
       upOffset = 0.4;
     } else {
-      const eyeH = this.isCrouching || this.isSliding ? 1.05 : 1.52;
+      const eyeH =
+        this.isCrouching || this.isSliding || this.isKnocked ? 1.05 : 1.52;
       pivot = {
         x: this.position.x,
         y: this.position.y + eyeH,
@@ -4649,7 +5488,11 @@ export class PlayerController {
     const weaponId: WeaponId = activeItem ? activeItem.weaponId : 'pickaxe';
 
     let animState: AnimState = 'idle';
-    if (this.phase === 'skydiving') {
+    if (this.isKnocked) {
+      animState = 'knocked';
+    } else if (this.isRevivingPartner) {
+      animState = 'reviving';
+    } else if (this.phase === 'skydiving') {
       animState = 'skydive';
     } else if (this.phase === 'gliding') {
       animState = 'glide';
@@ -4706,6 +5549,11 @@ export class PlayerController {
       isSwimming: this.isSwimming,
       velocityY: this.velocity.y,
       leanAngle: this.leanAngle,
+      hasVictoryCrown: this.victoryCrown,
+      medallionCount: this.medallions.length,
+      isKnocked: this.isKnocked,
+      isReviving: this.isRevivingPartner,
+      bowCharge: this.isDrawingBow ? clamp(this.bowCharge, 0, 1) : 0,
     };
   }
 
@@ -4832,6 +5680,21 @@ export class PlayerController {
       goldBars: this.goldBars,
       kineticDashCharges:
         activeItem?.weaponId === 'kinetic_blade' ? this.kineticDashCharges : null,
+      medallions: [...this.medallions],
+      hasVictoryCrown: this.victoryCrown,
+      bowCharge: this.isDrawingBow ? clamp(this.bowCharge, 0, 1) : null,
+      isKnocked: this.isKnocked,
+      bleedOutHp: this.isKnocked ? Math.max(0, this.bleedOutHp) : 0,
+      reviveProgress: this.isRevivingPartner
+        ? clamp(this.reviveTimer / REVIVE_DURATION_SEC, 0, 1)
+        : this.isKnocked
+          ? this.incomingReviveProgress
+          : null,
+      reviveLabel: this.isRevivingPartner
+        ? this.reviveLabel
+        : this.isKnocked
+          ? this.incomingReviveLabel
+          : null,
     };
   }
 }

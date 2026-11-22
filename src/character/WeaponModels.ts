@@ -10,7 +10,9 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'tac_shotgun',
   'heavy_shotgun',
   'smg',
+  'combat_smg',
   'sniper',
+  'boom_bow',
   'pistol',
   'rocket_launcher',
   'mythic_blade_rifle',
@@ -835,6 +837,126 @@ function buildSMG(): THREE.Group {
   return group;
 }
 
+function buildCombatSMG(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_combat_smg';
+
+  const chassis = makeStandardMat('#1e293b', 0.4, 0.52);
+  const receiverPanel = makeStandardMat('#334155', 0.36, 0.44);
+  const darkMetal = makeStandardMat('#0f172a', 0.34, 0.68);
+  const steel = makeStandardMat('#94a3b8', 0.24, 0.8);
+  const tapeMat = makeStandardMat('#fbbf24', 0.58, 0.1);
+  const opticGlow = makeStandardMat('#22d3ee', 0.12, 0.15, '#22d3ee', 0.9);
+  const laserGlow = makeStandardMat('#ef4444', 0.14, 0.15, '#ef4444', 0.95);
+
+  // Ergonomic pistol grip & flared trigger guard
+  addBox(group, 0.038, 0.112, 0.046, darkMetal, 0, -0.022, -0.008, 0.22, 0, 0);
+  addBox(group, 0.015, 0.03, 0.052, darkMetal, 0, 0.018, 0.05);
+
+  // Compact tactical receiver + slotted upper shroud + picatinny top rail
+  tagWrapTarget(addBox(group, 0.056, 0.078, 0.28, receiverPanel, 0, 0.066, 0.08));
+  tagWrapTarget(addBox(group, 0.050, 0.048, 0.16, receiverPanel, 0, 0.072, 0.26));
+  addBox(group, 0.030, 0.014, 0.34, darkMetal, 0, 0.112, 0.12);
+
+  // Twin taped SMG magazines (primary + reversed side-by-side backup mag + twin yellow tape bands)
+  addBox(group, 0.024, 0.145, 0.036, chassis, -0.016, -0.042, 0.125, -0.14, 0, 0);
+  addBox(group, 0.024, 0.145, 0.036, darkMetal, 0.016, -0.056, 0.125, -0.14, 0, 0);
+  addBox(group, 0.028, 0.014, 0.042, steel, -0.016, -0.112, 0.135, -0.14, 0, 0);
+  addBox(group, 0.028, 0.014, 0.042, steel, 0.016, -0.126, 0.135, -0.14, 0, 0);
+  addBox(group, 0.062, 0.024, 0.042, tapeMat, 0, -0.045, 0.125, -0.14, 0, 0);
+  addBox(group, 0.062, 0.020, 0.042, tapeMat, 0, -0.082, 0.130, -0.14, 0, 0);
+
+  // Reflex optic (riser, protective open hood, glowing cyan reticle lens)
+  addBox(group, 0.028, 0.018, 0.058, darkMetal, 0, 0.126, 0.07);
+  addBox(group, 0.008, 0.034, 0.046, chassis, -0.017, 0.148, 0.07);
+  addBox(group, 0.008, 0.034, 0.046, chassis, 0.017, 0.148, 0.07);
+  addBox(group, 0.042, 0.008, 0.046, chassis, 0, 0.166, 0.07);
+  addBox(group, 0.026, 0.026, 0.006, opticGlow, 0, 0.148, 0.085);
+
+  // Side laser rail module + glowing crimson laser emitter
+  addBox(group, 0.012, 0.024, 0.12, steel, -0.032, 0.072, 0.25);
+  addBox(group, 0.026, 0.026, 0.078, darkMetal, -0.042, 0.072, 0.26);
+  addCylinder(group, 0.009, 0.009, 0.014, laserGlow, -0.042, 0.072, 0.304, Math.PI / 2, 0, 0, 8);
+
+  // PDW extendable wire stock + buttpad
+  addBox(group, 0.008, 0.012, 0.16, steel, -0.022, 0.074, -0.13);
+  addBox(group, 0.008, 0.012, 0.16, steel, 0.022, 0.074, -0.13);
+  addBox(group, 0.046, 0.085, 0.024, darkMetal, 0, 0.062, -0.21);
+
+  // Fluted compact barrel + ported compensator nose
+  addCylinder(group, 0.014, 0.016, 0.16, steel, 0, 0.076, 0.36, Math.PI / 2, 0, 0, 10);
+  addCylinder(group, 0.020, 0.020, 0.045, darkMetal, 0, 0.076, 0.43, Math.PI / 2, 0, 0, 10);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.076, 0.46);
+  return group;
+}
+
+function buildBoomBow(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_boom_bow';
+
+  const riserMat = makeStandardMat('#334155', 0.36, 0.55);
+  const limbMat = makeStandardMat('#1e293b', 0.32, 0.62);
+  const steel = makeStandardMat('#94a3b8', 0.24, 0.82);
+  const camGold = makeStandardMat('#f59e0b', 0.26, 0.72, '#d97706', 0.22);
+  const stringMat = makeStandardMat('#e2e8f0', 0.35, 0.4);
+  const shaftMat = makeStandardMat('#0f172a', 0.36, 0.6);
+  const fletchMat = makeStandardMat('#f97316', 0.4, 0.2);
+  const shellRed = makeStandardMat('#dc2626', 0.3, 0.35);
+  const explosiveGlow = makeStandardMat('#f97316', 0.14, 0.15, '#fb923c', 0.96);
+  const tipEmber = makeStandardMat('#fde047', 0.1, 0.1, '#fef08a', 1.0);
+
+  // Sculpted vertical compound bow riser + grip (origin at hand grip 0, 0, 0)
+  addBox(group, 0.036, 0.13, 0.052, limbMat, 0, 0, 0);
+  tagWrapTarget(addBox(group, 0.038, 0.18, 0.062, riserMat, 0, 0.14, 0.03, -0.14, 0, 0));
+  tagWrapTarget(addBox(group, 0.038, 0.16, 0.062, riserMat, 0, -0.13, 0.03, 0.14, 0, 0));
+  // Arrow rest + holographic bow sight bracket
+  addBox(group, 0.028, 0.014, 0.048, steel, 0.02, 0.055, 0.055);
+  addBox(group, 0.024, 0.016, 0.056, steel, 0.028, 0.105, 0.045);
+  addCylinder(group, 0.024, 0.024, 0.016, explosiveGlow, 0.038, 0.105, 0.072, Math.PI / 2, 0, 0, 12);
+
+  // Upper & lower swept compound limbs
+  addBox(group, 0.044, 0.16, 0.032, limbMat, 0, 0.275, -0.025, -0.58, 0, 0);
+  addBox(group, 0.038, 0.16, 0.026, limbMat, 0, 0.385, -0.10, -0.92, 0, 0);
+  addBox(group, 0.044, 0.15, 0.032, limbMat, 0, -0.255, -0.025, 0.58, 0, 0);
+  addBox(group, 0.038, 0.15, 0.026, limbMat, 0, -0.36, -0.10, 0.92, 0, 0);
+
+  // Twin golden compound cam wheels at limb tips
+  addCylinder(group, 0.044, 0.044, 0.024, camGold, 0, 0.44, -0.14, 0, 0, Math.PI / 2, 12);
+  addCylinder(group, 0.018, 0.018, 0.036, steel, 0, 0.44, -0.14, 0, 0, Math.PI / 2, 8);
+  addCylinder(group, 0.044, 0.044, 0.024, camGold, 0, -0.41, -0.14, 0, 0, Math.PI / 2, 12);
+  addCylinder(group, 0.018, 0.018, 0.036, steel, 0, -0.41, -0.14, 0, 0, Math.PI / 2, 8);
+
+  // Taut compound bowstring (upper + lower segments meeting at nock y = 0.06, z = -0.22)
+  addCylinder(group, 0.004, 0.004, 0.39, stringMat, 0, 0.25, -0.18, 0.207, 0, 0, 6);
+  addCylinder(group, 0.004, 0.004, 0.48, stringMat, 0, -0.175, -0.18, -0.169, 0, 0, 6);
+  // Secondary compound power cables
+  addCylinder(group, 0.0035, 0.0035, 0.84, steel, -0.016, 0.015, -0.125, 0, 0, 0, 6);
+
+  // Nocked explosive arrow + fletching + shotgun-shell warhead + glowing explosive arrow tip
+  addCylinder(group, 0.008, 0.008, 0.58, shaftMat, 0, 0.06, 0.07, Math.PI / 2, 0, 0, 8);
+  addBox(group, 0.028, 0.005, 0.065, fletchMat, 0, 0.06, -0.17);
+  addBox(group, 0.005, 0.028, 0.065, fletchMat, 0, 0.06, -0.17);
+  // Explosive warhead shell collar + glowing tip
+  addCylinder(group, 0.019, 0.018, 0.065, shellRed, 0, 0.06, 0.39, Math.PI / 2, 0, 0, 10);
+  addCylinder(group, 0.021, 0.021, 0.018, camGold, 0, 0.06, 0.355, Math.PI / 2, 0, 0, 10);
+  addCylinder(group, 0.022, 0.016, 0.036, explosiveGlow, 0, 0.06, 0.44, Math.PI / 2, 0, 0, 10);
+  addMesh(
+    group,
+    new THREE.ConeGeometry(0.024, 0.075, 8),
+    tipEmber,
+    0,
+    0.06,
+    0.495,
+    Math.PI / 2,
+    0,
+    0,
+  );
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.06, 0.54);
+  return group;
+}
+
 function buildSniper(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'weapon_sniper';
@@ -1419,8 +1541,12 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildHeavyShotgun();
     case 'smg':
       return buildSMG();
+    case 'combat_smg':
+      return buildCombatSMG();
     case 'sniper':
       return buildSniper();
+    case 'boom_bow':
+      return buildBoomBow();
     case 'pistol':
       return buildPistol();
     case 'rocket_launcher':

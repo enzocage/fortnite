@@ -22,7 +22,9 @@ export type AnimState =
   | 'reload'
   | 'heal'
   | 'build'
-  | 'emote';
+  | 'emote'
+  | 'knocked'
+  | 'reviving';
 
 export type EmoteId =
   | 'victory_groove'
@@ -135,4 +137,10 @@ export interface CharacterRenderState {
   bossMaxShield?: number;
   isAlly?: boolean;
   allyRole?: SpecialistRole;
+  hasVictoryCrown?: boolean;
+  medallionCount?: number;
+  isKnocked?: boolean;
+  isReviving?: boolean;
+  bowCharge?: number;
+  isDuoPartner?: boolean;
 }

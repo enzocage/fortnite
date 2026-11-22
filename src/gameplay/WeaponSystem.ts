@@ -7,6 +7,7 @@ import type {
   ProjectileState,
   Rarity,
   SlurpBarrelEntity,
+  SlurpTankerEntity,
   SoundEventId,
   Vec3Like,
   VehicleEntity,
@@ -31,11 +32,12 @@ import type {
   PropsInteractionBridge,
   ShieldBubbleState,
   VehicleBridge,
+  WorldChapterBridge,
   WorldRiftCaptureBridge,
   WorldStationBridge,
 } from './GameplayTypes';
 
-const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
+export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   pickaxe: 'pickaxe_swing',
   ar: 'shot_ar',
   burst_ar: 'shot_burst_ar',
@@ -44,7 +46,9 @@ const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   tac_shotgun: 'shot_tac',
   heavy_shotgun: 'shot_heavy_shotgun',
   smg: 'shot_smg',
+  combat_smg: 'shot_combat_smg',
   sniper: 'shot_sniper',
+  boom_bow: 'bow_release',
   pistol: 'shot_pistol',
   rocket_launcher: 'shot_rocket',
   mythic_blade_rifle: 'shot_mythic_rifle',
@@ -60,6 +64,8 @@ const SHOT_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   medkit: 'ui_click',
   slurp_juice: 'ui_click',
 };
+
+const SHOT_SOUND_MAP = WEAPON_SOUND_MAP;
 
 export function computeWeaponDamage(
   weaponId: WeaponId,
@@ -162,6 +168,7 @@ interface ActiveProjectile extends ProjectileState {
   bounceSoundCooldown?: number;
   demolisherActive?: boolean;
   firstAssaultActive?: boolean;
+  combatMedallionActive?: boolean;
 }
 
 interface PendingBurst {
@@ -181,7 +188,10 @@ export class WeaponSystem {
   private vehicleBridge: VehicleBridge | null = null;
   private stationBridge: WorldStationBridge | null = null;
   private riftCaptureBridge: WorldRiftCaptureBridge | null = null;
+  private chapterBridge: WorldChapterBridge | null = null;
   private explodingBarrelIds = new Set<string>();
+  private rupturingTankerIds = new Set<string>();
+  private twinMagSlowUids = new Set<string>();
   private onSlurpBarrelBroken:
     | ((actorId: string, shieldAmount: number) => void)
     | null = null;
@@ -234,6 +244,47 @@ export class WeaponSystem {
 
   getRiftCaptureBridge(): WorldRiftCaptureBridge | null {
     return this.riftCaptureBridge;
+  }
+
+  setChapterBridge(bridge: WorldChapterBridge | null): void {
+    this.chapterBridge = bridge;
+  }
+
+  getChapterBridge(): WorldChapterBridge | null {
+    return this.chapterBridge;
+  }
+
+  isTwinMagFastReload(item: ItemInstance): boolean {
+    const def = WEAPONS[item.weaponId];
+    if (!def || def.twinMagFastReloadTime === undefined) return false;
+    return !this.twinMagSlowUids.has(item.uid);
+  }
+
+  getReloadTime(
+    item: ItemInstance,
+    opts?: { hasLightFingers?: boolean; hasCombatMedallion?: boolean },
+  ): number {
+    const def = WEAPONS[item.weaponId];
+    if (!def) return 0;
+    const baseTime =
+      def.twinMagFastReloadTime !== undefined && this.isTwinMagFastReload(item)
+        ? def.twinMagFastReloadTime
+        : def.reloadTime;
+    const augmentScale = opts?.hasLightFingers ? 0.7 : 1.0;
+    const medallionScale = opts?.hasCombatMedallion ? 0.8 : 1.0;
+    return baseTime * augmentScale * medallionScale;
+  }
+
+  completeTwinMagReload(item: ItemInstance): boolean {
+    const def = WEAPONS[item.weaponId];
+    if (!def || def.twinMagFastReloadTime === undefined) return false;
+    const wasFast = !this.twinMagSlowUids.has(item.uid);
+    if (wasFast) {
+      this.twinMagSlowUids.add(item.uid);
+    } else {
+      this.twinMagSlowUids.delete(item.uid);
+    }
+    return wasFast;
   }
 
   setOnSlurpBarrelBroken(
@@ -715,6 +766,151 @@ export class WeaponSystem {
     return true;
   }
 
+  private raycastSlurpTankers(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+    bridge?: WorldChapterBridge | null,
+  ): {
+    tanker: SlurpTankerEntity;
+    distance: number;
+    point: Vec3Like;
+    normal: Vec3Like;
+  } | null {
+    const activeBridge = bridge ?? this.chapterBridge;
+    const tankers = activeBridge?.getSlurpTankers();
+    if (!tankers || tankers.length === 0) return null;
+
+    const halfW = 1.45;
+    const halfL = 3.35;
+    const minY = -0.05;
+    const maxY = 2.95;
+    let bestDist = maxDist;
+    let best: {
+      tanker: SlurpTankerEntity;
+      distance: number;
+      point: Vec3Like;
+      normal: Vec3Like;
+    } | null = null;
+
+    for (let i = 0; i < tankers.length; i++) {
+      const tanker = tankers[i];
+      if (tanker.destroyed || tanker.hp <= 0) continue;
+
+      const cos = Math.cos(tanker.rotationY);
+      const sin = Math.sin(tanker.rotationY);
+      const ox = origin.x - tanker.x;
+      const oy = origin.y - tanker.y;
+      const oz = origin.z - tanker.z;
+
+      const localOrigin: Vec3Like = {
+        x: ox * cos - oz * sin,
+        y: oy,
+        z: ox * sin + oz * cos,
+      };
+      const localDir: Vec3Like = {
+        x: dir.x * cos - dir.z * sin,
+        y: dir.y,
+        z: dir.x * sin + dir.z * cos,
+      };
+
+      const hit = this.intersectRayAABB(
+        localOrigin,
+        localDir,
+        -halfW,
+        minY,
+        -halfL,
+        halfW,
+        maxY,
+        halfL,
+        bestDist,
+      );
+      if (hit) {
+        bestDist = hit.distance;
+        best = {
+          tanker,
+          distance: hit.distance,
+          point: {
+            x: tanker.x + hit.point.x * cos + hit.point.z * sin,
+            y: tanker.y + hit.point.y,
+            z: tanker.z - hit.point.x * sin + hit.point.z * cos,
+          },
+          normal: {
+            x: hit.normal.x * cos + hit.normal.z * sin,
+            y: hit.normal.y,
+            z: -hit.normal.x * sin + hit.normal.z * cos,
+          },
+        };
+      }
+    }
+
+    return best;
+  }
+
+  private applySlurpTankerHit(
+    bridge: WorldChapterBridge,
+    tankerId: string,
+    dmg: number,
+    hitPoint: Vec3Like,
+    normal: Vec3Like,
+  ): boolean {
+    if (this.rupturingTankerIds.has(tankerId)) return false;
+    const res = bridge.damageSlurpTanker(tankerId, dmg);
+    if (!res) return false;
+
+    this.eventBus.emit('vfx:impact', {
+      position: hitPoint,
+      normal,
+      material: 'shield',
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'shield_hit',
+      position: hitPoint,
+      spatial: true,
+    });
+
+    if (res.exploded) {
+      this.rupturingTankerIds.add(tankerId);
+      try {
+        const burstPos: Vec3Like = { x: res.x, y: res.y, z: res.z };
+        const radius = res.radius > 0 ? res.radius : 10;
+        const healAmount = res.healAmount > 0 ? res.healAmount : 60;
+        if (this.actorsProvider && healAmount > 0) {
+          const actors = this.actorsProvider();
+          for (let i = 0; i < actors.length; i++) {
+            const actor = actors[i];
+            if (!actor.alive || actor.isKnocked) continue;
+            const center = {
+              x: actor.position.x,
+              y: actor.position.y + actor.height * 0.5,
+              z: actor.position.z,
+            };
+            const d = Math.min(
+              dist3D(burstPos, actor.position),
+              dist3D(burstPos, center),
+            );
+            if (d <= radius) {
+              const maxHp = actor.maxHp ?? 100;
+              const maxShield = actor.maxShield ?? 100;
+              const hpAdded = Math.min(healAmount, Math.max(0, maxHp - actor.hp));
+              const leftover = healAmount - hpAdded;
+              const shieldAdded = Math.min(
+                leftover,
+                Math.max(0, maxShield - actor.shield),
+              );
+              actor.hp = Math.min(maxHp, actor.hp + hpAdded);
+              actor.shield = Math.min(maxShield, actor.shield + shieldAdded);
+              actor.onHeal?.(hpAdded, shieldAdded);
+            }
+          }
+        }
+      } finally {
+        this.rupturingTankerIds.delete(tankerId);
+      }
+    }
+    return true;
+  }
+
   private raycastExplosiveBarrels(
     origin: Vec3Like,
     dir: Vec3Like,
@@ -919,6 +1115,29 @@ export class WeaponSystem {
         );
       }
     }
+
+    // 7. Damage Slurp Tankers within blast radius
+    if (this.chapterBridge) {
+      const tankers = this.chapterBridge.getSlurpTankers();
+      for (let i = 0; i < tankers.length; i++) {
+        const tanker = tankers[i];
+        if (tanker.destroyed || tanker.hp <= 0 || this.rupturingTankerIds.has(tanker.id)) {
+          continue;
+        }
+        const center = { x: tanker.x, y: tanker.y + 1.4, z: tanker.z };
+        const d = dist3D(pos, center);
+        if (d <= radius + 2.2 && !this.isBlockedByShieldBubble(pos, center)) {
+          const falloff = clamp(1 - (d / (radius + 2.2)) * 0.65, 0.35, 1.0);
+          this.applySlurpTankerHit(
+            this.chapterBridge,
+            tanker.id,
+            Math.round(baseDmg * falloff),
+            center,
+            { x: 0, y: 1, z: 0 },
+          );
+        }
+      }
+    }
   }
 
   private applyExplosiveBarrelHit(
@@ -1044,6 +1263,7 @@ export class WeaponSystem {
     const vBridge = params.vehicleBridge ?? this.vehicleBridge;
     const sBridge = params.stationBridge ?? this.stationBridge;
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
+    const chBridge = params.chapterBridge ?? this.chapterBridge;
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const structDmg = Math.round(def.structureDamage * (hasDemolisher ? 1.3 : 1));
 
@@ -1079,6 +1299,12 @@ export class WeaponSystem {
       def.range,
       rcBridge,
     );
+    const tankerHit = this.raycastSlurpTankers(
+      params.origin,
+      aimDir,
+      def.range,
+      chBridge,
+    );
 
     if (
       actorHit &&
@@ -1086,7 +1312,8 @@ export class WeaponSystem {
       (!llamaHit || actorHit.distance <= llamaHit.distance) &&
       (!vehicleHit || actorHit.distance <= vehicleHit.distance) &&
       (!barrelHit || actorHit.distance <= barrelHit.distance) &&
-      (!expBarrelHit || actorHit.distance <= expBarrelHit.distance)
+      (!expBarrelHit || actorHit.distance <= expBarrelHit.distance) &&
+      (!tankerHit || actorHit.distance <= tankerHit.distance)
     ) {
       const ev = this.applyActorDamage(
         params.actor,
@@ -1104,6 +1331,33 @@ export class WeaponSystem {
         shotsHit: 1,
         headshots: 0,
         damageDealt: ev.damage,
+      };
+    }
+
+    if (
+      tankerHit &&
+      chBridge &&
+      (!worldHit.hit ||
+        (worldHit.targetType === 'static' && worldHit.targetId?.includes('tanker')) ||
+        tankerHit.distance <=
+          worldHit.distance + (worldHit.targetType === 'static' ? 0.12 : 0)) &&
+      (!llamaHit || tankerHit.distance <= llamaHit.distance) &&
+      (!vehicleHit || tankerHit.distance <= vehicleHit.distance) &&
+      (!barrelHit || tankerHit.distance <= barrelHit.distance) &&
+      (!expBarrelHit || tankerHit.distance <= expBarrelHit.distance)
+    ) {
+      this.applySlurpTankerHit(
+        chBridge,
+        tankerHit.tanker.id,
+        structDmg,
+        tankerHit.point,
+        tankerHit.normal,
+      );
+      return {
+        fired: true,
+        shotsHit: 1,
+        headshots: 0,
+        damageDealt: structDmg,
       };
     }
 
@@ -1293,7 +1547,12 @@ export class WeaponSystem {
   ): FireWeaponResult {
     const def = WEAPONS.kinetic_blade;
     const range = def.range > 0 ? def.range : 3.8;
-    const actorDmg = def.baseDamage > 0 ? def.baseDamage : 45;
+    const hasCombatMedallion = Boolean(
+      params.hasCombatMedallion ?? params.actor.hasCombatMedallion,
+    );
+    const actorDmg = Math.round(
+      (def.baseDamage > 0 ? def.baseDamage : 45) * (hasCombatMedallion ? 1.12 : 1),
+    );
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const structDmg = Math.round(
       (def.structureDamage > 0 ? def.structureDamage : 75) * (hasDemolisher ? 1.3 : 1),
@@ -1308,6 +1567,7 @@ export class WeaponSystem {
     const vBridge = params.vehicleBridge ?? this.vehicleBridge;
     const sBridge = params.stationBridge ?? this.stationBridge;
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
+    const chBridge = params.chapterBridge ?? this.chapterBridge;
     const props = this.propsBridge.getProps();
 
     const hitActorIds = new Set<string>();
@@ -1357,6 +1617,14 @@ export class WeaponSystem {
         worldHit.hit && worldHit.targetType === 'static'
           ? Math.min(range, worldHit.distance + 0.06)
           : entityMax;
+      const tankerMax =
+        worldHit.hit &&
+        worldHit.targetType === 'static' &&
+        worldHit.targetId?.includes('tanker')
+          ? range
+          : worldHit.hit && worldHit.targetType === 'static'
+            ? Math.min(range, worldHit.distance + 0.12)
+            : entityMax;
 
       const actorHit = this.raycastActors(
         rayOrigin,
@@ -1393,6 +1661,12 @@ export class WeaponSystem {
         barrelMax,
         sBridge,
       );
+      const tankerHit = this.raycastSlurpTankers(
+        rayOrigin,
+        rayDir,
+        tankerMax,
+        chBridge,
+      );
       const llamaHit = this.raycastLlamas(rayOrigin, rayDir, entityMax);
       const vehicleHit = this.raycastVehicles(
         rayOrigin,
@@ -1405,6 +1679,7 @@ export class WeaponSystem {
       let chosen:
         | 'exp_barrel'
         | 'barrel'
+        | 'tanker'
         | 'llama'
         | 'vehicle'
         | 'world'
@@ -1428,6 +1703,18 @@ export class WeaponSystem {
       ) {
         chosen = 'barrel';
         chosenDist = barrelHit.distance;
+      }
+      if (
+        tankerHit &&
+        chBridge &&
+        ((chosen === 'world' &&
+          worldHit.targetType === 'static' &&
+          worldHit.targetId?.includes('tanker')) ||
+          tankerHit.distance <=
+            chosenDist + (chosen === 'world' && worldHit.targetType === 'static' ? 0.12 : 0))
+      ) {
+        chosen = 'tanker';
+        chosenDist = tankerHit.distance;
       }
       if (llamaHit && llamaHit.distance <= chosenDist) {
         chosen = 'llama';
@@ -1465,6 +1752,20 @@ export class WeaponSystem {
             barrelHit.point,
             barrelHit.normal,
             params.actor,
+          );
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      } else if (chosen === 'tanker' && tankerHit && chBridge) {
+        const key = `tanker:${tankerHit.tanker.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.applySlurpTankerHit(
+            chBridge,
+            tankerHit.tanker.id,
+            structDmg,
+            tankerHit.point,
+            tankerHit.normal,
           );
           shotsHit += 1;
           structDamageDealt += structDmg;
@@ -1591,15 +1892,22 @@ export class WeaponSystem {
     vehicleBridge?: VehicleBridge | null;
     stationBridge?: WorldStationBridge | null;
     riftCaptureBridge?: WorldRiftCaptureBridge | null;
+    chapterBridge?: WorldChapterBridge | null;
     hasDemolisher?: boolean;
+    hasCombatMedallion?: boolean;
   }): FireWeaponResult {
     const dashRadius = params.radius ?? 2.8;
-    const actorDmg = params.damage ?? 50;
+    const baseActorDmg = params.damage ?? 50;
+    const hasCombatMedallion = Boolean(
+      params.hasCombatMedallion ?? params.actor.hasCombatMedallion,
+    );
+    const actorDmg = Math.round(baseActorDmg * (hasCombatMedallion ? 1.12 : 1));
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
-    const structDmg = Math.round(actorDmg * (hasDemolisher ? 1.3 : 1));
+    const structDmg = Math.round(baseActorDmg * (hasDemolisher ? 1.3 : 1));
     const vBridge = params.vehicleBridge ?? this.vehicleBridge;
     const sBridge = params.stationBridge ?? this.stationBridge;
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
+    const chBridge = params.chapterBridge ?? this.chapterBridge;
 
     this.eventBus.emit('sound:play', {
       id: 'kinetic_dash',
@@ -1753,6 +2061,28 @@ export class WeaponSystem {
       }
     }
 
+    if (chBridge) {
+      const tankers = chBridge.getSlurpTankers();
+      for (let i = 0; i < tankers.length; i++) {
+        const tanker = tankers[i];
+        if (tanker.destroyed || tanker.hp <= 0 || this.rupturingTankerIds.has(tanker.id)) {
+          continue;
+        }
+        const center = { x: tanker.x, y: tanker.y + 1.4, z: tanker.z };
+        if (distPointToSegment(center, params.from, params.to).dist <= dashRadius + 1.4) {
+          this.applySlurpTankerHit(
+            chBridge,
+            tanker.id,
+            structDmg,
+            center,
+            { x: 0, y: 1, z: 0 },
+          );
+          shotsHit += 1;
+          structDamageDealt += structDmg;
+        }
+      }
+    }
+
     const llamas = this.propsBridge.getLlamas?.() ?? [];
     for (let i = 0; i < llamas.length; i++) {
       const l = llamas[i];
@@ -1899,6 +2229,9 @@ export class WeaponSystem {
     }
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const hasFirstAssault = Boolean(params.hasFirstAssault ?? params.actor.hasFirstAssault);
+    const hasCombatMedallion = Boolean(
+      params.hasCombatMedallion ?? params.actor.hasCombatMedallion,
+    );
     const firstAssaultBoost =
       hasFirstAssault &&
       def.magSize > 0 &&
@@ -1953,6 +2286,12 @@ export class WeaponSystem {
     const isShieldBubble = Boolean(
       def.isShieldBubble || params.item.weaponId === 'shield_bubble',
     );
+    const isBoomArrow = Boolean(def.isBow || params.item.weaponId === 'boom_bow');
+    const bowCharge = isBoomArrow ? clamp(params.bowCharge ?? 1.0, 0, 1) : 1.0;
+    const bowSpeedMult = isBoomArrow ? lerp(0.35, 1.0, bowCharge) : 1.0;
+    const bowDmgMult = isBoomArrow ? lerp(0.35, 1.0, bowCharge) : 1.0;
+    const combatMedallionMult = hasCombatMedallion && !def.isThrowable ? 1.12 : 1.0;
+    const projSpeed = def.projectileSpeed * bowSpeedMult;
 
     const proj: ActiveProjectile = {
       id: `proj_${this.nextProjId++}`,
@@ -1967,14 +2306,20 @@ export class WeaponSystem {
       },
       startPos: { ...params.origin },
       velocity: {
-        x: shotDir.x * def.projectileSpeed,
-        y: shotDir.y * def.projectileSpeed,
-        z: shotDir.z * def.projectileSpeed,
+        x: shotDir.x * projSpeed,
+        y: shotDir.y * projSpeed,
+        z: shotDir.z * projSpeed,
       },
       gravity: def.projectileGravity,
-      damage: Math.round(def.baseDamage * rarityMult * (firstAssaultBoost ? 1.25 : 1.0)),
+      damage: Math.round(
+        def.baseDamage *
+          rarityMult *
+          bowDmgMult *
+          (firstAssaultBoost ? 1.25 : 1.0) *
+          combatMedallionMult,
+      ),
       structureDamage: Math.round(
-        def.structureDamage * rarityMult * (hasDemolisher ? 1.3 : 1.0),
+        def.structureDamage * rarityMult * bowDmgMult * (hasDemolisher ? 1.3 : 1.0),
       ),
       headshotMultiplier: def.headshotMultiplier,
       splashRadius: def.splashRadius,
@@ -1982,7 +2327,7 @@ export class WeaponSystem {
       maxAge:
         def.fuseTime !== undefined
           ? def.fuseTime + 0.5
-          : params.item.weaponId === 'sniper'
+          : params.item.weaponId === 'sniper' || isBoomArrow
             ? 3.2
             : 8.5,
       alive: true,
@@ -1993,10 +2338,12 @@ export class WeaponSystem {
       isShockwave,
       isSplashHeal,
       isShieldBubble,
+      isBoomArrow,
       settled: false,
       bounceSoundCooldown: 0,
       demolisherActive: hasDemolisher,
       firstAssaultActive: firstAssaultBoost,
+      combatMedallionActive: hasCombatMedallion,
     };
 
     this.projectiles.push(proj);
@@ -2049,14 +2396,19 @@ export class WeaponSystem {
     const vBridge = params.vehicleBridge ?? this.vehicleBridge;
     const sBridge = params.stationBridge ?? this.stationBridge;
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
+    const chBridge = params.chapterBridge ?? this.chapterBridge;
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const hasFirstAssault = Boolean(params.hasFirstAssault ?? params.actor.hasFirstAssault);
+    const hasCombatMedallion = Boolean(
+      params.hasCombatMedallion ?? params.actor.hasCombatMedallion,
+    );
     const firstAssaultBoost =
       hasFirstAssault &&
       def.magSize > 0 &&
       !def.isGrappler &&
       params.item.magAmmo === def.magSize;
     const firstAssaultMult = firstAssaultBoost ? 1.25 : 1.0;
+    const combatMedallionMult = hasCombatMedallion ? 1.12 : 1.0;
     const demolisherMult = hasDemolisher ? 1.3 : 1.0;
     params.onAmmoConsumed?.();
 
@@ -2124,6 +2476,14 @@ export class WeaponSystem {
         worldHit.hit && worldHit.targetType === 'static'
           ? Math.min(bubbleMaxDist, worldHit.distance + 0.06)
           : entityMaxDist;
+      const tankerMaxDist =
+        worldHit.hit &&
+        worldHit.targetType === 'static' &&
+        worldHit.targetId?.includes('tanker')
+          ? bubbleMaxDist
+          : worldHit.hit && worldHit.targetType === 'static'
+            ? Math.min(bubbleMaxDist, worldHit.distance + 0.12)
+            : entityMaxDist;
       const actorHit = this.raycastActors(
         params.origin,
         rayDir,
@@ -2150,6 +2510,12 @@ export class WeaponSystem {
         barrelMaxDist,
         rcBridge,
       );
+      const tankerHit = this.raycastSlurpTankers(
+        params.origin,
+        rayDir,
+        tankerMaxDist,
+        chBridge,
+      );
 
       let chosenType:
         | 'actor'
@@ -2157,6 +2523,7 @@ export class WeaponSystem {
         | 'vehicle'
         | 'barrel'
         | 'exp_barrel'
+        | 'tanker'
         | 'world'
         | 'bubble'
         | 'none' = 'none';
@@ -2180,6 +2547,18 @@ export class WeaponSystem {
       ) {
         chosenType = 'barrel';
         chosenDist = barrelHit.distance;
+      }
+      if (
+        tankerHit &&
+        chBridge &&
+        ((chosenType === 'world' &&
+          worldHit.targetType === 'static' &&
+          worldHit.targetId?.includes('tanker')) ||
+          tankerHit.distance <=
+            chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.12 : 0))
+      ) {
+        chosenType = 'tanker';
+        chosenDist = tankerHit.distance;
       }
       if (vehicleHit && vehicleHit.distance <= chosenDist) {
         chosenType = 'vehicle';
@@ -2208,15 +2587,17 @@ export class WeaponSystem {
                 ? expBarrelHit!.point
                 : chosenType === 'barrel'
                   ? barrelHit!.point
-                  : chosenType === 'world'
-                    ? worldHit.point
-                    : chosenType === 'bubble'
-                      ? bubbleHit!.point
-                      : {
-                          x: params.origin.x + rayDir.x * def.range,
-                          y: params.origin.y + rayDir.y * def.range,
-                          z: params.origin.z + rayDir.z * def.range,
-                        };
+                  : chosenType === 'tanker'
+                    ? tankerHit!.point
+                    : chosenType === 'world'
+                      ? worldHit.point
+                      : chosenType === 'bubble'
+                        ? bubbleHit!.point
+                        : {
+                            x: params.origin.x + rayDir.x * def.range,
+                            y: params.origin.y + rayDir.y * def.range,
+                            z: params.origin.z + rayDir.z * def.range,
+                          };
 
       const isMythicPulse = params.item.weaponId === 'mythic_blade_rifle';
       this.eventBus.emit('vfx:tracer', {
@@ -2244,7 +2625,8 @@ export class WeaponSystem {
             actorHit.distance,
             actorHit.isHeadshot,
           ) *
-            firstAssaultMult) /
+            firstAssaultMult *
+            combatMedallionMult) /
           pellets;
 
         const existing = actorAccum.get(actorHit.actor.id);
@@ -2278,6 +2660,14 @@ export class WeaponSystem {
           barrelHit.point,
           barrelHit.normal,
           params.actor,
+        );
+      } else if (chosenType === 'tanker' && tankerHit && chBridge) {
+        this.applySlurpTankerHit(
+          chBridge,
+          tankerHit.tanker.id,
+          structDmg,
+          tankerHit.point,
+          tankerHit.normal,
         );
       } else if (chosenType === 'llama' && llamaHit) {
         this.propsBridge.damageLlama?.(llamaHit.llama.id, structDmg, llamaHit.point);
@@ -2356,11 +2746,22 @@ export class WeaponSystem {
     }
   }
 
-  private detonateExplosive(proj: ActiveProjectile, impactPos: Vec3Like): void {
-    this.eventBus.emit('vfx:explosion', {
-      position: impactPos,
-      radius: proj.splashRadius,
-    });
+  private detonateExplosive(
+    proj: ActiveProjectile,
+    impactPos: Vec3Like,
+    directHit?: { actorId: string; isHeadshot: boolean },
+  ): void {
+    if (proj.isBoomArrow) {
+      this.eventBus.emit('vfx:bow_explosion', {
+        position: impactPos,
+        radius: proj.splashRadius,
+      });
+    } else {
+      this.eventBus.emit('vfx:explosion', {
+        position: impactPos,
+        radius: proj.splashRadius,
+      });
+    }
     this.eventBus.emit('sound:play', {
       id: 'explosion',
       position: impactPos,
@@ -2500,6 +2901,31 @@ export class WeaponSystem {
       }
     }
 
+    // Damage Slurp Tankers within splash radius
+    if (this.chapterBridge) {
+      const tankers = this.chapterBridge.getSlurpTankers();
+      for (let i = 0; i < tankers.length; i++) {
+        const tanker = tankers[i];
+        if (tanker.destroyed || tanker.hp <= 0 || this.rupturingTankerIds.has(tanker.id)) {
+          continue;
+        }
+        const center = { x: tanker.x, y: tanker.y + 1.4, z: tanker.z };
+        const d = dist3D(impactPos, center);
+        if (
+          d <= proj.splashRadius + 2.2 &&
+          !this.isBlockedByShieldBubble(impactPos, center)
+        ) {
+          this.applySlurpTankerHit(
+            this.chapterBridge,
+            tanker.id,
+            proj.structureDamage,
+            center,
+            { x: 0, y: 1, z: 0 },
+          );
+        }
+      }
+    }
+
     // Damage Actors within splash radius
     if (this.actorsProvider) {
       const actors = this.actorsProvider();
@@ -2511,17 +2937,25 @@ export class WeaponSystem {
           y: actor.position.y + actor.height * 0.5,
           z: actor.position.z,
         };
-        const d = dist3D(impactPos, center);
-        if (d <= proj.splashRadius && !this.isBlockedByShieldBubble(impactPos, center)) {
-          const falloff = clamp(1 - (d / proj.splashRadius) * 0.65, 0.35, 1.0);
-          const splashDmg = Math.round(proj.damage * falloff);
+        const isDirectHit = directHit?.actorId === actor.id;
+        const d = Math.min(dist3D(impactPos, actor.position), dist3D(impactPos, center));
+        if (
+          isDirectHit ||
+          (d <= proj.splashRadius && !this.isBlockedByShieldBubble(impactPos, center))
+        ) {
+          const falloff = isDirectHit
+            ? 1.0
+            : clamp(1 - (d / proj.splashRadius) * 0.65, 0.35, 1.0);
+          const hsMult =
+            isDirectHit && directHit?.isHeadshot ? proj.headshotMultiplier : 1.0;
+          const splashDmg = Math.round(proj.damage * falloff * hsMult);
           this.applyActorDamage(
             attackerStub,
             actor,
             proj.weaponId,
             proj.rarity,
             splashDmg,
-            false,
+            Boolean(isDirectHit && directHit?.isHeadshot),
             center,
             d,
             proj.isPlayer && actor.id !== proj.ownerId,
@@ -2766,6 +3200,14 @@ export class WeaponSystem {
           worldHit.hit && worldHit.targetType === 'static'
             ? Math.min(maxStepDist, worldHit.distance + 0.06)
             : entityMaxDist;
+        const tankerMaxDist =
+          worldHit.hit &&
+          worldHit.targetType === 'static' &&
+          worldHit.targetId?.includes('tanker')
+            ? maxStepDist
+            : worldHit.hit && worldHit.targetType === 'static'
+              ? Math.min(maxStepDist, worldHit.distance + 0.12)
+              : entityMaxDist;
         const actorHit = this.raycastActors(
           prevPos,
           stepDir,
@@ -2791,12 +3233,19 @@ export class WeaponSystem {
           barrelMaxDist,
           this.riftCaptureBridge,
         );
+        const tankerHit = this.raycastSlurpTankers(
+          prevPos,
+          stepDir,
+          tankerMaxDist,
+          this.chapterBridge,
+        );
 
         let hitType:
           | 'actor'
           | 'vehicle'
           | 'barrel'
           | 'exp_barrel'
+          | 'tanker'
           | 'world'
           | 'bubble'
           | 'none' = 'none';
@@ -2821,6 +3270,18 @@ export class WeaponSystem {
           hitType = 'barrel';
           chosenDist = barrelHit.distance;
         }
+        if (
+          tankerHit &&
+          this.chapterBridge &&
+          ((hitType === 'world' &&
+            worldHit.targetType === 'static' &&
+            worldHit.targetId?.includes('tanker')) ||
+            tankerHit.distance <=
+              chosenDist + (hitType === 'world' && worldHit.targetType === 'static' ? 0.12 : 0))
+        ) {
+          hitType = 'tanker';
+          chosenDist = tankerHit.distance;
+        }
         if (vehicleHit && vehicleHit.distance <= chosenDist) {
           hitType = 'vehicle';
           chosenDist = vehicleHit.distance;
@@ -2842,34 +3303,40 @@ export class WeaponSystem {
                 ? expBarrelHit!.point
                 : hitType === 'barrel'
                   ? barrelHit!.point
-                  : hitType === 'world'
-                    ? worldHit.point
-                    : hitType === 'bubble'
-                      ? bubbleHit!.point
-                      : {
-                          x: prevPos.x + stepDx,
-                          y: prevPos.y + stepDy,
-                          z: prevPos.z + stepDz,
-                        };
+                  : hitType === 'tanker'
+                    ? tankerHit!.point
+                    : hitType === 'world'
+                      ? worldHit.point
+                      : hitType === 'bubble'
+                        ? bubbleHit!.point
+                        : {
+                            x: prevPos.x + stepDx,
+                            y: prevPos.y + stepDy,
+                            z: prevPos.z + stepDz,
+                          };
 
         const tracerColor =
-          proj.weaponId === 'rocket_launcher'
-            ? 0xff5a2a
-            : proj.isShieldBubble
-              ? 0x38bdf8
-              : proj.isShockwave
-                ? 0xa855f7
-                : proj.isSplashHeal
-                  ? 0x22d3ee
-                  : proj.isThrowable
-                    ? 0xf59e0b
-                    : 0xfff3b0;
+          proj.isBoomArrow
+            ? 0xfbbf24
+            : proj.weaponId === 'rocket_launcher'
+              ? 0xff5a2a
+              : proj.isShieldBubble
+                ? 0x38bdf8
+                : proj.isShockwave
+                  ? 0xa855f7
+                  : proj.isSplashHeal
+                    ? 0x22d3ee
+                    : proj.isThrowable
+                      ? 0xf59e0b
+                      : 0xfff3b0;
         const tracerWidth =
           proj.weaponId === 'rocket_launcher'
             ? 0.14
-            : proj.isThrowable
-              ? 0.08
-              : 0.06;
+            : proj.isBoomArrow
+              ? 0.09
+              : proj.isThrowable
+                ? 0.08
+                : 0.06;
 
         this.eventBus.emit('vfx:tracer', {
           from: prevPos,
@@ -2940,7 +3407,11 @@ export class WeaponSystem {
                     z: nextPos.z + bubbleHit.normal.z * 0.08,
                   }
                 : nextPos;
-            this.detonateExplosive(proj, impactPos);
+            const directHit =
+              proj.isBoomArrow && hitType === 'actor' && actorHit
+                ? { actorId: actorHit.actor.id, isHeadshot: actorHit.isHeadshot }
+                : undefined;
+            this.detonateExplosive(proj, impactPos, directHit);
             proj.alive = false;
             this.projectiles.splice(i, 1);
           } else {
@@ -2963,9 +3434,11 @@ export class WeaponSystem {
                 travelDist,
                 actorHit.isHeadshot,
               );
-              const dmg = proj.firstAssaultActive
-                ? Math.round(baseDmg * 1.25)
-                : baseDmg;
+              const dmg = Math.round(
+                baseDmg *
+                  (proj.firstAssaultActive ? 1.25 : 1.0) *
+                  (proj.combatMedallionActive ? 1.12 : 1.0),
+              );
               const attackerStub: CombatActor = {
                 id: proj.ownerId,
                 name: proj.ownerName,
@@ -3013,6 +3486,14 @@ export class WeaponSystem {
                 barrelHit.normal,
                 ownerActor,
               );
+            } else if (hitType === 'tanker' && tankerHit && this.chapterBridge) {
+              this.applySlurpTankerHit(
+                this.chapterBridge,
+                tankerHit.tanker.id,
+                proj.structureDamage,
+                tankerHit.point,
+                tankerHit.normal,
+              );
             } else if (hitType === 'vehicle' && vehicleHit) {
               this.vehicleBridge?.damageVehicle(
                 vehicleHit.vehicle.id,
@@ -3040,5 +3521,7 @@ export class WeaponSystem {
     this.pendingBursts = [];
     this.shieldBubbles = [];
     this.explodingBarrelIds.clear();
+    this.rupturingTankerIds.clear();
+    this.twinMagSlowUids.clear();
   }
 }
