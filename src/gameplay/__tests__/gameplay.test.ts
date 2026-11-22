@@ -12,6 +12,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   ExplosiveBarrelEntity,
+  FlareBeaconEntity,
   ForecastTowerEntity,
   GrindRailEntity,
   HarvestableProp,
@@ -29,6 +30,7 @@ import type {
   Rarity,
   RebootVanEntity,
   RiftEntity,
+  ShieldMushroomEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SoundEventId,
@@ -45,6 +47,7 @@ import type {
   VendingMachineEntity,
   WeaponBunkerEntity,
   WeaponModId,
+  WildBoarEntity,
   ZiplineEntity,
 } from '../../types';
 import {
@@ -55,10 +58,13 @@ import {
   DBNO_MAX_HP,
   DEFAULT_SETTINGS,
   EventBus,
+  FLARE_SCAN_DURATION_SEC,
   GLIDER_FORCE_HEIGHT,
   GRID_XZ,
   GRID_Y,
   GRIND_RAIL_SPEED,
+  HAMMER_BOUNCE_IMPULSE_FWD,
+  HAMMER_BOUNCE_IMPULSE_Y,
   JETPACK_BURN_RATE,
   JETPACK_MAX_FUEL,
   JETPACK_RECHARGE_RATE,
@@ -72,6 +78,7 @@ import {
   RARITY_MULTIPLIER,
   REBOOT_DURATION_SEC,
   REVIVE_DURATION_SEC,
+  SHIELD_MUSHROOM_AMOUNT,
   SPIKE_TRAP_DAMAGE,
   STARTING_GOLD_BARS,
   TEAM_RUMBLE_RESPAWN_SEC,
@@ -81,6 +88,7 @@ import {
   WEAPONS,
   WEAPON_MODS,
   WEAPON_MOD_COST_GOLD,
+  WILD_BOAR_MAX_HP,
   dist3D,
 } from '../../core';
 import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from '../../world';
@@ -118,6 +126,7 @@ import {
   type WorldRiftCaptureBridge,
   type WorldSkyforgeBridge,
   type WorldStationBridge,
+  type WorldTideBridge,
 } from '../index';
 
 function createFlatTerrain(
@@ -6815,3 +6824,564 @@ describe('Wave 9 Gameplay Systems (Skyforge Jetpack, Plasma Flamethrower, Hop Cr
     expect(hackedCallbacks[0].x).toBeCloseTo(trainState.carPositions[1].x, 2);
   });
 });
+
+describe('Wave 10 Gameplay Systems (Shockwave Hammer, Recon Flare Gun, Shield Mushrooms, Wild Boars)', () => {
+  function setupWave10Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave10Tester');
+    player.setPhase('playing');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockTideBridge(
+    mushrooms: ShieldMushroomEntity[] = [],
+    boars: WildBoarEntity[] = [],
+  ): {
+    bridge: WorldTideBridge;
+    damageCalls: Array<{ id: string; dmg: number; attackerId: string }>;
+  } {
+    const damageCalls: Array<{ id: string; dmg: number; attackerId: string }> = [];
+    const bridge: WorldTideBridge = {
+      getShieldMushrooms: () => mushrooms,
+      findNearbyShieldMushroom: (pos, radius = 3.2) =>
+        mushrooms.find(
+          (m) => m.available && dist3D(pos, { x: m.x, y: m.y, z: m.z }) <= radius,
+        ) ?? null,
+      consumeShieldMushroom: (id) => {
+        const m = mushrooms.find((item) => item.id === id && item.available);
+        if (!m) return false;
+        m.available = false;
+        m.respawnSec = 60;
+        return true;
+      },
+      getWildBoars: () => boars,
+      damageWildBoar: (id, dmg, attackerId) => {
+        damageCalls.push({ id, dmg, attackerId });
+        const b = boars.find((item) => item.id === id && item.alive);
+        if (!b || dmg <= 0) return null;
+        b.hp = Math.max(0, b.hp - dmg);
+        const eliminated = b.hp <= 0;
+        if (eliminated) {
+          b.alive = false;
+        } else {
+          b.state = 'flee';
+        }
+        return { hit: true, eliminated, x: b.x, y: b.y, z: b.z };
+      },
+    };
+    return { bridge, damageCalls };
+  }
+
+  it('handles Shockwave Hammer LMB melee slam (75 enemy dmg, 16 m/s knockback, 250 build dmg) & RMB kinetic bounce leap (4 charges, 12s regen, fall safety)', () => {
+    expect(WEAPON_SOUND_MAP.shockwave_hammer).toBe('hammer_slam');
+    expect(WEAPON_SOUND_MAP.flare_gun).toBe('flare_fire');
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+
+    const { bus, building, weapons, player } = setupWave10Harness();
+    const sounds: SoundEventId[] = [];
+    const slamVfx: Array<{ position: Vec3Like; radius: number }> = [];
+    const bounceVfx: Array<{ position: Vec3Like }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:hammer_slam', (ev) => slamVfx.push(ev));
+    bus.on('vfx:hammer_bounce', (ev) => bounceVfx.push(ev));
+
+    // Not holding shockwave_hammer -> null charges
+    expect(player.getHudSnapshot().hammerCharges).toBeNull();
+
+    // Equip Shockwave Hammer in slot 2 and select it
+    player.getInventory().addItem({
+      uid: 'sh_1',
+      weaponId: 'shockwave_hammer',
+      rarity: 'epic',
+      magAmmo: 0,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+    expect(player.getHudSnapshot().activeWeaponId).toBe('shockwave_hammer');
+    expect(player.getHudSnapshot().hammerCharges).toEqual({
+      charges: 4,
+      maxCharges: 4,
+      regenProgress: 0,
+    });
+
+    // Place a metal wall at (gx=0, gy=0, gz=0, 'N') -> center (2, 1.5, 0) and let it finish building to 500 HP
+    const metalWall = building.placePieceForEntity('bot_enemy', 'wall', 'metal', 0, 0, 0, 'N', 0)!;
+    for (let i = 0; i < 40; i++) {
+      building.update(0.5, i * 0.5);
+    }
+    const wallHpBefore = metalWall.hp;
+    expect(wallHpBefore).toBeGreaterThanOrEqual(450);
+
+    // Place an enemy CombatActor 3.2m away from player at (2, 0, -2.0) when player is at (2, 0, 1.2)
+    let recordedImpulse: Vec3Like | null = null;
+    const enemyActor: CombatActor = {
+      id: 'bot_target_1',
+      name: 'HammerTarget',
+      position: { x: 2, y: 0, z: -2.0 },
+      eyePos: { x: 2, y: 1.5, z: -2.0 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      onImpulse: (imp) => {
+        recordedImpulse = { ...imp };
+      },
+    };
+    weapons.registerActorsProvider(() => [enemyActor]);
+
+    player.teleport({ x: 2, y: 0, z: 1.2 });
+    player.setLook(Math.PI, 0); // Facing -Z
+
+    // LMB ground slam -> 250 structure damage, 75 enemy damage, 16 m/s radial knockback, 0 bounce charges spent
+    let t = 0.05;
+    player.setMouseButton(0, true);
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(metalWall.hp).toBe(wallHpBefore - 250);
+    expect(enemyActor.hp).toBe(25);
+    expect(enemyActor.fallImmune).toBe(true);
+    expect(recordedImpulse).not.toBeNull();
+    expect(Math.hypot(recordedImpulse!.x, recordedImpulse!.z)).toBeCloseTo(16, 1);
+    expect(recordedImpulse!.y).toBeGreaterThanOrEqual(8);
+    expect(player.getStats().hammerSlams).toBe(1);
+    expect(player.getStats().damageDealt).toBe(75);
+    expect(sounds).toContain('hammer_slam');
+    expect(slamVfx.length).toBe(1);
+    expect(slamVfx[0].radius).toBeCloseTo(5.5, 2);
+    expect(player.getHudSnapshot().hammerCharges?.charges).toBe(4);
+
+    // Drain all 4 charges rapidly (0s elapsed) -> verify dryfire & deterministic 12s per charge regen
+    while ((player.getHudSnapshot().hammerCharges?.charges ?? 0) > 0) {
+      player.setMouseButton(2, true);
+      player.setMouseButton(2, false);
+    }
+    expect(player.getHudSnapshot().hammerCharges?.charges).toBe(0);
+
+    // Extra RMB at 0 charges plays dryfire and stays at 0
+    const dryfireBefore = sounds.filter((s) => s === 'dryfire').length;
+    player.setMouseButton(2, true);
+    player.setMouseButton(2, false);
+    expect(sounds.filter((s) => s === 'dryfire').length).toBe(dryfireBefore + 1);
+    expect(player.getHudSnapshot().hammerCharges?.charges).toBe(0);
+
+    // Advance 6.0s -> still 0 charges, ~0.5 regenProgress
+    for (let i = 0; i < 120; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().hammerCharges?.charges).toBe(0);
+    expect(player.getHudSnapshot().hammerCharges?.regenProgress).toBeCloseTo(0.5, 1);
+
+    // Advance 6.1s more (total 12.1s) -> regenerates 1 charge
+    for (let i = 0; i < 122; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().hammerCharges?.charges).toBe(1);
+    expect(player.getHudSnapshot().hammerCharges?.regenProgress).toBeCloseTo(0.1 / 12, 1);
+
+    // Finish regenerating back to 4/4 (+36s -> max 4, regenProgress = 0)
+    for (let i = 0; i < 720; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().hammerCharges).toEqual({
+      charges: 4,
+      maxCharges: 4,
+      regenProgress: 0,
+    });
+
+    // RMB Kinetic Bounce Leap -> consumes 1 charge, sets HAMMER_BOUNCE_IMPULSE_Y / FWD, grants fall immunity
+    player.teleport({ x: 20, y: 0, z: 20 });
+    player.setLook(Math.PI, 0); // Looking -Z
+    player.setMouseButton(2, true);
+    player.setMouseButton(2, false);
+
+    expect(player.getHudSnapshot().hammerCharges?.charges).toBe(3);
+    expect(player.isFallImmune()).toBe(true);
+    expect(sounds).toContain('hammer_bounce');
+    expect(bounceVfx.length).toBeGreaterThanOrEqual(1);
+
+    const posBeforeLeap = player.getPosition();
+    let peakY = 0;
+    for (let i = 0; i < 40; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      peakY = Math.max(peakY, player.getPosition().y);
+    }
+    const posAfterLeap = player.getPosition();
+    expect(peakY).toBeGreaterThan(6);
+    expect(posBeforeLeap.z - posAfterLeap.z).toBeGreaterThan(HAMMER_BOUNCE_IMPULSE_FWD * 0.5);
+    // Landing from peak >6m should deal zero fall damage
+    expect(player.getHealth()).toBe(100);
+    expect(sounds).not.toContain('fall_damage');
+
+    // Fall safety from 22m altitude via mid-air RMB bounce
+    player.teleport({ x: 20, y: 22, z: 20 });
+    player.setMouseButton(2, true);
+    player.setMouseButton(2, false);
+    expect(player.getHudSnapshot().hammerCharges?.charges).toBe(2);
+    expect(player.isFallImmune()).toBe(true);
+    expect(HAMMER_BOUNCE_IMPULSE_Y).toBe(18.5);
+    for (let i = 0; i < 100; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getPosition().y).toBeCloseTo(0, 1);
+    expect(player.getHealth()).toBe(100);
+    expect(sounds).not.toContain('fall_damage');
+  });
+
+  it('launches Recon Flare Gun projectile to burst at impact & sky apex with 75m scan beacon, incendiary damage, and HUD lifecycle', () => {
+    expect(FLARE_SCAN_DURATION_SEC).toBe(12);
+
+    const { bus, building, weapons, player } = setupWave10Harness();
+    const sounds: SoundEventId[] = [];
+    const flareTrails: Array<{ origin: Vec3Like; target: Vec3Like; radius: number }> = [];
+    const burstCallbacks: FlareBeaconEntity[] = [];
+
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:flare_trail', (ev) => flareTrails.push(ev));
+    player.setOnFlareBurst((beacon) => burstCallbacks.push(beacon));
+
+    // Place target wall at (2, 1.5, 0) and enemy actor right near impact (2, 0, 0.4)
+    const wall = building.placePieceForEntity('bot_enemy', 'wall', 'metal', 0, 0, 0, 'N', 0)!;
+    for (let i = 0; i < 40; i++) {
+      building.update(0.5, i * 0.5);
+    }
+    const wallHpBefore = wall.hp;
+
+    const enemyActor: CombatActor = {
+      id: 'bot_flare_1',
+      name: 'FlareVictim',
+      position: { x: 2, y: 0, z: 0.4 },
+      eyePos: { x: 2, y: 1.5, z: 0.4 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [enemyActor]);
+
+    // Equip flare_gun and shoot horizontally toward wall/enemy from (2, 0, 4)
+    player.getInventory().addItem({
+      uid: 'fg_1',
+      weaponId: 'flare_gun',
+      rarity: 'rare',
+      magAmmo: 6,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+    player.teleport({ x: 2, y: 0, z: 4 });
+    player.setLook(Math.PI, 0);
+
+    let t = 0.05;
+    player.setMouseButton(0, true);
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(sounds).toContain('flare_fire');
+    expect(player.getStats().flaresFired).toBe(1);
+    expect(player.getInventory().getActiveItem()?.magAmmo).toBe(5);
+    expect(weapons.getProjectiles().length).toBe(1);
+    expect(weapons.getProjectiles()[0].isFlare).toBe(true);
+    expect(weapons.getProjectiles()[0].flareScanRadius).toBe(75);
+
+    // Step until wall collision bursts flare (at ~48 m/s over 4m, < 0.25s)
+    for (let i = 0; i < 8; i++) {
+      t += 0.05;
+      weapons.update(0.05);
+      player.update(0.05, t);
+    }
+
+    expect(sounds).toContain('flare_burst');
+    expect(flareTrails.length).toBe(1);
+    expect(flareTrails[0].radius).toBe(75);
+    expect(wall.hp).toBe(wallHpBefore - 90);
+    expect(enemyActor.hp).toBe(40); // 100 - 60 flare splash
+    expect(burstCallbacks.length).toBe(1);
+    expect(burstCallbacks[0].radius).toBe(75);
+    expect(burstCallbacks[0].remainingSec).toBe(12);
+    expect(player.getFlareBeacons().length).toBe(1);
+    expect(player.getHudSnapshot().flareBeacons?.length).toBe(1);
+
+    // Second flare fired skyward bursts at ballistic apex in mid-air
+    const flareItem = player.getInventory().getActiveItem()!;
+    const skyResult = weapons.fireWeapon({
+      actor: {
+        id: 'player',
+        name: 'Wave10Tester',
+        position: { x: 40, y: 0, z: 40 },
+        eyePos: { x: 40, y: 1.6, z: 40 },
+        hp: 100,
+        shield: 0,
+        radius: 0.42,
+        height: 1.85,
+        alive: true,
+      },
+      item: flareItem,
+      origin: { x: 40, y: 1.6, z: 40 },
+      aimDir: { x: 0, y: 0.85, z: -0.5268 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(skyResult.fired).toBe(true);
+    expect(weapons.getProjectiles().length).toBe(1);
+
+    // Run until sky flare reaches ballistic apex and bursts (~4.5s)
+    for (let i = 0; i < 100; i++) {
+      t += 0.05;
+      weapons.update(0.05);
+      player.update(0.05, t);
+      if (burstCallbacks.length >= 2) break;
+    }
+    expect(burstCallbacks.length).toBe(2);
+    expect(burstCallbacks[1].y).toBeGreaterThan(20);
+    expect(burstCallbacks[1].radius).toBe(75);
+    expect(flareTrails.length).toBe(2);
+
+    // Set marked enemy count & verify flareBeacons expire after 12s
+    player.setFlareScanStatus(
+      [{ x: 10, z: -20, radius: 75, remainingSec: 1.0 }],
+      4,
+    );
+    expect(player.getHudSnapshot().flareScanMarkedCount).toBe(4);
+    expect(player.getHudSnapshot().flareBeacons).toEqual([
+      { x: 10, z: -20, radius: 75, remainingSec: 1.0 },
+    ]);
+
+    for (let i = 0; i < 22; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.1s -> beacon expires
+    }
+    expect(player.getHudSnapshot().flareBeacons).toEqual([]);
+
+    player.addFlareBeacon(
+      { id: 'qa_flare', x: 5, y: 18, z: -8, radius: 75, remainingSec: 12, ownerId: 'player' },
+      3,
+    );
+    expect(player.getHudSnapshot().flareScanMarkedCount).toBe(3);
+    expect(player.getHudSnapshot().flareBeacons?.length).toBe(1);
+  });
+
+  it('forages Shield Mushrooms via [E] (+10 Shield capped at 100) and eliminates Wild Boars via hitscan & AoE', () => {
+    expect(SHIELD_MUSHROOM_AMOUNT).toBe(10);
+    expect(WILD_BOAR_MAX_HP).toBe(110);
+
+    const { bus, weapons, player } = setupWave10Harness();
+    const sounds: SoundEventId[] = [];
+    const healVfx: Array<{ position: Vec3Like }> = [];
+    const eliminatedBoars: Array<{ pos: Vec3Like; attackerId: string }> = [];
+
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:splash_heal', (ev) => healVfx.push(ev));
+
+    const mushrooms: ShieldMushroomEntity[] = [
+      {
+        id: 'mush_1',
+        poiId: 'whispering_pines',
+        x: 0,
+        y: 0,
+        z: -1.6,
+        available: true,
+        respawnSec: 0,
+      },
+      {
+        id: 'mush_2',
+        poiId: 'whispering_pines',
+        x: 12,
+        y: 0,
+        z: 0,
+        available: true,
+        respawnSec: 0,
+      },
+      {
+        id: 'mush_unavailable',
+        poiId: 'whispering_pines',
+        x: 24,
+        y: 0,
+        z: 0,
+        available: false,
+        respawnSec: 30,
+      },
+    ];
+    const boars: WildBoarEntity[] = [
+      {
+        id: 'boar_1',
+        x: 0,
+        y: 0,
+        z: -10,
+        yaw: 0,
+        hp: WILD_BOAR_MAX_HP,
+        maxHp: WILD_BOAR_MAX_HP,
+        alive: true,
+        state: 'roam',
+        speed: 3.5,
+      },
+      {
+        id: 'boar_2',
+        x: 3,
+        y: 0,
+        z: -10,
+        yaw: 0,
+        hp: 50,
+        maxHp: WILD_BOAR_MAX_HP,
+        alive: true,
+        state: 'roam',
+        speed: 3.5,
+      },
+    ];
+
+    const { bridge: tideBridge, damageCalls } = createMockTideBridge(mushrooms, boars);
+    player.setTideBridge(tideBridge);
+    player.setOnBoarEliminated((pos, attackerId) => {
+      eliminatedBoars.push({ pos: { ...pos }, attackerId });
+    });
+    expect(player.getTideBridge()).toBe(tideBridge);
+
+    // 1. Shield Mushroom [E] interaction (+10 shield & stats.mushroomsEaten)
+    player.applySplashHeal(50); // health=100, shield=50
+    expect(player.getShield()).toBe(50);
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    let t = 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()?.label).toContain('SHIELD MUSHROOM');
+
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+
+    expect(mushrooms[0].available).toBe(false);
+    expect(player.getShield()).toBe(60);
+    expect(player.getStats().mushroomsEaten).toBe(1);
+    expect(sounds).toContain('mushroom_eat');
+    expect(healVfx.length).toBeGreaterThanOrEqual(1);
+
+    // Cap shield at 100 when eating near 95 shield
+    player.applySplashHeal(35); // shield = 95
+    expect(player.getShield()).toBe(95);
+    player.teleport({ x: 12, y: 0, z: 1.5 });
+    t += 0.05;
+    player.update(0.05, t);
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+
+    expect(mushrooms[1].available).toBe(false);
+    expect(player.getShield()).toBe(100);
+    expect(player.getStats().mushroomsEaten).toBe(2);
+
+    // Unavailable mushroom produces no prompt and grants nothing on [E]
+    player.teleport({ x: 24, y: 0, z: 1.2 });
+    t += 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()).toBeNull();
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(player.getStats().mushroomsEaten).toBe(2);
+
+    // 2. Wild Boar hitscan damage & elimination via PlayerController LMB / WeaponSystem
+    player.getInventory().addItem({
+      uid: 'ar_1',
+      weaponId: 'ar',
+      rarity: 'epic',
+      magAmmo: 30,
+      stackCount: 1,
+    });
+    player.getInventory().addAmmo('medium', 90);
+    player.pressKey('Digit2'); // Select AR
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, -0.09); // Aim at (0, ~0.6, -10) boar center
+
+    // Fire 1 shot first -> hurts boar_1 without killing it yet
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(damageCalls.length).toBe(1);
+    expect(damageCalls[0].id).toBe('boar_1');
+    expect(boars[0].alive).toBe(true);
+    expect(boars[0].hp).toBeLessThan(WILD_BOAR_MAX_HP);
+    expect(boars[0].state).toBe('flee');
+    expect(eliminatedBoars.length).toBe(0);
+    expect(player.getStats().boarsHunted).toBe(0);
+
+    // Keep firing hitscan shots until boar_1 is eliminated
+    player.setMouseButton(0, true);
+    for (let i = 0; i < 30 && boars[0].alive; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.setMouseButton(0, false);
+
+    expect(boars[0].alive).toBe(false);
+    expect(boars[0].hp).toBe(0);
+    expect(eliminatedBoars.length).toBe(1);
+    expect(eliminatedBoars[0].attackerId).toBe('player');
+    expect(eliminatedBoars[0].pos.x).toBe(0);
+    expect(eliminatedBoars[0].pos.z).toBe(-10);
+    expect(player.getStats().boarsHunted).toBe(1);
+
+    // 3. Shockwave Hammer AoE slam near boar_2 eliminates it and fires onBoarEliminated
+    player.getInventory().addItem({
+      uid: 'sh_boar',
+      weaponId: 'shockwave_hammer',
+      rarity: 'epic',
+      magAmmo: 0,
+      stackCount: 1,
+    });
+    player.pressKey('Digit3');
+    player.teleport({ x: 3, y: 0, z: -8.5 }); // 1.5m from boar_2 at (3, 0, -10)
+    for (let i = 0; i < 5; i++) {
+      t += 0.05;
+      player.update(0.05, t); // clear AR fireCooldown (0.18s)
+    }
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(boars[1].alive).toBe(false);
+    expect(boars[1].hp).toBe(0);
+    expect(eliminatedBoars.length).toBe(2);
+    expect(player.getStats().boarsHunted).toBe(2);
+    expect(weapons.getTideBridge()).toBe(tideBridge);
+
+    // Match reset clears Wave-10 counters & beacons cleanly
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave10Tester');
+    player.setPhase('playing');
+    expect(player.getStats().boarsHunted).toBe(0);
+    expect(player.getStats().mushroomsEaten).toBe(0);
+    expect(player.getStats().hammerSlams).toBe(0);
+    expect(player.getStats().flaresFired).toBe(0);
+    expect(player.getFlareBeacons()).toEqual([]);
+  });
+});
+

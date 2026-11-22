@@ -2639,6 +2639,49 @@ export class BotManager {
     return this.bots.filter((b) => b.alive);
   }
 
+  /**
+   * Returns alive, in-world enemy bots within horizontal `radius` meters of `(x, z)`
+   * for Recon Flare Gun target marking, excluding player companions and optional `excludeTeam`.
+   */
+  getBotsInRadius(
+    x: number,
+    z: number,
+    radius: number,
+    excludeTeam?: TeamId,
+  ): BotEntity[] {
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(z) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return [];
+    }
+    const rSq = radius * radius;
+    const result: BotEntity[] = [];
+    for (const bot of this.bots) {
+      if (!bot.alive || bot.state === 'eliminated' || bot.state === 'bus') {
+        continue;
+      }
+      if (excludeTeam !== undefined && bot.teamId === excludeTeam) {
+        continue;
+      }
+      if (
+        (excludeTeam === undefined || excludeTeam === 'team_blue') &&
+        (bot.isAlly || bot.isDuoPartner)
+      ) {
+        continue;
+      }
+      const dx = bot.position.x - x;
+      const dz = bot.position.z - z;
+      if (!Number.isFinite(dx) || !Number.isFinite(dz)) continue;
+      if (dx * dx + dz * dz <= rSq) {
+        result.push(bot);
+      }
+    }
+    return result;
+  }
+
   getBotById(id: string): BotEntity | undefined {
     return this.botMap.get(id);
   }

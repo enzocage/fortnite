@@ -11,6 +11,7 @@ import type {
   DroppedMedallionEntity,
   EditModeState,
   ExplosiveBarrelEntity,
+  FlareBeaconEntity,
   ForecastTowerEntity,
   GameModeId,
   GamePhase,
@@ -29,6 +30,7 @@ import type {
   Rarity,
   RebootVanEntity,
   RiftEntity,
+  ShieldMushroomEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
   StealthBushEntity,
@@ -46,6 +48,7 @@ import type {
   WeaponBunkerEntity,
   WeaponId,
   WeaponModId,
+  WildBoarEntity,
   ZiplineEntity,
 } from '../types';
 
@@ -238,6 +241,27 @@ export interface WorldSkyforgeBridge {
   consumeHopCrystal(id: string): { ok: boolean; position: Vec3Like } | null;
 }
 
+export interface WorldTideBridge {
+  getShieldMushrooms(): ShieldMushroomEntity[];
+  findNearbyShieldMushroom(
+    pos: Vec3Like,
+    radius?: number,
+  ): ShieldMushroomEntity | null;
+  consumeShieldMushroom(id: string): boolean;
+  getWildBoars(): WildBoarEntity[];
+  damageWildBoar(
+    id: string,
+    dmg: number,
+    attackerId: string,
+  ): {
+    hit: boolean;
+    eliminated: boolean;
+    x: number;
+    y: number;
+    z: number;
+  } | null;
+}
+
 export interface EmpDetonationReport {
   attackerId: string;
   isPlayer: boolean;
@@ -376,6 +400,7 @@ export interface FireWeaponParams {
   riftCaptureBridge?: WorldRiftCaptureBridge | null;
   chapterBridge?: WorldChapterBridge | null;
   overdriveBridge?: WorldOverdriveBridge | null;
+  tideBridge?: WorldTideBridge | null;
   hasDemolisher?: boolean;
   hasFirstAssault?: boolean;
   hasCombatMedallion?: boolean;
@@ -391,6 +416,8 @@ export interface FireWeaponParams {
   onBunkerDeployed?: (report: BunkerDeploymentReport) => void;
   onEmpHit?: (report: EmpDetonationReport) => void;
   onFlameDamage?: (damage: number) => void;
+  onFlareBurst?: (beacon: FlareBeaconEntity) => void;
+  onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
 }
 
 export interface FireWeaponResult {
@@ -430,6 +457,10 @@ export interface PlayerMatchStats {
   trainChestsHacked?: number;
   hopCrystalsUsed?: number;
   flameDamage?: number;
+  hammerSlams?: number;
+  flaresFired?: number;
+  boarsHunted?: number;
+  mushroomsEaten?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -533,4 +564,7 @@ export interface PlayerHudSnapshot {
   isJetpackThrusting?: boolean;
   lowGravityRemainingSec?: number | null;
   trainHackProgress?: number | null;
+  hammerCharges?: { charges: number; maxCharges: number; regenProgress: number } | null;
+  flareScanMarkedCount?: number;
+  flareBeacons?: Array<{ x: number; z: number; radius: number; remainingSec: number }>;
 }

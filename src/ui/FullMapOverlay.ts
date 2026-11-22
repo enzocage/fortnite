@@ -16,6 +16,7 @@ import type {
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
+  ShieldMushroomEntity,
   SlurpTankerEntity,
   SupplyDroneEntity,
   UpgradeBenchEntity,
@@ -23,6 +24,7 @@ import type {
   VehicleEntity,
   VendingMachineEntity,
   WeaponBunkerEntity,
+  WildBoarEntity,
   ZiplineEntity,
 } from '../types';
 import {
@@ -31,6 +33,8 @@ import {
   drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
   drawSkyforgeMapOverlay,
+  drawSpeedboatMapChevron,
+  drawTideMapOverlay,
   formatKeyCodeLabel,
   mapNormToWorld,
   type ResolvedChapterOverlay,
@@ -40,14 +44,17 @@ import {
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
   resolveSkyforgeOverlayArgs,
+  resolveTideOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
   type WorldSkyforgeOverlay,
+  type WorldTideOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
   getAllyRoleSvg,
+  getBoarSvg,
   getBunkerSvg,
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
@@ -60,6 +67,7 @@ import {
   getModBenchSvg,
   getRebootVanSvg,
   getSkyRiftIconSvg,
+  getSpeedboatSvg,
   getSupplyDroneSvg,
   getTankerSvg,
   getTrainSvg,
@@ -115,6 +123,10 @@ export class FullMapOverlay {
   private skyforgeOverlay: WorldSkyforgeOverlay = {
     train: null,
     craters: [],
+  };
+  private tideOverlay: WorldTideOverlay = {
+    boars: [],
+    mushrooms: [],
   };
 
   private open = false;
@@ -303,6 +315,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch riftcrater">${getHopCrystalSvg()}</span>
         <span>RIFT CRATER</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch speedboat">${getSpeedboatSvg()}</span>
+        <span>SPEEDBOAT</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch wildlife">${getBoarSvg()}</span>
+        <span>WILDLIFE</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -458,6 +478,21 @@ export class FullMapOverlay {
     craters?: MeteorCraterEntity[],
   ): void {
     this.skyforgeOverlay = resolveSkyforgeOverlayArgs(trainOrOverlay, craters);
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldTideOverlay(
+    boars: WildBoarEntity[],
+    mushrooms: ShieldMushroomEntity[],
+  ): void;
+  setWorldTideOverlay(overlay: WorldTideOverlay): void;
+  setWorldTideOverlay(
+    boarsOrOverlay: WildBoarEntity[] | WorldTideOverlay,
+    mushrooms?: ShieldMushroomEntity[],
+  ): void {
+    this.tideOverlay = resolveTideOverlayArgs(boarsOrOverlay, mushrooms);
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -649,25 +684,29 @@ export class FullMapOverlay {
         if (vehicle.destroyed) continue;
         const vp = toPx(vehicle.x, vehicle.z);
         const occupied = vehicle.driverId !== null;
-        ctx.save();
-        ctx.translate(vp.x, vp.y);
-        if (vehicle.kind === 'cyber_bike') {
-          ctx.rotate(Math.PI / 4);
-          ctx.fillStyle = occupied ? '#ffd000' : '#22d3ee';
-          ctx.strokeStyle = '#0f172a';
-          ctx.lineWidth = 1.6;
-          ctx.fillRect(-4.5, -4.5, 9, 9);
-          ctx.strokeRect(-4.5, -4.5, 9, 9);
+        if (vehicle.kind === 'speedboat') {
+          drawSpeedboatMapChevron(ctx, vp.x, vp.y, vehicle.yaw, occupied);
         } else {
-          ctx.fillStyle = occupied ? '#ffd000' : '#34eb5e';
-          ctx.strokeStyle = '#0f172a';
-          ctx.lineWidth = 1.6;
-          ctx.fillRect(-6, -4.5, 12, 9);
-          ctx.strokeRect(-6, -4.5, 12, 9);
-          ctx.fillStyle = '#e0f2fe';
-          ctx.fillRect(-4, -2.5, 8, 2.5);
+          ctx.save();
+          ctx.translate(vp.x, vp.y);
+          if (vehicle.kind === 'cyber_bike') {
+            ctx.rotate(Math.PI / 4);
+            ctx.fillStyle = occupied ? '#ffd000' : '#22d3ee';
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 1.6;
+            ctx.fillRect(-4.5, -4.5, 9, 9);
+            ctx.strokeRect(-4.5, -4.5, 9, 9);
+          } else {
+            ctx.fillStyle = occupied ? '#ffd000' : '#34eb5e';
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 1.6;
+            ctx.fillRect(-6, -4.5, 12, 9);
+            ctx.strokeRect(-6, -4.5, 12, 9);
+            ctx.fillStyle = '#e0f2fe';
+            ctx.fillRect(-4, -2.5, 8, 2.5);
+          }
+          ctx.restore();
         }
-        ctx.restore();
       }
       ctx.restore();
     }
@@ -1175,6 +1214,18 @@ export class FullMapOverlay {
       toPx,
       this.skyforgeOverlay,
       state.trainPos,
+      performance.now(),
+    );
+
+    // Wave-10 Tide & Recon Overlay (Wild Boars, Shield Mushrooms, Pulsing Crimson Flare Scan Rings)
+    drawTideMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      this.tideOverlay,
+      state.flareBeacons,
+      undefined,
       performance.now(),
     );
 

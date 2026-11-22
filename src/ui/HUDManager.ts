@@ -19,10 +19,12 @@ import type {
   MeteorCraterEntity,
   ModBenchEntity,
   RebootVanEntity,
+  ShieldMushroomEntity,
   SlurpTankerEntity,
   SupplyDroneEntity,
   TrapKind,
   WeaponBunkerEntity,
+  WildBoarEntity,
 } from '../types';
 import {
   angleRadToDeg,
@@ -35,6 +37,7 @@ import {
   drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
   drawSkyforgeMapOverlay,
+  drawTideMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -60,11 +63,13 @@ import {
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
   resolveSkyforgeOverlayArgs,
+  resolveTideOverlayArgs,
   selectVisibleVisualSoundCues,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
   type WorldSkyforgeOverlay,
+  type WorldTideOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
@@ -75,6 +80,7 @@ import {
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getCrownSvg,
+  getFlareScanSvg,
   getGoldBarSvg,
   getHopCrystalSvg,
   getJetpackFlameSvg,
@@ -232,6 +238,10 @@ export class HUDManager {
     train: null,
     craters: [],
   };
+  private tideOverlay: WorldTideOverlay = {
+    boars: [],
+    mushrooms: [],
+  };
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
@@ -290,6 +300,8 @@ export class HUDManager {
   private jetpackPctEl: HTMLSpanElement;
   private lowGPillEl: HTMLDivElement;
   private lowGLabelEl: HTMLSpanElement;
+  private flarePillEl: HTMLDivElement;
+  private flareLabelEl: HTMLSpanElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -327,6 +339,9 @@ export class HUDManager {
   private grapplerBadgeEl: HTMLDivElement;
   private grapplerCountEl: HTMLSpanElement;
   private kineticBadgeEl: HTMLDivElement;
+  private kineticIconEl: HTMLSpanElement;
+  private kineticTitleEl: HTMLSpanElement;
+  private kineticPipsWrapEl: HTMLDivElement;
   private kineticPipEls: HTMLSpanElement[] = [];
   private slotEls: HTMLDivElement[] = [];
 
@@ -441,6 +456,9 @@ export class HUDManager {
   private lastStealthKey = false;
   private lastJetpackKey = '';
   private lastLowGKey = '';
+  private lastJetpackVisible = false;
+  private lastLowGVisible = false;
+  private lastFlareMarkedCount = 0;
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -1136,10 +1154,22 @@ export class HUDManager {
     this.lowGLabelEl.textContent = 'LOW-G HOP 0s';
     this.lowGPillEl.append(lowGIcon, this.lowGLabelEl);
 
+    this.flarePillEl = document.createElement('div');
+    this.flarePillEl.className = 'fdr-flare-pill fdr-hidden';
+    this.flarePillEl.dataset.markedCount = '0';
+    const flareIcon = document.createElement('span');
+    flareIcon.className = 'fdr-flare-icon';
+    flareIcon.innerHTML = getFlareScanSvg();
+    this.flareLabelEl = document.createElement('span');
+    this.flareLabelEl.className = 'fdr-flare-label';
+    this.flareLabelEl.textContent = 'FLARE SCAN · 0 MARKED';
+    this.flarePillEl.append(flareIcon, this.flareLabelEl);
+
     this.statusChipRowEl.append(
       this.stealthPillEl,
       this.jetpackPillEl,
       this.lowGPillEl,
+      this.flarePillEl,
     );
 
     this.staminaWrapEl = document.createElement('div');
@@ -1383,25 +1413,19 @@ export class HUDManager {
 
     this.kineticBadgeEl = document.createElement('div');
     this.kineticBadgeEl.className = 'fdr-kinetic-badge fdr-hidden';
-    const kineticIcon = document.createElement('span');
-    kineticIcon.className = 'fdr-kinetic-icon';
-    kineticIcon.innerHTML = getWeaponSvg('kinetic_blade');
+    this.kineticIconEl = document.createElement('span');
+    this.kineticIconEl.className = 'fdr-kinetic-icon';
+    this.kineticIconEl.innerHTML = getWeaponSvg('kinetic_blade');
     const kineticMeta = document.createElement('div');
     kineticMeta.className = 'fdr-kinetic-meta';
-    const kineticTitle = document.createElement('span');
-    kineticTitle.className = 'fdr-kinetic-title';
-    kineticTitle.textContent = 'KINETIC DASH';
-    const kineticPipsWrap = document.createElement('div');
-    kineticPipsWrap.className = 'fdr-kinetic-pips';
-    for (let i = 0; i < 3; i++) {
-      const pip = document.createElement('span');
-      pip.className = 'fdr-kinetic-pip';
-      pip.textContent = '⚡';
-      this.kineticPipEls.push(pip);
-      kineticPipsWrap.appendChild(pip);
-    }
-    kineticMeta.append(kineticTitle, kineticPipsWrap);
-    this.kineticBadgeEl.append(kineticIcon, kineticMeta);
+    this.kineticTitleEl = document.createElement('span');
+    this.kineticTitleEl.className = 'fdr-kinetic-title';
+    this.kineticTitleEl.textContent = 'KINETIC DASH';
+    this.kineticPipsWrapEl = document.createElement('div');
+    this.kineticPipsWrapEl.className = 'fdr-kinetic-pips';
+    this.rebuildKineticPips(3, '⚡');
+    kineticMeta.append(this.kineticTitleEl, this.kineticPipsWrapEl);
+    this.kineticBadgeEl.append(this.kineticIconEl, kineticMeta);
 
     const hotbarSlots = document.createElement('div');
     hotbarSlots.className = 'fdr-hotbar-slots';
@@ -1786,6 +1810,19 @@ export class HUDManager {
     this.lastMinimapDraw = 0;
   }
 
+  setWorldTideOverlay(
+    boars: WildBoarEntity[],
+    mushrooms: ShieldMushroomEntity[],
+  ): void;
+  setWorldTideOverlay(overlay: WorldTideOverlay): void;
+  setWorldTideOverlay(
+    boarsOrOverlay: WildBoarEntity[] | WorldTideOverlay,
+    mushrooms?: ShieldMushroomEntity[],
+  ): void {
+    this.tideOverlay = resolveTideOverlayArgs(boarsOrOverlay, mushrooms);
+    this.lastMinimapDraw = 0;
+  }
+
   setVisible(visible: boolean): void {
     this.visible = visible;
     this.containerEl.classList.toggle('fdr-hidden', !visible);
@@ -1867,6 +1904,13 @@ export class HUDManager {
     this.lastGoldBars = -1;
     this.goldCountEl.textContent = '0';
     this.kineticBadgeEl.classList.add('fdr-hidden');
+    this.kineticBadgeEl.classList.remove('hammer-mode', 'empty');
+    this.kineticBadgeEl.dataset.mode = '';
+    delete this.kineticBadgeEl.dataset.charges;
+    delete this.kineticBadgeEl.dataset.maxCharges;
+    this.kineticIconEl.innerHTML = getWeaponSvg('kinetic_blade');
+    this.kineticTitleEl.textContent = 'KINETIC DASH';
+    this.rebuildKineticPips(3, '⚡');
     this.lastKineticKey = '';
     this.allyCardEl.classList.add('fdr-hidden');
     this.lastAllyKey = '';
@@ -1923,6 +1967,12 @@ export class HUDManager {
     this.lowGPillEl.dataset.lowG = 'false';
     this.lowGLabelEl.textContent = 'LOW-G HOP 0s';
     this.lastLowGKey = '';
+    this.lastJetpackVisible = false;
+    this.lastLowGVisible = false;
+    this.flarePillEl.classList.add('fdr-hidden');
+    this.flarePillEl.dataset.markedCount = '0';
+    this.flareLabelEl.textContent = 'FLARE SCAN · 0 MARKED';
+    this.lastFlareMarkedCount = 0;
     this.statusChipRowEl.classList.add('fdr-hidden');
     this.channelEl.classList.add('fdr-hidden');
     this.channelEl.classList.remove('train-hack');
@@ -2144,6 +2194,7 @@ export class HUDManager {
     this.updateWave7HUD(state);
     this.updateWave8HUD(state);
     this.updateWave9HUD(state);
+    this.updateWave10HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -3047,25 +3098,8 @@ export class HUDManager {
       this.goldCountEl.textContent = String(goldVal);
     }
 
-    // 2. Kinetic Blade Dash Charges (3 lightning pips)
-    const kineticVal =
-      !state.spectating &&
-      typeof state.kineticDashCharges === 'number' &&
-      Number.isFinite(state.kineticDashCharges)
-        ? Math.max(0, Math.min(3, Math.round(state.kineticDashCharges)))
-        : null;
-    const kineticKey = kineticVal === null ? '' : String(kineticVal);
-    if (kineticKey !== this.lastKineticKey) {
-      this.lastKineticKey = kineticKey;
-      this.kineticBadgeEl.classList.toggle('fdr-hidden', kineticVal === null);
-      if (kineticVal !== null) {
-        this.kineticBadgeEl.classList.toggle('empty', kineticVal === 0);
-        this.kineticPipEls.forEach((pip, idx) => {
-          pip.classList.toggle('active', idx < kineticVal);
-          pip.classList.toggle('spent', idx >= kineticVal);
-        });
-      }
-    }
+    // 2. Kinetic Blade Dash Charges / Shockwave Hammer Charges inside .fdr-kinetic-badge
+    this.updateMobilityChargesBadge(state);
 
     // 3. Allied Specialist Mini Card (top-left stack)
     const ally = !state.spectating ? state.hiredAlly ?? null : null;
@@ -3483,9 +3517,144 @@ export class HUDManager {
       }
     }
 
-    // 3. Keep horizontal status chip row collapsed when all 3 chips are hidden
-    const anyChipVisible = this.lastStealthKey || hasJetpack || hasLowG;
+    this.lastJetpackVisible = hasJetpack;
+    this.lastLowGVisible = hasLowG;
+    this.syncStatusChipRow();
+  }
+
+  private updateWave10HUD(state: HUDState): void {
+    // 1. Compact crimson FLARE SCAN · N MARKED chip inside .fdr-status-chip-row
+    const markedCount =
+      !state.spectating &&
+      typeof state.flareScanMarkedCount === 'number' &&
+      Number.isFinite(state.flareScanMarkedCount) &&
+      state.flareScanMarkedCount > 0
+        ? Math.round(state.flareScanMarkedCount)
+        : 0;
+    const hasFlareScan = markedCount > 0;
+    if (markedCount !== this.lastFlareMarkedCount) {
+      this.lastFlareMarkedCount = markedCount;
+      this.flarePillEl.classList.toggle('fdr-hidden', !hasFlareScan);
+      this.flarePillEl.dataset.markedCount = String(markedCount);
+      this.flareLabelEl.textContent = hasFlareScan
+        ? `FLARE SCAN · ${markedCount} MARKED`
+        : 'FLARE SCAN · 0 MARKED';
+    }
+
+    this.syncStatusChipRow();
+  }
+
+  private syncStatusChipRow(): void {
+    const anyChipVisible =
+      this.lastStealthKey ||
+      this.lastJetpackVisible ||
+      this.lastLowGVisible ||
+      this.lastFlareMarkedCount > 0;
     this.statusChipRowEl.classList.toggle('fdr-hidden', !anyChipVisible);
+  }
+
+  private rebuildKineticPips(count: number, glyph: string): void {
+    this.kineticPipsWrapEl.innerHTML = '';
+    this.kineticPipEls = [];
+    for (let i = 0; i < count; i++) {
+      const pip = document.createElement('span');
+      pip.className = 'fdr-kinetic-pip';
+      pip.textContent = glyph;
+      this.kineticPipEls.push(pip);
+      this.kineticPipsWrapEl.appendChild(pip);
+    }
+  }
+
+  private updateMobilityChargesBadge(state: HUDState): void {
+    const kineticVal =
+      !state.spectating &&
+      typeof state.kineticDashCharges === 'number' &&
+      Number.isFinite(state.kineticDashCharges)
+        ? Math.max(0, Math.min(3, Math.round(state.kineticDashCharges)))
+        : null;
+
+    const hammer =
+      !state.spectating && kineticVal === null
+        ? state.hammerCharges ?? null
+        : null;
+    const hammerMax =
+      hammer &&
+      typeof hammer.maxCharges === 'number' &&
+      Number.isFinite(hammer.maxCharges)
+        ? Math.max(1, Math.min(6, Math.round(hammer.maxCharges)))
+        : 4;
+    const hammerCur =
+      hammer &&
+      typeof hammer.charges === 'number' &&
+      Number.isFinite(hammer.charges)
+        ? Math.max(0, Math.min(hammerMax, Math.round(hammer.charges)))
+        : 0;
+    const hammerRegenBucket =
+      hammer &&
+      typeof hammer.regenProgress === 'number' &&
+      Number.isFinite(hammer.regenProgress)
+        ? Math.max(0, Math.min(20, Math.round(hammer.regenProgress * 20)))
+        : 0;
+
+    const badgeKey =
+      kineticVal !== null
+        ? `k:${kineticVal}`
+        : hammer !== null
+          ? `h:${hammerCur}/${hammerMax}:${hammerRegenBucket}`
+          : '';
+
+    if (badgeKey === this.lastKineticKey) return;
+
+    const prevMode = this.lastKineticKey.startsWith('h:')
+      ? 'hammer'
+      : this.lastKineticKey.startsWith('k:')
+        ? 'kinetic'
+        : '';
+    this.lastKineticKey = badgeKey;
+
+    if (kineticVal !== null) {
+      this.kineticBadgeEl.classList.remove('fdr-hidden', 'hammer-mode');
+      this.kineticBadgeEl.classList.toggle('empty', kineticVal === 0);
+      this.kineticBadgeEl.dataset.mode = 'kinetic';
+      delete this.kineticBadgeEl.dataset.charges;
+      delete this.kineticBadgeEl.dataset.maxCharges;
+      if (prevMode !== 'kinetic') {
+        this.kineticIconEl.innerHTML = getWeaponSvg('kinetic_blade');
+        this.kineticTitleEl.textContent = 'KINETIC DASH';
+        this.rebuildKineticPips(3, '⚡');
+      }
+      this.kineticPipEls.forEach((pip, idx) => {
+        pip.classList.toggle('active', idx < kineticVal);
+        pip.classList.toggle('spent', idx >= kineticVal);
+        pip.classList.remove('recharging');
+      });
+    } else if (hammer !== null) {
+      this.kineticBadgeEl.classList.remove('fdr-hidden');
+      this.kineticBadgeEl.classList.add('hammer-mode');
+      this.kineticBadgeEl.classList.toggle('empty', hammerCur === 0);
+      this.kineticBadgeEl.dataset.mode = 'hammer';
+      this.kineticBadgeEl.dataset.charges = String(hammerCur);
+      this.kineticBadgeEl.dataset.maxCharges = String(hammerMax);
+      if (prevMode !== 'hammer' || this.kineticPipEls.length !== hammerMax) {
+        this.kineticIconEl.innerHTML = getWeaponSvg('shockwave_hammer');
+        this.rebuildKineticPips(hammerMax, '◆');
+      }
+      this.kineticTitleEl.textContent = `SHOCK HAMMER · ${hammerCur}/${hammerMax}`;
+      this.kineticPipEls.forEach((pip, idx) => {
+        const isActive = idx < hammerCur;
+        const isRecharging =
+          idx === hammerCur && hammerCur < hammerMax && hammerRegenBucket > 0;
+        pip.classList.toggle('active', isActive);
+        pip.classList.toggle('spent', !isActive);
+        pip.classList.toggle('recharging', isRecharging);
+      });
+    } else {
+      this.kineticBadgeEl.classList.add('fdr-hidden');
+      this.kineticBadgeEl.classList.remove('hammer-mode', 'empty');
+      this.kineticBadgeEl.dataset.mode = '';
+      delete this.kineticBadgeEl.dataset.charges;
+      delete this.kineticBadgeEl.dataset.maxCharges;
+    }
   }
 
   private updateCenterCombat(state: HUDState, now: number): void {
@@ -3788,6 +3957,18 @@ export class HUDManager {
       worldToMini,
       this.skyforgeOverlay,
       state.trainPos,
+      performance.now(),
+    );
+
+    // Wave-10 Tide & Recon Overlay (Wild Boars, Shield Mushrooms, Pulsing Crimson Flare Scan Rings)
+    drawTideMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      this.tideOverlay,
+      state.flareBeacons,
+      undefined,
       performance.now(),
     );
 

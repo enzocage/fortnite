@@ -1210,6 +1210,79 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     maxStack: 1,
     allowedRarities: ['epic', 'legendary', 'mythic'],
   },
+  shockwave_hammer: {
+    id: 'shockwave_hammer',
+    name: 'Titan Shockwave Hammer',
+    shortName: 'SHOCK HAMMER',
+    category: 'throwable',
+    ammoType: null,
+    isConsumable: false,
+    isShockwaveHammer: true,
+    hammerMaxCharges: 4,
+    hammerChargeRegenSec: 12,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 5.5,
+    baseDamage: 75,
+    structureDamage: 250,
+    headshotMultiplier: 1.0,
+    fireRate: 0.9,
+    pellets: 0,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0,
+    adsSpread: 0,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 5.5,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0.02,
+    recoilYaw: 0,
+    maxStack: 1,
+    allowedRarities: ['epic', 'mythic'],
+  },
+  flare_gun: {
+    id: 'flare_gun',
+    name: 'Recon Flare Gun',
+    shortName: 'FLARE GUN',
+    category: 'pistol',
+    ammoType: null,
+    isConsumable: false,
+    isFlareGun: true,
+    flareScanRadius: 75,
+    isProjectile: true,
+    projectileSpeed: 48,
+    projectileGravity: 9.5,
+    splashRadius: 5.0,
+    baseDamage: 60,
+    structureDamage: 90,
+    headshotMultiplier: 1.5,
+    fireRate: 0.75,
+    pellets: 1,
+    magSize: 6,
+    reloadTime: 1.8,
+    baseSpread: 0.015,
+    adsSpread: 0.008,
+    crouchSpreadMult: 0.8,
+    moveSpreadAdd: 0.01,
+    bloomPerShot: 0.004,
+    bloomMax: 0.02,
+    bloomRecovery: 0.08,
+    range: 140,
+    falloffStart: 80,
+    falloffEnd: 140,
+    minFalloffMult: 0.75,
+    recoilPitch: 0.025,
+    recoilYaw: 0.006,
+    maxStack: 1,
+    allowedRarities: ['rare', 'epic'],
+  },
 };
 
 export const POIS: POIDef[] = [
@@ -1914,6 +1987,13 @@ export const JETPACK_THRUST_ACCEL = 26.5;
 export const LOW_GRAVITY_DURATION_SEC = 15;
 export const LOW_GRAVITY_SCALE = 0.52;
 export const METEOR_CRATER_CRYSTAL_RESPAWN_SEC = 45;
+
+export const SHIELD_MUSHROOM_AMOUNT = 10;
+export const SHIELD_MUSHROOM_RESPAWN_SEC = 60;
+export const WILD_BOAR_MAX_HP = 110;
+export const FLARE_SCAN_DURATION_SEC = 12;
+export const HAMMER_BOUNCE_IMPULSE_Y = 18.5;
+export const HAMMER_BOUNCE_IMPULSE_FWD = 17.5;
 
 export const WEAPON_MODS: readonly WeaponModDef[] = [
   {

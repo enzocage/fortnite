@@ -322,6 +322,26 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <circle cx="56" cy="29" r="2.2" fill="#fef08a"/>
     <rect x="21" y="27.5" width="17" height="3" rx="1" fill="#ef4444"/>
   </svg>`,
+
+  shockwave_hammer: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M12 53L36 29" stroke="#cbd5e1" stroke-width="6" stroke-linecap="round"/>
+    <path d="M12 53L20 45" stroke="#7c3aed" stroke-width="7" stroke-linecap="round"/>
+    <path d="M27 14L44 10L55 21L50 38L36 33L24 21L27 14Z" fill="#6d28d9" stroke="#0f172a" stroke-width="2.2" stroke-linejoin="round"/>
+    <rect x="28" y="16" width="18" height="14" rx="3" transform="rotate(45 37 23)" fill="#a855f7" stroke="#e9d5ff" stroke-width="1.6"/>
+    <circle cx="40" cy="22" r="5" fill="#22d3ee" stroke="#ecfeff" stroke-width="1.5"/>
+    <path d="M47 11C52 13 55 18 55 24" stroke="#22d3ee" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M20 28C16 24 15 18 18 13" stroke="#e879f9" stroke-width="2.2" stroke-linecap="round"/>
+  </svg>`,
+
+  flare_gun: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M12 24H37L40 34H26L21 49H13L17 34H12V24Z" fill="#f97316" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M37 22H49L53 20V35L49 33H37V22Z" fill="#ea580c" stroke="#0f172a" stroke-width="1.9" stroke-linejoin="round"/>
+    <rect x="15" y="37" width="7" height="11" rx="2" transform="rotate(14 18 42)" fill="#1e293b"/>
+    <rect x="21" y="26.5" width="13" height="4" rx="1" fill="#ef4444" stroke="#fef08a" stroke-width="1.1"/>
+    <circle cx="35" cy="28" r="2.2" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.2"/>
+    <circle cx="56" cy="27.5" r="3.6" fill="#ef4444" stroke="#fde047" stroke-width="1.4"/>
+    <path d="M56 17V21M56 34V38M61 27.5H58" stroke="#fde047" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {
@@ -437,6 +457,9 @@ export function getBountyTargetSvg(): string {
 }
 
 export function getVehicleIconSvg(kind: VehicleKind): string {
+  if (kind === 'speedboat') {
+    return getSpeedboatSvg();
+  }
   if (kind === 'cyber_bike') {
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
       <circle cx="17" cy="41" r="9" fill="#0f172a" stroke="#22d3ee" stroke-width="3"/>
@@ -877,5 +900,49 @@ export function getJetpackFlameSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
     <path d="M12 2C12 2 18.5 7.5 18.5 13.5C18.5 17.6 15.6 21 12 21C8.4 21 5.5 17.6 5.5 13.5C5.5 9.6 8.2 7 9.8 5.4C9.8 7.6 11.2 8.6 11.2 8.6C11 6.2 12 2 12 2Z" fill="#fb923c" stroke="#fde047" stroke-width="1.4" stroke-linejoin="round"/>
     <path d="M12 10.5C12 10.5 15 13 15 15.8C15 17.6 13.7 19 12 19C10.3 19 9 17.6 9 15.8C9 13.5 12 10.5 12 10.5Z" fill="#22d3ee"/>
+  </svg>`;
+}
+
+export function getSpeedboatSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M8 46C14 43 20 49 26 46C32 43 38 49 44 46C50 43 54 47 58 45" stroke="#67e8f9" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M9 33H46L57 25L50 39H12L9 33Z" fill="#06b6d4" stroke="#0f172a" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M22 23H38L44 33H19L22 23Z" fill="#e0f2fe" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="6" y="27" width="7" height="11" rx="2" fill="#334155" stroke="#0f172a" stroke-width="1.8"/>
+    <path d="M15 36H48" stroke="#bae6fd" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="32" cy="28" r="2.2" fill="#ffd000"/>
+  </svg>`;
+}
+
+export function getMushroomSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <ellipse cx="16" cy="26" rx="9" ry="2.5" fill="rgba(34,211,238,0.35)"/>
+    <rect x="12.5" y="16" width="7" height="10" rx="2.5" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+    <path d="M5 17C5 10.2 9.9 5.5 16 5.5C22.1 5.5 27 10.2 27 17H5Z" fill="#0ea5e9" stroke="#0c4a6e" stroke-width="1.8" stroke-linejoin="round"/>
+    <circle cx="11.5" cy="12" r="2.2" fill="#a5f3fc"/>
+    <circle cx="19" cy="10.5" r="1.8" fill="#a5f3fc"/>
+    <circle cx="21.5" cy="14.5" r="1.3" fill="#e0f2fe"/>
+  </svg>`;
+}
+
+export function getBoarSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="17" r="10.5" fill="#7c2d12" stroke="#f59e0b" stroke-width="1.8"/>
+    <path d="M8 11L11 5L14 10M24 11L21 5L18 10" fill="#9a3412" stroke="#f59e0b" stroke-width="1.4" stroke-linejoin="round"/>
+    <ellipse cx="16" cy="19.5" rx="5.2" ry="3.8" fill="#ea580c" stroke="#431407" stroke-width="1.4"/>
+    <circle cx="14" cy="19.5" r="1.1" fill="#431407"/>
+    <circle cx="18" cy="19.5" r="1.1" fill="#431407"/>
+    <path d="M10.5 20.5C8 20 6.5 17 7.5 14M21.5 20.5C24 20 25.5 17 24.5 14" stroke="#fef3c7" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="12" cy="14" r="1.5" fill="#fef08a"/>
+    <circle cx="20" cy="14" r="1.5" fill="#fef08a"/>
+  </svg>`;
+}
+
+export function getFlareScanSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+    <circle cx="12" cy="12" r="9.5" stroke="#f87171" stroke-width="1.8" stroke-dasharray="3.2 2.4"/>
+    <circle cx="12" cy="12" r="5.5" stroke="#ef4444" stroke-width="1.6"/>
+    <circle cx="12" cy="12" r="2.6" fill="#fef08a" stroke="#dc2626" stroke-width="1.2"/>
+    <path d="M12 2V5M12 19V22M2 12H5M19 12H22" stroke="#fca5a5" stroke-width="1.6" stroke-linecap="round"/>
   </svg>`;
 }

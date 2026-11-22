@@ -8,6 +8,7 @@ import type {
   CharacterRenderState,
   DamageEvent,
   EmoteId,
+  FlareBeaconEntity,
   GameModeId,
   GamePhase,
   GameSettings,
@@ -40,6 +41,8 @@ import {
   GRID_XZ,
   GRID_Y,
   GRIND_RAIL_SPEED,
+  HAMMER_BOUNCE_IMPULSE_FWD,
+  HAMMER_BOUNCE_IMPULSE_Y,
   JETPACK_BURN_RATE,
   JETPACK_MAX_FUEL,
   JETPACK_RECHARGE_RATE,
@@ -54,6 +57,7 @@ import {
   RARITY_ORDER,
   REBOOT_DURATION_SEC,
   REVIVE_DURATION_SEC,
+  SHIELD_MUSHROOM_AMOUNT,
   STARTING_GOLD_BARS,
   UPGRADE_COSTS,
   WATER_LEVEL,
@@ -93,6 +97,7 @@ import type {
   WorldRiftCaptureBridge,
   WorldSkyforgeBridge,
   WorldStationBridge,
+  WorldTideBridge,
   WorldTraversalBridge,
 } from './GameplayTypes';
 import { InventorySystem, getItemMagCapacity } from './InventorySystem';
@@ -126,6 +131,7 @@ export class PlayerController {
   private overdriveBridge: WorldOverdriveBridge | null = null;
   private frontierBridge: WorldFrontierBridge | null = null;
   private skyforgeBridge: WorldSkyforgeBridge | null = null;
+  private tideBridge: WorldTideBridge | null = null;
   private duoReviveBridge: DuoReviveBridge | null = null;
   private duoRebootBridge: DuoRebootBridge | null = null;
   private augmentManager: AugmentManager;
@@ -137,12 +143,28 @@ export class PlayerController {
   private onLootIslandCaptured: ((lootPos?: Vec3Like) => void) | null = null;
   private onDroneDestroyed: ((res: SupplyDroneDamageResult) => void) | null = null;
   private onTrainChestHacked: ((lootPos: Vec3Like) => void) | null = null;
+  private onFlareBurst: ((beacon: FlareBeaconEntity) => void) | null = null;
+  private onBoarEliminated:
+    | ((pos: Vec3Like, attackerId: string) => void)
+    | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
 
   private goldBars = STARTING_GOLD_BARS;
   private kineticDashCharges = WEAPONS.kinetic_blade.dashCharges ?? 3;
   private kineticDashRechargeTimer = 0;
+  private hammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
+  private hammerRechargeTimer = 0;
+  private flareBeacons: Array<{
+    id?: string;
+    x: number;
+    y?: number;
+    z: number;
+    radius: number;
+    remainingSec: number;
+    ownerId?: string;
+  }> = [];
+  private flareScanMarkedCount = 0;
   private lootIslandTickTimer = 0;
   private lootIslandUpdraftCooldown = 0;
 
@@ -337,6 +359,10 @@ export class PlayerController {
     trainChestsHacked: 0,
     hopCrystalsUsed: 0,
     flameDamage: 0,
+    hammerSlams: 0,
+    flaresFired: 0,
+    boarsHunted: 0,
+    mushroomsEaten: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -388,6 +414,7 @@ export class PlayerController {
       overdriveBridge?: WorldOverdriveBridge | null;
       frontierBridge?: WorldFrontierBridge | null;
       skyforgeBridge?: WorldSkyforgeBridge | null;
+      tideBridge?: WorldTideBridge | null;
       duoReviveBridge?: DuoReviveBridge | null;
       duoRebootBridge?: DuoRebootBridge | null;
       augmentManager?: AugmentManager | null;
@@ -400,6 +427,8 @@ export class PlayerController {
       onLootIslandCaptured?: ((lootPos?: Vec3Like) => void) | null;
       onDroneDestroyed?: ((res: SupplyDroneDamageResult) => void) | null;
       onTrainChestHacked?: ((lootPos: Vec3Like) => void) | null;
+      onFlareBurst?: ((beacon: FlareBeaconEntity) => void) | null;
+      onBoarEliminated?: ((pos: Vec3Like, attackerId: string) => void) | null;
     },
   ) {
     this.camera = camera;
@@ -443,6 +472,9 @@ export class PlayerController {
     if (options?.skyforgeBridge !== undefined) {
       this.setSkyforgeBridge(options.skyforgeBridge);
     }
+    if (options?.tideBridge !== undefined) {
+      this.setTideBridge(options.tideBridge);
+    }
     if (options?.duoReviveBridge !== undefined) {
       this.setDuoReviveBridge(options.duoReviveBridge);
     }
@@ -476,6 +508,25 @@ export class PlayerController {
     if (options?.onTrainChestHacked !== undefined) {
       this.setOnTrainChestHacked(options.onTrainChestHacked);
     }
+    if (options?.onFlareBurst !== undefined) {
+      this.setOnFlareBurst(options.onFlareBurst);
+    }
+    if (options?.onBoarEliminated !== undefined) {
+      this.setOnBoarEliminated(options.onBoarEliminated);
+    }
+
+    this.weapons.setPlayerTideObserver({
+      onFlareBurst: (beacon) => {
+        this.addFlareBeacon(beacon);
+        this.onFlareBurst?.(beacon);
+      },
+      onBoarEliminated: (pos, attackerId) => {
+        if (attackerId === 'player') {
+          this.stats.boarsHunted = (this.stats.boarsHunted ?? 0) + 1;
+        }
+        this.onBoarEliminated?.(pos, attackerId);
+      },
+    });
 
     this.unsubHitmarker = this.eventBus.on('combat:hitmarker', (ev) => {
       if (ev.attackerId === 'player') {
@@ -490,7 +541,11 @@ export class PlayerController {
 
     this.unsubDamage = this.eventBus.on('combat:damage', (ev) => {
       if (ev.attackerId === 'player' && ev.targetId !== 'player') {
-        if (ev.weaponId === 'kinetic_blade') {
+        if (
+          ev.weaponId === 'kinetic_blade' ||
+          ev.weaponId === 'shockwave_hammer' ||
+          ev.weaponId === 'flare_gun'
+        ) {
           this.stats.damageDealt += ev.damage;
         }
         if (ev.isElimination && this.isAlive()) {
@@ -616,6 +671,130 @@ export class PlayerController {
     this.onTrainChestHacked = cb;
   }
 
+  setTideBridge(bridge: WorldTideBridge | null): void {
+    const prev = this.tideBridge;
+    this.tideBridge = bridge;
+    if (bridge !== null) {
+      this.weapons.setTideBridge(bridge);
+    } else if (this.weapons.getTideBridge() === prev) {
+      this.weapons.setTideBridge(null);
+    }
+  }
+
+  getTideBridge(): WorldTideBridge | null {
+    return this.tideBridge;
+  }
+
+  setOnFlareBurst(cb: ((beacon: FlareBeaconEntity) => void) | null): void {
+    this.onFlareBurst = cb;
+  }
+
+  setOnBoarEliminated(
+    cb: ((pos: Vec3Like, attackerId: string) => void) | null,
+  ): void {
+    this.onBoarEliminated = cb;
+  }
+
+  setFlareScanStatus(
+    beacons: ReadonlyArray<{
+      id?: string;
+      x: number;
+      y?: number;
+      z: number;
+      radius: number;
+      remainingSec: number;
+      ownerId?: string;
+    }>,
+    markedCount: number,
+  ): void {
+    const next: typeof this.flareBeacons = [];
+    if (Array.isArray(beacons)) {
+      for (let i = 0; i < beacons.length; i++) {
+        const b = beacons[i];
+        if (
+          !b ||
+          !Number.isFinite(b.x) ||
+          !Number.isFinite(b.z) ||
+          !Number.isFinite(b.radius) ||
+          !Number.isFinite(b.remainingSec) ||
+          b.remainingSec <= 0
+        ) {
+          continue;
+        }
+        next.push({
+          ...(b.id !== undefined ? { id: b.id } : {}),
+          x: b.x,
+          ...(b.y !== undefined ? { y: b.y } : {}),
+          z: b.z,
+          radius: Math.max(1, b.radius),
+          remainingSec: b.remainingSec,
+          ...(b.ownerId !== undefined ? { ownerId: b.ownerId } : {}),
+        });
+      }
+    }
+    this.flareBeacons = next;
+    if (Number.isFinite(markedCount)) {
+      this.flareScanMarkedCount = Math.max(0, Math.round(markedCount));
+    }
+  }
+
+  addFlareBeacon(
+    beacon:
+      | FlareBeaconEntity
+      | {
+          id?: string;
+          x: number;
+          y?: number;
+          z: number;
+          radius: number;
+          remainingSec: number;
+          ownerId?: string;
+        },
+    markedCount?: number,
+  ): void {
+    if (
+      !beacon ||
+      !Number.isFinite(beacon.x) ||
+      !Number.isFinite(beacon.z) ||
+      !Number.isFinite(beacon.radius) ||
+      !Number.isFinite(beacon.remainingSec) ||
+      beacon.remainingSec <= 0
+    ) {
+      return;
+    }
+    const entry = {
+      ...(beacon.id !== undefined ? { id: beacon.id } : {}),
+      x: beacon.x,
+      ...(beacon.y !== undefined ? { y: beacon.y } : {}),
+      z: beacon.z,
+      radius: Math.max(1, beacon.radius),
+      remainingSec: beacon.remainingSec,
+      ...(beacon.ownerId !== undefined ? { ownerId: beacon.ownerId } : {}),
+    };
+    if (entry.id) {
+      const idx = this.flareBeacons.findIndex((b) => b.id === entry.id);
+      if (idx !== -1) {
+        this.flareBeacons[idx] = entry;
+      } else {
+        this.flareBeacons.push(entry);
+      }
+    } else {
+      this.flareBeacons.push(entry);
+    }
+    if (markedCount !== undefined && Number.isFinite(markedCount)) {
+      this.flareScanMarkedCount = Math.max(0, Math.round(markedCount));
+    }
+  }
+
+  getFlareBeacons(): Array<{ x: number; z: number; radius: number; remainingSec: number }> {
+    return this.flareBeacons.map((b) => ({
+      x: b.x,
+      z: b.z,
+      radius: b.radius,
+      remainingSec: b.remainingSec,
+    }));
+  }
+
   setLowGravityTimer(sec: number): void {
     if (!Number.isFinite(sec)) return;
     this.lowGravityTimer = Math.max(0, sec);
@@ -642,6 +821,7 @@ export class PlayerController {
       def.isThrowable ||
       def.isGrappler ||
       def.isKineticBlade ||
+      def.isShockwaveHammer ||
       def.isJetpack
     ) {
       return false;
@@ -793,6 +973,8 @@ export class PlayerController {
     this.jetpackDryLock = false;
     this.jetpackVfxTimer = 0;
     this.lowGravityTimer = 0;
+    this.hammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
+    this.hammerRechargeTimer = 0;
     this.isSliding = false;
     this.isCrouching = false;
     this.isStealthed = false;
@@ -1786,6 +1968,10 @@ export class PlayerController {
     this.goldBars = STARTING_GOLD_BARS;
     this.kineticDashCharges = WEAPONS.kinetic_blade.dashCharges ?? 3;
     this.kineticDashRechargeTimer = 0;
+    this.hammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
+    this.hammerRechargeTimer = 0;
+    this.flareBeacons = [];
+    this.flareScanMarkedCount = 0;
     this.lootIslandTickTimer = 0;
     this.lootIslandUpdraftCooldown = 0;
     this.medallions = [];
@@ -1849,6 +2035,10 @@ export class PlayerController {
       trainChestsHacked: 0,
       hopCrystalsUsed: 0,
       flameDamage: 0,
+      hammerSlams: 0,
+      flaresFired: 0,
+      boarsHunted: 0,
+      mushroomsEaten: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -2144,6 +2334,8 @@ export class PlayerController {
     this.isJetpackThrusting = false;
     this.jetpackDryLock = false;
     this.lowGravityTimer = 0;
+    this.flareBeacons = [];
+    this.flareScanMarkedCount = 0;
     this.weapons.clearActorBurn('player');
     this.incomingReviveProgress = null;
     this.incomingReviveLabel = null;
@@ -2248,6 +2440,7 @@ export class PlayerController {
 
   dispose(): void {
     this.detachInputListeners();
+    this.weapons.setPlayerTideObserver(null);
     this.unsubHitmarker?.();
     this.unsubHitmarker = null;
     this.unsubDamage?.();
@@ -2408,11 +2601,13 @@ export class PlayerController {
         this.building.resetEditTiles();
       } else if (this.isBuildMode) {
         this.cycleBuildMaterial();
-      } else if (
-        this.activeVehicleId === null &&
-        this.inventory.getActiveItem()?.weaponId === 'kinetic_blade'
-      ) {
-        this.tryKineticDash();
+      } else if (this.activeVehicleId === null) {
+        const activeWeaponId = this.inventory.getActiveItem()?.weaponId;
+        if (activeWeaponId === 'kinetic_blade') {
+          this.tryKineticDash();
+        } else if (activeWeaponId === 'shockwave_hammer') {
+          this.tryHammerBounce();
+        }
       }
     }
   }
@@ -2929,6 +3124,7 @@ export class PlayerController {
 
   private buildWeaponFireExtras(item: ItemInstance) {
     return {
+      tideBridge: this.tideBridge,
       weaponMods: item.mods ? [...item.mods] : undefined,
       actorTeamId:
         this.gameMode === 'team_rumble' ? ('team_blue' as const) : undefined,
@@ -2998,9 +3194,16 @@ export class PlayerController {
     this.fireCooldown = 1 / def.fireRate;
     this.stealthBreakTimer = STEALTH_FIRE_BREAK_SEC;
     this.isStealthed = false;
+    if (def.isShockwaveHammer || item.weaponId === 'shockwave_hammer') {
+      this.stats.hammerSlams = (this.stats.hammerSlams ?? 0) + 1;
+    } else if (def.isFlareGun || item.weaponId === 'flare_gun') {
+      this.stats.flaresFired = (this.stats.flaresFired ?? 0) + 1;
+    }
+
     if (
       item.weaponId !== 'pickaxe' &&
       !def.isKineticBlade &&
+      !def.isShockwaveHammer &&
       !def.isGrappler &&
       !def.isThrowable &&
       !def.isJetpack
@@ -3044,7 +3247,12 @@ export class PlayerController {
           spatial: true,
         });
       }
-    } else if (def.magSize > 0 && item.magAmmo <= 0 && !def.isGrappler) {
+    } else if (
+      def.magSize > 0 &&
+      item.magAmmo <= 0 &&
+      !def.isGrappler &&
+      !def.isFlareGun
+    ) {
       this.startReload();
     }
   }
@@ -3116,7 +3324,7 @@ export class PlayerController {
         if (isInitialPress) {
           this.eventBus.emit('sound:play', { id: 'dryfire' });
         }
-        if (!def.isGrappler) {
+        if (!def.isGrappler && !def.isFlareGun) {
           this.startReload();
         }
         return;
@@ -3171,7 +3379,11 @@ export class PlayerController {
     const eye = this.getEyePosition();
     const aimDir = this.computeCrosshairParallaxAimDir(eye);
 
-    if (item.weaponId === 'pickaxe' || def.isKineticBlade) {
+    if (
+      item.weaponId === 'pickaxe' ||
+      def.isKineticBlade ||
+      def.isShockwaveHammer
+    ) {
       this.harvestSwingTimer = 0.35;
     }
 
@@ -3443,6 +3655,86 @@ export class PlayerController {
       hasCombatMedallion: this.hasMedallion('medallion_combat'),
     });
 
+    return true;
+  }
+
+  /**
+   * Executes a Titan Shockwave Hammer RMB Kinetic Bounce Leap, consuming 1 charge.
+   */
+  private tryHammerBounce(): boolean {
+    if (
+      this.phase !== 'playing' ||
+      !this.isAlive() ||
+      this.isKnocked ||
+      this.activeVehicleId !== null ||
+      this.isBuildMode ||
+      this.building.getEditState().active
+    ) {
+      return false;
+    }
+    const item = this.inventory.getActiveItem();
+    if (!item || item.weaponId !== 'shockwave_hammer') return false;
+
+    this.isAiming = false;
+    this.isScoped = false;
+
+    if (this.hammerCharges <= 0) {
+      this.eventBus.emit('sound:play', {
+        id: 'dryfire',
+        position: { ...this.position },
+        spatial: true,
+      });
+      return false;
+    }
+
+    this.hammerCharges -= 1;
+    this.stealthBreakTimer = STEALTH_FIRE_BREAK_SEC;
+    this.isStealthed = false;
+    if (this.activeZipline) {
+      this.activeZipline = null;
+      this.ziplineCooldown = 0.5;
+    }
+    if (this.activeGrindRail) {
+      this.activeGrindRail = null;
+      this.grindRailCooldown = 0.5;
+    }
+    this.cancelPartnerRevive();
+    this.cancelPartnerReboot();
+    this.cancelTrainChestHack();
+    this.isMantling = false;
+    this.isSliding = false;
+    this.isCrouching = false;
+    this.isEmoting = false;
+    this.activeEmote = null;
+    this.healTimer = 0;
+    this.healLabel = null;
+    this.reloadTimer = 0;
+
+    const lookDir = this.getLookDirection();
+    const horizLen = Math.hypot(lookDir.x, lookDir.z);
+    const fwdX = horizLen > 1e-4 ? lookDir.x / horizLen : Math.sin(this.yaw);
+    const fwdZ = horizLen > 1e-4 ? lookDir.z / horizLen : Math.cos(this.yaw);
+
+    this.grounded = false;
+    this.wasAirborne = true;
+    this.fallPeakY = this.position.y;
+    this.fallImmune = true;
+    this.velocity.x = fwdX * HAMMER_BOUNCE_IMPULSE_FWD;
+    this.velocity.z = fwdZ * HAMMER_BOUNCE_IMPULSE_FWD;
+    this.velocity.y = HAMMER_BOUNCE_IMPULSE_Y;
+    this.harvestSwingTimer = 0.35;
+
+    const bouncePos = { ...this.position };
+    this.eventBus.emit('vfx:hammer_bounce', { position: bouncePos });
+    this.eventBus.emit('sound:play', {
+      id: 'hammer_bounce',
+      position: bouncePos,
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:camera_shake', {
+      intensity: 0.32,
+      duration: 0.18,
+    });
     return true;
   }
 
@@ -3800,7 +4092,8 @@ export class PlayerController {
       | 'vending_machine'
       | 'npc_specialist'
       | 'mod_bench'
-      | 'forecast_tower';
+      | 'forecast_tower'
+      | 'shield_mushroom';
     id: string;
     prompt: PlayerInteractPrompt;
   } | null {
@@ -3872,7 +4165,8 @@ export class PlayerController {
         | 'vending_machine'
         | 'npc_specialist'
         | 'mod_bench'
-        | 'forecast_tower';
+        | 'forecast_tower'
+        | 'shield_mushroom';
       id: string;
       prompt: PlayerInteractPrompt;
     } | null = null;
@@ -4050,7 +4344,12 @@ export class PlayerController {
             kind: 'vehicle',
             id: veh.id,
             prompt: {
-              label: veh.kind === 'cyber_bike' ? 'Drive Cyber Bike' : 'Drive Hover ATV',
+              label:
+                veh.kind === 'cyber_bike'
+                  ? 'Drive Cyber Bike'
+                  : veh.kind === 'speedboat'
+                    ? 'Drive Speedboat'
+                    : 'Drive Hover ATV',
               key: interactKey,
               rarity: 'rare',
             },
@@ -4123,6 +4422,32 @@ export class PlayerController {
               label: 'CONSUME HOP CRYSTAL (LOW-G)',
               key: interactKey,
               rarity: 'epic',
+            },
+          };
+        }
+      }
+    }
+
+    if (this.tideBridge) {
+      const mushroom = this.tideBridge.findNearbyShieldMushroom(this.position);
+      if (mushroom && mushroom.available) {
+        const d = Math.min(
+          2.4,
+          dist3D(this.position, {
+            x: mushroom.x,
+            y: mushroom.y,
+            z: mushroom.z,
+          }),
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'shield_mushroom',
+            id: mushroom.id,
+            prompt: {
+              label: `EAT SHIELD MUSHROOM (+${SHIELD_MUSHROOM_AMOUNT} SHIELD)`,
+              key: interactKey,
+              rarity: 'uncommon',
             },
           };
         }
@@ -4856,6 +5181,56 @@ export class PlayerController {
         this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
         return;
       }
+
+      if (candidate.kind === 'shield_mushroom' && this.tideBridge) {
+        const mushroom =
+          this.tideBridge
+            .getShieldMushrooms()
+            .find((m) => m.id === candidate.id) ??
+          this.tideBridge.findNearbyShieldMushroom(this.position);
+        let emittedEatSfx = false;
+        let emittedSplashVfx = false;
+        const unsubSfx = this.eventBus.on('sound:play', (ev) => {
+          if (ev.id === 'mushroom_eat') emittedEatSfx = true;
+        });
+        const unsubVfx = this.eventBus.on('vfx:splash_heal', () => {
+          emittedSplashVfx = true;
+        });
+        const consumed = this.tideBridge.consumeShieldMushroom(candidate.id);
+        unsubSfx();
+        unsubVfx();
+        if (!consumed) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        this.shield = Math.min(
+          this.maxShield,
+          this.shield + SHIELD_MUSHROOM_AMOUNT,
+        );
+        this.stats.mushroomsEaten = (this.stats.mushroomsEaten ?? 0) + 1;
+        const fxPos: Vec3Like = mushroom
+          ? { x: mushroom.x, y: mushroom.y + 0.3, z: mushroom.z }
+          : { ...this.position };
+        if (!emittedEatSfx) {
+          this.eventBus.emit('sound:play', {
+            id: 'mushroom_eat',
+            position: fxPos,
+            spatial: true,
+          });
+        }
+        if (!emittedSplashVfx) {
+          this.eventBus.emit('vfx:splash_heal', {
+            position: fxPos,
+            radius: 1.6,
+          });
+        }
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        return;
+      }
     }
 
     // Fallback: Attach to nearby Grind Rail or overhead Energy Zipline
@@ -5409,6 +5784,37 @@ export class PlayerController {
             this.kineticDashRechargeTimer = 0;
           }
         }
+        const maxHammerCharges =
+          WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
+        const hammerRegenSec =
+          WEAPONS.shockwave_hammer.hammerChargeRegenSec ?? 12;
+        if (this.hammerCharges < maxHammerCharges) {
+          this.hammerRechargeTimer += safeDt;
+          while (
+            this.hammerRechargeTimer >= hammerRegenSec - 1e-6 &&
+            this.hammerCharges < maxHammerCharges
+          ) {
+            this.hammerCharges += 1;
+            this.hammerRechargeTimer = Math.max(
+              0,
+              this.hammerRechargeTimer - hammerRegenSec,
+            );
+          }
+          if (this.hammerCharges >= maxHammerCharges) {
+            this.hammerRechargeTimer = 0;
+          }
+        }
+      }
+      if (this.flareBeacons.length > 0) {
+        for (let i = this.flareBeacons.length - 1; i >= 0; i--) {
+          this.flareBeacons[i].remainingSec -= safeDt;
+          if (this.flareBeacons[i].remainingSec <= 0) {
+            this.flareBeacons.splice(i, 1);
+          }
+        }
+        if (this.flareBeacons.length === 0) {
+          this.flareScanMarkedCount = 0;
+        }
       }
       if (this.activeVehicleId !== null) {
         this.updateVehicleDriving(safeDt);
@@ -5804,8 +6210,10 @@ export class PlayerController {
       !this.building.getEditState().active &&
       !activeDef.isConsumable &&
       !activeDef.isJetpack &&
+      !activeDef.isShockwaveHammer &&
       activeItem?.weaponId !== 'pickaxe' &&
       activeItem?.weaponId !== 'kinetic_blade' &&
+      activeItem?.weaponId !== 'shockwave_hammer' &&
       activeItem?.weaponId !== 'jetpack';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
@@ -6552,8 +6960,10 @@ export class PlayerController {
       !this.building.getEditState().active &&
       !activeDef.isConsumable &&
       !activeDef.isJetpack &&
+      !activeDef.isShockwaveHammer &&
       activeItem?.weaponId !== 'pickaxe' &&
       activeItem?.weaponId !== 'kinetic_blade' &&
+      activeItem?.weaponId !== 'shockwave_hammer' &&
       activeItem?.weaponId !== 'jetpack';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
@@ -7469,6 +7879,9 @@ export class PlayerController {
       this.moveSpeed > 11.5 ||
       Boolean(vehicleSnap?.isBoosting);
 
+    const maxHammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
+    const hammerRegenSec = WEAPONS.shockwave_hammer.hammerChargeRegenSec ?? 12;
+
     return {
       phase: this.phase,
       health: Math.ceil(this.health),
@@ -7599,6 +8012,24 @@ export class PlayerController {
         this.isHackingTrainChest && this.trainHackProgress !== null
           ? clamp(this.trainHackProgress, 0, 1)
           : null,
+      hammerCharges:
+        activeItem?.weaponId === 'shockwave_hammer'
+          ? {
+              charges: this.hammerCharges,
+              maxCharges: maxHammerCharges,
+              regenProgress:
+                this.hammerCharges >= maxHammerCharges
+                  ? 0
+                  : clamp(this.hammerRechargeTimer / hammerRegenSec, 0, 1),
+            }
+          : null,
+      flareScanMarkedCount: this.flareScanMarkedCount,
+      flareBeacons: this.flareBeacons.map((b) => ({
+        x: b.x,
+        z: b.z,
+        radius: b.radius,
+        remainingSec: b.remainingSec,
+      })),
     };
   }
 }

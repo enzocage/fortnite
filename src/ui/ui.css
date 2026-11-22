@@ -6358,3 +6358,139 @@
     height: min(74vh, 60vw, 550px);
   }
 }
+
+/* ============================================================================
+   WAVE 10 UI: TIDE & RECON (FLARE SCAN PILL, SHOCKWAVE HAMMER CHARGES,
+   28-ROW TACTICAL LEGEND AT 1280x720)
+   ============================================================================ */
+
+.fdr-status-chip-row {
+  flex-wrap: wrap;
+  row-gap: 3px;
+  column-gap: 4px;
+}
+
+.fdr-flare-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(69, 10, 10, 0.94), rgba(153, 27, 27, 0.92));
+  border: 1.5px solid #f87171;
+  box-shadow: 0 3px 10px rgba(239, 68, 68, 0.42), 0 0 10px rgba(248, 113, 113, 0.28);
+  color: #fee2e2;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-flare-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-flare-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-kinetic-badge.hammer-mode {
+  border-color: #c084fc;
+  background: linear-gradient(180deg, rgba(36, 14, 68, 0.94), rgba(16, 16, 48, 0.95));
+  box-shadow: 0 4px 14px rgba(192, 132, 252, 0.42);
+}
+
+.fdr-kinetic-badge.hammer-mode.empty {
+  border-color: #64748b;
+  box-shadow: none;
+}
+
+.fdr-kinetic-badge.hammer-mode .fdr-kinetic-title {
+  color: #f5d0fe;
+  white-space: nowrap;
+}
+
+.fdr-kinetic-badge.hammer-mode .fdr-kinetic-pip.active {
+  background: linear-gradient(180deg, #e879f9 0%, #7c3aed 100%);
+  border-color: #fae8ff;
+  color: #ffffff;
+  box-shadow: 0 0 8px rgba(217, 70, 239, 0.78);
+}
+
+.fdr-kinetic-badge.hammer-mode .fdr-kinetic-pip.recharging {
+  border-color: #c084fc;
+  color: #e9d5ff;
+  box-shadow: 0 0 6px rgba(192, 132, 252, 0.45);
+}
+
+.fdr-legend-swatch.speedboat svg,
+.fdr-legend-swatch.wildlife svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 1360px), (max-height: 760px) {
+  .fdr-status-chip-row {
+    gap: 3px 4px;
+  }
+
+  .fdr-flare-pill {
+    padding: 1.5px 6px;
+    gap: 3px;
+    font-size: 9.5px;
+    letter-spacing: 0.04em;
+  }
+
+  .fdr-flare-icon {
+    width: 11px;
+    height: 11px;
+  }
+
+  .fdr-kinetic-badge.hammer-mode {
+    padding: 3px 5px;
+    gap: 3px;
+  }
+
+  .fdr-kinetic-badge.hammer-mode .fdr-kinetic-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .fdr-kinetic-badge.hammer-mode .fdr-kinetic-title {
+    font-size: 9px;
+    letter-spacing: 0.04em;
+  }
+
+  .fdr-kinetic-badge.hammer-mode .fdr-kinetic-pips {
+    gap: 2.5px;
+  }
+
+  .fdr-kinetic-badge.hammer-mode .fdr-kinetic-pip {
+    width: 14px;
+    height: 14px;
+    font-size: 10px;
+  }
+
+  .fdr-map-legend {
+    gap: 2px 8px;
+    padding: 5px 8px;
+  }
+
+  .fdr-map-legend-title {
+    font-size: 11px;
+    padding-bottom: 2px;
+    margin-bottom: 0;
+  }
+
+  .fdr-map-legend-row {
+    font-size: 10.4px;
+    gap: 5px;
+    line-height: 1.08;
+  }
+}

@@ -4,6 +4,7 @@ import {
   DEFAULT_KEYBINDS,
   EMOTES,
   EventBus,
+  FLARE_SCAN_DURATION_SEC,
   GLIDERS,
   GRIND_RAIL_SPEED,
   MEDALLION_CIRCLE_RADII,
@@ -26,6 +27,7 @@ import type {
   CrosshairColor,
   DamageEvent,
   EmoteId,
+  FlareBeaconEntity,
   GameModeId,
   GamePhase,
   GameSettings,
@@ -123,6 +125,7 @@ export interface FortdropDebugAPI {
   giveWave7Loadout(): void;
   giveWave8Loadout(): void;
   giveWave9Loadout(): void;
+  giveWave10Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -419,6 +422,10 @@ export class GameEngine {
       this.worldInteractables.getTrainState(),
       this.worldInteractables.getMeteorCraters(),
     );
+    this.uiManager.setWorldTideOverlay(
+      this.worldInteractables.getWildBoars(),
+      this.worldInteractables.getShieldMushrooms(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.gameMode = this.lobbyConfig.gameMode ?? 'solo';
@@ -500,6 +507,13 @@ export class GameEngine {
     this.playerController.setSkyforgeBridge(this.worldInteractables);
     this.playerController.setOnTrainChestHacked((lootPos) => {
       this.handleTrainChestHacked(lootPos);
+    });
+    this.playerController.setTideBridge(this.worldInteractables);
+    this.playerController.setOnFlareBurst((beacon) => {
+      this.handleFlareBurst(beacon);
+    });
+    this.playerController.setOnBoarEliminated((pos, attackerId) => {
+      this.handleBoarEliminated(pos, attackerId);
     });
     this.playerController.setOnDroneDestroyed((res) => {
       this.handleSupplyDroneDestroyed(res);
@@ -618,7 +632,13 @@ export class GameEngine {
     this.enterLobby();
     if (typeof window !== 'undefined') {
       const search = new URLSearchParams(window.location.search);
-      const qaPoi = search.get('qaPoi') ?? (search.has('qaWave9') ? 'sunny_suburbs' : null);
+      const qaPoi =
+        search.get('qaPoi') ??
+        (search.has('qaWave10')
+          ? 'crystal_basin'
+          : search.has('qaWave9')
+            ? 'sunny_suburbs'
+            : null);
       if (qaPoi && POIS.some((p) => p.id === qaPoi)) {
         const qaModeParam = search.get('qaMode');
         const qaMode: GameModeId | undefined =
@@ -653,7 +673,83 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (search.has('qaWave9')) {
+        if (search.has('qaWave10')) {
+          window.__GAME__?.giveWave10Loadout();
+          this.playerController.setJetpackFuel(84);
+          this.playerController.setGoldBars(650);
+
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const fwdX = Math.sin(yaw);
+          const fwdZ = Math.cos(yaw);
+          const rightX = -Math.cos(yaw);
+          const rightZ = Math.sin(yaw);
+
+          this.worldInteractables.qaPlaceWave10Showcase(p, yaw);
+
+          let boatX = 46;
+          let boatZ = -104;
+          let foundWater = false;
+          for (let r = 8; r <= 28 && !foundWater; r += 2) {
+            for (const lat of [0, -6, 6, -12, 12]) {
+              const cx = p.x + fwdX * r + rightX * lat;
+              const cz = p.z + fwdZ * r + rightZ * lat;
+              if (this.terrain.isWater(cx, cz)) {
+                boatX = cx;
+                boatZ = cz;
+                foundWater = true;
+                break;
+              }
+            }
+          }
+          this.vehicleSystem.spawnVehicleAt('speedboat', boatX, boatZ, yaw - Math.PI * 0.35);
+
+          this.playerController.addFlareBeacon(
+            {
+              id: 'qa_flare_scan',
+              x: p.x + fwdX * 14,
+              y: p.y + 4,
+              z: p.z + fwdZ * 14,
+              radius: 75,
+              remainingSec: FLARE_SCAN_DURATION_SEC,
+              ownerId: 'player',
+            },
+            3,
+          );
+
+          this.collision.setPropColliders([
+            ...this.propsAndLoot.getActivePropColliders(),
+            ...this.propsAndLoot.getActiveLlamaColliders(),
+            ...this.worldInteractables.getColliders(),
+            ...this.vehicleSystem.getActiveVehicleColliders(),
+          ]);
+          this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
+          this.uiManager.setWorldChapterOverlay(
+            this.worldInteractables.getWeaponBunkers(),
+            this.worldInteractables.getSlurpTankers(),
+            this.worldInteractables.getDroppedMedallions(),
+            this.worldInteractables.getDroppedCrowns(),
+          );
+          this.uiManager.setWorldOverdriveOverlay(
+            this.worldInteractables.getGrindRails(),
+            this.worldInteractables.getRebootVans(),
+            this.worldInteractables.getSupplyDrones(),
+          );
+          this.uiManager.setWorldFrontierOverlay(
+            this.worldInteractables.getModBenches(),
+            this.worldInteractables.getForecastTowers(),
+          );
+          this.uiManager.setWorldSkyforgeOverlay(
+            this.worldInteractables.getTrainState(),
+            this.worldInteractables.getMeteorCraters(),
+          );
+          this.uiManager.setWorldTideOverlay(
+            this.worldInteractables.getWildBoars(),
+            this.worldInteractables.getShieldMushrooms(),
+          );
+          this.syncPlayerRig(this.playerController.getCharacterRenderState(), 1 / 60);
+          this.pushHUDState(false);
+        } else if (search.has('qaWave9')) {
           window.__GAME__?.giveWave9Loadout();
           this.playerController.setJetpackFuel(78);
           this.playerController.setLowGravityTimer(12.5);
@@ -1733,6 +1829,10 @@ export class GameEngine {
       this.worldInteractables.getTrainState(),
       this.worldInteractables.getMeteorCraters(),
     );
+    this.uiManager.setWorldTideOverlay(
+      this.worldInteractables.getWildBoars(),
+      this.worldInteractables.getShieldMushrooms(),
+    );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
       this.worldBuildResult.floorLootSpots,
@@ -1975,6 +2075,10 @@ export class GameEngine {
     this.uiManager.setWorldSkyforgeOverlay(
       this.worldInteractables.getTrainState(),
       this.worldInteractables.getMeteorCraters(),
+    );
+    this.uiManager.setWorldTideOverlay(
+      this.worldInteractables.getWildBoars(),
+      this.worldInteractables.getShieldMushrooms(),
     );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
@@ -2873,6 +2977,10 @@ export class GameEngine {
       trainChestsHacked: stats.trainChestsHacked ?? 0,
       hopCrystalsUsed: stats.hopCrystalsUsed ?? 0,
       flameDamage: Math.round(stats.flameDamage ?? 0),
+      hammerSlams: stats.hammerSlams ?? 0,
+      flaresFired: stats.flaresFired ?? 0,
+      boarsHunted: stats.boarsHunted ?? 0,
+      mushroomsEaten: stats.mushroomsEaten ?? 0,
       teamRumbleScore:
         this.gameMode === 'team_rumble'
           ? (() => {
@@ -2888,6 +2996,8 @@ export class GameEngine {
         ...(stats.empHits && stats.empHits >= 1 ? ['EMP BREAKER'] : []),
         ...(stats.trainChestsHacked && stats.trainChestsHacked >= 1 ? ['TRAIN HEIST'] : []),
         ...(stats.hopCrystalsUsed && stats.hopCrystalsUsed >= 1 ? ['SKY RIDER'] : []),
+        ...(stats.hammerSlams && stats.hammerSlams >= 2 ? ['TITAN SMASH'] : []),
+        ...(stats.flaresFired && stats.flaresFired >= 1 ? ['RECON ACE'] : []),
       ],
     };
     this.lastMatchSummary = summary;
@@ -2933,7 +3043,8 @@ export class GameEngine {
       s.includes('qaWave6') ||
       s.includes('qaWave7') ||
       s.includes('qaWave8') ||
-      s.includes('qaWave9')
+      s.includes('qaWave9') ||
+      s.includes('qaWave10')
     );
   }
 
@@ -3054,6 +3165,67 @@ export class GameEngine {
       tone: 'victory',
       durationMs: 4000,
     });
+  }
+
+  private handleFlareBurst(beacon: FlareBeaconEntity): void {
+    const excludeTeam = this.gameMode === 'team_rumble' ? 'team_blue' : undefined;
+    const scanned = this.botManager.getBotsInRadius(
+      beacon.x,
+      beacon.z,
+      beacon.radius,
+      excludeTeam,
+    );
+    for (const bot of scanned) {
+      this.audioBlips.push({
+        id: `flare_mark_${this.blipSeq++}`,
+        x: bot.position.x,
+        z: bot.position.z,
+        kind: 'bot',
+        age: 0,
+        maxAge: FLARE_SCAN_DURATION_SEC,
+      });
+    }
+    if (this.audioBlips.length > 48) {
+      this.audioBlips.splice(0, this.audioBlips.length - 48);
+    }
+    this.playerController.setFlareScanStatus(
+      this.playerController.getFlareBeacons(),
+      scanned.length,
+    );
+    this.eventBus.emit('ui:banner', {
+      id: `flare_scan_${Date.now()}`,
+      title: 'RECON FLARE SCAN',
+      subtitle: `${scanned.length} OPPONENT(S) MARKED WITHIN ${Math.round(beacon.radius)}M`,
+      tone: 'info',
+      durationMs: 2800,
+    });
+  }
+
+  private handleBoarEliminated(pos: Vec3Like, attackerId: string): void {
+    const drops: Array<{ id: WeaponId; rarity: 'epic' | 'rare'; stack: number }> = [
+      { id: 'heavy_shotgun', rarity: 'epic', stack: 1 },
+      { id: 'slurp_juice', rarity: 'epic', stack: 1 },
+    ];
+    drops.forEach((entry, idx) => {
+      const a = idx * Math.PI;
+      const def = WEAPONS[entry.id];
+      this.propsAndLoot.spawnLootDrop(
+        { x: pos.x, y: pos.y + 0.5, z: pos.z },
+        {
+          item: {
+            uid: `boar_loot_${Date.now()}_${idx}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          },
+        },
+        { x: Math.cos(a) * 1.4, y: 1.8, z: Math.sin(a) * 1.4 },
+      );
+    });
+    if (attackerId === 'player') {
+      this.grantPlayerGold(40, pos);
+    }
   }
 
   private handleTrainChestHacked(lootPos: Vec3Like): void {
@@ -3443,6 +3615,9 @@ export class GameEngine {
           chestHacked: trainSt.chestHacked,
         };
       })(),
+      hammerCharges: snap.hammerCharges ?? null,
+      flareScanMarkedCount: snap.flareScanMarkedCount ?? 0,
+      flareBeacons: snap.flareBeacons ?? [],
     };
 
     this.uiManager.updateHUD(hudState);
@@ -4073,6 +4248,34 @@ export class GameEngine {
         });
         inv.addAmmo('light', 240);
         inv.addAmmo('medium', 200);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
+      giveWave10Loadout() {
+        const inv = engine.playerController.getInventory();
+        inv.reset();
+        const items: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic' | 'rare'; stack: number }> = [
+          { id: 'shockwave_hammer', rarity: 'mythic', stack: 1 },
+          { id: 'flare_gun', rarity: 'epic', stack: 1 },
+          { id: 'plasma_flamethrower', rarity: 'mythic', stack: 1 },
+          { id: 'jetpack', rarity: 'legendary', stack: 1 },
+          { id: 'chug_splash', rarity: 'rare', stack: 4 },
+        ];
+        items.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w10_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('light', 240);
+        inv.addAmmo('medium', 180);
         inv.addMaterial('wood', 500);
         inv.addMaterial('brick', 500);
         inv.addMaterial('metal', 500);

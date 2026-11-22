@@ -25,6 +25,7 @@ import type {
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
+  ShieldMushroomEntity,
   SlurpTankerEntity,
   SupplyDroneEntity,
   UpgradeBenchEntity,
@@ -32,6 +33,7 @@ import type {
   VehicleEntity,
   VendingMachineEntity,
   WeaponBunkerEntity,
+  WildBoarEntity,
   ZiplineEntity,
 } from '../types';
 import { type CareerStats, loadCareerStats } from './CareerProfile';
@@ -45,10 +47,12 @@ import {
   resolveFrontierOverlayArgs,
   resolveOverdriveOverlayArgs,
   resolveSkyforgeOverlayArgs,
+  resolveTideOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
   type WorldSkyforgeOverlay,
+  type WorldTideOverlay,
 } from './UIHelpers';
 
 export interface UIManagerCallbacks {
@@ -292,6 +296,20 @@ export class UIManager {
     const resolved = resolveSkyforgeOverlayArgs(trainOrOverlay, craters);
     this.fullMap.setWorldSkyforgeOverlay(resolved.train, resolved.craters);
     this.hud.setWorldSkyforgeOverlay(resolved.train, resolved.craters);
+  }
+
+  setWorldTideOverlay(
+    boars: WildBoarEntity[],
+    mushrooms: ShieldMushroomEntity[],
+  ): void;
+  setWorldTideOverlay(overlay: WorldTideOverlay): void;
+  setWorldTideOverlay(
+    boarsOrOverlay: WildBoarEntity[] | WorldTideOverlay,
+    mushrooms?: ShieldMushroomEntity[],
+  ): void {
+    const resolved = resolveTideOverlayArgs(boarsOrOverlay, mushrooms);
+    this.fullMap.setWorldTideOverlay(resolved.boars, resolved.mushrooms);
+    this.hud.setWorldTideOverlay(resolved.boars, resolved.mushrooms);
   }
 
   setPhase(phase: GamePhase): void {

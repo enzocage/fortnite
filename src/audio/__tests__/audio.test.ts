@@ -145,6 +145,14 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   meteor_impact: true,
   hop_crystal_consume: true,
   low_g_jump: true,
+  hammer_slam: true,
+  hammer_bounce: true,
+  flare_fire: true,
+  flare_burst: true,
+  boat_boost: true,
+  mushroom_eat: true,
+  boar_grunt: true,
+  water_splash_wake: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -475,14 +483,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 128 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 136 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(128);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(136);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -1433,6 +1441,149 @@ describe('SoundSynthesizer', () => {
     const sparseDest = sparseFilterCtx.createGain();
     const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
     for (const id of wave9Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 10 SFX with strictly positive ramps >= 0.0001 across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave10Ids: SoundEventId[] = [
+      'hammer_slam',
+      'hammer_bounce',
+      'flare_fire',
+      'flare_burst',
+      'boat_boost',
+      'mushroom_eat',
+      'boar_grunt',
+      'water_splash_wake',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave10Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (
+        id === 'hammer_slam' ||
+        id === 'hammer_bounce' ||
+        id === 'flare_burst' ||
+        id === 'mushroom_eat'
+      ) {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.boar_grunt).toBeGreaterThan(0.3);
+    expect(durations.flare_fire).toBeGreaterThan(0.32);
+    expect(durations.water_splash_wake).toBeGreaterThan(0.36);
+    expect(durations.hammer_bounce).toBeGreaterThan(0.38);
+    expect(durations.mushroom_eat).toBeGreaterThan(0.38);
+    expect(durations.hammer_slam).toBeGreaterThan(0.48);
+    expect(durations.flare_burst).toBeGreaterThan(0.5);
+    expect(durations.boat_boost).toBeGreaterThan(0.5);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave10Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave10Ids) {
       expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
     }
     sparseSynth.dispose();
@@ -3269,5 +3420,182 @@ describe('AudioEngine', () => {
     expect(() => fallbackEngine.updateJetpackLoop(false, 0)).not.toThrow();
     expect(minOscs.every((o) => o.stopped)).toBe(true);
     fallbackEngine.dispose();
+  });
+
+  it('assigns explicit Wave-10 priorities, max hear distances, spatial culling, and tunes speedboat outboard engine profile', async () => {
+    expect(getSoundPriority('hammer_slam')).toBe(3);
+    expect(getSoundPriority('hammer_bounce')).toBe(3);
+    expect(getSoundPriority('flare_burst')).toBe(3);
+    expect(getSoundPriority('flare_fire')).toBe(2);
+    expect(getSoundPriority('boat_boost')).toBe(2);
+    expect(getSoundPriority('mushroom_eat')).toBe(2);
+    expect(getSoundPriority('boar_grunt')).toBe(1);
+    expect(getSoundPriority('water_splash_wake')).toBe(1);
+
+    expect(getMaxHearDistance('mushroom_eat')).toBe(60);
+    expect(getMaxHearDistance('water_splash_wake')).toBe(75);
+    expect(getMaxHearDistance('boar_grunt')).toBe(95);
+    expect(getMaxHearDistance('flare_fire')).toBe(145);
+    expect(getMaxHearDistance('hammer_bounce')).toBe(165);
+    expect(getMaxHearDistance('boat_boost')).toBe(195);
+    expect(getMaxHearDistance('hammer_slam')).toBe(210);
+    expect(getMaxHearDistance('flare_burst')).toBe(250);
+
+    const bus = new EventBus();
+
+    // 1. Headless, suspended, and muted safety for speedboat
+    const headless = new AudioEngine(bus);
+    expect(() => headless.updateVehicleEngine(true, 95, true, 'speedboat')).not.toThrow();
+    expect(() => headless.updateVehicleEngine(true, Number.NaN, false, 'speedboat')).not.toThrow();
+    expect(headless.getVehicleEngineState().active).toBe(false);
+    headless.dispose();
+
+    const suspendedCtx = new MockAudioContext();
+    suspendedCtx.state = 'suspended';
+    const suspendedEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => suspendedCtx as unknown as AudioContext,
+    });
+    suspendedEngine.updateVehicleEngine(true, 90, true, 'speedboat');
+    expect(suspendedCtx.oscillators.length).toBe(0);
+    expect(suspendedEngine.getVehicleEngineState().active).toBe(false);
+    suspendedEngine.dispose();
+
+    const mutedCtx = new MockAudioContext();
+    const mutedEngine = new AudioEngine(
+      bus,
+      { ...DEFAULT_SETTINGS, sfxVolume: 0 },
+      { contextFactory: () => mutedCtx as unknown as AudioContext },
+    );
+    await mutedEngine.unlock();
+    mutedEngine.updateVehicleEngine(true, 90, true, 'speedboat');
+    expect(mutedCtx.oscillators.length).toBe(0);
+    expect(mutedEngine.getVehicleEngineState().active).toBe(false);
+    mutedEngine.dispose();
+
+    // 2. Spatial culling for all 8 Wave-10 SoundEventIds
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'mushroom_eat', position: { x: 55, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'water_splash_wake', position: { x: 70, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'boar_grunt', position: { x: 90, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'flare_fire', position: { x: 140, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'hammer_bounce', position: { x: 160, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'boat_boost', position: { x: 190, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'hammer_slam', position: { x: 205, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'flare_burst', position: { x: 245, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'mushroom_eat', position: { x: 70, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'water_splash_wake', position: { x: 85, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'boar_grunt', position: { x: 105, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'flare_fire', position: { x: 155, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'hammer_bounce', position: { x: 175, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'boat_boost', position: { x: 205, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'hammer_slam', position: { x: 225, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'flare_burst', position: { x: 265, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // Advance time to clear one-shot voices before isolating speedboat engine loop
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+
+    // 3. Speedboat vehicle engine loop: distinct deep aquatic outboard hum profile vs hover_atv & cyber_bike
+    const oscBeforeBoat = mockCtx.oscillators.length;
+    const filterBeforeBoat = mockCtx.filters.length;
+    const gainsBeforeBoat = mockCtx.gains.length;
+
+    engine.updateVehicleEngine(true, 0, false, 'speedboat');
+    expect(engine.getVehicleEngineState()).toEqual({
+      active: true,
+      speedKmh: 0,
+      isBoosting: false,
+      kind: 'speedboat',
+    });
+    expect(engine.getActiveVoiceCount()).toBe(1);
+    expect(mockCtx.oscillators.length - oscBeforeBoat).toBe(3);
+    expect(mockCtx.filters.length - filterBeforeBoat).toBe(1);
+
+    const oscA = mockCtx.oscillators[oscBeforeBoat];
+    const oscB = mockCtx.oscillators[oscBeforeBoat + 1];
+    const boostOsc = mockCtx.oscillators[oscBeforeBoat + 2];
+    const humFilter = mockCtx.filters[filterBeforeBoat];
+    // Vehicle rig gains created in order: master(0), hum(1), whine(2), boost(3)
+    const boatMasterGain = mockCtx.gains[gainsBeforeBoat];
+    const boatHumGain = mockCtx.gains[gainsBeforeBoat + 1];
+    const boatWhineGain = mockCtx.gains[gainsBeforeBoat + 2];
+    const boatBoostGain = mockCtx.gains[gainsBeforeBoat + 3];
+
+    const idleBoatFreqA = oscA.frequency.value;
+    const idleBoatFilterFreq = humFilter.frequency.value;
+    expect(idleBoatFreqA).toBeGreaterThanOrEqual(50);
+    expect(idleBoatFreqA).toBeLessThan(65);
+    expect(boatBoostGain.gain.value).toBeCloseTo(0.0001, 4);
+
+    // Speed & boost modulation
+    engine.updateVehicleEngine(true, 80, false, 'speedboat');
+    const boat80FreqA = oscA.frequency.value;
+    const boat80FreqB = oscB.frequency.value;
+    const boat80FilterFreq = humFilter.frequency.value;
+    const boat80FilterQ = humFilter.Q.value;
+    const boat80HumGain = boatHumGain.gain.value;
+    const boat80WhineGain = boatWhineGain.gain.value;
+    expect(boat80FreqA).toBeGreaterThan(idleBoatFreqA);
+    expect(boat80FilterFreq).toBeGreaterThan(idleBoatFilterFreq);
+
+    const preBoostMaster = boatMasterGain.gain.value;
+    engine.updateVehicleEngine(true, 80, true, 'speedboat');
+    expect(oscA.frequency.value).toBeGreaterThan(boat80FreqA);
+    expect(boostOsc.frequency.value).toBeGreaterThan(24);
+    expect(boatBoostGain.gain.value).toBeGreaterThan(0.1);
+    expect(boatMasterGain.gain.value).toBeGreaterThan(preBoostMaster);
+
+    // Compare at identical 80 km/h cruise against hover_atv and cyber_bike (zero extra nodes allocated)
+    engine.updateVehicleEngine(true, 80, false, 'hover_atv');
+    const atv80FreqA = oscA.frequency.value;
+    const atv80FreqB = oscB.frequency.value;
+    const atv80FilterFreq = humFilter.frequency.value;
+    const atv80FilterQ = humFilter.Q.value;
+    const atv80HumGain = boatHumGain.gain.value;
+    const atv80WhineGain = boatWhineGain.gain.value;
+
+    engine.updateVehicleEngine(true, 80, false, 'cyber_bike');
+    const bike80FreqA = oscA.frequency.value;
+    const bike80FreqB = oscB.frequency.value;
+    const bike80FilterFreq = humFilter.frequency.value;
+    const bike80FilterQ = humFilter.Q.value;
+    const bike80WhineGain = boatWhineGain.gain.value;
+
+    // Speedboat outboard tuning is cleanly deeper, lower-Q, higher-hum, and lower-whine than both land/hover vehicles
+    expect(boat80FreqA).toBeLessThan(atv80FreqA);
+    expect(boat80FreqA).toBeLessThan(bike80FreqA);
+    expect(boat80FreqB).toBeLessThan(atv80FreqB);
+    expect(boat80FreqB).toBeLessThan(bike80FreqB);
+    expect(boat80FilterFreq).toBeLessThan(atv80FilterFreq);
+    expect(boat80FilterFreq).toBeLessThan(bike80FilterFreq);
+    expect(boat80FilterQ).toBeLessThan(atv80FilterQ);
+    expect(boat80FilterQ).toBeLessThan(bike80FilterQ);
+    expect(boat80HumGain).toBeGreaterThan(atv80HumGain);
+    expect(boat80WhineGain).toBeLessThan(atv80WhineGain);
+    expect(boat80WhineGain).toBeLessThan(bike80WhineGain);
+    expect(mockCtx.oscillators.length - oscBeforeBoat).toBe(3);
+
+    // Clean stop on active=false
+    engine.updateVehicleEngine(false, 0, false, 'speedboat');
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.slice(oscBeforeBoat).every((o) => o.stopped)).toBe(true);
+
+    // Polyphony stays bounded under rapid Wave-10 SFX bursts
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'hammer_slam' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+
+    engine.dispose();
   });
 });

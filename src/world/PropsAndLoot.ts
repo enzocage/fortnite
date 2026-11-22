@@ -97,6 +97,8 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'kinetic_blade',
   'jetpack',
   'plasma_flamethrower',
+  'shockwave_hammer',
+  'flare_gun',
 ];
 
 const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
@@ -118,6 +120,8 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'kinetic_blade',
   'jetpack',
   'plasma_flamethrower',
+  'shockwave_hammer',
+  'flare_gun',
 ];
 
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
@@ -136,6 +140,8 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'kinetic_blade',
   'jetpack',
   'plasma_flamethrower',
+  'shockwave_hammer',
+  'flare_gun',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
@@ -1983,6 +1989,112 @@ export class PropsAndLoot {
         grip.position.set(0, -0.14, -0.16);
         flameGroup.add(receiver, fuelCanister, nozzleTube, pilotFlame, grip);
         itemMesh = flameGroup;
+      } else if (def.isShockwaveHammer) {
+        const hammerGroup = new THREE.Group();
+        const violetSteelMat = this.getMat('loot_hammer_steel', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#4c1d95',
+            emissive: '#3b0764',
+            emissiveIntensity: 0.35,
+            roughness: 0.3,
+            metalness: 0.72,
+          }),
+        );
+        const kineticGlowMat = this.getMat('loot_hammer_glow', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#22d3ee',
+            emissive: '#06b6d4',
+            emissiveIntensity: 1.6,
+            roughness: 0.16,
+            metalness: 0.25,
+          }),
+        );
+        const shaft = new THREE.Mesh(
+          this.getGeo('loot_hammer_shaft', () => new THREE.CylinderGeometry(0.04, 0.05, 0.72, 8)),
+          itemMat,
+        );
+        shaft.position.y = -0.06;
+        const head = new THREE.Mesh(
+          this.getGeo('loot_hammer_head', () => new THREE.BoxGeometry(0.46, 0.25, 0.25)),
+          violetSteelMat,
+        );
+        head.position.y = 0.24;
+        const capGeo = this.getGeo('loot_hammer_cap', () => {
+          const g = new THREE.CylinderGeometry(0.14, 0.14, 0.06, 10);
+          g.rotateZ(Math.PI * 0.5);
+          return g;
+        });
+        const capL = new THREE.Mesh(capGeo, kineticGlowMat);
+        capL.position.set(-0.24, 0.24, 0);
+        const capR = new THREE.Mesh(capGeo, kineticGlowMat);
+        capR.position.set(0.24, 0.24, 0);
+        const core = new THREE.Mesh(
+          this.getGeo('loot_hammer_core', () => new THREE.OctahedronGeometry(0.11, 0)),
+          kineticGlowMat,
+        );
+        core.position.set(0, 0.24, 0.14);
+        const pommel = new THREE.Mesh(
+          this.getGeo('loot_hammer_pommel', () => new THREE.CylinderGeometry(0.065, 0.065, 0.08, 8)),
+          violetSteelMat,
+        );
+        pommel.position.y = -0.4;
+        hammerGroup.add(shaft, head, capL, capR, core, pommel);
+        hammerGroup.rotation.z = 0.22;
+        itemMesh = hammerGroup;
+      } else if (def.isFlareGun) {
+        const flareGroup = new THREE.Group();
+        const signalMat = this.getMat('loot_flare_orange', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#f97316',
+            emissive: '#ea580c',
+            emissiveIntensity: 0.55,
+            roughness: 0.3,
+            metalness: 0.4,
+          }),
+        );
+        const emberMat = this.getMat('loot_flare_ember', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#fef08a',
+            emissive: '#ef4444',
+            emissiveIntensity: 1.75,
+            roughness: 0.16,
+          }),
+        );
+        const frame = new THREE.Mesh(
+          this.getGeo('loot_flare_frame', () => new THREE.BoxGeometry(0.13, 0.16, 0.34)),
+          signalMat,
+        );
+        const barrel = new THREE.Mesh(
+          this.getGeo('loot_flare_barrel', () => {
+            const g = new THREE.CylinderGeometry(0.085, 0.065, 0.34, 10);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          signalMat,
+        );
+        barrel.position.set(0, 0.04, 0.26);
+        const bell = new THREE.Mesh(
+          this.getGeo('loot_flare_bell', () => {
+            const g = new THREE.CylinderGeometry(0.115, 0.085, 0.09, 10);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          itemMat,
+        );
+        bell.position.set(0, 0.04, 0.44);
+        const grip = new THREE.Mesh(
+          this.getGeo('loot_gun_grip', () => new THREE.BoxGeometry(0.12, 0.22, 0.14)),
+          itemMat,
+        );
+        grip.position.set(0, -0.14, -0.08);
+        grip.rotation.x = 0.22;
+        const ember = new THREE.Mesh(
+          this.getGeo('loot_flare_ember_geo', () => new THREE.SphereGeometry(0.06, 8, 6)),
+          emberMat,
+        );
+        ember.position.set(0, 0.04, 0.48);
+        flareGroup.add(frame, barrel, bell, grip, ember);
+        itemMesh = flareGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),

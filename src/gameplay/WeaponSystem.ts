@@ -1,6 +1,8 @@
 import type {
+  BuildPiece,
   DamageEvent,
   ExplosiveBarrelEntity,
+  FlareBeaconEntity,
   ItemInstance,
   LootLlamaEntity,
   MaterialType,
@@ -15,14 +17,17 @@ import type {
   VehicleEntity,
   WeaponId,
   WeaponModId,
+  WildBoarEntity,
 } from '../types';
 import {
   EventBus,
+  FLARE_SCAN_DURATION_SEC,
   GRID_XZ,
   GRID_Y,
   RARITY_MULTIPLIER,
   WEAPONS,
   clamp,
+  dist2D,
   dist3D,
   lerp,
 } from '../core';
@@ -42,6 +47,7 @@ import type {
   WorldOverdriveBridge,
   WorldRiftCaptureBridge,
   WorldStationBridge,
+  WorldTideBridge,
 } from './GameplayTypes';
 import { getItemMagCapacity } from './InventorySystem';
 
@@ -63,6 +69,8 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   rocket_launcher: 'shot_rocket',
   mythic_blade_rifle: 'shot_mythic_rifle',
   kinetic_blade: 'kinetic_slash',
+  shockwave_hammer: 'hammer_slam',
+  flare_gun: 'flare_fire',
   shockwave_grenade: 'pickaxe_swing',
   frag_grenade: 'pickaxe_swing',
   chug_splash: 'pickaxe_swing',
@@ -240,6 +248,7 @@ interface ActorHit {
 interface ActiveProjectile extends ProjectileState {
   isPlayer: boolean;
   startPos: Vec3Like;
+  startVy?: number;
   isThrowable?: boolean;
   settled?: boolean;
   bounceSoundCooldown?: number;
@@ -249,8 +258,11 @@ interface ActiveProjectile extends ProjectileState {
   ownerYaw?: number;
   actorSquadId?: string;
   actorTeamId?: TeamId;
+  tideBridge?: WorldTideBridge | null;
   onBunkerDeployed?: (report: BunkerDeploymentReport) => void;
   onEmpHit?: (report: EmpDetonationReport) => void;
+  onFlareBurst?: (beacon: FlareBeaconEntity) => void;
+  onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
 }
 
 interface PendingBurst {
@@ -285,6 +297,7 @@ export class WeaponSystem {
   private riftCaptureBridge: WorldRiftCaptureBridge | null = null;
   private chapterBridge: WorldChapterBridge | null = null;
   private overdriveBridge: WorldOverdriveBridge | null = null;
+  private tideBridge: WorldTideBridge | null = null;
   private explodingBarrelIds = new Set<string>();
   private rupturingTankerIds = new Set<string>();
   private twinMagSlowUids = new Set<string>();
@@ -298,12 +311,22 @@ export class WeaponSystem {
     | ((report: BunkerDeploymentReport) => void)
     | null = null;
   private onEmpHit: ((report: EmpDetonationReport) => void) | null = null;
+  private onFlareBurst: ((beacon: FlareBeaconEntity) => void) | null = null;
+  private onBoarEliminated:
+    | ((pos: Vec3Like, attackerId: string) => void)
+    | null = null;
+  private playerTideObserver: {
+    onFlareBurst?: (beacon: FlareBeaconEntity) => void;
+    onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
+  } | null = null;
   private projectiles: ActiveProjectile[] = [];
   private pendingBursts: PendingBurst[] = [];
   private shieldBubbles: ShieldBubbleState[] = [];
+  private flareBeacons: FlareBeaconEntity[] = [];
   private activeBurns = new Map<string, ActiveBurnState>();
   private nextProjId = 1;
   private nextBubbleId = 1;
+  private nextFlareBeaconId = 1;
   private dmgNumSeq = 1;
 
   constructor(
@@ -366,6 +389,14 @@ export class WeaponSystem {
     return this.overdriveBridge;
   }
 
+  setTideBridge(bridge: WorldTideBridge | null): void {
+    this.tideBridge = bridge;
+  }
+
+  getTideBridge(): WorldTideBridge | null {
+    return this.tideBridge;
+  }
+
   setOnDroneDestroyed(
     cb: ((res: SupplyDroneDamageResult) => void) | null,
   ): void {
@@ -380,6 +411,29 @@ export class WeaponSystem {
 
   setOnEmpHit(cb: ((report: EmpDetonationReport) => void) | null): void {
     this.onEmpHit = cb;
+  }
+
+  setOnFlareBurst(cb: ((beacon: FlareBeaconEntity) => void) | null): void {
+    this.onFlareBurst = cb;
+  }
+
+  setOnBoarEliminated(
+    cb: ((pos: Vec3Like, attackerId: string) => void) | null,
+  ): void {
+    this.onBoarEliminated = cb;
+  }
+
+  setPlayerTideObserver(
+    observer: {
+      onFlareBurst?: (beacon: FlareBeaconEntity) => void;
+      onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
+    } | null,
+  ): void {
+    this.playerTideObserver = observer;
+  }
+
+  getFlareBeacons(): FlareBeaconEntity[] {
+    return this.flareBeacons.map((b) => ({ ...b }));
   }
 
   isTwinMagFastReload(item: ItemInstance): boolean {
@@ -664,6 +718,10 @@ export class WeaponSystem {
       return this.executeKineticBladeCleave(params, aimDir);
     }
 
+    if (def.isShockwaveHammer || params.item.weaponId === 'shockwave_hammer') {
+      return this.executeShockwaveHammerSlam(params, aimDir);
+    }
+
     if (def.isGrappler || params.item.weaponId === 'grappler') {
       return this.executeGrapplerShot(params, aimDir);
     }
@@ -806,7 +864,12 @@ export class WeaponSystem {
       const veh = vehicles[i];
       if (veh.destroyed || veh.hp <= 0) continue;
       if (excludeDriverId && veh.driverId === excludeDriverId) continue;
-      const r = veh.kind === 'hover_atv' ? 1.25 : 0.95;
+      const r =
+        veh.kind === 'speedboat'
+          ? 1.5
+          : veh.kind === 'hover_atv'
+            ? 1.25
+            : 0.95;
       const hit = this.intersectRayAABB(
         origin,
         dir,
@@ -825,6 +888,325 @@ export class WeaponSystem {
     }
 
     return best;
+  }
+
+  private raycastWildBoars(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+    bridge?: WorldTideBridge | null,
+  ): {
+    boar: WildBoarEntity;
+    distance: number;
+    point: Vec3Like;
+    normal: Vec3Like;
+  } | null {
+    const activeBridge = bridge ?? this.tideBridge;
+    const boars = activeBridge?.getWildBoars();
+    if (!boars || boars.length === 0) return null;
+
+    const halfW = 0.72;
+    const minYOff = -0.05;
+    const maxYOff = 1.15;
+    let bestDist = maxDist;
+    let best: {
+      boar: WildBoarEntity;
+      distance: number;
+      point: Vec3Like;
+      normal: Vec3Like;
+    } | null = null;
+
+    for (let i = 0; i < boars.length; i++) {
+      const boar = boars[i];
+      if (!boar.alive || boar.hp <= 0) continue;
+      const hit = this.intersectRayAABB(
+        origin,
+        dir,
+        boar.x - halfW,
+        boar.y + minYOff,
+        boar.z - halfW,
+        boar.x + halfW,
+        boar.y + maxYOff,
+        boar.z + halfW,
+        bestDist,
+      );
+      if (hit) {
+        bestDist = hit.distance;
+        best = { boar, ...hit };
+      }
+    }
+
+    return best;
+  }
+
+  private applyWildBoarHit(
+    bridge: WorldTideBridge,
+    boarId: string,
+    dmg: number,
+    hitPoint: Vec3Like,
+    normal: Vec3Like,
+    attackerId: string,
+    isPlayer: boolean,
+    onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void,
+  ): { hit: boolean; eliminated: boolean; damage: number } {
+    const safeDmg = Math.max(1, Math.round(dmg));
+    const res = bridge.damageWildBoar(boarId, safeDmg, attackerId);
+    if (!res || !res.hit) {
+      return { hit: false, eliminated: false, damage: 0 };
+    }
+
+    this.eventBus.emit('vfx:impact', {
+      position: hitPoint,
+      normal,
+      material: 'flesh',
+    });
+
+    if (isPlayer) {
+      this.eventBus.emit('combat:hitmarker', {
+        attackerId,
+        isHeadshot: false,
+        isShield: false,
+        isElimination: res.eliminated,
+      });
+      this.eventBus.emit('ui:damage_number', {
+        id: `dmg_${this.dmgNumSeq++}`,
+        worldPos: hitPoint,
+        amount: safeDmg,
+        isShield: false,
+        isHeadshot: false,
+        timestamp: Date.now(),
+      });
+      this.eventBus.emit('sound:play', {
+        id: res.eliminated ? 'elimination' : 'hitmarker',
+      });
+    }
+
+    if (res.eliminated) {
+      const elimPos: Vec3Like = { x: res.x, y: res.y, z: res.z };
+      onBoarEliminated?.(elimPos, attackerId);
+      if (this.onBoarEliminated && this.onBoarEliminated !== onBoarEliminated) {
+        this.onBoarEliminated(elimPos, attackerId);
+      }
+      if (
+        attackerId === 'player' &&
+        this.playerTideObserver?.onBoarEliminated &&
+        this.playerTideObserver.onBoarEliminated !== onBoarEliminated &&
+        this.playerTideObserver.onBoarEliminated !== this.onBoarEliminated
+      ) {
+        this.playerTideObserver.onBoarEliminated(elimPos, attackerId);
+      }
+    }
+
+    return { hit: true, eliminated: res.eliminated, damage: safeDmg };
+  }
+
+  private getBuildPieceCenter(p: BuildPiece): Vec3Like {
+    if (p.type === 'wall') {
+      return p.dir === 'N'
+        ? {
+            x: (p.gx + 0.5) * GRID_XZ,
+            y: (p.gy + 0.5) * GRID_Y,
+            z: p.gz * GRID_XZ,
+          }
+        : {
+            x: p.gx * GRID_XZ,
+            y: (p.gy + 0.5) * GRID_Y,
+            z: (p.gz + 0.5) * GRID_XZ,
+          };
+    }
+    if (p.type === 'floor') {
+      return {
+        x: (p.gx + 0.5) * GRID_XZ,
+        y: p.gy * GRID_Y,
+        z: (p.gz + 0.5) * GRID_XZ,
+      };
+    }
+    return {
+      x: (p.gx + 0.5) * GRID_XZ,
+      y: (p.gy + 0.5) * GRID_Y,
+      z: (p.gz + 0.5) * GRID_XZ,
+    };
+  }
+
+  private applySplashEnvironmentDamage(opts: {
+    impactPos: Vec3Like;
+    radius: number;
+    structureDamage: number;
+    boarDamage: number;
+    ownerId: string;
+    attacker: CombatActor | null;
+    isPlayer: boolean;
+    tideBridge?: WorldTideBridge | null;
+    onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
+  }): number {
+    let hits = 0;
+    const { impactPos, radius, structureDamage, boarDamage, ownerId, attacker, isPlayer } = opts;
+    const attackerStub: CombatActor = attacker ?? {
+      id: ownerId,
+      name: ownerId,
+      position: { ...impactPos },
+      eyePos: { ...impactPos },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+
+    const props = this.propsBridge.getProps();
+    for (let i = 0; i < props.length; i++) {
+      const prop = props[i];
+      if (prop.destroyed) continue;
+      const center = { x: prop.x, y: prop.y + prop.height * 0.5, z: prop.z };
+      const d = dist3D(impactPos, center);
+      if (d <= radius + prop.radius && !this.isBlockedByShieldBubble(impactPos, center)) {
+        this.propsBridge.damageProp(prop.id, structureDamage, impactPos, false);
+        hits += 1;
+      }
+    }
+
+    const llamas = this.propsBridge.getLlamas?.() ?? [];
+    for (let i = 0; i < llamas.length; i++) {
+      const llama = llamas[i];
+      if (llama.opened) continue;
+      const center = { x: llama.x, y: llama.y + 0.8, z: llama.z };
+      const d = dist3D(impactPos, center);
+      if (d <= radius + 1.0 && !this.isBlockedByShieldBubble(impactPos, center)) {
+        this.propsBridge.damageLlama?.(llama.id, structureDamage, impactPos);
+        hits += 1;
+      }
+    }
+
+    const vehicles = this.vehicleBridge?.getVehicles() ?? [];
+    for (let i = 0; i < vehicles.length; i++) {
+      const veh = vehicles[i];
+      if (veh.destroyed || veh.hp <= 0) continue;
+      const center = { x: veh.x, y: veh.y + 0.65, z: veh.z };
+      const d = dist3D(impactPos, center);
+      if (d <= radius + 1.4 && !this.isBlockedByShieldBubble(impactPos, center)) {
+        const falloff = clamp(1 - (d / (radius + 1.4)) * 0.5, 0.4, 1.0);
+        this.vehicleBridge?.damageVehicle(
+          veh.id,
+          Math.round(structureDamage * falloff),
+          impactPos,
+        );
+        hits += 1;
+      }
+    }
+
+    if (this.stationBridge) {
+      const barrels = this.stationBridge.getSlurpBarrels();
+      const ownerActor =
+        this.actorsProvider?.().find((a) => a.id === ownerId && a.alive) ??
+        attacker;
+      for (let i = 0; i < barrels.length; i++) {
+        const barrel = barrels[i];
+        if (barrel.destroyed || barrel.hp <= 0) continue;
+        const center = { x: barrel.x, y: barrel.y + 0.625, z: barrel.z };
+        const d = dist3D(impactPos, center);
+        if (
+          d <= radius + 0.85 &&
+          !this.isBlockedByShieldBubble(impactPos, center)
+        ) {
+          this.applySlurpBarrelHit(
+            this.stationBridge,
+            barrel.id,
+            structureDamage,
+            center,
+            { x: 0, y: 1, z: 0 },
+            ownerActor,
+          );
+          hits += 1;
+        }
+      }
+    }
+
+    if (this.riftCaptureBridge) {
+      const expBarrels = this.riftCaptureBridge.getExplosiveBarrels();
+      const ownerActor =
+        this.actorsProvider?.().find((a) => a.id === ownerId && a.alive) ??
+        attackerStub;
+      for (let i = 0; i < expBarrels.length; i++) {
+        const barrel = expBarrels[i];
+        if (barrel.exploded || barrel.hp <= 0 || this.explodingBarrelIds.has(barrel.id)) {
+          continue;
+        }
+        const center = { x: barrel.x, y: barrel.y + 0.625, z: barrel.z };
+        const d = dist3D(impactPos, center);
+        if (
+          d <= radius + 0.85 &&
+          !this.isBlockedByShieldBubble(impactPos, center)
+        ) {
+          this.applyExplosiveBarrelHit(
+            this.riftCaptureBridge,
+            barrel.id,
+            structureDamage,
+            center,
+            { x: 0, y: 1, z: 0 },
+            ownerActor,
+            isPlayer,
+          );
+          hits += 1;
+        }
+      }
+    }
+
+    if (this.chapterBridge) {
+      const tankers = this.chapterBridge.getSlurpTankers();
+      for (let i = 0; i < tankers.length; i++) {
+        const tanker = tankers[i];
+        if (tanker.destroyed || tanker.hp <= 0 || this.rupturingTankerIds.has(tanker.id)) {
+          continue;
+        }
+        const center = { x: tanker.x, y: tanker.y + 1.4, z: tanker.z };
+        const d = dist3D(impactPos, center);
+        if (
+          d <= radius + 2.2 &&
+          !this.isBlockedByShieldBubble(impactPos, center)
+        ) {
+          this.applySlurpTankerHit(
+            this.chapterBridge,
+            tanker.id,
+            structureDamage,
+            center,
+            { x: 0, y: 1, z: 0 },
+          );
+          hits += 1;
+        }
+      }
+    }
+
+    const activeTideBridge = opts.tideBridge ?? this.tideBridge;
+    if (activeTideBridge && boarDamage > 0) {
+      const boars = activeTideBridge.getWildBoars();
+      for (let i = 0; i < boars.length; i++) {
+        const boar = boars[i];
+        if (!boar.alive || boar.hp <= 0) continue;
+        const center = { x: boar.x, y: boar.y + 0.55, z: boar.z };
+        const d = Math.min(
+          dist3D(impactPos, { x: boar.x, y: boar.y, z: boar.z }),
+          dist3D(impactPos, center),
+        );
+        if (d <= radius + 0.8 && !this.isBlockedByShieldBubble(impactPos, center)) {
+          const falloff =
+            d <= 2.2 ? 1.0 : clamp(1 - (d / (radius + 0.8)) * 0.55, 0.45, 1.0);
+          const dmg = Math.max(1, Math.round(boarDamage * falloff));
+          const res = this.applyWildBoarHit(
+            activeTideBridge,
+            boar.id,
+            dmg,
+            center,
+            { x: 0, y: 1, z: 0 },
+            ownerId,
+            isPlayer,
+            opts.onBoarEliminated,
+          );
+          if (res.hit) hits += 1;
+        }
+      }
+    }
+
+    return hits;
   }
 
   private raycastSupplyDrones(
@@ -1473,6 +1855,7 @@ export class WeaponSystem {
     const sBridge = params.stationBridge ?? this.stationBridge;
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
     const chBridge = params.chapterBridge ?? this.chapterBridge;
+    const activeTideBridge = params.tideBridge ?? this.tideBridge;
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const structDmg = Math.round(def.structureDamage * (hasDemolisher ? 1.3 : 1));
 
@@ -1489,6 +1872,12 @@ export class WeaponSystem {
       params.actor.id,
       params.actor.squadId,
       params.actorTeamId ?? params.actor.teamId,
+    );
+    const boarHit = this.raycastWildBoars(
+      params.origin,
+      aimDir,
+      def.range,
+      activeTideBridge,
     );
     const llamaHit = this.raycastLlamas(params.origin, aimDir, def.range);
     const vehicleHit = this.raycastVehicles(
@@ -1520,6 +1909,7 @@ export class WeaponSystem {
     if (
       actorHit &&
       (!worldHit.hit || actorHit.distance <= worldHit.distance) &&
+      (!boarHit || actorHit.distance <= boarHit.distance) &&
       (!llamaHit || actorHit.distance <= llamaHit.distance) &&
       (!vehicleHit || actorHit.distance <= vehicleHit.distance) &&
       (!barrelHit || actorHit.distance <= barrelHit.distance) &&
@@ -1542,6 +1932,34 @@ export class WeaponSystem {
         shotsHit: 1,
         headshots: 0,
         damageDealt: ev.damage,
+      };
+    }
+
+    if (
+      boarHit &&
+      activeTideBridge &&
+      (!worldHit.hit || boarHit.distance <= worldHit.distance) &&
+      (!llamaHit || boarHit.distance <= llamaHit.distance) &&
+      (!vehicleHit || boarHit.distance <= vehicleHit.distance) &&
+      (!barrelHit || boarHit.distance <= barrelHit.distance) &&
+      (!expBarrelHit || boarHit.distance <= expBarrelHit.distance) &&
+      (!tankerHit || boarHit.distance <= tankerHit.distance)
+    ) {
+      const res = this.applyWildBoarHit(
+        activeTideBridge,
+        boarHit.boar.id,
+        def.baseDamage,
+        boarHit.point,
+        boarHit.normal,
+        params.actor.id,
+        params.isPlayer,
+        params.onBoarEliminated,
+      );
+      return {
+        fired: true,
+        shotsHit: res.hit ? 1 : 0,
+        headshots: 0,
+        damageDealt: res.damage,
       };
     }
 
@@ -1779,6 +2197,7 @@ export class WeaponSystem {
     const sBridge = params.stationBridge ?? this.stationBridge;
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
     const chBridge = params.chapterBridge ?? this.chapterBridge;
+    const activeTideBridge = params.tideBridge ?? this.tideBridge;
     const props = this.propsBridge.getProps();
 
     const hitActorIds = new Set<string>();
@@ -1860,6 +2279,30 @@ export class WeaponSystem {
         );
         shotsHit += 1;
         actorDamageDealt += ev.damage;
+      }
+
+      const boarHit = this.raycastWildBoars(
+        rayOrigin,
+        rayDir,
+        entityMax,
+        activeTideBridge,
+      );
+      if (boarHit && activeTideBridge && !hitActorIds.has(`boar:${boarHit.boar.id}`)) {
+        hitActorIds.add(`boar:${boarHit.boar.id}`);
+        const res = this.applyWildBoarHit(
+          activeTideBridge,
+          boarHit.boar.id,
+          actorDmg,
+          boarHit.point,
+          boarHit.normal,
+          params.actor.id,
+          params.isPlayer,
+          params.onBoarEliminated,
+        );
+        if (res.hit) {
+          shotsHit += 1;
+          actorDamageDealt += res.damage;
+        }
       }
 
       const expBarrelHit = this.raycastExplosiveBarrels(
@@ -2340,6 +2783,210 @@ export class WeaponSystem {
       }
     }
 
+    if (this.tideBridge) {
+      const boars = this.tideBridge.getWildBoars();
+      for (let i = 0; i < boars.length; i++) {
+        const boar = boars[i];
+        if (!boar.alive || boar.hp <= 0) continue;
+        const center = { x: boar.x, y: boar.y + 0.55, z: boar.z };
+        if (distPointToSegment(center, params.from, params.to).dist <= dashRadius) {
+          const res = this.applyWildBoarHit(
+            this.tideBridge,
+            boar.id,
+            actorDmg,
+            center,
+            { x: 0, y: 1, z: 0 },
+            params.actor.id,
+            params.isPlayer,
+          );
+          if (res.hit) {
+            shotsHit += 1;
+            actorDamageDealt += res.damage;
+          }
+        }
+      }
+    }
+
+    return {
+      fired: true,
+      shotsHit,
+      headshots: 0,
+      damageDealt: actorDamageDealt > 0 ? actorDamageDealt : structDamageDealt,
+    };
+  }
+
+  /**
+   * Executes a Titan Shockwave Hammer LMB melee-slam:
+   * 5.5m AoE dealing 75 enemy damage + 16 m/s radial knockback + 250 structure damage.
+   */
+  private executeShockwaveHammerSlam(
+    params: FireWeaponParams,
+    aimDir: Vec3Like,
+  ): FireWeaponResult {
+    const def = WEAPONS.shockwave_hammer;
+    const radius = def.splashRadius > 0 ? def.splashRadius : 5.5;
+    const hasCombatMedallion = Boolean(
+      params.hasCombatMedallion ?? params.actor.hasCombatMedallion,
+    );
+    const hasDemolisher = Boolean(
+      params.hasDemolisher ?? params.actor.hasDemolisher,
+    );
+    const actorDmg = Math.round(
+      (def.baseDamage > 0 ? def.baseDamage : 75) *
+        (hasCombatMedallion ? 1.12 : 1),
+    );
+    const structDmg = Math.round(
+      (def.structureDamage > 0 ? def.structureDamage : 250) *
+        (hasDemolisher ? 1.3 : 1),
+    );
+    const slamPos: Vec3Like =
+      dist2D(
+        params.origin.x,
+        params.origin.z,
+        params.actor.position.x,
+        params.actor.position.z,
+      ) <= 1.5
+        ? {
+            x: params.actor.position.x,
+            y: params.actor.position.y,
+            z: params.actor.position.z,
+          }
+        : {
+            x: params.origin.x,
+            y: Math.max(0, params.origin.y - 1.5),
+            z: params.origin.z,
+          };
+
+    this.eventBus.emit('sound:play', {
+      id: 'hammer_slam',
+      position: { ...slamPos },
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:hammer_slam', {
+      position: { ...slamPos },
+      radius,
+    });
+    this.eventBus.emit('audio:noise', {
+      position: { ...slamPos },
+      kind: 'gunfire',
+      sourceId: params.actor.id,
+      radius: 110,
+    });
+    this.emitBlastCameraShake(slamPos, 0.52, params.isPlayer);
+
+    let shotsHit = 0;
+    let actorDamageDealt = 0;
+    let structDamageDealt = 0;
+
+    // 1. Damage & radially knock back enemy actors inside 5.5m AoE
+    const actors = this.actorsProvider ? this.actorsProvider() : [];
+    const slamTeamId = params.actorTeamId ?? params.actor.teamId;
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (
+        !actor.alive ||
+        isFriendlyCombatActor(
+          params.actor.id,
+          params.actor.squadId,
+          slamTeamId,
+          actor,
+        )
+      ) {
+        continue;
+      }
+      const center = {
+        x: actor.position.x,
+        y: actor.position.y + actor.height * 0.5,
+        z: actor.position.z,
+      };
+      const minDist = Math.min(
+        dist3D(slamPos, actor.position),
+        dist3D(slamPos, center),
+      );
+      if (minDist > radius || this.isBlockedByShieldBubble(slamPos, center)) {
+        continue;
+      }
+
+      const ev = this.applyActorDamage(
+        params.actor,
+        actor,
+        'shockwave_hammer',
+        params.item.rarity,
+        actorDmg,
+        false,
+        center,
+        minDist,
+        params.isPlayer,
+      );
+      shotsHit += 1;
+      actorDamageDealt += ev.damage;
+
+      const dx = actor.position.x - slamPos.x;
+      const dz = actor.position.z - slamPos.z;
+      const horizDist = Math.hypot(dx, dz);
+      const knockbackSpeed = 16;
+      const impulse: Vec3Like =
+        horizDist > 0.08
+          ? {
+              x: (dx / horizDist) * knockbackSpeed,
+              y: Math.max(8, knockbackSpeed * 0.5),
+              z: (dz / horizDist) * knockbackSpeed,
+            }
+          : {
+              x: aimDir.x * knockbackSpeed * 0.65,
+              y: knockbackSpeed * 0.75,
+              z: aimDir.z * knockbackSpeed * 0.65,
+            };
+
+      actor.fallImmune = true;
+      if (actor.onImpulse) {
+        actor.onImpulse(impulse, true);
+      } else if (actor.velocity) {
+        actor.velocity.x += impulse.x;
+        actor.velocity.y = Math.max(actor.velocity.y, 0) + impulse.y;
+        actor.velocity.z += impulse.z;
+      }
+    }
+
+    // 2. Smash structures (BuildPieces) within 5.5m AoE for 250 structure damage
+    const pieces = [...this.building.getPieces()];
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i];
+      if (p.hp <= 0) continue;
+      const pieceCenter = this.getBuildPieceCenter(p);
+      const d = dist3D(slamPos, pieceCenter);
+      if (
+        d <= radius + 1.5 &&
+        !this.isBlockedByShieldBubble(slamPos, pieceCenter)
+      ) {
+        this.building.damagePiece(p.id, structDmg);
+        this.eventBus.emit('vfx:impact', {
+          position: pieceCenter,
+          normal: { x: 0, y: 1, z: 0 },
+          material: p.material,
+        });
+        shotsHit += 1;
+        structDamageDealt += structDmg;
+      }
+    }
+
+    // 3. Damage props, barrels, tankers, llamas, vehicles, and wild boars in AoE
+    const envHits = this.applySplashEnvironmentDamage({
+      impactPos: slamPos,
+      radius,
+      structureDamage: structDmg,
+      boarDamage: actorDmg,
+      ownerId: params.actor.id,
+      attacker: params.actor,
+      isPlayer: params.isPlayer,
+      tideBridge: params.tideBridge,
+      onBoarEliminated: params.onBoarEliminated,
+    });
+    if (envHits > 0) {
+      shotsHit += envHits;
+      structDamageDealt += structDmg;
+    }
+
     return {
       fired: true,
       shotsHit,
@@ -2536,6 +3183,11 @@ export class WeaponSystem {
     const isEmpGrenade = Boolean(
       def.isEmpGrenade || params.item.weaponId === 'emp_grenade',
     );
+    const isFlare = Boolean(
+      def.isFlareGun || params.item.weaponId === 'flare_gun',
+    );
+    const flareScanRadius = isFlare ? (def.flareScanRadius ?? 75) : undefined;
+    const effectiveRarityMult = isFlare ? 1.0 : rarityMult;
     const isBoomArrow = Boolean(def.isBow || params.item.weaponId === 'boom_bow');
     const bowCharge = isBoomArrow ? clamp(params.bowCharge ?? 1.0, 0, 1) : 1.0;
     const bowSpeedMult = isBoomArrow ? lerp(0.35, 1.0, bowCharge) : 1.0;
@@ -2559,6 +3211,7 @@ export class WeaponSystem {
         z: params.origin.z + shotDir.z * 0.45,
       },
       startPos: { ...params.origin },
+      startVy: shotDir.y * projSpeed,
       velocity: {
         x: shotDir.x * projSpeed,
         y: shotDir.y * projSpeed,
@@ -2567,13 +3220,16 @@ export class WeaponSystem {
       gravity: def.projectileGravity,
       damage: Math.round(
         def.baseDamage *
-          rarityMult *
+          effectiveRarityMult *
           bowDmgMult *
           (firstAssaultBoost ? 1.25 : 1.0) *
           combatMedallionMult,
       ),
       structureDamage: Math.round(
-        def.structureDamage * rarityMult * bowDmgMult * (hasDemolisher ? 1.3 : 1.0),
+        def.structureDamage *
+          effectiveRarityMult *
+          bowDmgMult *
+          (hasDemolisher ? 1.3 : 1.0),
       ),
       headshotMultiplier: def.headshotMultiplier,
       splashRadius: def.splashRadius,
@@ -2595,6 +3251,8 @@ export class WeaponSystem {
       isBoomArrow,
       isPortABunker,
       isEmpGrenade,
+      isFlare,
+      flareScanRadius,
       settled: false,
       bounceSoundCooldown: 0,
       demolisherActive: hasDemolisher,
@@ -2603,8 +3261,11 @@ export class WeaponSystem {
       ownerYaw: derivedYaw,
       actorSquadId: params.actor.squadId,
       actorTeamId: params.actorTeamId ?? params.actor.teamId,
+      tideBridge: params.tideBridge ?? null,
       onBunkerDeployed: params.onBunkerDeployed,
       onEmpHit: params.onEmpHit,
+      onFlareBurst: params.onFlareBurst,
+      onBoarEliminated: params.onBoarEliminated,
     };
 
     this.projectiles.push(proj);
@@ -2666,6 +3327,7 @@ export class WeaponSystem {
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
     const chBridge = params.chapterBridge ?? this.chapterBridge;
     const odBridge = params.overdriveBridge ?? this.overdriveBridge;
+    const activeTideBridge = params.tideBridge ?? this.tideBridge;
     const mods = resolveWeaponMods(params.item, params.weaponMods);
     const modFx = getWeaponModEffects(mods);
     const magCap = getItemMagCapacity(params.item);
@@ -2734,6 +3396,15 @@ export class WeaponSystem {
         distance: number;
       }
     >();
+    const boarAccum = new Map<
+      string,
+      {
+        boarId: string;
+        totalDamage: number;
+        hitPoint: Vec3Like;
+        normal: Vec3Like;
+      }
+    >();
 
     let shotsHit = 0;
     let headshots = 0;
@@ -2798,6 +3469,12 @@ export class WeaponSystem {
           params.actor.squadId,
           params.actorTeamId ?? params.actor.teamId,
         );
+        const boarHit = this.raycastWildBoars(
+          params.origin,
+          rayDir,
+          entityMaxDist,
+          activeTideBridge,
+        );
         const droneHit = this.raycastSupplyDrones(
           params.origin,
           rayDir,
@@ -2833,6 +3510,7 @@ export class WeaponSystem {
 
         let chosenType:
           | 'actor'
+          | 'boar'
           | 'drone'
           | 'llama'
           | 'vehicle'
@@ -2887,6 +3565,10 @@ export class WeaponSystem {
           chosenType = 'drone';
           chosenDist = droneHit.distance;
         }
+        if (boarHit && boarHit.distance <= chosenDist) {
+          chosenType = 'boar';
+          chosenDist = boarHit.distance;
+        }
         if (actorHit && actorHit.distance <= chosenDist) {
           chosenType = 'actor';
           chosenDist = actorHit.distance;
@@ -2912,27 +3594,29 @@ export class WeaponSystem {
         endPoint =
           chosenType === 'actor'
             ? actorHit!.point
-            : chosenType === 'drone'
-              ? droneHit!.point
-              : chosenType === 'llama'
-                ? llamaHit!.point
-                : chosenType === 'vehicle'
-                  ? vehicleHit!.point
-                  : chosenType === 'exp_barrel'
-                    ? expBarrelHit!.point
-                    : chosenType === 'barrel'
-                      ? barrelHit!.point
-                      : chosenType === 'tanker'
-                        ? tankerHit!.point
-                        : chosenType === 'world'
-                          ? worldHit.point
-                          : chosenType === 'bubble'
-                            ? bubbleHit!.point
-                            : {
-                                x: params.origin.x + rayDir.x * def.range,
-                                y: params.origin.y + rayDir.y * def.range,
-                                z: params.origin.z + rayDir.z * def.range,
-                              };
+            : chosenType === 'boar'
+              ? boarHit!.point
+              : chosenType === 'drone'
+                ? droneHit!.point
+                : chosenType === 'llama'
+                  ? llamaHit!.point
+                  : chosenType === 'vehicle'
+                    ? vehicleHit!.point
+                    : chosenType === 'exp_barrel'
+                      ? expBarrelHit!.point
+                      : chosenType === 'barrel'
+                        ? barrelHit!.point
+                        : chosenType === 'tanker'
+                          ? tankerHit!.point
+                          : chosenType === 'world'
+                            ? worldHit.point
+                            : chosenType === 'bubble'
+                              ? bubbleHit!.point
+                              : {
+                                  x: params.origin.x + rayDir.x * def.range,
+                                  y: params.origin.y + rayDir.y * def.range,
+                                  z: params.origin.z + rayDir.z * def.range,
+                                };
 
         if (chosenType === 'actor' && actorHit) {
           const pelletDmg =
@@ -2957,6 +3641,28 @@ export class WeaponSystem {
               anyHeadshot: actorHit.isHeadshot,
               hitPoint: actorHit.point,
               distance: actorHit.distance,
+            });
+          }
+        } else if (chosenType === 'boar' && boarHit && activeTideBridge) {
+          const pelletDmg =
+            (computeWeaponDamage(
+              params.item.weaponId,
+              params.item.rarity,
+              boarHit.distance,
+              false,
+            ) *
+              firstAssaultMult *
+              combatMedallionMult) /
+            pellets;
+          const existing = boarAccum.get(boarHit.boar.id);
+          if (existing) {
+            existing.totalDamage += pelletDmg;
+          } else {
+            boarAccum.set(boarHit.boar.id, {
+              boarId: boarHit.boar.id,
+              totalDamage: pelletDmg,
+              hitPoint: boarHit.point,
+              normal: boarHit.normal,
             });
           }
         } else if (chosenType === 'drone' && droneHit && odBridge) {
@@ -3081,6 +3787,26 @@ export class WeaponSystem {
       totalDamageDealt += ev.damage;
     }
 
+    if (activeTideBridge) {
+      for (const entry of boarAccum.values()) {
+        const dmgRounded = Math.max(1, Math.round(entry.totalDamage));
+        const res = this.applyWildBoarHit(
+          activeTideBridge,
+          entry.boarId,
+          dmgRounded,
+          entry.hitPoint,
+          entry.normal,
+          params.actor.id,
+          params.isPlayer,
+          params.onBoarEliminated,
+        );
+        if (res.hit) {
+          shotsHit += 1;
+          totalDamageDealt += res.damage;
+        }
+      }
+    }
+
     return {
       fired: true,
       shotsHit,
@@ -3132,6 +3858,7 @@ export class WeaponSystem {
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
     const chBridge = params.chapterBridge ?? this.chapterBridge;
     const odBridge = params.overdriveBridge ?? this.overdriveBridge;
+    const activeTideBridge = params.tideBridge ?? this.tideBridge;
     const mods = resolveWeaponMods(params.item, params.weaponMods);
     const modFx = getWeaponModEffects(mods);
     const magCap = getItemMagCapacity(params.item);
@@ -3249,6 +3976,12 @@ export class WeaponSystem {
         params.actor.squadId,
         actorTeamId,
       );
+      const boarHit = this.raycastWildBoars(
+        params.origin,
+        rayDir,
+        entityMaxDist,
+        activeTideBridge,
+      );
       const droneHit = this.raycastSupplyDrones(
         params.origin,
         rayDir,
@@ -3284,6 +4017,7 @@ export class WeaponSystem {
 
       let chosenType:
         | 'actor'
+        | 'boar'
         | 'drone'
         | 'llama'
         | 'vehicle'
@@ -3338,6 +4072,10 @@ export class WeaponSystem {
         chosenType = 'drone';
         chosenDist = droneHit.distance;
       }
+      if (boarHit && boarHit.distance <= chosenDist) {
+        chosenType = 'boar';
+        chosenDist = boarHit.distance;
+      }
       if (actorHit && actorHit.distance <= chosenDist) {
         chosenType = 'actor';
         chosenDist = actorHit.distance;
@@ -3373,6 +4111,34 @@ export class WeaponSystem {
           if (actorHit.isHeadshot) headshots += 1;
           totalDamageDealt += ev.damage;
           this.registerActorBurn(params, actorHit.actor);
+        }
+      } else if (chosenType === 'boar' && boarHit && activeTideBridge) {
+        const key = `boar:${boarHit.boar.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          const rawDmg =
+            computeWeaponDamage(
+              params.item.weaponId,
+              params.item.rarity,
+              boarHit.distance,
+              false,
+            ) *
+            firstAssaultMult *
+            combatMedallionMult;
+          const res = this.applyWildBoarHit(
+            activeTideBridge,
+            boarHit.boar.id,
+            rawDmg,
+            boarHit.point,
+            boarHit.normal,
+            params.actor.id,
+            params.isPlayer,
+            params.onBoarEliminated,
+          );
+          if (res.hit) {
+            shotsHit += 1;
+            totalDamageDealt += res.damage;
+          }
         }
       } else if (chosenType === 'drone' && droneHit && odBridge) {
         const key = `drone:${droneHit.drone.id}`;
@@ -3672,128 +4438,17 @@ export class WeaponSystem {
       }
     }
 
-    // Damage Props within splash radius
-    const props = this.propsBridge.getProps();
-    for (let i = 0; i < props.length; i++) {
-      const prop = props[i];
-      if (prop.destroyed) continue;
-      const center = { x: prop.x, y: prop.y + prop.height * 0.5, z: prop.z };
-      const d = dist3D(impactPos, center);
-      if (d <= proj.splashRadius + prop.radius && !this.isBlockedByShieldBubble(impactPos, center)) {
-        this.propsBridge.damageProp(prop.id, proj.structureDamage, impactPos, false);
-      }
-    }
-
-    // Damage Loot Llamas within splash radius
-    const llamas = this.propsBridge.getLlamas?.() ?? [];
-    for (let i = 0; i < llamas.length; i++) {
-      const llama = llamas[i];
-      if (llama.opened) continue;
-      const center = { x: llama.x, y: llama.y + 0.8, z: llama.z };
-      const d = dist3D(impactPos, center);
-      if (d <= proj.splashRadius + 1.0 && !this.isBlockedByShieldBubble(impactPos, center)) {
-        this.propsBridge.damageLlama?.(llama.id, proj.structureDamage, impactPos);
-      }
-    }
-
-    // Damage Vehicles within splash radius
-    const vehicles = this.vehicleBridge?.getVehicles() ?? [];
-    for (let i = 0; i < vehicles.length; i++) {
-      const veh = vehicles[i];
-      if (veh.destroyed || veh.hp <= 0) continue;
-      const center = { x: veh.x, y: veh.y + 0.65, z: veh.z };
-      const d = dist3D(impactPos, center);
-      if (d <= proj.splashRadius + 1.4 && !this.isBlockedByShieldBubble(impactPos, center)) {
-        const falloff = clamp(1 - (d / (proj.splashRadius + 1.4)) * 0.5, 0.4, 1.0);
-        this.vehicleBridge?.damageVehicle(
-          veh.id,
-          Math.round(proj.structureDamage * falloff),
-          impactPos,
-        );
-      }
-    }
-
-    // Damage Slurp Barrels within splash radius
-    if (this.stationBridge) {
-      const barrels = this.stationBridge.getSlurpBarrels();
-      const ownerActor =
-        this.actorsProvider?.().find((a) => a.id === proj.ownerId && a.alive) ??
-        null;
-      for (let i = 0; i < barrels.length; i++) {
-        const barrel = barrels[i];
-        if (barrel.destroyed || barrel.hp <= 0) continue;
-        const center = { x: barrel.x, y: barrel.y + 0.625, z: barrel.z };
-        const d = dist3D(impactPos, center);
-        if (
-          d <= proj.splashRadius + 0.85 &&
-          !this.isBlockedByShieldBubble(impactPos, center)
-        ) {
-          this.applySlurpBarrelHit(
-            this.stationBridge,
-            barrel.id,
-            proj.structureDamage,
-            center,
-            { x: 0, y: 1, z: 0 },
-            ownerActor,
-          );
-        }
-      }
-    }
-
-    // Damage Explosive Barrels within splash radius
-    if (this.riftCaptureBridge) {
-      const expBarrels = this.riftCaptureBridge.getExplosiveBarrels();
-      const ownerActor =
-        this.actorsProvider?.().find((a) => a.id === proj.ownerId && a.alive) ??
-        attackerStub;
-      for (let i = 0; i < expBarrels.length; i++) {
-        const barrel = expBarrels[i];
-        if (barrel.exploded || barrel.hp <= 0 || this.explodingBarrelIds.has(barrel.id)) {
-          continue;
-        }
-        const center = { x: barrel.x, y: barrel.y + 0.625, z: barrel.z };
-        const d = dist3D(impactPos, center);
-        if (
-          d <= proj.splashRadius + 0.85 &&
-          !this.isBlockedByShieldBubble(impactPos, center)
-        ) {
-          this.applyExplosiveBarrelHit(
-            this.riftCaptureBridge,
-            barrel.id,
-            proj.structureDamage,
-            center,
-            { x: 0, y: 1, z: 0 },
-            ownerActor,
-            proj.isPlayer,
-          );
-        }
-      }
-    }
-
-    // Damage Slurp Tankers within splash radius
-    if (this.chapterBridge) {
-      const tankers = this.chapterBridge.getSlurpTankers();
-      for (let i = 0; i < tankers.length; i++) {
-        const tanker = tankers[i];
-        if (tanker.destroyed || tanker.hp <= 0 || this.rupturingTankerIds.has(tanker.id)) {
-          continue;
-        }
-        const center = { x: tanker.x, y: tanker.y + 1.4, z: tanker.z };
-        const d = dist3D(impactPos, center);
-        if (
-          d <= proj.splashRadius + 2.2 &&
-          !this.isBlockedByShieldBubble(impactPos, center)
-        ) {
-          this.applySlurpTankerHit(
-            this.chapterBridge,
-            tanker.id,
-            proj.structureDamage,
-            center,
-            { x: 0, y: 1, z: 0 },
-          );
-        }
-      }
-    }
+    this.applySplashEnvironmentDamage({
+      impactPos,
+      radius: proj.splashRadius,
+      structureDamage: proj.structureDamage,
+      boarDamage: proj.damage,
+      ownerId: proj.ownerId,
+      attacker: attackerStub,
+      isPlayer: proj.isPlayer,
+      tideBridge: proj.tideBridge,
+      onBoarEliminated: proj.onBoarEliminated,
+    });
 
     // Damage Actors within splash radius
     if (this.actorsProvider) {
@@ -3831,6 +4486,163 @@ export class WeaponSystem {
           );
         }
       }
+    }
+  }
+
+  private detonateFlare(
+    proj: ActiveProjectile,
+    impactPos: Vec3Like,
+    directHit?: { actorId: string; isHeadshot: boolean },
+    directBuildId?: string,
+  ): void {
+    const scanRadius =
+      proj.flareScanRadius ?? WEAPONS.flare_gun.flareScanRadius ?? 75;
+    const splashRadius =
+      proj.splashRadius > 0
+        ? proj.splashRadius
+        : WEAPONS.flare_gun.splashRadius || 5.0;
+
+    this.eventBus.emit('vfx:flare_trail', {
+      origin: { ...proj.startPos },
+      target: { ...impactPos },
+      radius: scanRadius,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'flare_burst',
+      position: { ...impactPos },
+      spatial: true,
+    });
+    this.eventBus.emit('audio:noise', {
+      position: { ...impactPos },
+      kind: 'gunfire',
+      sourceId: proj.ownerId,
+      radius: 140,
+    });
+    this.emitBlastCameraShake(impactPos, 0.34, proj.isPlayer);
+
+    const attackerStub: CombatActor = {
+      id: proj.ownerId,
+      name: proj.ownerName,
+      position: proj.startPos,
+      eyePos: proj.startPos,
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+
+    // 1. Damage BuildPieces within flare splash radius (90 base structure damage)
+    const pieces = [...this.building.getPieces()];
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i];
+      const center = this.getBuildPieceCenter(p);
+      const isDirect = directBuildId === p.id;
+      const d = dist3D(impactPos, center);
+      if (
+        isDirect ||
+        (d <= splashRadius + 1.8 &&
+          !this.isBlockedByShieldBubble(impactPos, center))
+      ) {
+        const falloff =
+          isDirect || d <= 2.4
+            ? 1.0
+            : clamp(1 - (d / (splashRadius + 1.8)) * 0.45, 0.45, 1.0);
+        this.building.damagePiece(
+          p.id,
+          Math.round(proj.structureDamage * falloff),
+        );
+      }
+    }
+
+    // 2. Damage environment props, vehicles, barrels, tankers, and wild boars
+    this.applySplashEnvironmentDamage({
+      impactPos,
+      radius: splashRadius,
+      structureDamage: proj.structureDamage,
+      boarDamage: proj.damage,
+      ownerId: proj.ownerId,
+      attacker: attackerStub,
+      isPlayer: proj.isPlayer,
+      tideBridge: proj.tideBridge,
+      onBoarEliminated: proj.onBoarEliminated,
+    });
+
+    // 3. Damage enemy actors within flare splash radius (60 base splash damage)
+    if (this.actorsProvider) {
+      const actors = this.actorsProvider();
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (
+          !actor.alive ||
+          isFriendlyCombatActor(
+            proj.ownerId,
+            proj.actorSquadId,
+            proj.actorTeamId,
+            actor,
+          )
+        ) {
+          continue;
+        }
+        const center = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.5,
+          z: actor.position.z,
+        };
+        const isDirectHit = directHit?.actorId === actor.id;
+        const d = Math.min(
+          dist3D(impactPos, actor.position),
+          dist3D(impactPos, center),
+        );
+        if (
+          isDirectHit ||
+          (d <= splashRadius && !this.isBlockedByShieldBubble(impactPos, center))
+        ) {
+          const falloff =
+            isDirectHit || d <= 2.2
+              ? 1.0
+              : clamp(1 - (d / splashRadius) * 0.55, 0.45, 1.0);
+          const hsMult =
+            isDirectHit && directHit?.isHeadshot ? proj.headshotMultiplier : 1.0;
+          const splashDmg = Math.round(proj.damage * falloff * hsMult);
+          this.applyActorDamage(
+            attackerStub,
+            actor,
+            proj.weaponId,
+            proj.rarity,
+            splashDmg,
+            Boolean(isDirectHit && directHit?.isHeadshot),
+            center,
+            d,
+            proj.isPlayer && actor.id !== proj.ownerId,
+          );
+        }
+      }
+    }
+
+    // 4. Spawn active FlareBeaconEntity (12s duration) and notify listeners
+    const beacon: FlareBeaconEntity = {
+      id: `flare_${this.nextFlareBeaconId++}`,
+      x: impactPos.x,
+      y: impactPos.y,
+      z: impactPos.z,
+      radius: scanRadius,
+      remainingSec: FLARE_SCAN_DURATION_SEC,
+      ownerId: proj.ownerId,
+    };
+    this.flareBeacons.push(beacon);
+
+    proj.onFlareBurst?.({ ...beacon });
+    if (this.onFlareBurst && this.onFlareBurst !== proj.onFlareBurst) {
+      this.onFlareBurst({ ...beacon });
+    }
+    if (
+      proj.ownerId === 'player' &&
+      this.playerTideObserver?.onFlareBurst &&
+      this.playerTideObserver.onFlareBurst !== proj.onFlareBurst &&
+      this.playerTideObserver.onFlareBurst !== this.onFlareBurst
+    ) {
+      this.playerTideObserver.onFlareBurst({ ...beacon });
     }
   }
 
@@ -4119,11 +4931,17 @@ export class WeaponSystem {
   update(dt: number): void {
     const safeDt = clamp(dt, 0, 0.05);
 
-    // 0. Tick active Shield Bubbles (18s duration)
+    // 0. Tick active Shield Bubbles (18s duration) & Recon Flare Beacons (12s duration)
     for (let i = this.shieldBubbles.length - 1; i >= 0; i--) {
       this.shieldBubbles[i].remaining -= safeDt;
       if (this.shieldBubbles[i].remaining <= 0) {
         this.shieldBubbles.splice(i, 1);
+      }
+    }
+    for (let i = this.flareBeacons.length - 1; i >= 0; i--) {
+      this.flareBeacons[i].remainingSec -= safeDt;
+      if (this.flareBeacons[i].remainingSec <= 0) {
+        this.flareBeacons.splice(i, 1);
       }
     }
 
@@ -4174,6 +4992,10 @@ export class WeaponSystem {
       }
 
       if (proj.age >= proj.maxAge) {
+        if (proj.isFlare) {
+          this.detonateFlare(proj, proj.position);
+          proj.alive = false;
+        }
         this.projectiles.splice(i, 1);
         continue;
       }
@@ -4183,6 +5005,7 @@ export class WeaponSystem {
       }
 
       const prevPos = { ...proj.position };
+      const prevVy = proj.velocity.y;
       proj.velocity.y -= proj.gravity * safeDt;
 
       const stepDx = proj.velocity.x * safeDt;
@@ -4220,6 +5043,7 @@ export class WeaponSystem {
             : worldHit.hit && worldHit.targetType === 'static'
               ? Math.min(maxStepDist, worldHit.distance + 0.12)
               : entityMaxDist;
+        const activeTideBridge = proj.tideBridge ?? this.tideBridge;
         const actorHit = this.raycastActors(
           prevPos,
           stepDir,
@@ -4227,6 +5051,12 @@ export class WeaponSystem {
           proj.ownerId,
           proj.actorSquadId,
           proj.actorTeamId,
+        );
+        const boarHit = this.raycastWildBoars(
+          prevPos,
+          stepDir,
+          entityMaxDist,
+          activeTideBridge,
         );
         const vehicleHit = this.raycastVehicles(
           prevPos,
@@ -4256,6 +5086,7 @@ export class WeaponSystem {
 
         let hitType:
           | 'actor'
+          | 'boar'
           | 'vehicle'
           | 'barrel'
           | 'exp_barrel'
@@ -4300,6 +5131,10 @@ export class WeaponSystem {
           hitType = 'vehicle';
           chosenDist = vehicleHit.distance;
         }
+        if (boarHit && boarHit.distance <= chosenDist) {
+          hitType = 'boar';
+          chosenDist = boarHit.distance;
+        }
         if (actorHit && actorHit.distance <= chosenDist) {
           hitType = 'actor';
           chosenDist = actorHit.distance;
@@ -4311,48 +5146,54 @@ export class WeaponSystem {
         const nextPos =
           hitType === 'actor'
             ? actorHit!.point
-            : hitType === 'vehicle'
-              ? vehicleHit!.point
-              : hitType === 'exp_barrel'
-                ? expBarrelHit!.point
-                : hitType === 'barrel'
-                  ? barrelHit!.point
-                  : hitType === 'tanker'
-                    ? tankerHit!.point
-                    : hitType === 'world'
-                      ? worldHit.point
-                      : hitType === 'bubble'
-                        ? bubbleHit!.point
-                        : {
-                            x: prevPos.x + stepDx,
-                            y: prevPos.y + stepDy,
-                            z: prevPos.z + stepDz,
-                          };
+            : hitType === 'boar'
+              ? boarHit!.point
+              : hitType === 'vehicle'
+                ? vehicleHit!.point
+                : hitType === 'exp_barrel'
+                  ? expBarrelHit!.point
+                  : hitType === 'barrel'
+                    ? barrelHit!.point
+                    : hitType === 'tanker'
+                      ? tankerHit!.point
+                      : hitType === 'world'
+                        ? worldHit.point
+                        : hitType === 'bubble'
+                          ? bubbleHit!.point
+                          : {
+                              x: prevPos.x + stepDx,
+                              y: prevPos.y + stepDy,
+                              z: prevPos.z + stepDz,
+                            };
 
         const tracerColor =
-          proj.isBoomArrow
-            ? 0xfbbf24
-            : proj.weaponId === 'rocket_launcher'
-              ? 0xff5a2a
-              : proj.isShieldBubble || proj.isPortABunker
-                ? 0x38bdf8
-                : proj.isEmpGrenade
-                  ? 0x22d3ee
-                  : proj.isShockwave
-                    ? 0xa855f7
-                    : proj.isSplashHeal
-                      ? 0x22d3ee
-                      : proj.isThrowable
-                        ? 0xf59e0b
-                        : 0xfff3b0;
+          proj.isFlare
+            ? 0xff6b2b
+            : proj.isBoomArrow
+              ? 0xfbbf24
+              : proj.weaponId === 'rocket_launcher'
+                ? 0xff5a2a
+                : proj.isShieldBubble || proj.isPortABunker
+                  ? 0x38bdf8
+                  : proj.isEmpGrenade
+                    ? 0x22d3ee
+                    : proj.isShockwave
+                      ? 0xa855f7
+                      : proj.isSplashHeal
+                        ? 0x22d3ee
+                        : proj.isThrowable
+                          ? 0xf59e0b
+                          : 0xfff3b0;
         const tracerWidth =
           proj.weaponId === 'rocket_launcher'
             ? 0.14
-            : proj.isBoomArrow
-              ? 0.09
-              : proj.isThrowable
-                ? 0.08
-                : 0.06;
+            : proj.isFlare
+              ? 0.11
+              : proj.isBoomArrow
+                ? 0.09
+                : proj.isThrowable
+                  ? 0.08
+                  : 0.06;
 
         this.eventBus.emit('vfx:tracer', {
           from: prevPos,
@@ -4369,11 +5210,13 @@ export class WeaponSystem {
             const n =
               hitType === 'actor'
                 ? actorHit!.normal
-                : hitType === 'vehicle'
-                  ? vehicleHit!.normal
-                  : hitType === 'bubble'
-                    ? bubbleHit!.normal
-                    : worldHit.normal;
+                : hitType === 'boar'
+                  ? boarHit!.normal
+                  : hitType === 'vehicle'
+                    ? vehicleHit!.normal
+                    : hitType === 'bubble'
+                      ? bubbleHit!.normal
+                      : worldHit.normal;
             const vn = proj.velocity.x * n.x + proj.velocity.y * n.y + proj.velocity.z * n.z;
             if (vn < 0) {
               const restitution = 0.35;
@@ -4439,6 +5282,26 @@ export class WeaponSystem {
             this.detonateChugSplash(proj, nextPos);
             proj.alive = false;
             this.projectiles.splice(i, 1);
+          } else if (proj.isFlare) {
+            const impactPos =
+              hitType === 'bubble' && bubbleHit
+                ? {
+                    x: nextPos.x + bubbleHit.normal.x * 0.08,
+                    y: nextPos.y + bubbleHit.normal.y * 0.08,
+                    z: nextPos.z + bubbleHit.normal.z * 0.08,
+                  }
+                : nextPos;
+            const directHit =
+              hitType === 'actor' && actorHit
+                ? { actorId: actorHit.actor.id, isHeadshot: actorHit.isHeadshot }
+                : undefined;
+            const directBuildId =
+              hitType === 'world' && worldHit.targetType === 'build'
+                ? worldHit.targetId
+                : undefined;
+            this.detonateFlare(proj, impactPos, directHit, directBuildId);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
           } else if (proj.splashRadius > 0) {
             const impactPos =
               hitType === 'bubble' && bubbleHit
@@ -4467,6 +5330,29 @@ export class WeaponSystem {
                 position: bubbleHit.point,
                 spatial: true,
               });
+            } else if (hitType === 'boar' && boarHit && activeTideBridge) {
+              const travelDist = dist3D(proj.startPos, nextPos);
+              const baseDmg = computeWeaponDamage(
+                proj.weaponId,
+                proj.rarity,
+                travelDist,
+                false,
+              );
+              const dmg = Math.round(
+                baseDmg *
+                  (proj.firstAssaultActive ? 1.25 : 1.0) *
+                  (proj.combatMedallionActive ? 1.12 : 1.0),
+              );
+              this.applyWildBoarHit(
+                activeTideBridge,
+                boarHit.boar.id,
+                dmg,
+                boarHit.point,
+                boarHit.normal,
+                proj.ownerId,
+                proj.isPlayer,
+                proj.onBoarEliminated,
+              );
             } else if (hitType === 'actor' && actorHit) {
               const travelDist = dist3D(proj.startPos, nextPos);
               const baseDmg = computeWeaponDamage(
@@ -4552,7 +5438,27 @@ export class WeaponSystem {
             proj.alive = false;
             this.projectiles.splice(i, 1);
           }
+        } else if (
+          proj.isFlare &&
+          (proj.startVy ?? 0) >= 6.0 &&
+          prevVy > 0 &&
+          proj.velocity.y <= 0 &&
+          proj.age >= 0.15
+        ) {
+          this.detonateFlare(proj, nextPos);
+          proj.alive = false;
+          this.projectiles.splice(i, 1);
         }
+      } else if (
+        proj.isFlare &&
+        (proj.startVy ?? 0) >= 6.0 &&
+        prevVy > 0 &&
+        proj.velocity.y <= 0 &&
+        proj.age >= 0.15
+      ) {
+        this.detonateFlare(proj, proj.position);
+        proj.alive = false;
+        this.projectiles.splice(i, 1);
       }
     }
 
@@ -4618,6 +5524,7 @@ export class WeaponSystem {
     this.projectiles = [];
     this.pendingBursts = [];
     this.shieldBubbles = [];
+    this.flareBeacons = [];
     this.activeBurns.clear();
     this.explodingBarrelIds.clear();
     this.rupturingTankerIds.clear();

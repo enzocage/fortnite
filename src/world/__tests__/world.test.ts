@@ -9,6 +9,7 @@ import {
   PLAYER_RADIUS,
   POIS,
   REBOOT_VAN_COOLDOWN_SEC,
+  SHIELD_MUSHROOM_RESPAWN_SEC,
   STEP_HEIGHT,
   STORM_PHASES,
   TRAIN_CHEST_COOLDOWN_SEC,
@@ -17,6 +18,7 @@ import {
   WATER_LEVEL,
   WEAPON_MOD_COST_GOLD,
   WEAPONS,
+  WILD_BOAR_MAX_HP,
   WORLD_HALF,
 } from '../../core';
 import {
@@ -39,6 +41,7 @@ import {
   type Wave7ShowcaseResult,
   type Wave8ShowcaseResult,
   type Wave9ShowcaseResult,
+  type Wave10ShowcaseResult,
 } from '../index';
 import type { WeatherKind } from '../../types';
 
@@ -1199,7 +1202,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
 });
 
 describe('VehicleSystem', () => {
-  it('spawns 8 deterministic hover vehicles (4 hover_atv + 4 cyber_bike) clear of water and buildings', () => {
+  it('spawns 12 deterministic vehicles (4 hover_atv + 4 cyber_bike + 4 speedboat) clear of buildings', () => {
     const terrain = new TerrainSystem(4201);
     const builder = new WorldBuilder();
     const world = builder.build(terrain, 'low');
@@ -1209,18 +1212,24 @@ describe('VehicleSystem', () => {
 
     const v1 = vs1.getVehicles();
     const v2 = vs2.getVehicles();
-    expect(v1).toHaveLength(8);
-    expect(v2).toHaveLength(8);
+    expect(v1).toHaveLength(12);
+    expect(v2).toHaveLength(12);
     expect(v1.filter((v) => v.kind === 'hover_atv')).toHaveLength(4);
     expect(v1.filter((v) => v.kind === 'cyber_bike')).toHaveLength(4);
+    expect(v1.filter((v) => v.kind === 'speedboat')).toHaveLength(4);
     expect(vs1.getGroup()).toBeInstanceOf(THREE.Group);
-    expect(vs1.getActiveVehicleColliders()).toHaveLength(8);
+    expect(vs1.getActiveVehicleColliders()).toHaveLength(12);
 
     for (let i = 0; i < v1.length; i++) {
       expect(v1[i].id).toBe(v2[i].id);
       expect(v1[i].x).toBe(v2[i].x);
       expect(v1[i].z).toBe(v2[i].z);
-      expect(terrain.isWater(v1[i].x, v1[i].z)).toBe(false);
+      if (v1[i].kind === 'speedboat') {
+        expect(terrain.isWater(v1[i].x, v1[i].z)).toBe(true);
+        expect(v1[i].y).toBeCloseTo(WATER_LEVEL + 0.12, 4);
+      } else {
+        expect(terrain.isWater(v1[i].x, v1[i].z)).toBe(false);
+      }
       expect(v1[i].hp).toBe(v1[i].maxHp);
       expect(v1[i].driverId).toBeNull();
       expect(v1[i].destroyed).toBe(false);
@@ -1246,12 +1255,16 @@ describe('VehicleSystem', () => {
     terrain.dispose();
   });
 
-  it('supports enter, driving, steering, boost VFX, water/lava hover float, exit, damage, spawn, and reset', () => {
+  it('supports enter, driving, steering, boost VFX, water/lava hover float, speedboat buoyancy/wake/amphibious speed, exit, damage, spawn, and reset', () => {
     const terrain = new TerrainSystem(4201);
     const bus = new EventBus();
     const boostSpy = vi.fn();
+    const wakeSpy = vi.fn();
+    const soundSpy = vi.fn();
     const explosionSpy = vi.fn();
     bus.on('vfx:vehicle_boost', boostSpy);
+    bus.on('vfx:water_wake', wakeSpy);
+    bus.on('sound:play', soundSpy);
     bus.on('vfx:explosion', explosionSpy);
 
     const vs = new VehicleSystem(terrain, bus, 4201);
@@ -1289,9 +1302,56 @@ describe('VehicleSystem', () => {
 
     // Water floatation over Crystal Basin lake (25 + 35, -115)
     const waterBike = vs.spawnVehicleAt('cyber_bike', 60, -115, 0);
-    expect(vs.getVehicles()).toHaveLength(9);
+    expect(vs.getVehicles()).toHaveLength(13);
     expect(terrain.isWater(waterBike.x, waterBike.z)).toBe(true);
     expect(waterBike.y).toBeGreaterThan(WATER_LEVEL + 0.3);
+
+    // Speedboat water buoyancy (WATER_LEVEL + 0.12), water wake + boat_boost + water_splash_wake, and amphibious 0.78x dry speed
+    const waterBoat = vs.getVehicles().find((v) => v.kind === 'speedboat')!;
+    expect(waterBoat).toBeDefined();
+    expect(terrain.isWater(waterBoat.x, waterBoat.z)).toBe(true);
+    expect(waterBoat.y).toBeCloseTo(WATER_LEVEL + 0.12, 4);
+
+    wakeSpy.mockClear();
+    soundSpy.mockClear();
+    vs.enterVehicle(waterBoat.id, 'boat_driver');
+    for (let i = 0; i < 12; i++) {
+      vs.driveVehicle(waterBoat.id, 1, 0, true, 0.05);
+      vs.update(0.05, 1 + i * 0.05);
+    }
+    expect(terrain.isWater(waterBoat.x, waterBoat.z)).toBe(true);
+    expect(waterBoat.y).toBeCloseTo(WATER_LEVEL + 0.12, 2);
+    expect(wakeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        yaw: waterBoat.yaw,
+        speed: expect.any(Number),
+      }),
+    );
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'water_splash_wake' }));
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'boat_boost' }));
+    vs.exitVehicle(waterBoat.id, 'boat_driver');
+
+    const dryBoat = vs.spawnVehicleAt('speedboat', -75, -40, 0);
+    expect(vs.getVehicles()).toHaveLength(14);
+    expect(terrain.isWater(dryBoat.x, dryBoat.z)).toBe(false);
+    vs.enterVehicle(dryBoat.id, 'land_driver');
+    for (let i = 0; i < 60; i++) {
+      vs.driveVehicle(dryBoat.id, 1, 0, false, 0.05);
+      vs.update(0.05, 4 + i * 0.05);
+    }
+    const dryTopSpeed = Math.hypot(dryBoat.vx, dryBoat.vz);
+
+    const waterCruiseBoat = vs.spawnVehicleAt('speedboat', 260, 260, Math.PI * 0.25);
+    expect(vs.getVehicles()).toHaveLength(15);
+    vs.enterVehicle(waterCruiseBoat.id, 'water_cruise_driver');
+    for (let i = 0; i < 60; i++) {
+      vs.driveVehicle(waterCruiseBoat.id, 1, 0, false, 0.05);
+      vs.update(0.05, 7 + i * 0.05);
+    }
+    expect(terrain.isWater(waterCruiseBoat.x, waterCruiseBoat.z)).toBe(true);
+    expect(waterCruiseBoat.y).toBeCloseTo(WATER_LEVEL + 0.12, 2);
+    const waterCruiseSpeed = Math.hypot(waterCruiseBoat.vx, waterCruiseBoat.vz);
+    expect(dryTopSpeed / waterCruiseSpeed).toBeCloseTo(0.78, 2);
 
     // Volcanic lava thermal float & boost recharge over Scorched Caldera
     const lavaAtv = vs.spawnVehicleAt('hover_atv', VOLCANO_CENTER_X, VOLCANO_CENTER_Z, 0);
@@ -1310,10 +1370,11 @@ describe('VehicleSystem', () => {
     expect(first.hp).toBe(0);
     expect(explosionSpy).toHaveBeenCalledTimes(1);
     expect(vs.enterVehicle(first.id, 'player')).toBe(false);
-    expect(vs.getActiveVehicleColliders()).toHaveLength(9);
+    expect(vs.getActiveVehicleColliders()).toHaveLength(15);
 
     vs.reset();
-    expect(vs.getVehicles()).toHaveLength(8);
+    expect(vs.getVehicles()).toHaveLength(12);
+    expect(vs.getVehicles().filter((v) => v.kind === 'speedboat')).toHaveLength(4);
     expect(vs.getVehicles().every((v) => !v.destroyed && v.hp === v.maxHp)).toBe(true);
 
     vs.dispose();
@@ -3861,6 +3922,371 @@ describe('Wave-9 Loot Pools, 3D Pickup Meshes & Full GLSL Shader Uniform Validat
       }
     }
 
+    storm.dispose();
+    fx.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-10 Shield Mushrooms, Wild Loot Boars & Showcase', () => {
+  it('constructs 24 Glowing Shield Mushrooms and 8 Roaming Wild Loot Boars clear of water/buildings/props with full lifecycle and reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const soundSpy = vi.fn();
+    const healVfxSpy = vi.fn();
+    bus.on('sound:play', soundSpy);
+    bus.on('vfx:splash_heal', healVfxSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 1.0) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 2.8 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    // 1. 24 Glowing Blue Shield Slurp Mushrooms
+    const mushrooms = interactables.getShieldMushrooms();
+    expect(mushrooms).toHaveLength(24);
+    expect(new Set(mushrooms.map((m) => m.poiId))).toEqual(
+      new Set(['whispering_pines', 'crystal_basin', 'sunny_suburbs']),
+    );
+    expect(mushrooms.filter((m) => m.poiId === 'whispering_pines')).toHaveLength(8);
+    expect(mushrooms.filter((m) => m.poiId === 'crystal_basin')).toHaveLength(8);
+    expect(mushrooms.filter((m) => m.poiId === 'sunny_suburbs')).toHaveLength(8);
+
+    for (const m of mushrooms) {
+      expect(m.available).toBe(true);
+      expect(m.respawnSec).toBe(0);
+      expect(terrain.isWater(m.x, m.z)).toBe(false);
+      expect(m.y).toBeCloseTo(terrain.getHeightAt(m.x, m.z), 4);
+      expect(terrain.getNormalAt(m.x, m.z).y, `${m.id} (${m.x}, ${m.z})`).toBeGreaterThan(0.85);
+      expect(isClearOfBuildings(m.x, m.y, m.z, 0.8), `${m.id} hits building`).toBe(true);
+      const blockingProp = pal.getProps().find((p) => Math.hypot(m.x - p.x, m.z - p.z) < p.radius + 0.6);
+      expect(blockingProp, `${m.id} near prop ${blockingProp?.kind}`).toBeUndefined();
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(m.x - veh.x, m.z - veh.z)).toBeGreaterThan(3.0);
+      }
+      for (const other of mushrooms) {
+        if (other.id !== m.id) {
+          expect(Math.hypot(m.x - other.x, m.z - other.z)).toBeGreaterThan(1.2);
+        }
+      }
+      const mGroup = interactables.getGroup().getObjectByName(`ShieldMushroom_${m.id}`) as THREE.Group;
+      expect(mGroup).toBeDefined();
+      expect(mGroup.children.length).toBeGreaterThanOrEqual(2);
+    }
+
+    const m0 = mushrooms[0];
+    const m0Group = interactables.getGroup().getObjectByName(`ShieldMushroom_${m0.id}`) as THREE.Group;
+    const m0CapGroup = m0Group.children[1] as THREE.Group;
+    expect(m0CapGroup.visible).toBe(true);
+
+    expect(interactables.findNearbyShieldMushroom({ x: m0.x - 1.2, y: m0.y, z: m0.z })?.id).toBe(m0.id);
+    expect(interactables.findNearbyShieldMushroom({ x: m0.x + 10, y: m0.y, z: m0.z })).toBeNull();
+    expect(interactables.findNearbyShieldMushroom({ x: Number.NaN, y: m0.y, z: m0.z })).toBeNull();
+
+    expect(interactables.consumeShieldMushroom('nonexistent_mush')).toBe(false);
+    expect(interactables.consumeShieldMushroom(m0.id)).toBe(true);
+    expect(m0.available).toBe(false);
+    expect(m0.respawnSec).toBe(SHIELD_MUSHROOM_RESPAWN_SEC);
+    expect(m0CapGroup.visible).toBe(false);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'mushroom_eat' }));
+    expect(healVfxSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        position: expect.objectContaining({ x: m0.x, z: m0.z }),
+      }),
+    );
+    expect(interactables.consumeShieldMushroom(m0.id)).toBe(false);
+    expect(interactables.findNearbyShieldMushroom({ x: m0.x, y: m0.y, z: m0.z }, 1.0)).toBeNull();
+    expect(interactables.findNearbyShieldMushroom({ x: m0.x, y: m0.y, z: m0.z })?.id).not.toBe(m0.id);
+
+    // Tick half respawn then full respawn
+    interactables.update(25, 25);
+    expect(m0.available).toBe(false);
+    expect(m0.respawnSec).toBeCloseTo(SHIELD_MUSHROOM_RESPAWN_SEC - 25, 4);
+
+    interactables.update(40, 65);
+    expect(m0.available).toBe(true);
+    expect(m0.respawnSec).toBe(0);
+    expect(m0CapGroup.visible).toBe(true);
+
+    // 2. 8 Roaming Stylized 3D Wild Loot Boars
+    const boars = interactables.getWildBoars();
+    expect(boars).toHaveLength(8);
+
+    for (const b of boars) {
+      expect(b.hp).toBe(WILD_BOAR_MAX_HP);
+      expect(b.maxHp).toBe(WILD_BOAR_MAX_HP);
+      expect(b.alive).toBe(true);
+      expect(b.state).toBe('roam');
+      expect(b.speed).toBeGreaterThan(1);
+      expect(terrain.isWater(b.x, b.z)).toBe(false);
+      expect(['grassland', 'forest']).toContain(terrain.getBiomeAt(b.x, b.z));
+      expect(b.y).toBeCloseTo(terrain.getHeightAt(b.x, b.z), 4);
+      expect(isClearOfBuildings(b.x, b.y, b.z, 1.5), `${b.id} hits building`).toBe(true);
+      const blockingProp = pal.getProps().find((p) => Math.hypot(b.x - p.x, b.z - p.z) < p.radius + 1.5);
+      expect(blockingProp, `${b.id} near prop ${blockingProp?.kind}`).toBeUndefined();
+
+      const bGroup = interactables.getGroup().getObjectByName(`WildBoar_${b.id}`) as THREE.Group;
+      expect(bGroup).toBeDefined();
+      expect(bGroup.visible).toBe(true);
+      const bodyGroup = bGroup.children[0] as THREE.Group;
+      const legPivots = bodyGroup.children.filter((c) => c instanceof THREE.Group);
+      expect(legPivots).toHaveLength(4);
+    }
+
+    const b0 = boars[0];
+    const b0StartX = b0.x;
+    const b0StartZ = b0.z;
+    const b0Group = interactables.getGroup().getObjectByName(`WildBoar_${b0.id}`) as THREE.Group;
+    const b0Body = b0Group.children[0] as THREE.Group;
+    const b0Legs = b0Body.children.filter((c) => c instanceof THREE.Group) as THREE.Group[];
+
+    // Roam & articulated 4-leg trot animation
+    interactables.update(0.35, 65.35);
+    expect(Math.hypot(b0.x - b0StartX, b0.z - b0StartZ)).toBeGreaterThan(0.2);
+    expect(terrain.isWater(b0.x, b0.z)).toBe(false);
+    expect(b0Legs.some((leg) => Math.abs(leg.rotation.x) > 0.01)).toBe(true);
+
+    // First hit -> flees & emits 'boar_grunt'
+    soundSpy.mockClear();
+    expect(interactables.damageWildBoar('nonexistent_boar', 30, 'player')).toBeNull();
+    expect(interactables.damageWildBoar(b0.id, 0, 'player')).toBeNull();
+    const firstHit = interactables.damageWildBoar(b0.id, 45, 'player');
+    expect(firstHit).toEqual({
+      hit: true,
+      eliminated: false,
+      x: b0.x,
+      y: b0.y,
+      z: b0.z,
+    });
+    expect(b0.hp).toBe(WILD_BOAR_MAX_HP - 45);
+    expect(b0.alive).toBe(true);
+    expect(b0.state).toBe('flee');
+    expect(b0.speed).toBeGreaterThan(5);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'boar_grunt' }));
+
+    const fleePosBefore = { x: b0.x, z: b0.z };
+    interactables.update(0.4, 65.75);
+    expect(Math.hypot(b0.x - fleePosBefore.x, b0.z - fleePosBefore.z)).toBeGreaterThan(1.5);
+    expect(terrain.isWater(b0.x, b0.z)).toBe(false);
+
+    // Lethal hit -> eliminated & marked alive = false
+    const elimHit = interactables.damageWildBoar(b0.id, 90, 'player');
+    expect(elimHit).toEqual({
+      hit: true,
+      eliminated: true,
+      x: b0.x,
+      y: b0.y,
+      z: b0.z,
+    });
+    expect(b0.hp).toBe(0);
+    expect(b0.alive).toBe(false);
+    expect(b0Group.visible).toBe(false);
+    expect(interactables.damageWildBoar(b0.id, 20, 'player')).toBeNull();
+
+    // 3. reset() restores all 24 mushrooms & 8 boars cleanly (and keeps base colliders unchanged)
+    interactables.consumeShieldMushroom(m0.id);
+    interactables.reset();
+    expect(interactables.getShieldMushrooms()).toHaveLength(24);
+    expect(interactables.getShieldMushrooms().every((m) => m.available && m.respawnSec === 0)).toBe(true);
+    expect(m0CapGroup.visible).toBe(true);
+    expect(interactables.getWildBoars()).toHaveLength(8);
+    expect(
+      interactables
+        .getWildBoars()
+        .every((b) => b.alive && b.hp === WILD_BOAR_MAX_HP && b.state === 'roam'),
+    ).toBe(true);
+    expect(b0Group.visible).toBe(true);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+
+    vehicles.dispose();
+    interactables.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('supports qaPlaceWave10Showcase(centerPos, yaw) placing 4 Shield Mushrooms + 2 Wild Boars in foreground view and clears on reset()/dispose()', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    const center = { x: -75, y: terrain.getHeightAt(-75, -12), z: -12 };
+    const yaw = 0.25;
+    const showcase: Wave10ShowcaseResult = interactables.qaPlaceWave10Showcase(center, yaw);
+
+    expect(showcase.mushrooms).toHaveLength(4);
+    for (const m of showcase.mushrooms) {
+      expect(m.available).toBe(true);
+      expect(m.respawnSec).toBe(0);
+      expect(terrain.isWater(m.x, m.z)).toBe(false);
+      expect(m.y).toBeCloseTo(terrain.getHeightAt(m.x, m.z), 4);
+      expect(Math.hypot(m.x - center.x, m.z - center.z)).toBeLessThan(12);
+    }
+
+    expect(showcase.boars).toHaveLength(2);
+    for (const b of showcase.boars) {
+      expect(b.alive).toBe(true);
+      expect(b.hp).toBe(WILD_BOAR_MAX_HP);
+      expect(terrain.isWater(b.x, b.z)).toBe(false);
+      expect(b.y).toBeCloseTo(terrain.getHeightAt(b.x, b.z), 4);
+      expect(Math.hypot(b.x - center.x, b.z - center.z)).toBeLessThan(14);
+    }
+
+    expect(interactables.getShieldMushrooms()).toHaveLength(28);
+    expect(interactables.getWildBoars()).toHaveLength(10);
+
+    // Calling qaPlaceWave10Showcase again replaces cleanly without leaking duplicates
+    interactables.qaPlaceWave10Showcase(center, yaw);
+    expect(interactables.getShieldMushrooms()).toHaveLength(28);
+    expect(interactables.getWildBoars()).toHaveLength(10);
+
+    interactables.reset();
+    expect(interactables.getShieldMushrooms()).toHaveLength(24);
+    expect(interactables.getWildBoars()).toHaveLength(8);
+
+    interactables.dispose();
+    expect(interactables.getShieldMushrooms()).toHaveLength(0);
+    expect(interactables.getWildBoars()).toHaveLength(0);
+    terrain.dispose();
+  });
+});
+
+describe('Wave-10 Loot Pools, 3D Pickup Meshes & GLSL Shader Validation', () => {
+  it('spawns shockwave_hammer and flare_gun across floor, chest, and supply-drop pools with distinct 3D pickup silhouettes', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 420; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('shockwave_hammer')).toBe(true);
+    expect(floorIds.has('flare_gun')).toBe(true);
+    expect(chestIds.has('shockwave_hammer')).toBe(true);
+    expect(chestIds.has('flare_gun')).toBe(true);
+
+    const dropsBeforeSupply = pal.getLootDrops().length;
+    for (let i = 0; i < 95; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    const supplyIds = new Set(
+      pal
+        .getLootDrops()
+        .slice(dropsBeforeSupply)
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(supplyIds.has('shockwave_hammer')).toBe(true);
+    expect(supplyIds.has('flare_gun')).toBe(true);
+
+    // Distinct multi-part 3D pickup silhouettes for shockwave_hammer & flare_gun
+    const groupBefore = pal.getGroup().children.length;
+    pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'hammer_mesh_test', weaponId: 'shockwave_hammer', rarity: 'epic', magAmmo: 0, stackCount: 1 } },
+    );
+    const hammerDropGroup = pal.getGroup().children[groupBefore] as THREE.Group;
+    const hammerSilhouette = hammerDropGroup.children[1] as THREE.Group;
+    expect(hammerSilhouette).toBeInstanceOf(THREE.Group);
+    expect(hammerSilhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.spawnLootDrop(
+      { x: 4, y: 12, z: 0 },
+      { item: { uid: 'flare_mesh_test', weaponId: 'flare_gun', rarity: 'rare', magAmmo: 6, stackCount: 1 } },
+    );
+    const flareDropGroup = pal.getGroup().children[groupBefore + 1] as THREE.Group;
+    const flareSilhouette = flareDropGroup.children[1] as THREE.Group;
+    expect(flareSilhouette).toBeInstanceOf(THREE.Group);
+    expect(flareSilhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('validates GLSL ShaderMaterial uniforms, smoothstep bounds, and EnvironmentDetail wind shader injection after Wave-10 additions', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const storm = new StormSystem(4201, 'solo');
+    const detail = new EnvironmentDetail(terrain, world.colliders, 'low', 4201);
+
+    const shaderMats: THREE.ShaderMaterial[] = [];
+    for (const root of [fx.getGroup(), world.group, storm.getMesh()]) {
+      root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof THREE.ShaderMaterial) {
+          shaderMats.push(obj.material);
+        }
+      });
+    }
+    expect(shaderMats.length).toBeGreaterThanOrEqual(6);
+
+    for (const mat of shaderMats) {
+      for (const glsl of [mat.vertexShader, mat.fragmentShader]) {
+        const smoothMatches = [
+          ...glsl.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g),
+        ];
+        for (const m of smoothMatches) {
+          expect(Number(m[1])).toBeLessThan(Number(m[2]));
+        }
+        const usedUniforms = new Set(glsl.match(/\bu[A-Z][A-Za-z0-9_]*/g) ?? []);
+        for (const uName of usedUniforms) {
+          expect(glsl).toMatch(
+            new RegExp(`uniform\\s+(?:float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\\s+${uName}\\b`),
+          );
+          expect(mat.uniforms[uName]).toBeDefined();
+        }
+      }
+    }
+
+    const grassMesh = detail.getGroup().getObjectByName('InstancedGrass') as THREE.InstancedMesh;
+    const grassMat = grassMesh.material as THREE.MeshStandardMaterial;
+    const mockShader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: '#include <common>\nvoid main() {\n#include <begin_vertex>\n}',
+      fragmentShader: '',
+    };
+    grassMat.onBeforeCompile(
+      mockShader as unknown as THREE.WebGLProgramParametersWithUniforms,
+      {} as THREE.WebGLRenderer,
+    );
+    expect(mockShader.vertexShader).toContain('uniform float uWindTime;');
+    expect(mockShader.vertexShader).toContain('uniform float uWindStrength;');
+
+    detail.dispose();
     storm.dispose();
     fx.dispose();
     builder.dispose();

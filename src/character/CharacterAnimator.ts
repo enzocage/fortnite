@@ -321,7 +321,7 @@ export class CharacterAnimator {
         } else {
           this.applyIdlePose(p, t);
         }
-        this.applyHarvestPose(p, t, finiteOr(state.harvestSwingTimer));
+        this.applyHarvestPose(p, t, finiteOr(state.harvestSwingTimer), state.weaponId);
         break;
       case 'reload':
         if (speed > 0.5) {
@@ -869,12 +869,38 @@ export class CharacterAnimator {
     p.rFoRx = 0.22;
   }
 
-  private applyHarvestPose(p: PoseTarget, t: number, swingTimer: number): void {
+  private applyHarvestPose(
+    p: PoseTarget,
+    t: number,
+    swingTimer: number,
+    weaponId: WeaponId = 'pickaxe',
+  ): void {
     const cycle = swingTimer > 0 ? (swingTimer % 0.625) / 0.625 : (t * 1.65) % 1;
     const swing =
       cycle < 0.35
         ? -Math.cos((cycle / 0.35) * Math.PI)
         : 1 - ((cycle - 0.35) / 0.65) * 2;
+
+    if (weaponId === 'shockwave_hammer') {
+      // Heavy two-handed overhead kinetic warhammer slam swing
+      const slamLift = -1.25 - swing * 0.68;
+      p.chestRx = 0.14 + Math.max(0, swing) * 0.24;
+      p.chestRy = -swing * 0.16;
+      p.spineRy = -swing * 0.08;
+
+      p.rShRx = slamLift;
+      p.rShRy = 0.26;
+      p.rShRz = -0.18;
+      p.rElRx = -0.62 - Math.max(0, -swing) * 0.28;
+      p.rHaRx = 0.18 + swing * 0.20;
+
+      p.lShRx = slamLift + 0.04;
+      p.lShRy = -0.44;
+      p.lShRz = 0.14;
+      p.lElRx = -0.66 - Math.max(0, -swing) * 0.28;
+      p.lHaRx = 0.12 + swing * 0.16;
+      return;
+    }
 
     p.chestRy = -swing * 0.42;
     p.spineRy = -swing * 0.18;
@@ -1102,6 +1128,18 @@ export class CharacterAnimator {
         p.lShRy = -0.52;
         p.lShRz = 0.08;
         p.lElRx = -0.82;
+      } else if (weapon === 'shockwave_hammer') {
+        // Heavy two-handed warhammer diagonal carry while sprinting
+        const strideBob = Math.sin(t * 11) * 0.08;
+        p.chestRy += 0.16;
+        p.rShRx = -0.68 + strideBob;
+        p.rShRy = 0.32;
+        p.rShRz = -0.18;
+        p.rElRx = -1.06;
+        p.lShRx = -0.78 - strideBob;
+        p.lShRy = -0.48;
+        p.lShRz = 0.14;
+        p.lElRx = -0.94;
       } else if (isTwoHandedGun(weapon)) {
         p.rShRx = -0.78;
         p.rShRy = 0.58;
@@ -1124,6 +1162,60 @@ export class CharacterAnimator {
 
     const torsoPitch = p.hipsRx + p.spineRx + p.chestRx;
     const keepLeftGripOnZipline = anim === 'zipline';
+
+    if (weapon === 'shockwave_hammer') {
+      if (state.isFiring) {
+        // Heavy two-handed overhead kinetic slam swing
+        const swingCycle = Math.cos(t * 12.0);
+        const slamLift = -1.18 - 0.56 * swingCycle;
+        p.chestRx += 0.14 - 0.16 * swingCycle;
+        p.chestRy += 0.08 * swingCycle;
+        p.rShRx = slamLift - aimPitch * 0.45 - recoilTilt * 0.5;
+        p.rShRy = 0.28;
+        p.rShRz = -0.18;
+        p.rElRx = -0.58 - 0.18 * (1 - swingCycle);
+        p.rHaRx = 0.18;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = slamLift - aimPitch * 0.45 - recoilTilt * 0.5 + 0.04;
+          p.lShRy = -0.44;
+          p.lShRz = 0.14;
+          p.lElRx = -0.62 - 0.18 * (1 - swingCycle);
+          p.lHaRx = 0.12;
+        }
+      } else if (state.isAiming) {
+        // Poised two-handed kinetic bounce / slam wind-up stance
+        p.chestRx -= 0.08;
+        p.chestRy += 0.18;
+        p.rShRx = -1.42 - aimPitch * 0.45;
+        p.rShRy = 0.30;
+        p.rShRz = -0.20;
+        p.rElRx = -0.74;
+        p.rHaRx = 0.16;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -1.36 - aimPitch * 0.45;
+          p.lShRy = -0.48;
+          p.lShRz = 0.16;
+          p.lElRx = -0.78;
+          p.lHaRx = 0.10;
+        }
+      } else {
+        // Heavy two-handed warhammer carry stance across torso
+        p.chestRy += 0.14;
+        p.rShRx = -0.62 - aimPitch * 0.22;
+        p.rShRy = 0.28;
+        p.rShRz = -0.16;
+        p.rElRx = -0.94;
+        p.rHaRx = 0.14;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -0.76 - aimPitch * 0.22;
+          p.lShRy = -0.52;
+          p.lShRz = 0.12;
+          p.lElRx = -0.88;
+          p.lHaRx = 0.08;
+        }
+      }
+      return;
+    }
 
     if (isMeleeWeapon(weapon)) {
       if (state.isAiming || state.isFiring) {
@@ -1211,7 +1303,12 @@ export class CharacterAnimator {
       return;
     }
 
-    if (weapon === 'pistol' || weapon === 'grappler' || keepLeftGripOnZipline) {
+    if (
+      weapon === 'pistol' ||
+      weapon === 'flare_gun' ||
+      weapon === 'grappler' ||
+      keepLeftGripOnZipline
+    ) {
       p.rElRx = state.isAiming ? -0.32 : -0.55;
       p.rHaRx = 0;
       p.rShRx = -Math.PI / 2 - torsoPitch - aimPitch - recoilTilt - p.rElRx - p.rHaRx;

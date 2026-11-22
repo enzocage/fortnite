@@ -190,6 +190,10 @@ export interface GameEventMap {
   'vfx:flame_stream': { origin: Vec3Like; direction: Vec3Like; range: number };
   'vfx:meteor_strike': { position: Vec3Like; radius: number };
   'vfx:hop_crystal_aura': { position: Vec3Like };
+  'vfx:hammer_slam': { position: Vec3Like; radius: number };
+  'vfx:hammer_bounce': { position: Vec3Like };
+  'vfx:flare_trail': { origin: Vec3Like; target: Vec3Like; radius: number };
+  'vfx:water_wake': { position: Vec3Like; yaw: number; speed: number };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

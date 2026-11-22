@@ -225,6 +225,9 @@ export interface HUDState {
   lowGravityRemainingSec?: number | null;
   trainHackProgress?: number | null;
   trainPos?: { x: number; z: number; yaw: number; chestHacked: boolean } | null;
+  hammerCharges?: { charges: number; maxCharges: number; regenProgress: number } | null;
+  flareScanMarkedCount?: number;
+  flareBeacons?: Array<{ x: number; z: number; radius: number; remainingSec: number }>;
 }
 
 export interface MatchQuest {
@@ -307,6 +310,10 @@ export interface MatchSummary {
   trainChestsHacked?: number;
   hopCrystalsUsed?: number;
   flameDamage?: number;
+  hammerSlams?: number;
+  flaresFired?: number;
+  boarsHunted?: number;
+  mushroomsEaten?: number;
 }
 
 export interface BannerMessage {

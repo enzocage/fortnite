@@ -37,15 +37,18 @@ import type {
   ModBenchEntity,
   Rarity,
   RebootVanEntity,
+  ShieldMushroomEntity,
   SlurpTankerEntity,
   StormState,
   SupplyDroneEntity,
+  VehicleEntity,
   VehicleKind,
   VisualSoundCue,
   WeaponBunkerEntity,
   WeaponModDef,
   WeaponModId,
   WeatherKind,
+  WildBoarEntity,
 } from '../types';
 
 export interface CompassTick {
@@ -531,7 +534,9 @@ export function formatWeatherLabel(weather?: WeatherKind): string {
  * Maps VehicleKind enum values to display labels.
  */
 export function formatVehicleKindLabel(kind: VehicleKind): string {
-  return kind === 'cyber_bike' ? 'CYBER BIKE' : 'HOVER ATV';
+  if (kind === 'cyber_bike') return 'CYBER BIKE';
+  if (kind === 'speedboat') return 'APEX SPEEDBOAT';
+  return 'HOVER ATV';
 }
 
 /**
@@ -1183,14 +1188,21 @@ function classifyHighlightTone(
     label.includes('CROWN') ||
     label.includes('VICTORY') ||
     label.includes('MEDALLION') ||
-    label.includes('HEIST')
+    label.includes('HEIST') ||
+    label.includes('TITAN') ||
+    label.includes('SMASH')
   ) {
     return 'gold';
   }
   if (label.includes('TRAP') || label.includes('MEDIC') || label.includes('SURVIVOR')) {
     return 'emerald';
   }
-  if (label.includes('SHARP') || label.includes('ELIM') || label.includes('SLAYER')) {
+  if (
+    label.includes('SHARP') ||
+    label.includes('ELIM') ||
+    label.includes('SLAYER') ||
+    label.includes('RECON')
+  ) {
     return 'crimson';
   }
   return 'cyan';
@@ -1240,6 +1252,12 @@ export function deriveMatchHighlightBadges(
   }
   if ((summary.hopCrystalsUsed ?? 0) >= 1) {
     pushBadge('SKY RIDER', 'cyan');
+  }
+  if ((summary.hammerSlams ?? 0) >= 2) {
+    pushBadge('TITAN SMASH', 'gold');
+  }
+  if ((summary.flaresFired ?? 0) >= 1) {
+    pushBadge('RECON ACE', 'crimson');
   }
   if ((summary.reboots ?? 0) >= 1) {
     pushBadge('REBOOT HERO', 'cyan');
@@ -1695,6 +1713,267 @@ export function drawSkyforgeMapOverlay(
       ctx.fill();
 
       ctx.restore();
+    }
+  }
+}
+
+export interface WorldTideOverlay {
+  boars: WildBoarEntity[];
+  mushrooms: ShieldMushroomEntity[];
+}
+
+export function resolveTideOverlayArgs(
+  boarsOrOverlay: WildBoarEntity[] | Partial<WorldTideOverlay> = [],
+  mushrooms: ShieldMushroomEntity[] = [],
+): WorldTideOverlay {
+  if (Array.isArray(boarsOrOverlay)) {
+    return {
+      boars: boarsOrOverlay,
+      mushrooms: Array.isArray(mushrooms) ? mushrooms : [],
+    };
+  }
+  const ov = boarsOrOverlay ?? {};
+  return {
+    boars: Array.isArray(ov.boars) ? ov.boars : [],
+    mushrooms: Array.isArray(ov.mushrooms) ? ov.mushrooms : [],
+  };
+}
+
+/**
+ * Draws a cyan hydro-boat chevron marker for an active Speedboat at pixel coordinates `(px, py)`
+ * without fillText, strokeText, or ellipse (Node test mock safe).
+ */
+export function drawSpeedboatMapChevron(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  yaw = 0,
+  occupied = false,
+): void {
+  ctx.save();
+  ctx.translate(px, py);
+  if (typeof yaw === 'number' && Number.isFinite(yaw)) {
+    ctx.rotate?.(-yaw);
+  }
+
+  ctx.beginPath();
+  ctx.arc(0, 0, 7.6, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(8, 51, 68, 0.88)';
+  ctx.fill();
+  ctx.strokeStyle = occupied ? '#ffd000' : '#22d3ee';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(0, -5.6);
+  ctx.lineTo(4.6, 4.2);
+  ctx.lineTo(0, 2.0);
+  ctx.lineTo(-4.6, 4.2);
+  ctx.closePath();
+  ctx.fillStyle = occupied ? '#ffd000' : '#22d3ee';
+  ctx.strokeStyle = '#e0f2fe';
+  ctx.lineWidth = 1.1;
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(0, -0.6, 1.3, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * Draws Wave-10 Tide & Recon overlay items (pulsing crimson Recon Flare Scan Rings,
+ * available Shield Mushrooms, live Wild Boars, and optional Speedboat cyan hydro-boat chevrons)
+ * without fillText, strokeText, or ellipse (Node test mock safe).
+ */
+export function drawTideMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  overlay: WorldTideOverlay,
+  flareBeacons?: HUDState['flareBeacons'],
+  vehicles?: VehicleEntity[],
+  nowMs = performance.now(),
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.007);
+  const sweep = (nowMs * 0.0012) % 1;
+
+  // 1. Pulsing Crimson Recon Flare Scan Rings
+  if (Array.isArray(flareBeacons) && flareBeacons.length > 0) {
+    for (const beacon of flareBeacons) {
+      if (
+        !beacon ||
+        !Number.isFinite(beacon.x) ||
+        !Number.isFinite(beacon.z) ||
+        !Number.isFinite(beacon.radius) ||
+        beacon.radius <= 0
+      ) {
+        continue;
+      }
+      if (
+        typeof beacon.remainingSec === 'number' &&
+        Number.isFinite(beacon.remainingSec) &&
+        beacon.remainingSec <= 0
+      ) {
+        continue;
+      }
+      const fp = toPx(beacon.x, beacon.z);
+      const baseRad = Math.max(10, beacon.radius * pxPerMeter);
+      if (
+        fp.x + baseRad < -18 ||
+        fp.x - baseRad > size + 18 ||
+        fp.y + baseRad < -18 ||
+        fp.y - baseRad > size + 18
+      ) {
+        continue;
+      }
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(fp.x, fp.y, baseRad, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(239, 68, 68, ${(0.09 + pulse * 0.08).toFixed(2)})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(248, 113, 113, ${(0.68 + pulse * 0.28).toFixed(2)})`;
+      ctx.lineWidth = 1.9;
+      ctx.stroke();
+
+      const waveRad = Math.max(4, baseRad * (0.28 + sweep * 0.72));
+      ctx.setLineDash?.([5, 4]);
+      ctx.beginPath();
+      ctx.arc(fp.x, fp.y, waveRad, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(252, 165, 165, ${(0.88 - sweep * 0.52).toFixed(2)})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.setLineDash?.([]);
+
+      // Flare beacon core marker
+      ctx.beginPath();
+      ctx.arc(fp.x, fp.y, 4.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#ef4444';
+      ctx.fill();
+      ctx.strokeStyle = '#fee2e2';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(fp.x, fp.y, 1.6, 0, Math.PI * 2);
+      ctx.fillStyle = '#fef08a';
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // 2. Available Shield Mushrooms (subtle cyan cap markers)
+  const mushrooms = Array.isArray(overlay?.mushrooms) ? overlay.mushrooms : [];
+  for (const mush of mushrooms) {
+    if (!mush || !mush.available || !Number.isFinite(mush.x) || !Number.isFinite(mush.z)) {
+      continue;
+    }
+    const mp = toPx(mush.x, mush.z);
+    if (mp.x < -12 || mp.x > size + 12 || mp.y < -12 || mp.y > size + 12) {
+      continue;
+    }
+    ctx.save();
+    ctx.translate(mp.x, mp.y);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 4.0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(8, 47, 73, 0.88)';
+    ctx.fill();
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0.2, 2.8, Math.PI, 0);
+    ctx.closePath();
+    ctx.fillStyle = '#22d3ee';
+    ctx.fill();
+
+    ctx.fillStyle = '#e0f2fe';
+    ctx.fillRect(-1.0, 0.2, 2.0, 2.0);
+    ctx.restore();
+  }
+
+  // 3. Live Wild Boars
+  const boars = Array.isArray(overlay?.boars) ? overlay.boars : [];
+  for (const boar of boars) {
+    if (!boar || !boar.alive || !Number.isFinite(boar.x) || !Number.isFinite(boar.z)) {
+      continue;
+    }
+    const bp = toPx(boar.x, boar.z);
+    if (bp.x < -14 || bp.x > size + 14 || bp.y < -14 || bp.y > size + 14) {
+      continue;
+    }
+    const charging = boar.state === 'charge';
+    ctx.save();
+    ctx.translate(bp.x, bp.y);
+
+    if (charging) {
+      ctx.beginPath();
+      ctx.arc(0, 0, 7.6 + pulse * 1.4, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.72)';
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(67, 20, 7, 0.92)';
+    ctx.fill();
+    ctx.strokeStyle = charging ? '#ef4444' : '#f59e0b';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Boar head & curved ivory tusks
+    ctx.beginPath();
+    ctx.moveTo(0, -3.4);
+    ctx.lineTo(3.4, -0.5);
+    ctx.lineTo(2.4, 3.2);
+    ctx.lineTo(-2.4, 3.2);
+    ctx.lineTo(-3.4, -0.5);
+    ctx.closePath();
+    ctx.fillStyle = '#ea580c';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(-2.4, 1.4);
+    ctx.lineTo(-4.6, -0.8);
+    ctx.moveTo(2.4, 1.4);
+    ctx.lineTo(4.6, -0.8);
+    ctx.strokeStyle = '#fef3c7';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(-1.2, -0.8, 0.9, 0, Math.PI * 2);
+    ctx.arc(1.2, -0.8, 0.9, 0, Math.PI * 2);
+    ctx.fillStyle = '#fef08a';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 4. Optional Speedboat Cyan Hydro-Boat Chevrons
+  if (Array.isArray(vehicles) && vehicles.length > 0) {
+    for (const vehicle of vehicles) {
+      if (!vehicle || vehicle.destroyed || vehicle.kind !== 'speedboat') continue;
+      if (!Number.isFinite(vehicle.x) || !Number.isFinite(vehicle.z)) continue;
+      const vp = toPx(vehicle.x, vehicle.z);
+      if (vp.x < -14 || vp.x > size + 14 || vp.y < -14 || vp.y > size + 14) {
+        continue;
+      }
+      drawSpeedboatMapChevron(
+        ctx,
+        vp.x,
+        vp.y,
+        vehicle.yaw,
+        vehicle.driverId !== null,
+      );
     }
   }
 }

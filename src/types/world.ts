@@ -107,7 +107,7 @@ export interface LootLlamaEntity {
   opened: boolean;
 }
 
-export type VehicleKind = 'hover_atv' | 'cyber_bike';
+export type VehicleKind = 'hover_atv' | 'cyber_bike' | 'speedboat';
 
 export interface VehicleEntity {
   id: string;
@@ -397,6 +397,39 @@ export interface MeteorCraterEntity {
   radius: number;
   crystalAvailable: boolean;
   crystalRespawnSec: number;
+}
+
+export interface ShieldMushroomEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  available: boolean;
+  respawnSec: number;
+}
+
+export interface WildBoarEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  hp: number;
+  maxHp: number;
+  alive: boolean;
+  state: 'roam' | 'flee' | 'charge';
+  speed: number;
+}
+
+export interface FlareBeaconEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  remainingSec: number;
+  ownerId: string;
 }
 
 export interface SupplyDrop {

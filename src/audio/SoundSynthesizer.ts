@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 128 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 136 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -355,6 +355,22 @@ export class SoundSynthesizer {
       case 'footstep_water':
       case 'footstep_sand':
         return this.playSurfaceFootstep(id, t, targetNode, vol, pitch);
+      case 'hammer_slam':
+        return this.playHammerSlam(t, targetNode, vol, pitch);
+      case 'hammer_bounce':
+        return this.playHammerBounce(t, targetNode, vol, pitch);
+      case 'flare_fire':
+        return this.playFlareFire(t, targetNode, vol, pitch);
+      case 'flare_burst':
+        return this.playFlareBurst(t, targetNode, vol, pitch);
+      case 'boat_boost':
+        return this.playBoatBoost(t, targetNode, vol, pitch);
+      case 'mushroom_eat':
+        return this.playMushroomEat(t, targetNode, vol, pitch);
+      case 'boar_grunt':
+        return this.playBoarGrunt(t, targetNode, vol, pitch);
+      case 'water_splash_wake':
+        return this.playWaterSplashWake(t, targetNode, vol, pitch);
       default: {
         const exhaustive: never = id;
         return exhaustive;
@@ -7060,6 +7076,591 @@ export class SoundSynthesizer {
       gain: 0.12 * vol,
       filterType: 'highpass',
       filterFreqStart: 3400,
+      wet: 0.32,
+    });
+    return 0.42;
+  }
+
+  // --- Wave 10 Bespoke SFX ---
+
+  private playHammerSlam(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Massive kinetic seismic sub-bass drop
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 155 * pitch,
+      freqEnd: 24 * pitch,
+      duration: 0.45,
+      gain: 0.72 * vol,
+      wet: 0.34,
+    });
+    // Heavy kinetic piston slam crunch
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 420 * pitch,
+      freqEnd: 58 * pitch,
+      duration: 0.24,
+      gain: 0.38 * vol,
+      wet: 0.24,
+    });
+    // Metallic violet-steel hammerhead clang partials
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 680 * pitch,
+      freqEnd: 560 * pitch,
+      duration: 0.28,
+      gain: 0.22 * vol,
+      wet: 0.3,
+    });
+    this.tone(target, t + 0.01, {
+      type: 'triangle',
+      freqStart: 1140 * pitch,
+      freqEnd: 940 * pitch,
+      duration: 0.22,
+      gain: 0.14 * vol,
+      wet: 0.28,
+    });
+    // Kinetic shockwave ring FM aura
+    this.playFmAura(
+      target,
+      t + 0.01,
+      0.42,
+      190 * pitch,
+      64 * pitch,
+      95 * pitch,
+      32 * pitch,
+      140 * pitch,
+      0.22 * vol,
+      1800,
+      320,
+      0.36,
+    );
+    // Ground-shatter shockwave blast noise
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.38,
+      gain: 0.54 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2100 * pitch,
+      filterFreqEnd: 190,
+      distort: true,
+      wet: 0.3,
+    });
+    // Sharp metallic anvil impact crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.075,
+      gain: 0.32 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3400 * pitch,
+      filterFreqEnd: 1200 * pitch,
+      filterQ: 1.8,
+      distort: true,
+      wet: 0.2,
+    });
+    return 0.54;
+  }
+
+  private playHammerBounce(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Spring-loaded kinetic launch sub-kick
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 140 * pitch,
+      freqEnd: 36 * pitch,
+      duration: 0.22,
+      gain: 0.48 * vol,
+      wet: 0.24,
+    });
+    // Ascending violet kinetic coil-charge sweep
+    this.tone(target, t + 0.01, {
+      type: 'sawtooth',
+      freqStart: 190 * pitch,
+      freqEnd: 1080 * pitch,
+      duration: 0.36,
+      attack: 0.015,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 480 * pitch,
+      filterFreqEnd: 3200 * pitch,
+      filterQ: 2.2,
+      wet: 0.32,
+    });
+    // Harmonic fifth anti-gravity lift shimmer
+    this.tone(target, t + 0.015, {
+      type: 'triangle',
+      freqStart: 285 * pitch,
+      freqEnd: 1620 * pitch,
+      duration: 0.32,
+      attack: 0.018,
+      gain: 0.18 * vol,
+      wet: 0.34,
+    });
+    // Kinetic spring-warp FM aura
+    this.playFmAura(
+      target,
+      t + 0.02,
+      0.36,
+      420 * pitch,
+      1260 * pitch,
+      210 * pitch,
+      630 * pitch,
+      120 * pitch,
+      0.16 * vol,
+      1400,
+      4200,
+      0.36,
+    );
+    // Pressurized kinetic air displacement whoosh
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.34,
+      attack: 0.012,
+      gain: 0.38 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 320 * pitch,
+      filterFreqEnd: 2800 * pitch,
+      filterQ: 1.8,
+      distort: true,
+      wet: 0.3,
+    });
+    // Crisp high-velocity upward air shimmer
+    this.noise(target, t + 0.03, {
+      buffer: 'white',
+      duration: 0.26,
+      attack: 0.02,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2400,
+      wet: 0.3,
+    });
+    return 0.44;
+  }
+
+  private playFlareFire(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Hollow rescue flare tube thoomp kick
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 220 * pitch,
+      freqEnd: 64 * pitch,
+      duration: 0.15,
+      gain: 0.46 * vol,
+      wet: 0.22,
+    });
+    // Mechanical flare pistol hammer latch click
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 980 * pitch,
+      freqEnd: 340 * pitch,
+      duration: 0.045,
+      gain: 0.16 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1800 * pitch,
+      filterQ: 2.0,
+      wet: 0.14,
+    });
+    // Ascending pyrotechnic signal flare whistle
+    this.tone(target, t + 0.015, {
+      type: 'sine',
+      freqStart: 580 * pitch,
+      freqEnd: 1460 * pitch,
+      duration: 0.32,
+      attack: 0.02,
+      gain: 0.2 * vol,
+      wet: 0.3,
+    });
+    // Harmonic flare rocket whistling overtone
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 870 * pitch,
+      freqEnd: 2190 * pitch,
+      duration: 0.28,
+      attack: 0.025,
+      gain: 0.12 * vol,
+      wet: 0.28,
+    });
+    // Flare propellant ignition whoosh
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.3,
+      gain: 0.4 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 920 * pitch,
+      filterFreqEnd: 2600 * pitch,
+      filterQ: 1.5,
+      distort: true,
+      wet: 0.28,
+    });
+    // Magnesium sparkler trail fizz
+    this.noise(target, t + 0.02, {
+      buffer: 'white',
+      duration: 0.24,
+      attack: 0.01,
+      gain: 0.2 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3200,
+      wet: 0.26,
+    });
+    return 0.38;
+  }
+
+  private playFlareBurst(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // High-altitude aerial flare shell pop
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 250 * pitch,
+      freqEnd: 42 * pitch,
+      duration: 0.24,
+      gain: 0.52 * vol,
+      wet: 0.34,
+    });
+    // Flare canister crackle sweep
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 340 * pitch,
+      freqEnd: 140 * pitch,
+      duration: 0.18,
+      gain: 0.2 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1600 * pitch,
+      filterFreqEnd: 420,
+      wet: 0.28,
+    });
+    // Dual crimson Recon Radar sonar lock pings
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.06, freq: 1318.51, dur: 0.16, gain: 0.16 },
+        { offset: 0.2, freq: 1760.0, dur: 0.28, gain: 0.18 },
+      ],
+      'sine',
+      'triangle',
+      0.5,
+      0.4,
+    );
+    // Pulsing thermal scan beacon FM aura
+    this.playFmAura(
+      target,
+      t + 0.08,
+      0.44,
+      880 * pitch,
+      1320 * pitch,
+      440 * pitch,
+      660 * pitch,
+      110 * pitch,
+      0.15 * vol,
+      1800,
+      4400,
+      0.4,
+    );
+    // Aerial pyrotechnic burst roar
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.32,
+      gain: 0.44 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 780 * pitch,
+      filterFreqEnd: 2400 * pitch,
+      filterQ: 1.2,
+      distort: true,
+      wet: 0.36,
+    });
+    // Incendiary magnesium flare sizzle tail
+    this.noise(target, t + 0.03, {
+      buffer: 'white',
+      duration: 0.44,
+      attack: 0.02,
+      gain: 0.2 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2800,
+      wet: 0.32,
+    });
+    return 0.58;
+  }
+
+  private playBoatBoost(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Deep marine outboard sub-growl surge
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 84 * pitch,
+      freqEnd: 30 * pitch,
+      duration: 0.36,
+      gain: 0.52 * vol,
+      wet: 0.22,
+    });
+    // Hydro-jet turbine spool-up
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 98 * pitch,
+      freqEnd: 390 * pitch,
+      duration: 0.46,
+      attack: 0.025,
+      gain: 0.26 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 420 * pitch,
+      filterFreqEnd: 1750 * pitch,
+      wet: 0.24,
+    });
+    // Dual-harmonic aquatic impeller hum
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 196 * pitch,
+      freqEnd: 585 * pitch,
+      duration: 0.42,
+      attack: 0.03,
+      gain: 0.17 * vol,
+      wet: 0.22,
+    });
+    // High hydro-cavitation jet whine
+    this.tone(target, t + 0.04, {
+      type: 'sine',
+      freqStart: 420 * pitch,
+      freqEnd: 1120 * pitch,
+      duration: 0.38,
+      attack: 0.04,
+      gain: 0.11 * vol,
+      wet: 0.24,
+    });
+    // Pressurized hydro-jet stern wake blast
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.54,
+      attack: 0.025,
+      gain: 0.48 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 260 * pitch,
+      filterFreqEnd: 1850 * pitch,
+      filterQ: 1.3,
+      distort: true,
+      wet: 0.28,
+    });
+    // Frothing stern wake water spray
+    this.noise(target, t + 0.02, {
+      buffer: 'white',
+      duration: 0.46,
+      attack: 0.02,
+      gain: 0.26 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2200,
+      wet: 0.28,
+    });
+    return 0.58;
+  }
+
+  private playMushroomEat(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Tactile organic mushroom bite snap
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 185 * pitch,
+      freqEnd: 76 * pitch,
+      duration: 0.08,
+      gain: 0.26 * vol,
+      wet: 0.14,
+    });
+    // Ascending cyan shield-infusion harmonic chime (C5 -> E5 -> G5 -> C6)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.03, freq: 523.25, dur: 0.12, gain: 0.15 },
+        { offset: 0.085, freq: 659.25, dur: 0.14, gain: 0.16 },
+        { offset: 0.14, freq: 783.99, dur: 0.16, gain: 0.17 },
+        { offset: 0.2, freq: 1046.5, dur: 0.24, gain: 0.19 },
+      ],
+      'sine',
+      'triangle',
+      2.0,
+      0.34,
+    );
+    // Cyan spore-shield resonance FM aura
+    this.playFmAura(
+      target,
+      t + 0.06,
+      0.34,
+      659.25 * pitch,
+      1318.51 * pitch,
+      329.63 * pitch,
+      659.25 * pitch,
+      85 * pitch,
+      0.13 * vol,
+      1600,
+      4200,
+      0.36,
+    );
+    // Crisp organic forage crunch
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.095,
+      gain: 0.32 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 950 * pitch,
+      filterFreqEnd: 460 * pitch,
+      filterQ: 1.6,
+      wet: 0.16,
+    });
+    // Effervescent slurp-spore sparkle tail
+    this.noise(target, t + 0.04, {
+      buffer: 'white',
+      duration: 0.24,
+      attack: 0.02,
+      gain: 0.16 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3400,
+      wet: 0.3,
+    });
+    return 0.44;
+  }
+
+  private playBoarGrunt(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Deep guttural wild boar chest growl (pulse 1)
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 98 * pitch,
+      freqEnd: 62 * pitch,
+      duration: 0.22,
+      attack: 0.015,
+      gain: 0.34 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 460 * pitch,
+      filterFreqEnd: 210 * pitch,
+      wet: 0.16,
+    });
+    // Formant throat resonance grunt
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 148 * pitch,
+      freqEnd: 94 * pitch,
+      duration: 0.2,
+      attack: 0.015,
+      gain: 0.26 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 380 * pitch,
+      filterFreqEnd: 240 * pitch,
+      filterQ: 2.8,
+      wet: 0.14,
+    });
+    // Sub-throat chest thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 82 * pitch,
+      freqEnd: 48 * pitch,
+      duration: 0.18,
+      attack: 0.012,
+      gain: 0.28 * vol,
+      wet: 0.12,
+    });
+    // Double-snort pulse 2
+    this.tone(target, t + 0.16, {
+      type: 'sawtooth',
+      freqStart: 118 * pitch,
+      freqEnd: 72 * pitch,
+      duration: 0.16,
+      attack: 0.012,
+      gain: 0.3 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 520 * pitch,
+      filterFreqEnd: 230 * pitch,
+      wet: 0.14,
+    });
+    this.tone(target, t + 0.16, {
+      type: 'triangle',
+      freqStart: 176 * pitch,
+      freqEnd: 108 * pitch,
+      duration: 0.15,
+      attack: 0.012,
+      gain: 0.2 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 440 * pitch,
+      filterFreqEnd: 260 * pitch,
+      filterQ: 2.6,
+      wet: 0.12,
+    });
+    // Nasal snout snort air puffs
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.15,
+      attack: 0.01,
+      gain: 0.28 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 760 * pitch,
+      filterFreqEnd: 420 * pitch,
+      filterQ: 2.4,
+      distort: true,
+      wet: 0.12,
+    });
+    this.noise(target, t + 0.16, {
+      buffer: 'pink',
+      duration: 0.12,
+      attack: 0.008,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 920 * pitch,
+      filterFreqEnd: 520 * pitch,
+      filterQ: 2.2,
+      wet: 0.12,
+    });
+    return 0.36;
+  }
+
+  private playWaterSplashWake(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Low hull-slap water displacement thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 135 * pitch,
+      freqEnd: 42 * pitch,
+      duration: 0.16,
+      gain: 0.36 * vol,
+      wet: 0.24,
+    });
+    // Cascading water bubble droplet pops
+    this.tone(target, t + 0.025, {
+      type: 'sine',
+      freqStart: 480 * pitch,
+      freqEnd: 960 * pitch,
+      duration: 0.085,
+      gain: 0.15 * vol,
+      wet: 0.28,
+    });
+    this.tone(target, t + 0.075, {
+      type: 'sine',
+      freqStart: 720 * pitch,
+      freqEnd: 1380 * pitch,
+      duration: 0.095,
+      gain: 0.14 * vol,
+      wet: 0.28,
+    });
+    // Buoyant wake crest overtone shimmer
+    this.tone(target, t + 0.04, {
+      type: 'triangle',
+      freqStart: 980 * pitch,
+      freqEnd: 620 * pitch,
+      duration: 0.14,
+      gain: 0.11 * vol,
+      wet: 0.26,
+    });
+    // Churning wave wake wash
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.38,
+      gain: 0.44 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1650 * pitch,
+      filterFreqEnd: 420,
+      wet: 0.3,
+    });
+    // Crisp spraying water droplets
+    this.noise(target, t + 0.015, {
+      buffer: 'white',
+      duration: 0.34,
+      attack: 0.01,
+      gain: 0.32 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1100 * pitch,
+      filterFreqEnd: 3400 * pitch,
+      filterQ: 1.2,
       wet: 0.32,
     });
     return 0.42;

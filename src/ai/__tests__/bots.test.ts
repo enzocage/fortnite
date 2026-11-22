@@ -4719,3 +4719,278 @@ describe('Wave 9 Skyforge Rising: Plasma Flamethrower, Jetpack Exclusion, Train/
     mgr.dispose();
   });
 });
+
+describe('Wave 10 Tidal Frontier: Shockwave Hammer, Recon Flare Gun Scoring & getBotsInRadius', () => {
+  it('scores shockwave_hammer (<10m melee & anti-build smash) and flare_gun (12..65m recon & ignition) cleanly in selectBestWeaponForRange', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 120, medium: 90, shells: 20, heavy: 10, rockets: 0 };
+
+    // 1. Shockwave Hammer dominates <10m CQB even with magAmmo=0 (magSize=0 melee), yields cleanly at >=10m
+    const hammerLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'epic', 30),
+      makeItem('pump_shotgun', 'epic', 5),
+      makeItem('shockwave_hammer', 'epic', 0),
+    ];
+    expect(selectBestWeaponForRange(hammerLoadout, 4, fullAmmo)?.item.weaponId).toBe(
+      'shockwave_hammer',
+    );
+    expect(brain.selectBestWeaponForRange(hammerLoadout, 8, fullAmmo)?.item.weaponId).toBe(
+      'shockwave_hammer',
+    );
+    expect(selectBestWeaponForRange(hammerLoadout, 10, fullAmmo)?.item.weaponId).toBe(
+      'pump_shotgun',
+    );
+    expect(selectBestWeaponForRange(hammerLoadout, 16, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // Out-of-range (<10m only) shockwave_hammer returns null when paired only with pickaxe
+    const hammerOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('shockwave_hammer', 'epic', 0),
+    ];
+    expect(selectBestWeaponForRange(hammerOnly, 5, fullAmmo)?.item.weaponId).toBe(
+      'shockwave_hammer',
+    );
+    expect(selectBestWeaponForRange(hammerOnly, 12, fullAmmo)).toBeNull();
+
+    // Anti-build bonus: open-field legendary heavy_shotgun beats epic hammer at 8m,
+    // but near builds epic shockwave_hammer decisively wins for structure smashing!
+    const buildSmashLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('heavy_shotgun', 'legendary', 5),
+      makeItem('shockwave_hammer', 'epic', 0),
+    ];
+    expect(selectBestWeaponForRange(buildSmashLoadout, 8, fullAmmo, false)?.item.weaponId).toBe(
+      'heavy_shotgun',
+    );
+    expect(selectBestWeaponForRange(buildSmashLoadout, 8, fullAmmo, true)?.item.weaponId).toBe(
+      'shockwave_hammer',
+    );
+
+    const nearbyWall: BuildPiece = {
+      id: 'wall_w10',
+      key: '0_3_2_N',
+      type: 'wall',
+      material: 'wood',
+      gx: 0,
+      gy: 3,
+      gz: 2,
+      dir: 'N',
+      rotation: 0,
+      hp: 150,
+      maxHp: 150,
+      targetMaxHp: 150,
+      buildProgress: 1,
+      ownerId: 'player',
+      editMask: 0,
+      editVariant: 'full',
+      createdAt: 1,
+    };
+    expect(
+      brain.selectBestWeaponForRange(buildSmashLoadout, 7, fullAmmo, {
+        buildPieces: [nearbyWall],
+        botPos: { x: 0, y: 10, z: 0 },
+        targetPos: { x: 0, y: 10, z: 7 },
+      })?.item.weaponId,
+    ).toBe('shockwave_hammer');
+
+    // 2. Recon Flare Gun wins mid-range recon window (12..65m), yields <12m and >65m
+    const flareLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'epic', 30),
+      makeItem('pump_shotgun', 'epic', 5),
+      makeItem('flare_gun', 'epic', 6),
+    ];
+    expect(selectBestWeaponForRange(flareLoadout, 8, fullAmmo)?.item.weaponId).toBe(
+      'pump_shotgun',
+    );
+    expect(selectBestWeaponForRange(flareLoadout, 15, fullAmmo)?.item.weaponId).toBe('flare_gun');
+    expect(brain.selectBestWeaponForRange(flareLoadout, 40, fullAmmo)?.item.weaponId).toBe(
+      'flare_gun',
+    );
+    expect(selectBestWeaponForRange(flareLoadout, 65, fullAmmo)?.item.weaponId).toBe('flare_gun');
+    expect(selectBestWeaponForRange(flareLoadout, 80, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // Ignition bonus near builds lets epic flare_gun beat legendary AR at 35m
+    const flareVsLegAr: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'legendary', 30),
+      makeItem('flare_gun', 'epic', 6),
+    ];
+    expect(selectBestWeaponForRange(flareVsLegAr, 35, fullAmmo, false)?.item.weaponId).toBe('ar');
+    expect(selectBestWeaponForRange(flareVsLegAr, 35, fullAmmo, true)?.item.weaponId).toBe(
+      'flare_gun',
+    );
+
+    // Combined Wave-10 loadout transitions cleanly across close -> mid -> long ranges
+    const combinedLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('shockwave_hammer', 'epic', 0),
+      makeItem('flare_gun', 'epic', 6),
+      makeItem('ar', 'epic', 30),
+    ];
+    expect(selectBestWeaponForRange(combinedLoadout, 5, fullAmmo)?.item.weaponId).toBe(
+      'shockwave_hammer',
+    );
+    expect(selectBestWeaponForRange(combinedLoadout, 30, fullAmmo)?.item.weaponId).toBe(
+      'flare_gun',
+    );
+    expect(selectBestWeaponForRange(combinedLoadout, 85, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // Empty flare_gun (magAmmo=0, ammoType=null) is cleanly skipped
+    const emptyFlareLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('flare_gun', 'epic', 0),
+    ];
+    expect(selectBestWeaponForRange(emptyFlareLoadout, 35, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // 3. Live combat integration: hammer swings at 5m, flare gun fires at 35m & consumes cartridge
+    const closeEnemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 5 },
+      eyePos: { x: 0, y: 11.55, z: 5 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const hammerCtx = makeMockContext({ getCombatTargets: () => [closeEnemy] });
+    const hammerBot = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    hammerBot.inventory.items[1] = makeItem('ar', 'epic', 30);
+    hammerBot.inventory.items[2] = makeItem('shockwave_hammer', 'epic', 0);
+    hammerBot.inventory.ammo.medium = 90;
+
+    updateBot(hammerBot, hammerCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(hammerCtx.firedCalls).toHaveLength(1);
+    expect(hammerCtx.firedCalls[0].weaponId).toBe('shockwave_hammer');
+
+    const midEnemy: BotCombatTarget = {
+      ...closeEnemy,
+      position: { x: 0, y: 10, z: 35 },
+      eyePos: { x: 0, y: 11.55, z: 35 },
+    };
+    const flareCtx = makeMockContext({ getCombatTargets: () => [midEnemy] });
+    const flareBot = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    flareBot.inventory.items[1] = makeItem('ar', 'epic', 30);
+    flareBot.inventory.items[2] = makeItem('flare_gun', 'epic', 6);
+    flareBot.inventory.ammo.medium = 90;
+
+    updateBot(flareBot, flareCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(flareCtx.firedCalls).toHaveLength(1);
+    expect(flareCtx.firedCalls[0].weaponId).toBe('flare_gun');
+    expect(flareBot.inventory.items[2]!.magAmmo).toBe(5);
+  });
+
+  it('exposes BotManager.getBotsInRadius returning alive in-world enemies within radius with excludeTeam filtering', () => {
+    // 1. Solo / Duos filtering: radius boundary, bus exclusion, dead exclusion, ally & duo partner exclusion
+    const duosCtx = makeMockContext({ gameMode: 'duos' });
+    const duosMgr = new BotManager(duosCtx, 'standard', 1010, 'duos');
+    duosMgr.spawnBots(6, 20, 'duos');
+
+    const partner = duosMgr.getDuoPartner()!;
+    partner.state = 'rotating';
+    partner.position = { x: 10, y: 10, z: 10 };
+
+    const hiredAlly = duosMgr.spawnAlliedSpecialist({
+      id: 'npc_recon',
+      name: 'Recon Scout',
+      role: 'scout',
+      poiId: 'metro_towers',
+      x: 5,
+      y: 10,
+      z: 5,
+      skinId: 'emerald_scout',
+      priceGold: 200,
+      hiredBy: 'player',
+    });
+    hiredAlly.position = { x: 5, y: 10, z: 5 };
+
+    const enemies = duosMgr.getBots().filter((b) => !b.isDuoPartner && !b.isAlly);
+    expect(enemies).toHaveLength(6);
+
+    // Inside radius (0, 74.9), exact boundary (75, 0), airborne gliding inside radius, outside (76, 0), dead, and bus
+    enemies[0].state = 'rotating';
+    enemies[0].position = { x: 0, y: 10, z: 20 };
+
+    enemies[1].state = 'combat';
+    enemies[1].position = { x: 75, y: 10, z: 0 }; // exact boundary
+
+    enemies[2].state = 'gliding';
+    enemies[2].position = { x: -30, y: 45, z: 40 }; // dist = 50 <= 75, in-world airborne
+
+    enemies[3].state = 'rotating';
+    enemies[3].position = { x: 76, y: 10, z: 0 }; // outside radius
+
+    enemies[4].state = 'eliminated';
+    enemies[4].alive = false;
+    enemies[4].position = { x: 5, y: 10, z: 0 }; // dead
+
+    enemies[5].state = 'bus';
+    enemies[5].alive = true;
+    enemies[5].position = { x: 0, y: 175, z: 0 }; // still inside battle bus
+
+    const soloFound = duosMgr.getBotsInRadius(0, 0, 75);
+    const soloIds = soloFound.map((b) => b.id).sort();
+    expect(soloIds).toEqual([enemies[0].id, enemies[1].id, enemies[2].id].sort());
+    expect(soloFound.some((b) => b.isAlly || b.isDuoPartner)).toBe(false);
+
+    // Invalid / negative radius safely returns []
+    expect(duosMgr.getBotsInRadius(0, 0, -5)).toEqual([]);
+    expect(duosMgr.getBotsInRadius(Number.NaN, 0, 75)).toEqual([]);
+    expect(duosMgr.getBotsInRadius(0, 0, Number.POSITIVE_INFINITY)).toEqual([]);
+    duosMgr.dispose();
+
+    // 2. Team Rumble excludeTeam filtering
+    const rumbleCtx = makeMockContext({ gameMode: 'team_rumble' });
+    const rumbleMgr = new BotManager(rumbleCtx, 'standard', 2020, 'team_rumble');
+    rumbleMgr.spawnBots(6, 12, 'team_rumble');
+
+    const blueBots = rumbleMgr.getBots().filter((b) => b.teamId === 'team_blue');
+    const redBots = rumbleMgr.getBots().filter((b) => b.teamId === 'team_red');
+    expect(blueBots.length).toBeGreaterThanOrEqual(2);
+    expect(redBots.length).toBeGreaterThanOrEqual(2);
+
+    for (const [idx, b] of blueBots.entries()) {
+      b.state = 'rotating';
+      b.position = idx === 0 ? { x: 10, y: 10, z: 10 } : { x: 200, y: 10, z: 0 };
+    }
+    for (const [idx, r] of redBots.entries()) {
+      r.state = 'rotating';
+      r.position = idx === 0 ? { x: -15, y: 10, z: 20 } : { x: 0, y: 10, z: -220 };
+    }
+
+    // Without excludeTeam -> both in-radius team_blue and team_red bots returned
+    const bothTeams = rumbleMgr.getBotsInRadius(0, 0, 75);
+    expect(bothTeams.map((b) => b.id).sort()).toEqual([blueBots[0].id, redBots[0].id].sort());
+
+    // excludeTeam: 'team_blue' -> only team_red enemies returned
+    const enemiesOfBlue = rumbleMgr.getBotsInRadius(0, 0, 75, 'team_blue');
+    expect(enemiesOfBlue.map((b) => b.id)).toEqual([redBots[0].id]);
+    expect(enemiesOfBlue.every((b) => b.teamId === 'team_red')).toBe(true);
+
+    // excludeTeam: 'team_red' -> only team_blue enemies returned
+    const enemiesOfRed = rumbleMgr.getBotsInRadius(0, 0, 75, 'team_red');
+    expect(enemiesOfRed.map((b) => b.id)).toEqual([blueBots[0].id]);
+    expect(enemiesOfRed.every((b) => b.teamId === 'team_blue')).toBe(true);
+
+    rumbleMgr.dispose();
+  });
+});

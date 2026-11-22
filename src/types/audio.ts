@@ -128,7 +128,15 @@ export type SoundEventId =
   | 'meteor_whistle'
   | 'meteor_impact'
   | 'hop_crystal_consume'
-  | 'low_g_jump';
+  | 'low_g_jump'
+  | 'hammer_slam'
+  | 'hammer_bounce'
+  | 'flare_fire'
+  | 'flare_burst'
+  | 'boat_boost'
+  | 'mushroom_eat'
+  | 'boar_grunt'
+  | 'water_splash_wake';
 
 export type MusicTrackId =
   | 'none'

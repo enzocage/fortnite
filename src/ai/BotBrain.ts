@@ -508,6 +508,19 @@ function scoreWeaponForDistance(
       else if (distance <= 55) base = 92;
       else base = Math.max(15, 92 - (distance - 55) * 0.45);
       break;
+    case 'shockwave_hammer':
+      if (!Number.isFinite(distance) || distance >= 10) return -1;
+      base =
+        (distance <= 6
+          ? 128 - distance * 1.5
+          : 119 - (distance - 6) * 3.5) + (nearBuilds ? 44 : 0);
+      break;
+    case 'flare_gun':
+      if (distance > def.range) return 0.5;
+      if (distance < 12) base = 22;
+      else if (distance <= 65) base = 110 + (nearBuilds ? 28 : 0);
+      else base = Math.max(12, 62 - (distance - 65) * 0.9);
+      break;
   }
 
   const rarityMult = RARITY_MULTIPLIER[item.rarity] ?? 1.0;
@@ -545,6 +558,8 @@ export function selectBestWeaponForDistance(
       if (item.magAmmo <= 0 && reserve <= 0) {
         continue;
       }
+    } else if (def.ammoType === null && def.magSize > 0 && item.magAmmo <= 0) {
+      continue;
     }
 
     const score = scoreWeaponForDistance(
@@ -1199,6 +1214,7 @@ function getWeaponOverallValue(item: ItemInstance): number {
   const rarityIdx = RARITY_ORDER.indexOf(item.rarity);
   const baseByType: Record<string, number> = {
     mythic_blade_rifle: 62,
+    shockwave_hammer: 58,
     railgun: 57,
     heavy_shotgun: 56,
     plasma_flamethrower: 56,
@@ -1207,6 +1223,7 @@ function getWeaponOverallValue(item: ItemInstance): number {
     tactical_dmr: 53,
     boom_bow: 53,
     sniper: 52,
+    flare_gun: 50,
     pump_shotgun: 50,
     ar: 48,
     combat_smg: 47,
@@ -1952,7 +1969,7 @@ function handleFireAndBurst(
       aimTargetY += targetVel.y * leadSec * yLeadScale;
       aimTargetZ += targetVel.z * leadSec;
     }
-    if (def.isBow && def.projectileSpeed > 0 && def.projectileGravity > 0) {
+    if ((def.isBow || def.isFlareGun) && def.projectileSpeed > 0 && def.projectileGravity > 0) {
       const flightT = distance / def.projectileSpeed;
       aimTargetY += 0.5 * def.projectileGravity * flightT * flightT;
     }
@@ -1966,8 +1983,12 @@ function handleFireAndBurst(
     dt,
   );
 
-  // Pickaxe / Kinetic Blade melee fallback at point-blank range
-  if (activeItem.weaponId === 'pickaxe' || activeItem.weaponId === 'kinetic_blade') {
+  // Pickaxe / Kinetic Blade / Shockwave Hammer melee fallback at point-blank range
+  if (
+    activeItem.weaponId === 'pickaxe' ||
+    activeItem.weaponId === 'kinetic_blade' ||
+    activeItem.weaponId === 'shockwave_hammer'
+  ) {
     if (distance <= def.range + 0.3 && bot.fireCooldown <= 0 && hasLOS) {
       ctx.fireWeapon(bot, activeItem, eye, aimDir, 0.05);
       bot.fireCooldown = 1 / def.fireRate;
@@ -2451,6 +2472,7 @@ function selectBestFirearmForRange(
       !def ||
       item.weaponId === 'pickaxe' ||
       item.weaponId === 'kinetic_blade' ||
+      item.weaponId === 'shockwave_hammer' ||
       def.isThrowable ||
       isUtilityOnlyItem(item.weaponId) ||
       isHealingItem(item.weaponId)
@@ -2463,6 +2485,8 @@ function selectBestFirearmForRange(
     if (def.ammoType !== null) {
       const reserve = ammo[def.ammoType] ?? 0;
       if (item.magAmmo <= 0 && reserve <= 0) continue;
+    } else if (def.magSize > 0 && item.magAmmo <= 0) {
+      continue;
     }
 
     const score = scoreWeaponForDistance(
@@ -2736,6 +2760,12 @@ function getPreferredCombatRange(
     weaponId === 'combat_smg'
   ) {
     return { min: 8, max: 22 };
+  }
+  if (weaponId === 'shockwave_hammer' || weaponId === 'kinetic_blade') {
+    return { min: 2.0, max: 5.0 };
+  }
+  if (weaponId === 'flare_gun') {
+    return { min: 16, max: 52 };
   }
   if (weaponId === 'plasma_flamethrower') {
     return { min: 3.5, max: 13 };

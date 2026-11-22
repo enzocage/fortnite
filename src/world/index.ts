@@ -39,7 +39,9 @@ export {
   type Wave7ShowcaseResult,
   type Wave8ShowcaseResult,
   type Wave9ShowcaseResult,
+  type Wave10ShowcaseResult,
   type WeaponBunkerLootResult,
+  type WildBoarDamageResult,
 } from './WorldInteractables';
 export { EnvironmentDetail } from './EnvironmentDetail';
 export { VehicleSystem } from './VehicleSystem';

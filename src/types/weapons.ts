@@ -31,7 +31,9 @@ export type WeaponId =
   | 'medkit'
   | 'slurp_juice'
   | 'jetpack'
-  | 'plasma_flamethrower';
+  | 'plasma_flamethrower'
+  | 'shockwave_hammer'
+  | 'flare_gun';
 
 export type WeaponCategory =
   | 'pickaxe'
@@ -117,6 +119,11 @@ export interface WeaponDef {
   burnDps?: number;
   burnDurationSec?: number;
   woodDamageMult?: number;
+  isShockwaveHammer?: boolean;
+  isFlareGun?: boolean;
+  flareScanRadius?: number;
+  hammerMaxCharges?: number;
+  hammerChargeRegenSec?: number;
   allowedRarities: Rarity[];
 }
 
@@ -168,4 +175,6 @@ export interface ProjectileState {
   isBoomArrow?: boolean;
   isPortABunker?: boolean;
   isEmpGrenade?: boolean;
+  isFlare?: boolean;
+  flareScanRadius?: number;
 }

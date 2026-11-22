@@ -64,6 +64,21 @@ const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
     halfL: 1.65,
     height: 1.4,
   },
+  speedboat: {
+    maxHp: 450,
+    hoverHeight: 0.12,
+    maxSpeed: 29,
+    boostSpeed: 42,
+    reverseSpeed: 12,
+    accel: 30,
+    boostAccel: 52,
+    brakeDecel: 32,
+    turnRate: 2.5,
+    maxBankRoll: 0.28,
+    halfW: 1.28,
+    halfL: 2.35,
+    height: 1.45,
+  },
 };
 
 interface DefaultVehicleSpawn {
@@ -85,9 +100,15 @@ const DEFAULT_VEHICLE_SPAWNS: readonly DefaultVehicleSpawn[] = [
   { kind: 'cyber_bike', x: 46, z: 118, yaw: 0, accentHex: '#ec4899' }, // Crater Depot Yard
   { kind: 'cyber_bike', x: 134, z: 163, yaw: Math.PI * 0.5, accentHex: '#38bdf8' }, // Skyline Spire Approach
   { kind: 'cyber_bike', x: -142, z: 134, yaw: Math.PI * 0.45, accentHex: '#facc15' }, // Scorched Caldera Road
+  // 4 Speedboats moored at Crystal Basin lake, Central River, and scenic coastal coves
+  { kind: 'speedboat', x: 58, z: -102, yaw: -Math.PI * 0.65, accentHex: '#0ea5e9' }, // Crystal Basin Lake
+  { kind: 'speedboat', x: 103, z: 52, yaw: 0.05, accentHex: '#06b6d4' }, // Central River
+  { kind: 'speedboat', x: 240, z: 240, yaw: -Math.PI * 0.75, accentHex: '#22d3ee' }, // Southeast Coastal Cove
+  { kind: 'speedboat', x: -195, z: -279, yaw: Math.PI * 0.25, accentHex: '#38bdf8' }, // Northwest Coastal Cove
 ];
 
 const VOLCANO_LAVA_RADIUS = 11.8;
+const SPEEDBOAT_DRY_TERRAIN_SPEED_SCALE = 0.78;
 
 interface VehicleEntry {
   data: VehicleEntity;
@@ -101,13 +122,15 @@ interface VehicleEntry {
   drivenThisFrame: boolean;
   boostVfxCooldown: number;
   boostSfxCooldown: number;
+  wakeVfxCooldown: number;
+  wakeSfxCooldown: number;
   bobPhase: number;
   lastSteer: number;
 }
 
 /**
- * Manages deterministic 3D driveable hover vehicles (`hover_atv` and `cyber_bike`)
- * with terrain-conforming hover spring physics, water floatation, lava thermal boost,
+ * Manages deterministic 3D driveable vehicles (`hover_atv`, `cyber_bike`, and amphibious `speedboat`)
+ * with terrain-conforming hover/buoyancy physics, water wake emission, lava thermal boost,
  * and boost VFX emission.
  */
 export class VehicleSystem {
@@ -210,7 +233,7 @@ export class VehicleSystem {
     const cx = clamp(x, -WORLD_HALF + 8, WORLD_HALF - 8);
     const cz = clamp(z, -WORLD_HALF + 8, WORLD_HALF - 8);
     const { surfaceY, onWater } = this.getEffectiveSurfaceY(cx, cz);
-    const y = surfaceY + spec.hoverHeight;
+    const y = surfaceY + spec.hoverHeight + (kind === 'speedboat' && !onWater ? 0.16 : 0);
 
     const normal = onWater ? { x: 0, y: 1, z: 0 } : this.terrain.getNormalAt(cx, cz);
     const fwdX = Math.sin(yaw);
@@ -241,7 +264,8 @@ export class VehicleSystem {
     };
 
     const accentHex =
-      accentOverride ?? (kind === 'hover_atv' ? '#38bdf8' : '#ec4899');
+      accentOverride ??
+      (kind === 'hover_atv' ? '#38bdf8' : kind === 'cyber_bike' ? '#ec4899' : '#0ea5e9');
     const visual = this.buildVehicleMesh(kind, accentHex);
     visual.group.name = `Vehicle_${id}`;
     visual.group.rotation.order = 'YXZ';
@@ -272,6 +296,8 @@ export class VehicleSystem {
       drivenThisFrame: false,
       boostVfxCooldown: 0,
       boostSfxCooldown: 0,
+      wakeVfxCooldown: 0,
+      wakeSfxCooldown: 0,
       bobPhase: (this.vehiclesList.length * 1.37) % (Math.PI * 2),
       lastSteer: 0,
     };
@@ -503,7 +529,7 @@ export class VehicleSystem {
         bodyPivot.add(flame);
         thrusterFlames.push(flame);
       }
-    } else {
+    } else if (kind === 'cyber_bike') {
       // Sleek Futuristic Cyber Hover-Bike (+Z forward)
       const hull = new THREE.Mesh(
         this.getGeo('bike_hull', () => new THREE.BoxGeometry(0.68, 0.44, 2.55)),
@@ -613,19 +639,224 @@ export class VehicleSystem {
       flame.visible = false;
       bodyPivot.add(flame);
       thrusterFlames.push(flame);
+    } else {
+      this.createSpeedboatMesh(bodyPivot, hoverPads, thrusterFlames, {
+        darkFrameMat,
+        chromeMat,
+        seatMat,
+        bodyMat,
+        goldMat,
+        windMat,
+        flameMat,
+        headlightMat,
+        hoverPadMat,
+      });
     }
 
     return { group, bodyPivot, hoverPads, thrusterFlames, headlightMat, hoverPadMat };
+  }
+
+  private createSpeedboatMesh(
+    bodyPivot: THREE.Group,
+    hoverPads: THREE.Mesh[],
+    thrusterFlames: THREE.Mesh[],
+    mats: {
+      darkFrameMat: THREE.Material;
+      chromeMat: THREE.Material;
+      seatMat: THREE.Material;
+      bodyMat: THREE.Material;
+      goldMat: THREE.Material;
+      windMat: THREE.Material;
+      flameMat: THREE.Material;
+      headlightMat: THREE.MeshStandardMaterial;
+      hoverPadMat: THREE.MeshStandardMaterial;
+    },
+  ): void {
+    const {
+      darkFrameMat,
+      chromeMat,
+      seatMat,
+      bodyMat,
+      goldMat,
+      windMat,
+      flameMat,
+      headlightMat,
+      hoverPadMat,
+    } = mats;
+
+    const hullWhiteMat = this.getMat('boat_white_hull', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#f8fafc',
+        roughness: 0.28,
+        metalness: 0.25,
+      }),
+    );
+
+    // Lower hydro-stepped V-hull keel (+Z forward)
+    const keel = new THREE.Mesh(
+      this.getGeo('boat_keel', () => new THREE.BoxGeometry(1.52, 0.24, 3.3)),
+      darkFrameMat,
+    );
+    keel.position.set(0, 0.04, -0.2);
+    keel.castShadow = true;
+    keel.receiveShadow = true;
+    bodyPivot.add(keel);
+
+    // Main sculpted hull body & side gunwales
+    const mainHull = new THREE.Mesh(
+      this.getGeo('boat_main_hull', () => new THREE.BoxGeometry(1.88, 0.42, 2.85)),
+      bodyMat,
+    );
+    mainHull.position.set(0, 0.24, -0.35);
+    mainHull.castShadow = true;
+    mainHull.receiveShadow = true;
+    bodyPivot.add(mainHull);
+
+    // Crisp white deck coaming & pointed tapered bow prow
+    const foredeck = new THREE.Mesh(
+      this.getGeo('boat_foredeck', () => new THREE.BoxGeometry(1.12, 0.34, 1.45)),
+      hullWhiteMat,
+    );
+    foredeck.position.set(0, 0.3, 1.32);
+    foredeck.rotation.x = -0.08;
+    foredeck.castShadow = true;
+    bodyPivot.add(foredeck);
+
+    const prowTip = new THREE.Mesh(
+      this.getGeo('boat_prow_tip', () => new THREE.BoxGeometry(0.56, 0.28, 0.72)),
+      bodyMat,
+    );
+    prowTip.position.set(0, 0.31, 2.04);
+    prowTip.rotation.y = Math.PI * 0.25;
+    prowTip.castShadow = true;
+    bodyPivot.add(prowTip);
+
+    const bowChineGeo = this.getGeo('boat_bow_chine', () => new THREE.BoxGeometry(0.36, 0.36, 1.55));
+    for (const side of [-1, 1]) {
+      const chine = new THREE.Mesh(bowChineGeo, bodyMat);
+      chine.position.set(side * 0.62, 0.27, 1.24);
+      chine.rotation.y = -side * 0.34;
+      chine.castShadow = true;
+      bodyPivot.add(chine);
+    }
+
+    // Racing stripe & side hydro-trim rails
+    const stripe = new THREE.Mesh(
+      this.getGeo('boat_deck_stripe', () => new THREE.BoxGeometry(0.3, 0.06, 1.55)),
+      goldMat,
+    );
+    stripe.position.set(0, 0.48, 1.26);
+    stripe.rotation.x = -0.08;
+    bodyPivot.add(stripe);
+
+    const hydroRailGeo = this.getGeo('boat_hydro_rail', () => new THREE.BoxGeometry(0.1, 0.1, 2.35));
+    for (const rx of [-0.95, 0.95]) {
+      const rail = new THREE.Mesh(hydroRailGeo, hoverPadMat);
+      rail.position.set(rx, 0.3, -0.35);
+      bodyPivot.add(rail);
+      hoverPads.push(rail);
+    }
+
+    // Recessed cockpit deck, twin sport seats, helm console & wrap-around windscreen
+    const deckFloor = new THREE.Mesh(
+      this.getGeo('boat_cockpit_floor', () => new THREE.BoxGeometry(1.42, 0.08, 1.68)),
+      seatMat,
+    );
+    deckFloor.position.set(0, 0.44, -0.45);
+    bodyPivot.add(deckFloor);
+
+    const seatGeo = this.getGeo('boat_seat', () => new THREE.BoxGeometry(0.46, 0.34, 0.48));
+    for (const sx of [-0.36, 0.36]) {
+      const seat = new THREE.Mesh(seatGeo, seatMat);
+      seat.position.set(sx, 0.6, -0.78);
+      seat.castShadow = true;
+      bodyPivot.add(seat);
+    }
+
+    const consoleBox = new THREE.Mesh(
+      this.getGeo('boat_console', () => new THREE.BoxGeometry(0.76, 0.38, 0.46)),
+      darkFrameMat,
+    );
+    consoleBox.position.set(0, 0.6, 0.24);
+    bodyPivot.add(consoleBox);
+
+    const wheelGeo = this.getGeo('boat_wheel', () => new THREE.TorusGeometry(0.15, 0.03, 6, 12));
+    const wheel = new THREE.Mesh(wheelGeo, chromeMat);
+    wheel.position.set(-0.28, 0.72, 0.02);
+    wheel.rotation.x = -0.45;
+    bodyPivot.add(wheel);
+
+    const windscreen = new THREE.Mesh(
+      this.getGeo('boat_windscreen', () => new THREE.BoxGeometry(1.48, 0.36, 0.1)),
+      windMat,
+    );
+    windscreen.position.set(0, 0.76, 0.46);
+    windscreen.rotation.x = -0.58;
+    bodyPivot.add(windscreen);
+
+    const sideWindGeo = this.getGeo('boat_side_wind', () => new THREE.BoxGeometry(0.08, 0.28, 0.64));
+    for (const swx of [-0.72, 0.72]) {
+      const sw = new THREE.Mesh(sideWindGeo, windMat);
+      sw.position.set(swx, 0.7, 0.14);
+      bodyPivot.add(sw);
+    }
+
+    // Dual front marine LED headlights
+    const hlGeo = this.getGeo('boat_hl', () => new THREE.BoxGeometry(0.22, 0.11, 0.1));
+    for (const hx of [-0.42, 0.42]) {
+      const hl = new THREE.Mesh(hlGeo, headlightMat);
+      hl.position.set(hx, 0.38, 1.88);
+      bodyPivot.add(hl);
+    }
+
+    // Twin rear outboard cyan boost thrusters + glow rings + plumes
+    const podGeo = this.getGeo('boat_thruster_pod', () => new THREE.BoxGeometry(0.36, 0.46, 0.56));
+    const nozzleGeo = this.getGeo('boat_nozzle', () => {
+      const g = new THREE.CylinderGeometry(0.14, 0.2, 0.32, 10);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const boostRingGeo = this.getGeo('boat_boost_ring', () => new THREE.TorusGeometry(0.19, 0.04, 6, 12));
+    const flameGeo = this.getGeo('veh_flame_cone', () => {
+      const g = new THREE.ConeGeometry(0.18, 1.25, 10);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+
+    for (const tx of [-0.46, 0.46]) {
+      const pod = new THREE.Mesh(podGeo, darkFrameMat);
+      pod.position.set(tx, 0.36, -1.86);
+      pod.castShadow = true;
+      bodyPivot.add(pod);
+
+      const nozzle = new THREE.Mesh(nozzleGeo, chromeMat);
+      nozzle.position.set(tx, 0.3, -2.14);
+      bodyPivot.add(nozzle);
+
+      const glowRing = new THREE.Mesh(boostRingGeo, hoverPadMat);
+      glowRing.position.set(tx, 0.3, -2.26);
+      bodyPivot.add(glowRing);
+      hoverPads.push(glowRing);
+
+      const flame = new THREE.Mesh(flameGeo, flameMat);
+      flame.position.set(tx, 0.3, -2.86);
+      flame.visible = false;
+      bodyPivot.add(flame);
+      thrusterFlames.push(flame);
+    }
   }
 
   private syncVisualAndCollider(entry: VehicleEntry, elapsed: number): void {
     const v = entry.data;
     const spec = VEHICLE_SPECS[v.kind];
 
-    const bob = Math.sin(elapsed * 3.2 + entry.bobPhase) * 0.045;
+    const speed = Math.hypot(v.vx, v.vz);
+    const bob =
+      Math.sin(elapsed * 3.2 + entry.bobPhase) * (v.kind === 'speedboat' ? 0.032 : 0.045);
     entry.group.position.set(v.x, v.y, v.z);
     entry.group.rotation.set(v.pitch, v.yaw, v.roll, 'YXZ');
     entry.bodyPivot.position.y = bob;
+    entry.bodyPivot.rotation.x = v.kind === 'speedboat' ? -clamp(speed / 45, 0, 0.1) : 0;
 
     const absCos = Math.abs(Math.cos(v.yaw));
     const absSin = Math.abs(Math.sin(v.yaw));
@@ -638,7 +869,6 @@ export class VehicleSystem {
     entry.collider.minZ = v.z - ez;
     entry.collider.maxZ = v.z + ez;
 
-    const speed = Math.hypot(v.vx, v.vz);
     const activeGlow = v.driverId !== null || speed > 1.0;
     entry.headlightMat.emissiveIntensity = v.driverId !== null ? 1.45 : 0.45;
     entry.hoverPadMat.emissiveIntensity = v.isBoosting
@@ -729,8 +959,20 @@ export class VehicleSystem {
 
     const cleanThrottle = clamp(throttle, -1, 1);
     const cleanSteer = clamp(steer, -1, 1);
+    let lastOnWater = false;
 
     for (let s = 0; s < subSteps; s++) {
+      const startSurface = this.getEffectiveSurfaceY(v.x, v.z);
+      const speedScale =
+        v.kind === 'speedboat' && !startSurface.onWater && !startSurface.onLava
+          ? SPEEDBOAT_DRY_TERRAIN_SPEED_SCALE
+          : 1.0;
+      const effMaxSpeed = spec.maxSpeed * speedScale;
+      const effBoostSpeed = spec.boostSpeed * speedScale;
+      const effReverseSpeed = spec.reverseSpeed * speedScale;
+      const effAccel = spec.accel * speedScale;
+      const effBoostAccel = spec.boostAccel * speedScale;
+
       let fwdX = Math.sin(v.yaw);
       let fwdZ = Math.cos(v.yaw);
       const rightX = -Math.cos(v.yaw);
@@ -761,9 +1003,13 @@ export class VehicleSystem {
         v.boostCharge = Math.max(0, v.boostCharge - stepDt * 0.36);
         const boostDrive = cleanThrottle >= -0.05 ? Math.max(cleanThrottle, 0.85) : cleanThrottle;
         if (boostDrive >= 0) {
-          vFwd = Math.min(spec.boostSpeed, vFwd + spec.boostAccel * boostDrive * stepDt);
+          if (vFwd > effBoostSpeed) {
+            vFwd = Math.max(effBoostSpeed, vFwd - spec.brakeDecel * 0.8 * stepDt);
+          } else {
+            vFwd = Math.min(effBoostSpeed, vFwd + effBoostAccel * boostDrive * stepDt);
+          }
         } else {
-          vFwd = Math.max(-spec.reverseSpeed, vFwd + spec.accel * boostDrive * stepDt);
+          vFwd = Math.max(-effReverseSpeed, vFwd + effAccel * boostDrive * stepDt);
         }
       } else {
         v.boostCharge = Math.min(1, v.boostCharge + stepDt * 0.22);
@@ -771,14 +1017,16 @@ export class VehicleSystem {
           if (cleanThrottle > 0) {
             if (vFwd < 0) {
               vFwd = Math.min(0, vFwd + spec.brakeDecel * stepDt);
+            } else if (vFwd > effMaxSpeed) {
+              vFwd = Math.max(effMaxSpeed, vFwd - spec.brakeDecel * 0.8 * stepDt);
             } else {
-              vFwd = Math.min(spec.maxSpeed, vFwd + spec.accel * cleanThrottle * stepDt);
+              vFwd = Math.min(effMaxSpeed, vFwd + effAccel * cleanThrottle * stepDt);
             }
           } else {
             if (vFwd > 0) {
               vFwd = Math.max(0, vFwd - spec.brakeDecel * stepDt);
             } else {
-              vFwd = Math.max(-spec.reverseSpeed, vFwd + spec.accel * cleanThrottle * stepDt);
+              vFwd = Math.max(-effReverseSpeed, vFwd + effAccel * cleanThrottle * stepDt);
             }
           }
         } else {
@@ -797,8 +1045,9 @@ export class VehicleSystem {
       v.z = clamp(v.z + v.vz * stepDt, -WORLD_HALF + 8, WORLD_HALF - 8);
       this.resolveStaticCollisions(v, spec);
 
-      // Terrain / Water / Volcanic Lava hover spring physics
+      // Terrain / Water / Volcanic Lava hover & speedboat buoyancy physics
       const { surfaceY, onWater, onLava } = this.getEffectiveSurfaceY(v.x, v.z);
+      lastOnWater = onWater;
       let targetHoverY = surfaceY + spec.hoverHeight;
 
       if (onLava) {
@@ -807,8 +1056,13 @@ export class VehicleSystem {
         v.boostCharge = Math.min(1, v.boostCharge + stepDt * 0.55);
         v.vy += 9.5 * stepDt;
       } else if (onWater) {
-        // Smooth skimming float on water surface
-        targetHoverY += 0.08;
+        // Hover vehicles skim slightly above water; speedboats sit cleanly at WATER_LEVEL + 0.12
+        if (v.kind !== 'speedboat') {
+          targetHoverY += 0.08;
+        }
+      } else if (v.kind === 'speedboat') {
+        // Amphibious hull planing clearance on dry terrain
+        targetHoverY += 0.16;
       }
 
       if (v.y > targetHoverY + 0.35) {
@@ -820,8 +1074,9 @@ export class VehicleSystem {
         v.y += v.vy * stepDt;
       }
 
-      if (v.y < surfaceY + 0.18) {
-        v.y = surfaceY + 0.18;
+      const minClearance = v.kind === 'speedboat' ? 0.04 : 0.18;
+      if (v.y < surfaceY + minClearance) {
+        v.y = surfaceY + minClearance;
         if (v.vy < 0) v.vy = 0;
       }
 
@@ -841,9 +1096,11 @@ export class VehicleSystem {
       v.roll = damp(v.roll, terrainRoll + bankRoll, 10, stepDt);
     }
 
-    // Boost VFX & SFX emission (immediate on activation, rate-limited while held)
+    // Boost & Speedboat Water Wake VFX/SFX emission (immediate on activation, rate-limited while held)
     if (entry.boostVfxCooldown > 0) entry.boostVfxCooldown = Math.max(0, entry.boostVfxCooldown - dt);
     if (entry.boostSfxCooldown > 0) entry.boostSfxCooldown = Math.max(0, entry.boostSfxCooldown - dt);
+    if (entry.wakeVfxCooldown > 0) entry.wakeVfxCooldown = Math.max(0, entry.wakeVfxCooldown - dt);
+    if (entry.wakeSfxCooldown > 0) entry.wakeSfxCooldown = Math.max(0, entry.wakeSfxCooldown - dt);
 
     if (v.isBoosting) {
       if (entry.boostVfxCooldown <= 0 && this.eventBus) {
@@ -861,7 +1118,7 @@ export class VehicleSystem {
       }
       if (entry.boostSfxCooldown <= 0 && this.eventBus) {
         this.eventBus.emit('sound:play', {
-          id: 'vehicle_boost',
+          id: v.kind === 'speedboat' ? 'boat_boost' : 'vehicle_boost',
           position: { x: v.x, y: v.y, z: v.z },
           spatial: true,
         });
@@ -869,6 +1126,41 @@ export class VehicleSystem {
       }
     } else {
       entry.boostVfxCooldown = 0;
+    }
+
+    if (v.kind === 'speedboat' && lastOnWater) {
+      const waterSpeed = Math.hypot(v.vx, v.vz);
+      const activelyMoving =
+        v.isBoosting || (isDriven && Math.abs(cleanThrottle) > 0.05) || waterSpeed > 2.0;
+      if (activelyMoving) {
+        if (entry.wakeVfxCooldown <= 0 && this.eventBus) {
+          const fwdX = Math.sin(v.yaw);
+          const fwdZ = Math.cos(v.yaw);
+          this.eventBus.emit('vfx:water_wake', {
+            position: {
+              x: v.x - fwdX * 1.9,
+              y: WATER_LEVEL + 0.05,
+              z: v.z - fwdZ * 1.9,
+            },
+            yaw: v.yaw,
+            speed: waterSpeed,
+          });
+          entry.wakeVfxCooldown = 0.09;
+        }
+        if (entry.wakeSfxCooldown <= 0 && this.eventBus) {
+          this.eventBus.emit('sound:play', {
+            id: 'water_splash_wake',
+            position: { x: v.x, y: WATER_LEVEL + 0.2, z: v.z },
+            volume: clamp(0.35 + waterSpeed / 45, 0.35, 0.85),
+            spatial: true,
+          });
+          entry.wakeSfxCooldown = 0.38;
+        }
+      } else {
+        entry.wakeVfxCooldown = 0;
+      }
+    } else {
+      entry.wakeVfxCooldown = 0;
     }
   }
 

@@ -20,6 +20,7 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'mythic_blade_rifle',
   'grappler',
   'plasma_flamethrower',
+  'flare_gun',
 ]);
 
 const THROWABLE_WEAPONS = new Set<WeaponId>([
@@ -1866,6 +1867,154 @@ function buildPlasmaFlamethrower(): THREE.Group {
   return group;
 }
 
+function buildShockwaveHammer(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_shockwave_hammer';
+  // Keep iconic violet-steel kinetic chassis, side exhaust vents & cyan core intact
+  group.userData.wrapDisabled = true;
+
+  const darkGrip = makeStandardMat('#0f172a', 0.68, 0.22);
+  const violetSteel = makeStandardMat('#4c1d95', 0.3, 0.72);
+  const violetArmor = makeStandardMat('#6d28d9', 0.26, 0.65, '#7c3aed', 0.18);
+  const titanium = makeStandardMat('#94a3b8', 0.22, 0.86);
+  const brightAlloy = makeStandardMat('#cbd5e1', 0.2, 0.88);
+  const cyanCore = makeStandardMat('#22d3ee', 0.12, 0.15, '#22d3ee', 0.96);
+  const violetPlasma = makeStandardMat('#a855f7', 0.15, 0.18, '#a855f7', 0.86);
+
+  // Heavy reinforced warhammer shaft (origin y = 0 at primary hand grip) + two-hand grip wraps + kinetic pommel
+  addCylinder(group, 0.025, 0.028, 0.94, titanium, 0, 0.24, 0, 0, 0, 0, 10);
+  addCylinder(group, 0.034, 0.034, 0.19, darkGrip, 0, 0.0, 0, 0, 0, 0, 10);
+  addCylinder(group, 0.035, 0.035, 0.17, darkGrip, 0, 0.27, 0, 0, 0, 0, 10);
+  addCylinder(group, 0.038, 0.038, 0.024, violetArmor, 0, 0.13, 0, 0, 0, 0, 10);
+  addCylinder(group, 0.044, 0.032, 0.062, violetSteel, 0, -0.23, 0, 0, 0, 0, 10);
+  addCylinder(group, 0.036, 0.036, 0.018, cyanCore, 0, -0.255, 0, 0, 0, 0, 10);
+
+  // Hydraulic kinetic piston neck & glowing shock absorber collar under hammer head
+  addCylinder(group, 0.052, 0.042, 0.10, violetSteel, 0, 0.57, 0, 0, 0, 0, 10);
+  addCylinder(group, 0.056, 0.056, 0.024, cyanCore, 0, 0.62, 0, 0, 0, 0, 10);
+  for (const side of [-1, 1] as const) {
+    addCylinder(group, 0.014, 0.014, 0.14, brightAlloy, side * 0.052, 0.58, 0, 0, 0, 0, 8);
+  }
+
+  // Heavy stylized violet-steel main hammer housing + top dorsal pressure crest
+  addBox(group, 0.20, 0.21, 0.34, violetSteel, 0, 0.77, 0);
+  addBox(group, 0.22, 0.048, 0.29, violetArmor, 0, 0.89, 0);
+  addBox(group, 0.22, 0.042, 0.27, violetArmor, 0, 0.66, 0);
+  addBox(group, 0.078, 0.045, 0.19, titanium, 0, 0.928, 0);
+  addBox(group, 0.036, 0.022, 0.15, cyanCore, 0, 0.946, 0);
+
+  // Central glowing cyan energy core & plasma containment rings visible on both flanks
+  addMesh(group, new THREE.SphereGeometry(0.068, 14, 12), cyanCore, 0, 0.77, 0);
+  addCylinder(group, 0.052, 0.052, 0.224, cyanCore, 0, 0.77, 0, 0, 0, Math.PI / 2, 12);
+  for (const side of [-1, 1] as const) {
+    addMesh(
+      group,
+      new THREE.TorusGeometry(0.062, 0.012, 8, 14),
+      violetPlasma,
+      side * 0.108,
+      0.77,
+      0,
+      0,
+      Math.PI / 2,
+      0,
+    );
+  }
+
+  // Side exhaust vents (armored vent pods + glowing cyan exhaust louvers on both sides)
+  for (const side of [-1, 1] as const) {
+    const vx = side * 0.122;
+    addBox(group, 0.044, 0.115, 0.18, darkGrip, vx, 0.77, 0);
+    for (const vz of [-0.052, 0, 0.052]) {
+      addBox(group, 0.048, 0.022, 0.032, cyanCore, vx + side * 0.004, 0.79, vz, 0, 0, side * 0.24);
+      addBox(group, 0.048, 0.016, 0.028, titanium, vx + side * 0.006, 0.745, vz, 0, 0, side * 0.24);
+    }
+  }
+
+  // Front & rear kinetic piston shock heads + glowing cyan shock-ring faces
+  for (const dir of [-1, 1] as const) {
+    addCylinder(group, 0.068, 0.072, 0.075, titanium, 0, 0.77, dir * 0.195, Math.PI / 2, 0, 0, 12);
+    addBox(group, 0.225, 0.24, 0.052, violetArmor, 0, 0.77, dir * 0.245);
+    addBox(group, 0.195, 0.21, 0.022, brightAlloy, 0, 0.77, dir * 0.275);
+    addMesh(
+      group,
+      new THREE.TorusGeometry(0.078, 0.014, 8, 16),
+      cyanCore,
+      0,
+      0.77,
+      dir * 0.286,
+      0,
+      0,
+      0,
+    );
+    addCylinder(group, 0.042, 0.042, 0.016, violetPlasma, 0, 0.77, dir * 0.286, Math.PI / 2, 0, 0, 12);
+  }
+
+  return group;
+}
+
+function buildFlareGun(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_flare_gun';
+
+  const signalOrange = makeStandardMat('#f97316', 0.34, 0.22);
+  const deepOrange = makeStandardMat('#ea580c', 0.38, 0.26);
+  const darkGrip = makeStandardMat('#1e293b', 0.62, 0.24);
+  const steel = makeStandardMat('#94a3b8', 0.24, 0.82);
+  const rescueYellow = makeStandardMat('#facc15', 0.28, 0.24, '#facc15', 0.28);
+  const emberGlow = makeStandardMat('#fb923c', 0.12, 0.14, '#f97316', 1.05);
+  const emberCore = makeStandardMat('#fef08a', 0.08, 0.1, '#fde047', 1.18);
+
+  // Ergonomic grip, rescue lanyard pommel loop & trigger guard
+  addBox(group, 0.038, 0.115, 0.05, darkGrip, 0, -0.025, -0.01, 0.24, 0, 0);
+  addBox(group, 0.044, 0.02, 0.056, rescueYellow, 0, -0.082, -0.025, 0.24, 0, 0);
+  addMesh(
+    group,
+    new THREE.TorusGeometry(0.014, 0.004, 6, 12),
+    steel,
+    0,
+    -0.098,
+    -0.032,
+    0,
+    Math.PI / 2,
+    0,
+  );
+  addBox(group, 0.014, 0.034, 0.058, darkGrip, 0, 0.022, 0.05);
+
+  // Signal-orange break-action receiver + hinge pin + hammer spur + high-vis sights
+  tagWrapTarget(addBox(group, 0.044, 0.046, 0.165, signalOrange, 0, 0.054, 0.055));
+  tagWrapTarget(addBox(group, 0.048, 0.034, 0.135, deepOrange, 0, 0.088, 0.045));
+  addBox(group, 0.050, 0.012, 0.11, rescueYellow, 0, 0.062, 0.055);
+  addCylinder(group, 0.010, 0.010, 0.054, steel, 0, 0.064, 0.115, 0, 0, Math.PI / 2, 8);
+  addBox(group, 0.014, 0.028, 0.024, steel, 0, 0.092, -0.034, -0.45, 0, 0);
+  addBox(group, 0.014, 0.014, 0.014, rescueYellow, 0, 0.124, 0.242);
+  addBox(group, 0.022, 0.012, 0.012, rescueYellow, 0, 0.114, -0.015);
+
+  // Thick flared signal-orange rescue barrel + wide flared bell muzzle
+  addCylinder(group, 0.029, 0.026, 0.145, signalOrange, 0, 0.088, 0.145, Math.PI / 2, 0, 0, 12);
+  addCylinder(group, 0.045, 0.029, 0.068, signalOrange, 0, 0.088, 0.242, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.048, 0.046, 0.016, deepOrange, 0, 0.088, 0.274, Math.PI / 2, 0, 0, 14);
+  addMesh(
+    group,
+    new THREE.TorusGeometry(0.036, 0.007, 6, 14),
+    darkGrip,
+    0,
+    0.088,
+    0.279,
+    0,
+    0,
+    0,
+  );
+
+  // Glowing ember cartridge visible in breech chamber + hot glowing ember flare inside flared muzzle
+  addCylinder(group, 0.019, 0.019, 0.065, emberGlow, 0, 0.088, 0.055, Math.PI / 2, 0, 0, 12);
+  addCylinder(group, 0.021, 0.021, 0.014, rescueYellow, 0, 0.088, 0.022, Math.PI / 2, 0, 0, 12);
+  addMesh(group, new THREE.SphereGeometry(0.024, 10, 8), emberGlow, 0, 0.088, 0.258);
+  addMesh(group, new THREE.SphereGeometry(0.015, 8, 8), emberCore, 0, 0.088, 0.264);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.088, 0.295);
+  return group;
+}
+
 const MOD_CHILD_NAMES = new Set([
   'mod_red_dot',
   'mod_suppressor',
@@ -1914,6 +2063,13 @@ function getWeaponModAnchors(weaponGroup: THREE.Group): WeaponModAnchors {
         redDot: [0, 0.100, 0.06],
         drumMag: [0, -0.060, -0.01],
         foregrip: [0, 0.016, 0.12],
+        suppressor: supPos,
+      };
+    case 'weapon_flare_gun':
+      return {
+        redDot: [0, 0.124, 0.06],
+        drumMag: [0, -0.060, -0.01],
+        foregrip: [0, 0.022, 0.14],
         suppressor: supPos,
       };
     case 'weapon_smg':
@@ -2184,6 +2340,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildJetpack();
     case 'plasma_flamethrower':
       return buildPlasmaFlamethrower();
+    case 'shockwave_hammer':
+      return buildShockwaveHammer();
+    case 'flare_gun':
+      return buildFlareGun();
   }
 }
 

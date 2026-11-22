@@ -987,6 +987,116 @@ interface HopCrystalAuraSlot {
   motes: HopCrystalMote[];
 }
 
+interface HammerSlamShard {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface HammerSlamSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  flashMesh: THREE.Mesh;
+  flashMat: THREE.MeshBasicMaterial;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  violetRingMesh: THREE.Mesh;
+  violetRingMat: THREE.MeshBasicMaterial;
+  cyanRingMesh: THREE.Mesh;
+  cyanRingMat: THREE.MeshBasicMaterial;
+  tiltRingMesh: THREE.Mesh;
+  tiltRingMat: THREE.MeshBasicMaterial;
+  shards: HammerSlamShard[];
+}
+
+interface HammerBounceSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface HammerBounceSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  groundRingMesh: THREE.Mesh;
+  groundRingMat: THREE.MeshBasicMaterial;
+  boostRingMesh: THREE.Mesh;
+  boostRingMat: THREE.MeshBasicMaterial;
+  columnMesh: THREE.Mesh;
+  columnMat: THREE.MeshBasicMaterial;
+  sparks: HammerBounceSpark[];
+}
+
+interface FlareTrailSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface FlareTrailSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  beamLength: number;
+  group: THREE.Group;
+  beamMesh: THREE.Mesh;
+  beamMat: THREE.MeshBasicMaterial;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  burstMesh: THREE.Mesh;
+  burstMat: THREE.MeshBasicMaterial;
+  innerRingMesh: THREE.Mesh;
+  innerRingMat: THREE.MeshBasicMaterial;
+  scanRingMesh: THREE.Mesh;
+  scanRingMat: THREE.MeshBasicMaterial;
+  sparks: FlareTrailSpark[];
+}
+
+interface WaterWakeDroplet {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface WaterWakeSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  speedScale: number;
+  group: THREE.Group;
+  leftWakeMesh: THREE.Mesh;
+  rightWakeMesh: THREE.Mesh;
+  wakeMat: THREE.MeshBasicMaterial;
+  rippleRingMesh: THREE.Mesh;
+  rippleRingMat: THREE.MeshBasicMaterial;
+  foamRingMesh: THREE.Mesh;
+  foamRingMat: THREE.MeshBasicMaterial;
+  droplets: WaterWakeDroplet[];
+}
+
 function getWeaponModColor(modId: WeaponModId): string {
   const found = WEAPON_MODS.find((m) => m.id === modId);
   return found?.accentColor ?? '#38bdf8';
@@ -1140,6 +1250,14 @@ const METEOR_STRIKE_POOL_SIZE = 6;
 const METEOR_STRIKE_EMBER_COUNT = 16;
 const HOP_CRYSTAL_AURA_POOL_SIZE = 10;
 const HOP_CRYSTAL_MOTE_COUNT = 12;
+const HAMMER_SLAM_POOL_SIZE = 8;
+const HAMMER_SLAM_SHARD_COUNT = 16;
+const HAMMER_BOUNCE_POOL_SIZE = 10;
+const HAMMER_BOUNCE_SPARK_COUNT = 12;
+const FLARE_TRAIL_POOL_SIZE = 8;
+const FLARE_TRAIL_SPARK_COUNT = 14;
+const WATER_WAKE_POOL_SIZE = 32;
+const WATER_WAKE_DROPLET_COUNT = 8;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -1220,6 +1338,10 @@ export class VFXManager {
   private readonly flameStreams: FlameStreamSlot[] = [];
   private readonly meteorStrikes: MeteorStrikeSlot[] = [];
   private readonly hopCrystalAuras: HopCrystalAuraSlot[] = [];
+  private readonly hammerSlams: HammerSlamSlot[] = [];
+  private readonly hammerBounces: HammerBounceSlot[] = [];
+  private readonly flareTrails: FlareTrailSlot[] = [];
+  private readonly waterWakes: WaterWakeSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -1280,6 +1402,10 @@ export class VFXManager {
   private flameStreamCursor = 0;
   private meteorStrikeCursor = 0;
   private hopCrystalAuraCursor = 0;
+  private hammerSlamCursor = 0;
+  private hammerBounceCursor = 0;
+  private flareTrailCursor = 0;
+  private waterWakeCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -4911,6 +5037,430 @@ export class VFXManager {
         motes,
       });
     }
+
+    // 43. Shockwave Hammer Ground Slam (violet-cyan radial shockwave rings + impact dome + debris shards)
+    for (let i = 0; i < HAMMER_SLAM_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_hammer_slam';
+      group.visible = false;
+
+      const flashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const flashMesh = new THREE.Mesh(this.unitSphereGeo, flashMat);
+      group.add(flashMesh);
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x8b5cf6,
+          transparent: true,
+          opacity: 0.44,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.unitSphereGeo, domeMat);
+      group.add(domeMesh);
+
+      const violetRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const violetRingMesh = new THREE.Mesh(this.unitRingGeo, violetRingMat);
+      violetRingMesh.rotation.x = -Math.PI / 2;
+      violetRingMesh.position.y = 0.12;
+      group.add(violetRingMesh);
+
+      const cyanRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const cyanRingMesh = new THREE.Mesh(this.unitRingGeo, cyanRingMat);
+      cyanRingMesh.rotation.x = -Math.PI / 2;
+      cyanRingMesh.position.y = 0.18;
+      group.add(cyanRingMesh);
+
+      const tiltRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.86,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const tiltRingMesh = new THREE.Mesh(this.hexRingGeo, tiltRingMat);
+      tiltRingMesh.rotation.set(Math.PI / 3, 0, Math.PI / 5);
+      group.add(tiltRingMesh);
+
+      const shards: HammerSlamShard[] = [];
+      for (let s = 0; s < HAMMER_SLAM_SHARD_COUNT; s++) {
+        const isRock = s % 4 === 0;
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: isRock ? 0x64748b : s % 2 === 0 ? 0x22d3ee : 0xa855f7,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: isRock,
+            blending: isRock ? THREE.NormalBlending : THREE.AdditiveBlending,
+          }),
+        );
+        const geo = isRock ? this.unitBoxGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        shards.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.18,
+        });
+      }
+
+      this.root.add(group);
+      this.hammerSlams.push({
+        active: false,
+        age: 0,
+        duration: 0.78,
+        radius: 5.5,
+        group,
+        flashMesh,
+        flashMat,
+        domeMesh,
+        domeMat,
+        violetRingMesh,
+        violetRingMat,
+        cyanRingMesh,
+        cyanRingMat,
+        tiltRingMesh,
+        tiltRingMat,
+        shards,
+      });
+    }
+
+    // 44. Shockwave Hammer Kinetic Bounce Leap (upward cyan-violet vortex + launch ring + spiraling sparks)
+    for (let i = 0; i < HAMMER_BOUNCE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_hammer_bounce';
+      group.visible = false;
+
+      const groundRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const groundRingMesh = new THREE.Mesh(this.unitRingGeo, groundRingMat);
+      groundRingMesh.rotation.x = -Math.PI / 2;
+      groundRingMesh.position.y = 0.08;
+      group.add(groundRingMesh);
+
+      const boostRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const boostRingMesh = new THREE.Mesh(this.hexRingGeo, boostRingMat);
+      boostRingMesh.rotation.x = -Math.PI / 2;
+      group.add(boostRingMesh);
+
+      const columnMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.44,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const columnMesh = new THREE.Mesh(this.beamCylGeo, columnMat);
+      group.add(columnMesh);
+
+      const sparks: HammerBounceSpark[] = [];
+      for (let s = 0; s < HAMMER_BOUNCE_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xe0f2fe : s % 2 === 0 ? 0x22d3ee : 0xa855f7,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / HAMMER_BOUNCE_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.65,
+          speedY: 4.5,
+          spin: 5.5,
+          baseScale: 0.12,
+        });
+      }
+
+      this.root.add(group);
+      this.hammerBounces.push({
+        active: false,
+        age: 0,
+        duration: 0.64,
+        group,
+        groundRingMesh,
+        groundRingMat,
+        boostRingMesh,
+        boostRingMat,
+        columnMesh,
+        columnMat,
+        sparks,
+      });
+    }
+
+    // 45. Recon Flare Gun Signal Trail & Scan Beacon Burst
+    for (let i = 0; i < FLARE_TRAIL_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_flare_trail';
+      group.visible = false;
+
+      const beamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfb923c,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const beamMesh = new THREE.Mesh(this.unitCylinderGeo, beamMat);
+      group.add(beamMesh);
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMesh = new THREE.Mesh(this.unitSphereGeo, coreMat);
+      group.add(coreMesh);
+
+      const burstMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const burstMesh = new THREE.Mesh(this.unitSphereGeo, burstMat);
+      group.add(burstMesh);
+
+      const innerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfacc15,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const innerRingMesh = new THREE.Mesh(this.unitRingGeo, innerRingMat);
+      innerRingMesh.rotation.x = -Math.PI / 2;
+      innerRingMesh.position.y = 0.1;
+      group.add(innerRingMesh);
+
+      const scanRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xef4444,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const scanRingMesh = new THREE.Mesh(this.unitRingGeo, scanRingMat);
+      scanRingMesh.rotation.x = -Math.PI / 2;
+      scanRingMesh.position.y = 0.14;
+      group.add(scanRingMesh);
+
+      const sparks: FlareTrailSpark[] = [];
+      for (let s = 0; s < FLARE_TRAIL_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xfef08a : s % 2 === 0 ? 0xf97316 : 0xef4444,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.16,
+        });
+      }
+
+      this.root.add(group);
+      this.flareTrails.push({
+        active: false,
+        age: 0,
+        duration: 1.15,
+        radius: 15,
+        beamLength: 0,
+        group,
+        beamMesh,
+        beamMat,
+        coreMesh,
+        coreMat,
+        burstMesh,
+        burstMat,
+        innerRingMesh,
+        innerRingMat,
+        scanRingMesh,
+        scanRingMat,
+        sparks,
+      });
+    }
+
+    // 46. Speedboat Water Wake (V-shaped stern foam trails + concentric water ripples + splash droplets)
+    for (let i = 0; i < WATER_WAKE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_water_wake';
+      group.visible = false;
+
+      const wakeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const leftWakeMesh = new THREE.Mesh(this.unitBoxGeo, wakeMat);
+      leftWakeMesh.rotation.y = 0.42;
+      group.add(leftWakeMesh);
+
+      const rightWakeMesh = new THREE.Mesh(this.unitBoxGeo, wakeMat);
+      rightWakeMesh.rotation.y = -0.42;
+      group.add(rightWakeMesh);
+
+      const rippleRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.82,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const rippleRingMesh = new THREE.Mesh(this.unitRingGeo, rippleRingMat);
+      rippleRingMesh.rotation.x = -Math.PI / 2;
+      rippleRingMesh.position.y = 0.04;
+      group.add(rippleRingMesh);
+
+      const foamRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf0f9ff,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const foamRingMesh = new THREE.Mesh(this.unitRingGeo, foamRingMat);
+      foamRingMesh.rotation.x = -Math.PI / 2;
+      foamRingMesh.position.y = 0.06;
+      group.add(foamRingMesh);
+
+      const droplets: WaterWakeDroplet[] = [];
+      for (let d = 0; d < WATER_WAKE_DROPLET_COUNT; d++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: d % 2 === 0 ? 0xf0f9ff : 0x7dd3fc,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        droplets.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.09,
+        });
+      }
+
+      this.root.add(group);
+      this.waterWakes.push({
+        active: false,
+        age: 0,
+        duration: 0.72,
+        speedScale: 1,
+        group,
+        leftWakeMesh,
+        rightWakeMesh,
+        wakeMat,
+        rippleRingMesh,
+        rippleRingMat,
+        foamRingMesh,
+        foamRingMat,
+        droplets,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -5099,6 +5649,12 @@ export class VFXManager {
       ),
       this.eventBus.on('vfx:meteor_strike', (e) => this.spawnMeteorStrike(e.position, e.radius)),
       this.eventBus.on('vfx:hop_crystal_aura', (e) => this.spawnHopCrystalAura(e.position)),
+      this.eventBus.on('vfx:hammer_slam', (e) => this.spawnHammerSlam(e.position, e.radius)),
+      this.eventBus.on('vfx:hammer_bounce', (e) => this.spawnHammerBounce(e.position)),
+      this.eventBus.on('vfx:flare_trail', (e) =>
+        this.spawnFlareTrail(e.origin, e.target, e.radius),
+      ),
+      this.eventBus.on('vfx:water_wake', (e) => this.spawnWaterWake(e.position, e.yaw, e.speed)),
     );
   }
 
@@ -5186,6 +5742,9 @@ export class VFXManager {
       color = 0xfbbf24;
     } else if (weaponId === 'boom_bow') {
       scale = 0.95;
+      color = 0xf97316;
+    } else if (weaponId === 'flare_gun') {
+      scale = 1.18;
       color = 0xf97316;
     } else if (weaponId === 'smg' || weaponId === 'pistol') {
       scale = 0.78;
@@ -7370,6 +7929,179 @@ export class VFXManager {
         mt.material.opacity = fade;
       }
     }
+
+    // 44. Shockwave Hammer Ground Slam
+    for (let i = 0; i < HAMMER_SLAM_POOL_SIZE; i++) {
+      const hs = this.hammerSlams[i];
+      if (!hs.active) continue;
+      hs.age += safeDt;
+      const t = hs.age / hs.duration;
+      if (t >= 1) {
+        hs.active = false;
+        hs.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      hs.flashMesh.scale.setScalar(hs.radius * (0.25 + 0.65 * Math.min(1, t * 4)));
+      hs.flashMat.opacity = Math.max(0, 0.96 * (1 - t * 2.2));
+
+      hs.domeMesh.scale.setScalar(hs.radius * (0.28 + 0.78 * easeOut));
+      hs.domeMat.opacity = 0.44 * fade * fade;
+
+      hs.violetRingMesh.scale.setScalar(hs.radius * (0.24 + 1.05 * easeOut));
+      hs.violetRingMat.opacity = 0.95 * fade;
+
+      hs.cyanRingMesh.scale.setScalar(hs.radius * (0.18 + 0.88 * easeOut));
+      hs.cyanRingMat.opacity = 0.92 * fade;
+
+      hs.tiltRingMesh.rotation.y += 4.5 * safeDt;
+      hs.tiltRingMesh.scale.setScalar(hs.radius * (0.2 + 0.75 * easeOut));
+      hs.tiltRingMat.opacity = 0.86 * fade;
+
+      for (let s = 0; s < HAMMER_SLAM_SHARD_COUNT; s++) {
+        const sh = hs.shards[s];
+        sh.vy -= 14.5 * safeDt;
+        sh.mesh.position.x += sh.vx * safeDt;
+        sh.mesh.position.y = Math.max(0.03, sh.mesh.position.y + sh.vy * safeDt);
+        sh.mesh.position.z += sh.vz * safeDt;
+        sh.mesh.rotation.x += sh.rx * safeDt;
+        sh.mesh.rotation.y += sh.ry * safeDt;
+        sh.mesh.scale.setScalar(sh.baseScale * (1 - 0.55 * t));
+        sh.material.opacity = fade;
+      }
+    }
+
+    // 45. Shockwave Hammer Kinetic Bounce Leap
+    for (let i = 0; i < HAMMER_BOUNCE_POOL_SIZE; i++) {
+      const hb = this.hammerBounces[i];
+      if (!hb.active) continue;
+      hb.age += safeDt;
+      const t = hb.age / hb.duration;
+      if (t >= 1) {
+        hb.active = false;
+        hb.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      hb.groundRingMesh.scale.setScalar(0.55 + 3.2 * easeOut);
+      hb.groundRingMat.opacity = 0.94 * fade;
+
+      hb.boostRingMesh.position.y = 0.15 + 3.4 * easeOut;
+      hb.boostRingMesh.rotation.z += 5.5 * safeDt;
+      hb.boostRingMesh.scale.setScalar(0.48 + 1.45 * easeOut);
+      hb.boostRingMat.opacity = 0.9 * fade;
+
+      hb.columnMesh.position.y = 1.2 + 1.8 * t;
+      hb.columnMesh.scale.set(0.65 + 0.7 * easeOut, 2.4 + 2.2 * t, 0.65 + 0.7 * easeOut);
+      hb.columnMat.opacity = 0.44 * fade;
+
+      for (let s = 0; s < HAMMER_BOUNCE_SPARK_COUNT; s++) {
+        const sp = hb.sparks[s];
+        const ang = sp.angle + hb.age * sp.spin;
+        const rad = sp.radius * (1 + 0.5 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 7 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.45 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 46. Recon Flare Gun Signal Trail & Scan Beacon Burst
+    for (let i = 0; i < FLARE_TRAIL_POOL_SIZE; i++) {
+      const ft = this.flareTrails[i];
+      if (!ft.active) continue;
+      ft.age += safeDt;
+      const t = ft.age / ft.duration;
+      if (t >= 1) {
+        ft.active = false;
+        ft.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      if (ft.beamLength >= 1e-4) {
+        const beamW = Math.max(0.03, 0.22 * (1 - 0.72 * t));
+        ft.beamMesh.scale.set(beamW, ft.beamLength, beamW);
+        ft.beamMat.opacity = 0.88 * fade;
+      }
+
+      ft.coreMesh.scale.setScalar(0.65 + 0.45 * Math.sin(t * Math.PI));
+      ft.coreMat.opacity = 0.96 * fade;
+
+      ft.burstMesh.scale.setScalar(0.8 + 3.2 * Math.min(1, t * 2.2));
+      ft.burstMat.opacity = 0.78 * fade * fade;
+
+      ft.innerRingMesh.scale.setScalar(0.5 + Math.min(12, ft.radius * 0.25) * easeOut);
+      ft.innerRingMat.opacity = 0.94 * fade;
+
+      ft.scanRingMesh.scale.setScalar(1.0 + ft.radius * easeOut);
+      ft.scanRingMat.opacity = 0.9 * fade;
+
+      for (let s = 0; s < FLARE_TRAIL_SPARK_COUNT; s++) {
+        const sp = ft.sparks[s];
+        sp.vy -= 3.2 * safeDt;
+        sp.mesh.position.x += sp.vx * safeDt;
+        sp.mesh.position.y += sp.vy * safeDt;
+        sp.mesh.position.z += sp.vz * safeDt;
+        sp.mesh.rotation.x += sp.rx * safeDt;
+        sp.mesh.rotation.y += sp.ry * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.45 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 47. Speedboat Water Wake
+    for (let i = 0; i < WATER_WAKE_POOL_SIZE; i++) {
+      const ww = this.waterWakes[i];
+      if (!ww.active) continue;
+      ww.age += safeDt;
+      const t = ww.age / ww.duration;
+      if (t >= 1) {
+        ww.active = false;
+        ww.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const sc = ww.speedScale;
+
+      const wakeOffX = (0.52 + 0.85 * easeOut) * sc;
+      const wakeOffZ = -(0.35 + 1.15 * easeOut) * sc;
+      const wakeW = (0.18 + 0.26 * easeOut) * sc;
+      const wakeLen = (1.1 + 1.65 * easeOut) * sc;
+      ww.leftWakeMesh.position.set(-wakeOffX, 0.03, wakeOffZ);
+      ww.leftWakeMesh.scale.set(wakeW, 0.05, wakeLen);
+      ww.rightWakeMesh.position.set(wakeOffX, 0.03, wakeOffZ);
+      ww.rightWakeMesh.scale.set(wakeW, 0.05, wakeLen);
+      ww.wakeMat.opacity = 0.78 * fade;
+
+      ww.rippleRingMesh.scale.setScalar((0.75 + 2.4 * easeOut) * sc);
+      ww.rippleRingMat.opacity = 0.82 * fade;
+
+      ww.foamRingMesh.scale.setScalar((0.45 + 1.55 * easeOut) * sc);
+      ww.foamRingMat.opacity = 0.88 * fade;
+
+      for (let d = 0; d < WATER_WAKE_DROPLET_COUNT; d++) {
+        const dr = ww.droplets[d];
+        dr.vy -= 12.0 * safeDt;
+        dr.mesh.position.x += dr.vx * safeDt;
+        dr.mesh.position.y = Math.max(0.01, dr.mesh.position.y + dr.vy * safeDt);
+        dr.mesh.position.z += dr.vz * safeDt;
+        dr.mesh.scale.setScalar(dr.baseScale * (1 - 0.5 * t));
+        dr.material.opacity = fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -8780,6 +9512,215 @@ export class VFXManager {
     }
   }
 
+  private spawnHammerSlam(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.hammerSlams[this.hammerSlamCursor];
+    this.hammerSlamCursor = (this.hammerSlamCursor + 1) % HAMMER_SLAM_POOL_SIZE;
+
+    const safeRadius = clamp(Number.isFinite(radius) && radius > 0 ? radius : 5.5, 1.5, 35);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.78;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.05, position.z);
+    slot.group.visible = true;
+
+    slot.flashMesh.scale.setScalar(safeRadius * 0.25);
+    slot.flashMat.opacity = 0.96;
+
+    slot.domeMesh.scale.setScalar(safeRadius * 0.28);
+    slot.domeMat.opacity = 0.44;
+
+    slot.violetRingMesh.scale.setScalar(safeRadius * 0.24);
+    slot.violetRingMat.opacity = 0.95;
+
+    slot.cyanRingMesh.scale.setScalar(safeRadius * 0.18);
+    slot.cyanRingMat.opacity = 0.92;
+
+    slot.tiltRingMesh.rotation.set(Math.PI / 3, this.nextRand() * Math.PI, Math.PI / 5);
+    slot.tiltRingMesh.scale.setScalar(safeRadius * 0.2);
+    slot.tiltRingMat.opacity = 0.86;
+
+    for (let s = 0; s < HAMMER_SLAM_SHARD_COUNT; s++) {
+      const sh = slot.shards[s];
+      const ang = (s / HAMMER_SLAM_SHARD_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const spd = safeRadius * (0.95 + this.nextRand() * 0.95);
+      sh.vx = Math.cos(ang) * spd;
+      sh.vy = safeRadius * (0.45 + this.nextRand() * 0.75);
+      sh.vz = Math.sin(ang) * spd;
+      sh.rx = (this.nextRand() - 0.5) * 14;
+      sh.ry = (this.nextRand() - 0.5) * 14;
+      sh.baseScale = Math.max(0.14, safeRadius * 0.042);
+      sh.mesh.position.set(Math.cos(ang) * 0.3, 0.12, Math.sin(ang) * 0.3);
+      sh.mesh.rotation.set(this.nextRand() * Math.PI, this.nextRand() * Math.PI, 0);
+      sh.mesh.scale.setScalar(sh.baseScale);
+      sh.material.opacity = 0.96;
+      sh.mesh.visible = true;
+    }
+  }
+
+  private spawnHammerBounce(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.hammerBounces[this.hammerBounceCursor];
+    this.hammerBounceCursor = (this.hammerBounceCursor + 1) % HAMMER_BOUNCE_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.64;
+
+    slot.group.position.set(position.x, position.y + 0.05, position.z);
+    slot.group.visible = true;
+
+    slot.groundRingMesh.scale.setScalar(0.55);
+    slot.groundRingMat.opacity = 0.94;
+
+    slot.boostRingMesh.position.set(0, 0.15, 0);
+    slot.boostRingMesh.rotation.set(-Math.PI / 2, 0, 0);
+    slot.boostRingMesh.scale.setScalar(0.48);
+    slot.boostRingMat.opacity = 0.9;
+
+    slot.columnMesh.position.set(0, 1.2, 0);
+    slot.columnMesh.scale.set(0.65, 2.4, 0.65);
+    slot.columnMat.opacity = 0.44;
+
+    for (let s = 0; s < HAMMER_BOUNCE_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / HAMMER_BOUNCE_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      sp.radius = 0.45 + this.nextRand() * 0.45;
+      sp.speedY = 3.8 + this.nextRand() * 3.2;
+      sp.spin = (s % 2 === 0 ? 1 : -1) * (4.2 + this.nextRand() * 3.0);
+      sp.baseScale = 0.10 + this.nextRand() * 0.055;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.15 + this.nextRand() * 0.45,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.96;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnFlareTrail(origin: Vec3Like, target: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(origin) || !isFiniteVec3(target)) return;
+
+    const slot = this.flareTrails[this.flareTrailCursor];
+    this.flareTrailCursor = (this.flareTrailCursor + 1) % FLARE_TRAIL_POOL_SIZE;
+
+    const safeRadius = clamp(Number.isFinite(radius) && radius > 0 ? radius : 15, 1.5, 90);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.15;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(target.x, target.y, target.z);
+    slot.group.visible = true;
+
+    this.tmpA.set(origin.x, origin.y, origin.z);
+    this.tmpB.set(target.x, target.y, target.z);
+    this.tmpDir.subVectors(this.tmpB, this.tmpA);
+    const len = this.tmpDir.length();
+    if (Number.isFinite(len) && len >= 1e-4) {
+      slot.beamLength = len;
+      this.tmpDir.divideScalar(len);
+      this.tmpQuat.setFromUnitVectors(this.upAxis, this.tmpDir);
+      slot.beamMesh.position.set(
+        (origin.x - target.x) * 0.5,
+        (origin.y - target.y) * 0.5,
+        (origin.z - target.z) * 0.5,
+      );
+      slot.beamMesh.quaternion.copy(this.tmpQuat);
+      slot.beamMesh.scale.set(0.22, len, 0.22);
+      slot.beamMat.opacity = 0.88;
+      slot.beamMesh.visible = true;
+    } else {
+      slot.beamLength = 0;
+      slot.beamMesh.position.set(0, 0, 0);
+      slot.beamMesh.quaternion.identity();
+      slot.beamMesh.scale.set(0.05, 0.05, 0.05);
+      slot.beamMat.opacity = 0;
+      slot.beamMesh.visible = false;
+    }
+
+    slot.coreMesh.scale.setScalar(0.65);
+    slot.coreMat.opacity = 0.96;
+
+    slot.burstMesh.scale.setScalar(0.8);
+    slot.burstMat.opacity = 0.78;
+
+    slot.innerRingMesh.scale.setScalar(0.5);
+    slot.innerRingMat.opacity = 0.94;
+
+    slot.scanRingMesh.scale.setScalar(1.0);
+    slot.scanRingMat.opacity = 0.9;
+
+    for (let s = 0; s < FLARE_TRAIL_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      const ang = (s / FLARE_TRAIL_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      const spd = 2.2 + this.nextRand() * 4.2;
+      sp.vx = Math.cos(ang) * spd;
+      sp.vy = 1.4 + this.nextRand() * 3.0;
+      sp.vz = Math.sin(ang) * spd;
+      sp.rx = (this.nextRand() - 0.5) * 10;
+      sp.ry = (this.nextRand() - 0.5) * 10;
+      sp.baseScale = 0.14 + this.nextRand() * 0.08;
+      sp.mesh.position.set(0, 0.2, 0);
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.95;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnWaterWake(position: Vec3Like, yaw: number, speed: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.waterWakes[this.waterWakeCursor];
+    this.waterWakeCursor = (this.waterWakeCursor + 1) % WATER_WAKE_POOL_SIZE;
+
+    const safeYaw = Number.isFinite(yaw) ? yaw : 0;
+    const safeSpeed = clamp(Number.isFinite(speed) && speed >= 0 ? speed : 6, 0.5, 45);
+    const speedScale = clamp(0.6 + safeSpeed * 0.055, 0.6, 2.4);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.72;
+    slot.speedScale = speedScale;
+
+    slot.group.position.set(position.x, position.y + 0.04, position.z);
+    slot.group.rotation.set(0, safeYaw, 0);
+    slot.group.visible = true;
+
+    slot.leftWakeMesh.position.set(-0.52 * speedScale, 0.03, -0.35 * speedScale);
+    slot.leftWakeMesh.scale.set(0.18 * speedScale, 0.05, 1.1 * speedScale);
+    slot.rightWakeMesh.position.set(0.52 * speedScale, 0.03, -0.35 * speedScale);
+    slot.rightWakeMesh.scale.set(0.18 * speedScale, 0.05, 1.1 * speedScale);
+    slot.wakeMat.opacity = 0.78;
+
+    slot.rippleRingMesh.scale.setScalar(0.75 * speedScale);
+    slot.rippleRingMat.opacity = 0.82;
+
+    slot.foamRingMesh.scale.setScalar(0.45 * speedScale);
+    slot.foamRingMat.opacity = 0.88;
+
+    for (let d = 0; d < WATER_WAKE_DROPLET_COUNT; d++) {
+      const dr = slot.droplets[d];
+      const side = d % 2 === 0 ? -1 : 1;
+      dr.vx = side * (1.8 + this.nextRand() * 2.4) * speedScale;
+      dr.vy = (2.2 + this.nextRand() * 2.0) * (0.7 + 0.3 * speedScale);
+      dr.vz = -(1.2 + this.nextRand() * 2.2) * speedScale;
+      dr.baseScale = (0.075 + this.nextRand() * 0.045) * (0.85 + 0.25 * speedScale);
+      dr.mesh.position.set(side * 0.45, 0.1, -0.25);
+      dr.mesh.scale.setScalar(dr.baseScale);
+      dr.material.opacity = 0.9;
+      dr.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -8924,6 +9865,10 @@ export class VFXManager {
     for (const fs of this.flameStreams) if (fs.active) count++;
     for (const ms of this.meteorStrikes) if (ms.active) count++;
     for (const hc of this.hopCrystalAuras) if (hc.active) count++;
+    for (const hs of this.hammerSlams) if (hs.active) count++;
+    for (const hb of this.hammerBounces) if (hb.active) count++;
+    for (const ft of this.flareTrails) if (ft.active) count++;
+    for (const ww of this.waterWakes) if (ww.active) count++;
     return count;
   }
 
@@ -9147,6 +10092,30 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveHammerSlamCount(): number {
+    let count = 0;
+    for (const hs of this.hammerSlams) if (hs.active) count++;
+    return count;
+  }
+
+  public getActiveHammerBounceCount(): number {
+    let count = 0;
+    for (const hb of this.hammerBounces) if (hb.active) count++;
+    return count;
+  }
+
+  public getActiveFlareTrailCount(): number {
+    let count = 0;
+    for (const ft of this.flareTrails) if (ft.active) count++;
+    return count;
+  }
+
+  public getActiveWaterWakeCount(): number {
+    let count = 0;
+    for (const ww of this.waterWakes) if (ww.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -9317,6 +10286,22 @@ export class VFXManager {
     for (const hc of this.hopCrystalAuras) {
       hc.active = false;
       hc.group.visible = false;
+    }
+    for (const hs of this.hammerSlams) {
+      hs.active = false;
+      hs.group.visible = false;
+    }
+    for (const hb of this.hammerBounces) {
+      hb.active = false;
+      hb.group.visible = false;
+    }
+    for (const ft of this.flareTrails) {
+      ft.active = false;
+      ft.group.visible = false;
+    }
+    for (const ww of this.waterWakes) {
+      ww.active = false;
+      ww.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

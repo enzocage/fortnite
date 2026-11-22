@@ -46,6 +46,7 @@ import type {
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
+  ShieldMushroomEntity,
   SlurpTankerEntity,
   SpecialistRole,
   SupplyDroneEntity,
@@ -59,6 +60,7 @@ import type {
   WeaponId,
   WeaponModId,
   WeatherKind,
+  WildBoarEntity,
 } from '../../types';
 import {
   angleRadToDeg,
@@ -76,6 +78,8 @@ import {
   deriveMatchHighlightBadges,
   drawFrontierMapOverlay,
   drawSkyforgeMapOverlay,
+  drawSpeedboatMapChevron,
+  drawTideMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -92,6 +96,7 @@ import {
   getAugmentIconSvg,
   getAugmentMeta,
   getBearingDeg,
+  getBoarSvg,
   getBountyTargetSvg,
   getBuildIconSvg,
   getBunkerSvg,
@@ -100,6 +105,7 @@ import {
   getContextualHudHints,
   getContrailMeta,
   getCrownSvg,
+  getFlareScanSvg,
   getForecastTowerSvg,
   getGameModeMeta,
   getGoldBarSvg,
@@ -113,6 +119,7 @@ import {
   getMedallionMeta,
   getMedallionSvg,
   getModBenchSvg,
+  getMushroomSvg,
   getOvershieldBoltSvg,
   getRarityMeta,
   getRebootVanSvg,
@@ -120,6 +127,7 @@ import {
   getShortestAngleDiffDeg,
   getSkullSvg,
   getSkyRiftIconSvg,
+  getSpeedboatSvg,
   getStealthLeafSvg,
   getStormEyeSvg,
   getSupplyDroneSvg,
@@ -152,6 +160,7 @@ import {
   resolveFrontierOverlayArgs,
   resolveKeybinds,
   resolveSkyforgeOverlayArgs,
+  resolveTideOverlayArgs,
   sanitizeGameMode,
   saveStoredLobbyConfig,
   saveStoredSettings,
@@ -161,6 +170,7 @@ import {
   updateVictoryCrown,
   type WorldFrontierOverlay,
   type WorldSkyforgeOverlay,
+  type WorldTideOverlay,
   worldToMapNorm,
   xpForLevelStep,
 } from '../index';
@@ -378,6 +388,7 @@ describe('UIHelpers', () => {
     }
     expect(formatVehicleKindLabel('hover_atv')).toBe('HOVER ATV');
     expect(formatVehicleKindLabel('cyber_bike')).toBe('CYBER BIKE');
+    expect(formatVehicleKindLabel('speedboat')).toBe('APEX SPEEDBOAT');
     expect(normalizeBoostChargePct(0.65)).toBeCloseTo(65, 5);
     expect(normalizeBoostChargePct(1)).toBeCloseTo(100, 5);
     expect(normalizeBoostChargePct(82)).toBeCloseTo(82, 5);
@@ -430,9 +441,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 31 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 33 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(31);
+    expect(weaponIds.length).toBe(33);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -444,7 +455,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9 upgraded icons have rich multi-element custom artwork
+    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9/Wave-10 upgraded icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -463,6 +474,8 @@ describe('WeaponIcons & SVG assets', () => {
       'emp_grenade',
       'jetpack',
       'plasma_flamethrower',
+      'shockwave_hammer',
+      'flare_gun',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -4535,7 +4548,7 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     hud.dispose();
   });
 
-  it('forwards setWorldFrontierOverlay to FullMapOverlay (26 legend rows, golden forecast rings, mod benches, forecast towers, blue allies before POI labels) & shows Team Rumble MatchOverlay summary', () => {
+  it('forwards setWorldFrontierOverlay to FullMapOverlay (28 legend rows, golden forecast rings, mod benches, forecast towers, blue allies before POI labels) & shows Team Rumble MatchOverlay summary', () => {
     const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
     const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
 
@@ -4610,12 +4623,12 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     const bus = new EventBus();
     const ui = new UIManager(root as unknown as HTMLElement, bus);
 
-    // 1. Legend has exactly 26 rows including MOD BENCH, FORECAST TOWER, APEX TRAIN & RIFT CRATER
+    // 1. Legend has exactly 28 rows including MOD BENCH, FORECAST TOWER, APEX TRAIN, RIFT CRATER, SPEEDBOAT & WILDLIFE
     const legend = root.findByClass('fdr-map-legend');
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(26);
+    expect(legendRowCount).toBe(28);
     expect(legend?.textContent).toContain('MOD BENCH');
     expect(legend?.textContent).toContain('FORECAST TOWER');
 
@@ -4967,6 +4980,7 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const stealthPill = chipRow?.findByClass('fdr-stealth-pill');
     const jetpackPill = chipRow?.findByClass('fdr-jetpack-pill');
     const lowGPill = chipRow?.findByClass('fdr-lowg-pill');
+    const flarePill = chipRow?.findByClass('fdr-flare-pill');
     const vitalsStack = bottomCenter?.findByClass('fdr-vitals-stack');
     const channelBar = bottomCenter?.findByClass('fdr-channel-bar');
 
@@ -4975,11 +4989,12 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     expect(stealthPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(jetpackPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(lowGPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(flarePill?.classList.contains('fdr-hidden')).toBe(true);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeGreaterThanOrEqual(0);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeLessThan(
       bottomCenter?.children.indexOf(vitalsStack!) ?? 999,
     );
-    expect(chipRow?.children).toEqual([stealthPill, jetpackPill, lowGPill]);
+    expect(chipRow?.children).toEqual([stealthPill, jetpackPill, lowGPill, flarePill]);
 
     // 2. All 3 status chips active + Train Hack channel bar + Minimap Skyforge Overlay
     const trainState: ApexTrainState = {
@@ -5113,7 +5128,7 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     hud.dispose();
   });
 
-  it('forwards setWorldSkyforgeOverlay to FullMapOverlay (26 legend rows, closed rail loop, train carriage & craters before POI labels) & shows TRAIN HEIST / SKY RIDER highlights on MatchOverlay', () => {
+  it('forwards setWorldSkyforgeOverlay to FullMapOverlay (28 legend rows, closed rail loop, train carriage & craters before POI labels) & shows TRAIN HEIST / SKY RIDER highlights on MatchOverlay', () => {
     const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
     const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
 
@@ -5188,12 +5203,12 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const bus = new EventBus();
     const ui = new UIManager(root as unknown as HTMLElement, bus);
 
-    // 1. Legend has exactly 26 rows including APEX TRAIN & RIFT CRATER
+    // 1. Legend has exactly 28 rows including APEX TRAIN, RIFT CRATER, SPEEDBOAT & WILDLIFE
     const legend = root.findByClass('fdr-map-legend');
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(26);
+    expect(legendRowCount).toBe(28);
     expect(legend?.textContent).toContain('APEX TRAIN');
     expect(legend?.textContent).toContain('RIFT CRATER');
 
@@ -5288,6 +5303,676 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const highlightsRow = root.findByClass('fdr-highlights-row');
     expect(highlightsRow?.textContent).toContain('TRAIN HEIST');
     expect(highlightsRow?.textContent).toContain('SKY RIDER');
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 10 UI: Tide & Recon (Shockwave Hammer, Flare Gun, Apex Speedboat, Boars, Mushrooms & Highlights)', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave-10 SVGs (shockwave_hammer, flare_gun, getSpeedboatSvg, getMushroomSvg, getBoarSvg), APEX SPEEDBOAT label, WorldTideOverlay & TITAN SMASH / RECON ACE highlights', () => {
+    for (const id of ['shockwave_hammer', 'flare_gun'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    const boatSvg = getSpeedboatSvg();
+    for (const svg of [
+      boatSvg,
+      getMushroomSvg(),
+      getBoarSvg(),
+      getFlareScanSvg(),
+      getVehicleIconSvg('speedboat'),
+    ]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+    expect(getVehicleIconSvg('speedboat')).toBe(boatSvg);
+    expect(getVehicleIconSvg('speedboat')).not.toBe(getVehicleIconSvg('hover_atv'));
+    expect(getVehicleIconSvg('speedboat')).not.toBe(getVehicleIconSvg('cyber_bike'));
+
+    expect(formatVehicleKindLabel('speedboat')).toBe('APEX SPEEDBOAT');
+
+    const boars: WildBoarEntity[] = [
+      {
+        id: 'boar-live',
+        x: 40,
+        y: 10,
+        z: -30,
+        yaw: 0.4,
+        hp: 110,
+        maxHp: 110,
+        alive: true,
+        state: 'charge',
+        speed: 8.5,
+      },
+      {
+        id: 'boar-dead',
+        x: 90,
+        y: 10,
+        z: 90,
+        yaw: 0,
+        hp: 0,
+        maxHp: 110,
+        alive: false,
+        state: 'roam',
+        speed: 0,
+      },
+    ];
+    const mushrooms: ShieldMushroomEntity[] = [
+      {
+        id: 'mush-1',
+        poiId: 'crystal_basin',
+        x: -25,
+        y: 9,
+        z: 18,
+        available: true,
+        respawnSec: 0,
+      },
+      {
+        id: 'mush-2',
+        poiId: 'crystal_basin',
+        x: -30,
+        y: 9,
+        z: 22,
+        available: false,
+        respawnSec: 45,
+      },
+    ];
+    const speedboats: VehicleEntity[] = [
+      {
+        id: 'boat-1',
+        kind: 'speedboat',
+        x: 55,
+        y: 1,
+        z: 65,
+        yaw: 0.6,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 450,
+        maxHp: 450,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: null,
+        destroyed: false,
+      },
+    ];
+
+    const byArgs: WorldTideOverlay = resolveTideOverlayArgs(boars, mushrooms);
+    expect(byArgs.boars.length).toBe(2);
+    expect(byArgs.mushrooms.length).toBe(2);
+
+    const byObj: WorldTideOverlay = resolveTideOverlayArgs({
+      boars,
+      mushrooms,
+    });
+    expect(byObj.boars[0].id).toBe('boar-live');
+    expect(byObj.mushrooms[0].id).toBe('mush-1');
+
+    // Minimal Node canvas mock WITHOUT fillText, strokeText, ellipse, rotate, or strokeRect!
+    const directCalls: Array<{ op: string; args: unknown[] }> = [];
+    const safeCtx = {
+      save: () => directCalls.push({ op: 'save', args: [] }),
+      restore: () => directCalls.push({ op: 'restore', args: [] }),
+      translate: (...args: unknown[]) => directCalls.push({ op: 'translate', args }),
+      beginPath: () => directCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => directCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => directCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => directCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => directCalls.push({ op: 'arc', args }),
+      fill: () => directCalls.push({ op: 'fill', args: [] }),
+      stroke: () => directCalls.push({ op: 'stroke', args: [] }),
+      fillRect: (...args: unknown[]) => directCalls.push({ op: 'fillRect', args }),
+      setLineDash: (...args: unknown[]) => directCalls.push({ op: 'setLineDash', args }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    drawTideMapOverlay(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      220,
+      220 / 280,
+      (wx, wz) => ({ x: 110 + wx * (220 / 280), y: 110 + wz * (220 / 280) }),
+      byArgs,
+      [{ x: -15, z: -20, radius: 75, remainingSec: 9.5 }],
+      speedboats,
+      1500,
+    );
+
+    const hasLiveBoar = directCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (110 + 40 * (220 / 280))) < 0.5 &&
+        Math.abs((c.args[1] as number) - (110 + -30 * (220 / 280))) < 0.5,
+    );
+    const hasDeadBoar = directCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (110 + 90 * (220 / 280))) < 0.5 &&
+        Math.abs((c.args[1] as number) - (110 + 90 * (220 / 280))) < 0.5,
+    );
+    const hasBoat = directCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (110 + 55 * (220 / 280))) < 0.5 &&
+        Math.abs((c.args[1] as number) - (110 + 65 * (220 / 280))) < 0.5,
+    );
+    const hasFlareRing = directCalls.some(
+      (c) =>
+        c.op === 'arc' &&
+        Math.abs((c.args[0] as number) - (110 + -15 * (220 / 280))) < 0.5 &&
+        Math.abs((c.args[1] as number) - (110 + -20 * (220 / 280))) < 0.5 &&
+        (c.args[2] as number) > 20,
+    );
+
+    expect(hasLiveBoar).toBe(true);
+    expect(hasDeadBoar).toBe(false);
+    expect(hasBoat).toBe(true);
+    expect(hasFlareRing).toBe(true);
+    expect(directCalls.some((c) => c.op === 'setLineDash')).toBe(true);
+
+    // Direct drawSpeedboatMapChevron check without rotate on mock
+    drawSpeedboatMapChevron(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      44,
+      88,
+      1.2,
+      true,
+    );
+
+    const noHighlightBadges = deriveMatchHighlightBadges({
+      victory: false,
+      placement: 8,
+      totalPlayers: 30,
+      kills: 1,
+      damageDealt: 180,
+      shotsFired: 10,
+      shotsHit: 3,
+      accuracy: 30,
+      headshots: 0,
+      structuresBuilt: 0,
+      chestsOpened: 1,
+      survivalTimeSec: 90,
+      hammerSlams: 1,
+      flaresFired: 0,
+    });
+    expect(noHighlightBadges.some((b) => b.label === 'TITAN SMASH')).toBe(false);
+    expect(noHighlightBadges.some((b) => b.label === 'RECON ACE')).toBe(false);
+
+    const badges = deriveMatchHighlightBadges({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 4,
+      damageDealt: 960,
+      shotsFired: 25,
+      shotsHit: 12,
+      accuracy: 48,
+      headshots: 1,
+      structuresBuilt: 4,
+      chestsOpened: 3,
+      survivalTimeSec: 195,
+      hammerSlams: 2,
+      flaresFired: 1,
+    });
+    expect(badges.some((b) => b.label === 'TITAN SMASH')).toBe(true);
+    expect(badges.find((b) => b.label === 'RECON ACE')?.tone).toBe('crimson');
+  });
+
+  it('renders Shockwave Hammer Charges inside .fdr-kinetic-badge, crimson FLARE SCAN pill, APEX SPEEDBOAT dashboard & Node-safe Minimap Tide overlay', () => {
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    // Minimal 2D canvas context WITHOUT fillText, strokeText, or ellipse!
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => miniMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    const boars: WildBoarEntity[] = [
+      {
+        id: 'boar-mini',
+        x: 18,
+        y: 10,
+        z: -24,
+        yaw: 0.2,
+        hp: 110,
+        maxHp: 110,
+        alive: true,
+        state: 'roam',
+        speed: 4,
+      },
+    ];
+    const mushrooms: ShieldMushroomEntity[] = [
+      {
+        id: 'mush-mini',
+        poiId: 'metro_towers',
+        x: -14,
+        y: 10,
+        z: 16,
+        available: true,
+        respawnSec: 0,
+      },
+    ];
+    hud.setWorldTideOverlay(boars, mushrooms);
+    miniDrawCalls.length = 0;
+
+    // 1. Hammer Charges (4/4), Flare Scan Marked Pill, APEX SPEEDBOAT dashboard, hotbar SVGs & Minimap Tide Overlay
+    hud.update(
+      makeBaseHUDState({
+        kineticDashCharges: null,
+        hammerCharges: { charges: 4, maxCharges: 4, regenProgress: 0 },
+        flareScanMarkedCount: 3,
+        flareBeacons: [{ x: 10, z: 12, radius: 75, remainingSec: 8 }],
+        isStealthed: true,
+        vehicle: {
+          kind: 'speedboat',
+          speedKmh: 78,
+          hp: 450,
+          maxHp: 450,
+          boostCharge: 0.9,
+          isBoosting: true,
+        },
+        slots: [
+          { uid: 'pick', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+          { uid: 'sh', weaponId: 'shockwave_hammer', rarity: 'epic', magAmmo: 0, stackCount: 1 },
+          { uid: 'fg', weaponId: 'flare_gun', rarity: 'rare', magAmmo: 4, stackCount: 1 },
+          null,
+          null,
+          null,
+        ],
+        activeSlot: 1,
+      }),
+    );
+
+    const kineticBadge = hudRoot.findByClass('fdr-kinetic-badge');
+    expect(kineticBadge?.classList.contains('fdr-hidden')).toBe(false);
+    expect(kineticBadge?.classList.contains('hammer-mode')).toBe(true);
+    expect(kineticBadge?.dataset.mode).toBe('hammer');
+    expect(kineticBadge?.textContent).toContain('SHOCK HAMMER · 4/4');
+    expect(kineticBadge?.innerHTML).toContain(getWeaponSvg('shockwave_hammer'));
+    const hammerPips = kineticBadge?.findAllByClass('fdr-kinetic-pip') ?? [];
+    expect(hammerPips.length).toBe(4);
+    expect(hammerPips.every((p) => p.classList.contains('active'))).toBe(true);
+
+    const chipRow = hudRoot.findByClass('fdr-status-chip-row');
+    const flarePill = chipRow?.findByClass('fdr-flare-pill');
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(false);
+    expect(flarePill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(flarePill?.dataset.markedCount).toBe('3');
+    expect(flarePill?.textContent).toContain('FLARE SCAN · 3 MARKED');
+
+    const vehDash = hudRoot.findByClass('fdr-vehicle-dash');
+    expect(vehDash?.classList.contains('fdr-hidden')).toBe(false);
+    expect(vehDash?.textContent).toContain('APEX SPEEDBOAT');
+    expect(vehDash?.innerHTML).toContain(getSpeedboatSvg());
+
+    const slotCards = hudRoot.findAllByClass('fdr-slot-card');
+    expect(slotCards[1]?.innerHTML).toContain(getWeaponSvg('shockwave_hammer'));
+    expect(slotCards[2]?.innerHTML).toContain(getWeaponSvg('flare_gun'));
+
+    // Minimap rendered boar & mushroom translate and crimson flare ring without fillText/ellipse
+    const miniSize = 220;
+    const miniPxPerMeter = miniSize / 280;
+    const hasBoarMini = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + 18 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + -24 * miniPxPerMeter)) < 0.5,
+    );
+    const hasFlareMini = miniDrawCalls.some(
+      (c) =>
+        c.op === 'arc' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + 10 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + 12 * miniPxPerMeter)) < 0.5 &&
+        (c.args[2] as number) >= 75 * miniPxPerMeter - 1,
+    );
+    expect(hasBoarMini).toBe(true);
+    expect(hasFlareMini).toBe(true);
+
+    // 2. Partial hammer charges (2/4) & zero charges (0/4 + empty)
+    hud.update(
+      makeBaseHUDState({
+        kineticDashCharges: null,
+        hammerCharges: { charges: 2, maxCharges: 4, regenProgress: 0.5 },
+        flareScanMarkedCount: 1,
+      }),
+    );
+    expect(kineticBadge?.textContent).toContain('SHOCK HAMMER · 2/4');
+    expect(kineticBadge?.classList.contains('empty')).toBe(false);
+    const partialPips = kineticBadge?.findAllByClass('fdr-kinetic-pip') ?? [];
+    expect(partialPips[0].classList.contains('active')).toBe(true);
+    expect(partialPips[1].classList.contains('active')).toBe(true);
+    expect(partialPips[2].classList.contains('active')).toBe(false);
+    expect(partialPips[2].classList.contains('recharging')).toBe(true);
+    expect(flarePill?.textContent).toContain('FLARE SCAN · 1 MARKED');
+
+    hud.update(
+      makeBaseHUDState({
+        kineticDashCharges: null,
+        hammerCharges: { charges: 0, maxCharges: 4, regenProgress: 0.25 },
+        flareScanMarkedCount: 0,
+        isStealthed: false,
+      }),
+    );
+    expect(kineticBadge?.textContent).toContain('SHOCK HAMMER · 0/4');
+    expect(kineticBadge?.classList.contains('empty')).toBe(true);
+    expect(flarePill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(true);
+
+    // 3. Kinetic Dash takes precedence over hammerCharges when both are present, and null hides cleanly
+    hud.update(
+      makeBaseHUDState({
+        kineticDashCharges: 3,
+        hammerCharges: { charges: 4, maxCharges: 4, regenProgress: 0 },
+      }),
+    );
+    expect(kineticBadge?.classList.contains('hammer-mode')).toBe(false);
+    expect(kineticBadge?.textContent).toContain('KINETIC DASH');
+    expect(kineticBadge?.findAllByClass('fdr-kinetic-pip').length).toBe(3);
+
+    hud.update(
+      makeBaseHUDState({
+        kineticDashCharges: null,
+        hammerCharges: null,
+      }),
+    );
+    expect(kineticBadge?.classList.contains('fdr-hidden')).toBe(true);
+
+    hud.dispose();
+  });
+
+  it('forwards setWorldTideOverlay to FullMapOverlay (28 legend rows, live boars, flare rings & speedboats before POI labels) & shows TITAN SMASH / RECON ACE highlights on MatchOverlay', () => {
+    const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+
+    // FullMap mock WITHOUT ellipse
+    const fullMockCtx = {
+      clearRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => fullDrawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => fullDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => fullDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => fullDrawCalls.push({ op: 'arc', args }),
+      fill: () => fullDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => fullDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => fullDrawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => fullDrawCalls.push({ op: 'rotate', args }),
+      setLineDash: (...args: unknown[]) => fullDrawCalls.push({ op: 'setLineDash', args }),
+      fillText: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    let canvasCount = 0;
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          const idx = canvasCount++;
+          (el as unknown as { getContext: () => unknown }).getContext = () =>
+            idx === 0 ? miniMockCtx : fullMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. Legend has exactly 28 rows including SPEEDBOAT & WILDLIFE
+    const legend = root.findByClass('fdr-map-legend');
+    const legendRowCount = (
+      legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
+    ).length;
+    expect(legendRowCount).toBe(28);
+    expect(legend?.textContent).toContain('SPEEDBOAT');
+    expect(legend?.textContent).toContain('WILDLIFE');
+
+    // 2. setWorldTideOverlay & speedboat vehicles render before POI labels
+    const boars: WildBoarEntity[] = [
+      {
+        id: 'boar-full-1',
+        x: -145,
+        y: 12,
+        z: 95,
+        yaw: 0.3,
+        hp: 110,
+        maxHp: 110,
+        alive: true,
+        state: 'roam',
+        speed: 4.5,
+      },
+      {
+        id: 'boar-full-dead',
+        x: 210,
+        y: 12,
+        z: 210,
+        yaw: 0,
+        hp: 0,
+        maxHp: 110,
+        alive: false,
+        state: 'roam',
+        speed: 0,
+      },
+    ];
+    const mushrooms: ShieldMushroomEntity[] = [
+      {
+        id: 'mush-full-1',
+        poiId: 'sunny_suburbs',
+        x: -115,
+        y: 11,
+        z: -95,
+        available: true,
+        respawnSec: 0,
+      },
+    ];
+    const vehicles: VehicleEntity[] = [
+      {
+        id: 'boat-full-1',
+        kind: 'speedboat',
+        x: 175,
+        y: 1,
+        z: 140,
+        yaw: 0.8,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 450,
+        maxHp: 450,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: null,
+        destroyed: false,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldVehicles(vehicles);
+    ui.setWorldTideOverlay(boars, mushrooms);
+    ui.toggleFullMap(true);
+    fullDrawCalls.length = 0;
+    miniDrawCalls.length = 0;
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        playerPos: { x: 0, y: 10, z: 0 },
+        flareBeacons: [{ x: 85, z: -90, radius: 75, remainingSec: 10 }],
+      }),
+    );
+
+    const findFullTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return fullDrawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const boarIdx = findFullTranslateIdx(-145, 95);
+    const deadBoarIdx = findFullTranslateIdx(210, 210);
+    const boatIdx = findFullTranslateIdx(175, 140);
+    const flareNorm = worldToMapNorm(85, -90);
+    const flareIdx = fullDrawCalls.findIndex(
+      (c) =>
+        c.op === 'arc' &&
+        Math.abs((c.args[0] as number) - flareNorm.nx * 640) < 0.5 &&
+        Math.abs((c.args[1] as number) - flareNorm.nz * 640) < 0.5,
+    );
+    const firstPoiLabelIdx = fullDrawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+
+    expect(boarIdx).toBeGreaterThanOrEqual(0);
+    expect(deadBoarIdx).toBe(-1);
+    expect(boatIdx).toBeGreaterThanOrEqual(0);
+    expect(flareIdx).toBeGreaterThanOrEqual(0);
+    expect(firstPoiLabelIdx).toBeGreaterThan(boarIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(boatIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(flareIdx);
+
+    // 3. MatchOverlay shows TITAN SMASH & RECON ACE badges
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 6,
+      damageDealt: 1340,
+      shotsFired: 50,
+      shotsHit: 24,
+      accuracy: 48,
+      headshots: 2,
+      structuresBuilt: 5,
+      chestsOpened: 3,
+      survivalTimeSec: 205,
+      hammerSlams: 3,
+      flaresFired: 2,
+      boarsHunted: 1,
+      mushroomsEaten: 2,
+    });
+    const highlightsRow = root.findByClass('fdr-highlights-row');
+    expect(highlightsRow?.textContent).toContain('TITAN SMASH');
+    expect(highlightsRow?.textContent).toContain('RECON ACE');
 
     ui.dispose();
   });

@@ -2,17 +2,22 @@ import * as THREE from 'three';
 import {
   EventBus,
   GRIND_RAIL_SPEED,
+  ISLAND_RADIUS,
   MEDALLIONS,
   METEOR_CRATER_CRYSTAL_RESPAWN_SEC,
   POIS,
   RARITY_COLORS,
   REBOOT_VAN_COOLDOWN_SEC,
+  SHIELD_MUSHROOM_RESPAWN_SEC,
   TRAIN_CHEST_COOLDOWN_SEC,
   TRAIN_HACK_DURATION_SEC,
   TRAIN_SPEED_MPS,
   WATER_LEVEL,
   WEAPON_MOD_COST_GOLD,
   WEAPONS,
+  WILD_BOAR_MAX_HP,
+  clamp,
+  normalizeAngle,
 } from '../core';
 import type {
   ApexTrainState,
@@ -34,6 +39,7 @@ import type {
   Rarity,
   RebootVanEntity,
   RiftEntity,
+  ShieldMushroomEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SpecialistRole,
@@ -47,6 +53,7 @@ import type {
   VendingMachineEntity,
   WeaponBunkerEntity,
   WeaponId,
+  WildBoarEntity,
   ZiplineEntity,
 } from '../types';
 
@@ -194,6 +201,19 @@ export interface HopCrystalConsumeResult {
 export interface Wave9ShowcaseResult {
   train: ApexTrainState;
   crater: MeteorCraterEntity;
+}
+
+export interface WildBoarDamageResult {
+  hit: boolean;
+  eliminated: boolean;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface Wave10ShowcaseResult {
+  mushrooms: ShieldMushroomEntity[];
+  boars: WildBoarEntity[];
 }
 
 interface VendingMachineVisual {
@@ -439,6 +459,35 @@ interface MeteorCraterVisual {
   isQaShowcase?: boolean;
 }
 
+interface ShieldMushroomVisual {
+  data: ShieldMushroomEntity;
+  group: THREE.Group;
+  capGroup: THREE.Group;
+  auraRing: THREE.Mesh;
+  baseCapY: number;
+  bobPhase: number;
+  isQaShowcase?: boolean;
+}
+
+interface WildBoarVisual {
+  data: WildBoarEntity;
+  group: THREE.Group;
+  bodyGroup: THREE.Group;
+  legFL: THREE.Group;
+  legFR: THREE.Group;
+  legBL: THREE.Group;
+  legBR: THREE.Group;
+  homeX: number;
+  homeZ: number;
+  initialYaw: number;
+  roamRadius: number;
+  trotPhase: number;
+  wanderPhase: number;
+  fleeTimer: number;
+  hitAnim: number;
+  isQaShowcase?: boolean;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -478,6 +527,10 @@ const TRAIN_HACK_DECAY_GRACE_SEC = 2.0;
 const TRAIN_HACK_DECAY_RATE_SEC = 4.5;
 const METEOR_CRATER_RADIUS = 5.2;
 const HOP_CRYSTAL_NEARBY_RADIUS = 4.2;
+const SHIELD_MUSHROOM_NEARBY_RADIUS = 2.8;
+const BOAR_ROAM_SPEED = 2.6;
+const BOAR_FLEE_SPEED = 7.8;
+const BOAR_FLEE_DURATION_SEC = 5.0;
 const TRAIN_MID_RING_WAYPOINTS_XZ: ReadonlyArray<[number, number]> = [
   [-38, -36],
   [-8, -52],
@@ -566,6 +619,10 @@ export class WorldInteractables {
   private stealthBushesMap = new Map<string, StealthBushVisual>();
   private meteorCraters: MeteorCraterEntity[] = [];
   private meteorCratersMap = new Map<string, MeteorCraterVisual>();
+  private shieldMushrooms: ShieldMushroomEntity[] = [];
+  private shieldMushroomsMap = new Map<string, ShieldMushroomVisual>();
+  private wildBoars: WildBoarEntity[] = [];
+  private wildBoarsMap = new Map<string, WildBoarVisual>();
   private trainGroup!: THREE.Group;
   private trainTrackGroup!: THREE.Group;
   private trainTrackGeos: THREE.BufferGeometry[] = [];
@@ -664,6 +721,8 @@ export class WorldInteractables {
     this.buildStealthBushes(terrain);
     this.buildApexTrain(terrain);
     this.buildMeteorCraters(terrain);
+    this.buildShieldMushrooms(terrain);
+    this.buildWildBoars(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -6028,6 +6087,31 @@ export class WorldInteractables {
       if (idx >= 0) this.meteorCraters.splice(idx, 1);
     }
 
+    for (const qaMushId of [
+      'mushroom_qa_showcase_1',
+      'mushroom_qa_showcase_2',
+      'mushroom_qa_showcase_3',
+      'mushroom_qa_showcase_4',
+    ]) {
+      const qaMush = this.shieldMushroomsMap.get(qaMushId);
+      if (qaMush) {
+        this.group.remove(qaMush.group);
+        this.shieldMushroomsMap.delete(qaMushId);
+        const idx = this.shieldMushrooms.findIndex((m) => m.id === qaMushId);
+        if (idx >= 0) this.shieldMushrooms.splice(idx, 1);
+      }
+    }
+
+    for (const qaBoarId of ['boar_qa_showcase_1', 'boar_qa_showcase_2']) {
+      const qaBoar = this.wildBoarsMap.get(qaBoarId);
+      if (qaBoar) {
+        this.group.remove(qaBoar.group);
+        this.wildBoarsMap.delete(qaBoarId);
+        const idx = this.wildBoars.findIndex((b) => b.id === qaBoarId);
+        if (idx >= 0) this.wildBoars.splice(idx, 1);
+      }
+    }
+
     for (const g of this.qaShowcaseGeos) g.dispose();
     this.qaShowcaseGeos = [];
 
@@ -6293,6 +6377,506 @@ export class WorldInteractables {
       volume: 0.95,
       spatial: true,
     });
+  }
+
+  private createShieldMushroomEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    scale?: number;
+    isQaShowcase?: boolean;
+  }): ShieldMushroomVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: ShieldMushroomEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      y,
+      z: spec.z,
+      available: true,
+      respawnSec: 0,
+    };
+    this.shieldMushrooms.push(data);
+
+    const stalkMat = this.getSharedMat('mushroom_stalk_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#dbeafe',
+        emissive: '#0891b2',
+        emissiveIntensity: 0.25,
+        roughness: 0.65,
+      }),
+    );
+    const capMat = this.getSharedMat('mushroom_cap_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#06b6d4',
+        emissive: '#0ea5e9',
+        emissiveIntensity: 1.45,
+        roughness: 0.22,
+        metalness: 0.15,
+      }),
+    );
+    const gillMat = this.getSharedMat('mushroom_gill_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#67e8f9',
+        emissive: '#22d3ee',
+        emissiveIntensity: 1.65,
+        roughness: 0.2,
+      }),
+    );
+    const auraMat = this.getSharedMat('mushroom_aura_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#22d3ee',
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const stalkGeo = this.getSharedGeo(
+      'mushroom_stalk_geo',
+      () => new THREE.CylinderGeometry(0.1, 0.14, 0.3, 8),
+    );
+    const capGeo = this.getSharedGeo(
+      'mushroom_cap_geo',
+      () => new THREE.SphereGeometry(0.32, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    );
+    const gillGeo = this.getSharedGeo(
+      'mushroom_gill_geo',
+      () => new THREE.CylinderGeometry(0.28, 0.1, 0.06, 12),
+    );
+    const spotGeo = this.getSharedGeo(
+      'mushroom_spot_geo',
+      () => new THREE.SphereGeometry(0.052, 6, 6),
+    );
+    const auraRingGeo = this.getSharedGeo('mushroom_aura_ring_geo', () => {
+      const g = new THREE.RingGeometry(0.28, 0.44, 16);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+
+    const scale = spec.scale ?? 1.0;
+    const mushGroup = new THREE.Group();
+    mushGroup.name = `ShieldMushroom_${spec.id}`;
+    mushGroup.position.set(spec.x, y, spec.z);
+    mushGroup.scale.setScalar(scale);
+
+    const auraRing = new THREE.Mesh(auraRingGeo, auraMat);
+    auraRing.position.y = 0.04;
+    mushGroup.add(auraRing);
+
+    const baseCapY = 0;
+    const capGroup = new THREE.Group();
+    capGroup.position.y = baseCapY;
+
+    const stalk = new THREE.Mesh(stalkGeo, stalkMat);
+    stalk.position.y = 0.15;
+    stalk.castShadow = true;
+    capGroup.add(stalk);
+
+    const gill = new THREE.Mesh(gillGeo, gillMat);
+    gill.position.y = 0.31;
+    capGroup.add(gill);
+
+    const cap = new THREE.Mesh(capGeo, capMat);
+    cap.position.y = 0.31;
+    cap.scale.set(1.06, 0.78, 1.06);
+    cap.castShadow = true;
+    capGroup.add(cap);
+
+    for (let s = 0; s < 4; s++) {
+      const a = (s / 4) * Math.PI * 2 + 0.4;
+      const spot = new THREE.Mesh(spotGeo, gillMat);
+      spot.position.set(Math.cos(a) * 0.18, 0.45, Math.sin(a) * 0.18);
+      capGroup.add(spot);
+    }
+
+    mushGroup.add(capGroup);
+    this.group.add(mushGroup);
+
+    const visual: ShieldMushroomVisual = {
+      data,
+      group: mushGroup,
+      capGroup,
+      auraRing,
+      baseCapY,
+      bobPhase: (this.shieldMushrooms.length * 1.23) % (Math.PI * 2),
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.shieldMushroomsMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildShieldMushrooms(_terrain: TerrainQuery): void {
+    const clusterDefs: Array<{
+      poiId: string;
+      prefix: string;
+      cx: number;
+      cz: number;
+    }> = [
+      // Whispering Pines (8 mushrooms in 2 scenic clusters)
+      { poiId: 'whispering_pines', prefix: 'mush_pines_nw', cx: 133, cz: -197 },
+      { poiId: 'whispering_pines', prefix: 'mush_pines_sw', cx: 145, cz: -125 },
+      // Crystal Basin shoreline (8 mushrooms in 2 shoreline clusters)
+      { poiId: 'crystal_basin', prefix: 'mush_crystal_ne', cx: 52, cz: -162 },
+      { poiId: 'crystal_basin', prefix: 'mush_crystal_nw', cx: -22, cz: -143 },
+      // Sunny Suburbs glades (8 mushrooms in 2 glade clusters)
+      { poiId: 'sunny_suburbs', prefix: 'mush_suburbs_nw', cx: -185, cz: -199 },
+      { poiId: 'sunny_suburbs', prefix: 'mush_suburbs_se', cx: -113, cz: -127 },
+    ];
+
+    const offsets: ReadonlyArray<[number, number, number]> = [
+      [-1.1, -0.8, 1.05],
+      [1.0, -0.9, 0.92],
+      [-0.8, 1.0, 0.96],
+      [1.2, 0.9, 1.12],
+    ];
+
+    for (const cluster of clusterDefs) {
+      for (let i = 0; i < offsets.length; i++) {
+        const [ox, oz, scale] = offsets[i];
+        this.createShieldMushroomEntry({
+          id: `${cluster.prefix}_${i + 1}`,
+          poiId: cluster.poiId,
+          x: cluster.cx + ox,
+          z: cluster.cz + oz,
+          scale,
+        });
+      }
+    }
+  }
+
+  getShieldMushrooms(): ShieldMushroomEntity[] {
+    return this.shieldMushrooms;
+  }
+
+  findNearbyShieldMushroom(
+    pos: Vec3Like,
+    radius = SHIELD_MUSHROOM_NEARBY_RADIUS,
+  ): ShieldMushroomEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return null;
+    }
+
+    let best: ShieldMushroomEntity | null = null;
+    let bestDist = radius;
+    for (let i = 0; i < this.shieldMushrooms.length; i++) {
+      const m = this.shieldMushrooms[i];
+      if (!m.available) continue;
+      const d = Math.hypot(m.x - pos.x, m.y - pos.y, m.z - pos.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  consumeShieldMushroom(id: string): boolean {
+    const entry = this.shieldMushroomsMap.get(id);
+    if (!entry || !entry.data.available) {
+      return false;
+    }
+
+    entry.data.available = false;
+    entry.data.respawnSec = SHIELD_MUSHROOM_RESPAWN_SEC;
+    entry.capGroup.visible = false;
+    entry.auraRing.visible = false;
+
+    const pos: Vec3Like = {
+      x: entry.data.x,
+      y: entry.data.y + 0.35,
+      z: entry.data.z,
+    };
+    this.eventBus?.emit('sound:play', {
+      id: 'mushroom_eat',
+      position: { ...pos },
+      volume: 0.85,
+      spatial: true,
+    });
+    this.eventBus?.emit('vfx:splash_heal', {
+      position: { ...pos },
+      radius: 2.2,
+    });
+
+    return true;
+  }
+
+  private createWildBoarEntry(spec: {
+    id: string;
+    x: number;
+    z: number;
+    yaw: number;
+    roamRadius?: number;
+    isQaShowcase?: boolean;
+  }): WildBoarVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: WildBoarEntity = {
+      id: spec.id,
+      x: spec.x,
+      y,
+      z: spec.z,
+      yaw: normalizeAngle(spec.yaw),
+      hp: WILD_BOAR_MAX_HP,
+      maxHp: WILD_BOAR_MAX_HP,
+      alive: true,
+      state: 'roam',
+      speed: BOAR_ROAM_SPEED,
+    };
+    this.wildBoars.push(data);
+
+    const hideMat = this.getSharedMat('boar_hide_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#4a2c1d',
+        roughness: 0.84,
+        metalness: 0.08,
+      }),
+    );
+    const bristleMat = this.getSharedMat('boar_bristle_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#29170f',
+        roughness: 0.9,
+      }),
+    );
+    const snoutMat = this.getSharedMat('boar_snout_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#c08474',
+        roughness: 0.72,
+      }),
+    );
+    const tuskMat = this.getSharedMat('boar_gold_tusk_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#fde047',
+        emissive: '#eab308',
+        emissiveIntensity: 0.55,
+        roughness: 0.25,
+        metalness: 0.75,
+      }),
+    );
+    const eyeMat = this.getSharedMat('boar_eye_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#fbbf24',
+        emissive: '#f59e0b',
+        emissiveIntensity: 1.25,
+        roughness: 0.2,
+      }),
+    );
+
+    const torsoGeo = this.getSharedGeo(
+      'boar_torso_geo',
+      () => new THREE.BoxGeometry(0.68, 0.54, 1.08),
+    );
+    const ridgeGeo = this.getSharedGeo(
+      'boar_ridge_geo',
+      () => new THREE.BoxGeometry(0.16, 0.16, 0.88),
+    );
+    const saddleGeo = this.getSharedGeo(
+      'boar_saddle_geo',
+      () => new THREE.BoxGeometry(0.72, 0.16, 0.34),
+    );
+    const headGeo = this.getSharedGeo(
+      'boar_head_geo',
+      () => new THREE.BoxGeometry(0.54, 0.46, 0.52),
+    );
+    const snoutGeo = this.getSharedGeo('boar_snout_geo', () => {
+      const g = new THREE.CylinderGeometry(0.16, 0.2, 0.24, 8);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const tuskGeo = this.getSharedGeo(
+      'boar_tusk_geo',
+      () => new THREE.ConeGeometry(0.055, 0.36, 7),
+    );
+    const earGeo = this.getSharedGeo(
+      'boar_ear_geo',
+      () => new THREE.BoxGeometry(0.12, 0.22, 0.1),
+    );
+    const eyeGeo = this.getSharedGeo('boar_eye_geo', () => new THREE.SphereGeometry(0.048, 6, 6));
+    const tailGeo = this.getSharedGeo(
+      'boar_tail_geo',
+      () => new THREE.BoxGeometry(0.09, 0.2, 0.12),
+    );
+    const legGeo = this.getSharedGeo(
+      'boar_leg_geo',
+      () => new THREE.BoxGeometry(0.16, 0.34, 0.16),
+    );
+    const hoofGeo = this.getSharedGeo(
+      'boar_hoof_geo',
+      () => new THREE.BoxGeometry(0.17, 0.1, 0.18),
+    );
+
+    const boarGroup = new THREE.Group();
+    boarGroup.name = `WildBoar_${spec.id}`;
+    boarGroup.position.set(spec.x, y, spec.z);
+    boarGroup.rotation.y = data.yaw;
+
+    const bodyGroup = new THREE.Group();
+
+    const torso = new THREE.Mesh(torsoGeo, hideMat);
+    torso.position.set(0, 0.58, 0);
+    torso.castShadow = true;
+    torso.receiveShadow = true;
+    bodyGroup.add(torso);
+
+    const ridge = new THREE.Mesh(ridgeGeo, bristleMat);
+    ridge.position.set(0, 0.9, -0.02);
+    ridge.castShadow = true;
+    bodyGroup.add(ridge);
+
+    const goldSaddle = new THREE.Mesh(saddleGeo, tuskMat);
+    goldSaddle.position.set(0, 0.72, 0.14);
+    bodyGroup.add(goldSaddle);
+
+    const head = new THREE.Mesh(headGeo, hideMat);
+    head.position.set(0, 0.62, 0.68);
+    head.castShadow = true;
+    bodyGroup.add(head);
+
+    const snout = new THREE.Mesh(snoutGeo, snoutMat);
+    snout.position.set(0, 0.52, 0.98);
+    bodyGroup.add(snout);
+
+    for (const side of [-1, 1]) {
+      const tusk = new THREE.Mesh(tuskGeo, tuskMat);
+      tusk.position.set(side * 0.2, 0.55, 0.96);
+      tusk.rotation.set(0.45, 0, -side * 0.34);
+      bodyGroup.add(tusk);
+
+      const ear = new THREE.Mesh(earGeo, bristleMat);
+      ear.position.set(side * 0.25, 0.88, 0.56);
+      ear.rotation.z = -side * 0.28;
+      bodyGroup.add(ear);
+
+      const eye = new THREE.Mesh(eyeGeo, eyeMat);
+      eye.position.set(side * 0.23, 0.7, 0.87);
+      bodyGroup.add(eye);
+    }
+
+    const tail = new THREE.Mesh(tailGeo, bristleMat);
+    tail.position.set(0, 0.76, -0.58);
+    tail.rotation.x = -0.45;
+    bodyGroup.add(tail);
+
+    const makeLegPivot = (lx: number, lz: number): THREE.Group => {
+      const pivot = new THREE.Group();
+      pivot.position.set(lx, 0.42, lz);
+      const limb = new THREE.Mesh(legGeo, hideMat);
+      limb.position.y = -0.17;
+      limb.castShadow = true;
+      const hoof = new THREE.Mesh(hoofGeo, bristleMat);
+      hoof.position.y = -0.37;
+      pivot.add(limb, hoof);
+      bodyGroup.add(pivot);
+      return pivot;
+    };
+
+    const legFL = makeLegPivot(-0.24, 0.34);
+    const legFR = makeLegPivot(0.24, 0.34);
+    const legBL = makeLegPivot(-0.24, -0.34);
+    const legBR = makeLegPivot(0.24, -0.34);
+
+    boarGroup.add(bodyGroup);
+    this.group.add(boarGroup);
+
+    const visual: WildBoarVisual = {
+      data,
+      group: boarGroup,
+      bodyGroup,
+      legFL,
+      legFR,
+      legBL,
+      legBR,
+      homeX: spec.x,
+      homeZ: spec.z,
+      initialYaw: data.yaw,
+      roamRadius: spec.roamRadius ?? 9.5,
+      trotPhase: (this.wildBoars.length * 1.37) % (Math.PI * 2),
+      wanderPhase: (this.wildBoars.length * 1.91) % (Math.PI * 2),
+      fleeTimer: 0,
+      hitAnim: 0,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.wildBoarsMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildWildBoars(_terrain: TerrainQuery): void {
+    const specs: Array<{ id: string; x: number; z: number; yaw: number }> = [
+      { id: 'boar_forest_ne_1', x: 140, z: -195, yaw: 0.6 },
+      { id: 'boar_forest_ne_2', x: 185, z: -135, yaw: 2.1 },
+      { id: 'boar_forest_east', x: 130, z: -45, yaw: -1.4 },
+      { id: 'boar_meadow_nw', x: -195, z: -175, yaw: 0.9 },
+      { id: 'boar_meadow_north', x: -110, z: -185, yaw: -2.2 },
+      { id: 'boar_meadow_center', x: 50, z: -35, yaw: 1.5 },
+      { id: 'boar_meadow_west', x: -115, z: 30, yaw: -0.7 },
+      { id: 'boar_meadow_south', x: 10, z: 185, yaw: 2.6 },
+    ];
+    for (const spec of specs) {
+      this.createWildBoarEntry(spec);
+    }
+  }
+
+  getWildBoars(): WildBoarEntity[] {
+    return this.wildBoars;
+  }
+
+  damageWildBoar(
+    id: string,
+    dmg: number,
+    _attackerId: string,
+  ): WildBoarDamageResult | null {
+    const entry = this.wildBoarsMap.get(id);
+    if (!entry || !entry.data.alive || !Number.isFinite(dmg) || dmg <= 0) {
+      return null;
+    }
+
+    const boar = entry.data;
+    boar.hp = Math.max(0, boar.hp - dmg);
+    entry.hitAnim = 1.0;
+
+    this.eventBus?.emit('sound:play', {
+      id: 'boar_grunt',
+      position: { x: boar.x, y: boar.y + 0.65, z: boar.z },
+      volume: 0.92,
+      spatial: true,
+    });
+
+    if (boar.hp <= 0) {
+      boar.hp = 0;
+      boar.alive = false;
+      boar.speed = 0;
+      entry.group.visible = false;
+      return {
+        hit: true,
+        eliminated: true,
+        x: boar.x,
+        y: boar.y,
+        z: boar.z,
+      };
+    }
+
+    if (boar.state !== 'flee') {
+      boar.state = 'flee';
+      boar.yaw = normalizeAngle(boar.yaw + Math.PI * 0.85);
+    }
+    boar.speed = BOAR_FLEE_SPEED;
+    entry.fleeTimer = BOAR_FLEE_DURATION_SEC;
+
+    return {
+      hit: true,
+      eliminated: false,
+      x: boar.x,
+      y: boar.y,
+      z: boar.z,
+    };
   }
 
   private clearTrainTrackVisuals(): void {
@@ -7394,6 +7978,71 @@ export class WorldInteractables {
     };
   }
 
+  qaPlaceWave10Showcase(
+    centerPos: Vec3Like,
+    yaw = 0,
+  ): Wave10ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities();
+
+    const fwdX = Math.sin(yaw);
+    const fwdZ = Math.cos(yaw);
+    const rightX = -Math.cos(yaw);
+    const rightZ = Math.sin(yaw);
+
+    const mushSpecs: ReadonlyArray<[number, number, number]> = [
+      [-2.8, 5.4, 1.05],
+      [-1.5, 6.2, 0.96],
+      [-3.3, 6.8, 0.98],
+      [-1.9, 7.5, 1.12],
+    ];
+    const mushrooms: ShieldMushroomEntity[] = [];
+    for (let i = 0; i < mushSpecs.length; i++) {
+      const [ro, fo, scale] = mushSpecs[i];
+      const spot = this.findDryGroundNear(
+        centerPos,
+        rightX * ro + fwdX * fo,
+        rightZ * ro + fwdZ * fo,
+      );
+      const entry = this.createShieldMushroomEntry({
+        id: `mushroom_qa_showcase_${i + 1}`,
+        poiId: 'qa_showcase',
+        x: spot.x,
+        z: spot.z,
+        scale,
+        isQaShowcase: true,
+      });
+      mushrooms.push(entry.data);
+    }
+
+    const boarSpecs: ReadonlyArray<[number, number, number]> = [
+      [2.2, 7.6, yaw - Math.PI * 0.65],
+      [4.8, 9.2, yaw + Math.PI * 0.72],
+    ];
+    const boars: WildBoarEntity[] = [];
+    for (let i = 0; i < boarSpecs.length; i++) {
+      const [ro, fo, boarYaw] = boarSpecs[i];
+      const spot = this.findDryGroundNear(
+        centerPos,
+        rightX * ro + fwdX * fo,
+        rightZ * ro + fwdZ * fo,
+      );
+      const entry = this.createWildBoarEntry({
+        id: `boar_qa_showcase_${i + 1}`,
+        x: spot.x,
+        z: spot.z,
+        yaw: boarYaw,
+        roamRadius: 5.0,
+        isQaShowcase: true,
+      });
+      boars.push(entry.data);
+    }
+
+    return {
+      mushrooms,
+      boars,
+    };
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -7597,6 +8246,38 @@ export class WorldInteractables {
       mc.shardsGroup.position.y = mc.baseShardsY;
       mc.shardsGroup.rotation.set(0, 0, 0);
       mc.auraRing.scale.set(1, 1, 1);
+    }
+
+    for (const sm of this.shieldMushroomsMap.values()) {
+      sm.data.available = true;
+      sm.data.respawnSec = 0;
+      sm.capGroup.visible = true;
+      sm.auraRing.visible = true;
+      sm.capGroup.position.y = sm.baseCapY;
+      sm.auraRing.scale.set(1, 1, 1);
+    }
+
+    for (const wb of this.wildBoarsMap.values()) {
+      wb.data.x = wb.homeX;
+      wb.data.z = wb.homeZ;
+      wb.data.y = this.terrain.getHeightAt(wb.homeX, wb.homeZ);
+      wb.data.yaw = wb.initialYaw;
+      wb.data.hp = WILD_BOAR_MAX_HP;
+      wb.data.maxHp = WILD_BOAR_MAX_HP;
+      wb.data.alive = true;
+      wb.data.state = 'roam';
+      wb.data.speed = BOAR_ROAM_SPEED;
+      wb.fleeTimer = 0;
+      wb.hitAnim = 0;
+      wb.group.visible = true;
+      wb.group.position.set(wb.data.x, wb.data.y, wb.data.z);
+      wb.group.rotation.set(0, wb.initialYaw, 0);
+      wb.bodyGroup.position.y = 0;
+      wb.bodyGroup.rotation.set(0, 0, 0);
+      wb.legFL.rotation.x = 0;
+      wb.legFR.rotation.x = 0;
+      wb.legBL.rotation.x = 0;
+      wb.legBR.rotation.x = 0;
     }
 
     this.trainState.active = true;
@@ -8076,6 +8757,97 @@ export class WorldInteractables {
       }
       craterIdx++;
     }
+
+    // Update 24 Glowing Shield Mushrooms (respawn timers & soft glow bob)
+    for (const sm of this.shieldMushroomsMap.values()) {
+      if (!sm.data.available) {
+        sm.data.respawnSec = Math.max(0, sm.data.respawnSec - safeDt);
+        if (sm.data.respawnSec <= 0) {
+          sm.data.respawnSec = 0;
+          sm.data.available = true;
+          sm.capGroup.visible = true;
+          sm.auraRing.visible = true;
+        }
+      }
+      if (sm.data.available) {
+        const phase = elapsed * 2.4 + sm.bobPhase;
+        sm.capGroup.position.y = sm.baseCapY + Math.sin(phase) * 0.035;
+        const ringPulse = 1.0 + Math.sin(phase * 1.35) * 0.08;
+        sm.auraRing.scale.set(ringPulse, ringPulse, ringPulse);
+      }
+    }
+
+    // Update 8 Roaming Wild Loot Boars (roam/flee movement, terrain grounding & 4-leg trot animation)
+    for (const wb of this.wildBoarsMap.values()) {
+      const boar = wb.data;
+      if (!boar.alive) continue;
+
+      if (boar.state === 'flee') {
+        wb.fleeTimer = Math.max(0, wb.fleeTimer - safeDt);
+        if (wb.fleeTimer <= 0) {
+          boar.state = 'roam';
+          boar.speed = BOAR_ROAM_SPEED;
+        }
+      }
+
+      if (safeDt > 0) {
+        boar.yaw = normalizeAngle(
+          boar.yaw +
+            Math.sin(elapsed * 0.75 + wb.wanderPhase) *
+              (boar.state === 'flee' ? 0.25 : 0.45) *
+              safeDt,
+        );
+
+        const stepDist = boar.speed * safeDt;
+        const boundLimit = ISLAND_RADIUS - 20;
+        const nx = clamp(boar.x + Math.sin(boar.yaw) * stepDist, -boundLimit, boundLimit);
+        const nz = clamp(boar.z + Math.cos(boar.yaw) * stepDist, -boundLimit, boundLimit);
+        const distFromHome = Math.hypot(nx - wb.homeX, nz - wb.homeZ);
+        const maxAllowedRadius =
+          boar.state === 'flee' ? Math.max(wb.roamRadius * 2.2, 20) : wb.roamRadius;
+
+        const isDryAndWalkable =
+          !this.terrain.isWater(nx, nz) &&
+          Math.hypot(nx, nz) <= boundLimit &&
+          this.terrain.getNormalAt(nx, nz).y >= 0.78;
+
+        if (isDryAndWalkable && distFromHome <= maxAllowedRadius) {
+          boar.x = nx;
+          boar.z = nz;
+          boar.y = this.terrain.getHeightAt(nx, nz);
+        } else {
+          const toHomeX = wb.homeX - boar.x;
+          const toHomeZ = wb.homeZ - boar.z;
+          if (Math.hypot(toHomeX, toHomeZ) > 0.8) {
+            boar.yaw = normalizeAngle(
+              Math.atan2(toHomeX, toHomeZ) + (boar.state === 'flee' ? 0.4 : 0),
+            );
+          } else {
+            boar.yaw = normalizeAngle(boar.yaw + 1.7);
+          }
+        }
+
+        wb.trotPhase += safeDt * (boar.state === 'flee' ? 16.5 : 8.2);
+      }
+
+      const swing = Math.sin(wb.trotPhase) * (boar.state === 'flee' ? 0.62 : 0.38);
+      wb.legFL.rotation.x = swing;
+      wb.legBR.rotation.x = swing;
+      wb.legFR.rotation.x = -swing;
+      wb.legBL.rotation.x = -swing;
+      wb.bodyGroup.position.y =
+        Math.abs(Math.sin(wb.trotPhase)) * (boar.state === 'flee' ? 0.085 : 0.045);
+
+      if (wb.hitAnim > 0) {
+        wb.hitAnim = Math.max(0, wb.hitAnim - safeDt * 5.0);
+        wb.bodyGroup.rotation.z = Math.sin(wb.hitAnim * Math.PI * 3.0) * wb.hitAnim * 0.16;
+      } else {
+        wb.bodyGroup.rotation.z = 0;
+      }
+
+      wb.group.position.set(boar.x, boar.y, boar.z);
+      wb.group.rotation.y = boar.yaw;
+    }
   }
 
   dispose(): void {
@@ -8135,6 +8907,10 @@ export class WorldInteractables {
     this.stealthBushesMap.clear();
     this.meteorCraters = [];
     this.meteorCratersMap.clear();
+    this.shieldMushrooms = [];
+    this.shieldMushroomsMap.clear();
+    this.wildBoars = [];
+    this.wildBoarsMap.clear();
     this.trainTrackPoints = [];
     this.trainCarMetas = [];
     this.trainLocoWheels = [];

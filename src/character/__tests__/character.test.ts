@@ -85,9 +85,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 31 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 33 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(31);
+    expect(allIds).toHaveLength(33);
 
     const seenNames = new Set<string>();
 
@@ -3659,6 +3659,385 @@ describe('Wave-9 Skyforge Jetpack, Plasma Flamethrower, Low-G Boot Aura, Burning
     expect(vfx.getActiveFlameStreamCount()).toBe(0);
     expect(vfx.getActiveMeteorStrikeCount()).toBe(0);
     expect(vfx.getActiveHopCrystalAuraCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-10 Titan Shockwave Hammer, Recon Flare Gun, Stances & VFX Channels', () => {
+  it('builds bespoke Shockwave Hammer and Flare Gun models with muzzleOffset, wrap rules, and zero casing ejection', () => {
+    const hammer = createWeaponModel('shockwave_hammer');
+    expect(hammer.name).toBe('weapon_shockwave_hammer');
+    expect(hammer.userData.wrapDisabled).toBe(true);
+    expect(isRangedWeapon('shockwave_hammer')).toBe(false);
+    expect(isThrowableWeapon('shockwave_hammer')).toBe(false);
+    expect(hasMuzzleOffset('shockwave_hammer')).toBe(false);
+    expect(countMeshes(hammer)).toBeGreaterThanOrEqual(20);
+
+    const violetSteelHex = new THREE.Color('#4c1d95').getHex();
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    let hasVioletSteel = false;
+    let hasCyanCore = false;
+    hammer.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.color.getHex() === violetSteelHex) hasVioletSteel = true;
+        if (child.material.emissive.getHex() === cyanHex) hasCyanCore = true;
+      }
+    });
+    expect(hasVioletSteel).toBe(true);
+    expect(hasCyanCore).toBe(true);
+
+    // Shockwave Hammer preserves its violet-steel & cyan plasma finishes when wraps are applied
+    applyWeaponWrap(hammer, 'midas_gold');
+    const goldMat = getWeaponWrapMaterial('midas_gold');
+    hammer.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        expect(child.material).not.toBe(goldMat);
+      }
+    });
+    expect(hammer.userData.appliedWrapId).toBeUndefined();
+    assertFiniteBox(hammer);
+    disposeObject3D(hammer);
+
+    const flareGun = createWeaponModel('flare_gun');
+    expect(flareGun.name).toBe('weapon_flare_gun');
+    expect(isRangedWeapon('flare_gun')).toBe(true);
+    expect(isThrowableWeapon('flare_gun')).toBe(false);
+    expect(hasMuzzleOffset('flare_gun')).toBe(true);
+    expect(countMeshes(flareGun)).toBeGreaterThanOrEqual(12);
+    const flareMuzzle = flareGun.userData.muzzleOffset as THREE.Vector3;
+    expect(flareMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(flareMuzzle.z).toBeGreaterThan(0.2);
+
+    const signalOrangeHex = new THREE.Color('#f97316').getHex();
+    const emberYellowHex = new THREE.Color('#fde047').getHex();
+    let hasSignalOrange = false;
+    let hasGlowingEmber = false;
+    let flareWrapTargets = 0;
+    flareGun.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) flareWrapTargets++;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.color.getHex() === signalOrangeHex) hasSignalOrange = true;
+        if (
+          child.material.emissive.getHex() === signalOrangeHex ||
+          child.material.emissive.getHex() === emberYellowHex
+        ) {
+          hasGlowingEmber = true;
+        }
+      }
+    });
+    expect(hasSignalOrange).toBe(true);
+    expect(hasGlowingEmber).toBe(true);
+    expect(flareWrapTargets).toBeGreaterThanOrEqual(2);
+
+    applyWeaponWrap(flareGun, 'neon_cyber');
+    const neonMat = getWeaponWrapMaterial('neon_cyber');
+    let wrappedCount = 0;
+    flareGun.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) {
+        expect(child.material).toBe(neonMat);
+        wrappedCount++;
+      } else {
+        expect(child.material).not.toBe(neonMat);
+      }
+    });
+    expect(wrappedCount).toBe(flareWrapTargets);
+    assertFiniteBox(flareGun);
+    disposeObject3D(flareGun);
+
+    // Flare gun muzzle flash emits signal-orange flash WITHOUT brass casing ejection
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.4 },
+      direction: { x: 0, y: 0.25, z: 0.96 },
+      weaponId: 'flare_gun',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(1);
+    vfx.dispose();
+  });
+
+  it('animates Shockwave Hammer two-handed carry/slam stances and Flare Gun pistol stance cleanly', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    // 1. Shockwave Hammer heavy two-handed carry stance (idle)
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'shockwave_hammer',
+        animState: 'idle',
+        isAiming: false,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('shockwave_hammer');
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.5);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.5);
+    expect(rig.joints.rightElbow.rotation.x).toBeLessThan(-0.7);
+    expect(rig.joints.leftElbow.rotation.x).toBeLessThan(-0.7);
+    assertFiniteBox(rig.getGroup());
+
+    // 2. Shockwave Hammer heavy two-handed sprint carry
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'shockwave_hammer',
+        animState: 'sprint',
+        moveSpeed: 8.5,
+        isAiming: false,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.5);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.5);
+    assertFiniteBox(rig.getGroup());
+
+    // 3. Shockwave Hammer heavy two-handed slam wind-up / firing swing
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'shockwave_hammer',
+        animState: 'idle',
+        isAiming: true,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.2);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-1.2);
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'shockwave_hammer',
+        animState: 'idle',
+        isFiring: true,
+      }),
+      0,
+    );
+    const slamStartRight = rig.joints.rightShoulder.rotation.x;
+    const slamStartLeft = rig.joints.leftShoulder.rotation.x;
+    expect(slamStartRight).toBeLessThan(-1.2);
+    expect(slamStartLeft).toBeLessThan(-1.2);
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'shockwave_hammer',
+        animState: 'harvest',
+        harvestSwingTimer: 0.3,
+      }),
+      0.08,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).not.toBeCloseTo(slamStartRight, 2);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.4);
+    assertFiniteBox(rig.getGroup());
+
+    // 4. Flare Gun pistol stance (one-handed ready -> two-handed aimed support grip)
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'flare_gun',
+        animState: 'idle',
+        isAiming: false,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('flare_gun');
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.8);
+    expect(rig.joints.leftShoulder.rotation.x).toBeGreaterThan(-0.5);
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'flare_gun',
+        animState: 'idle',
+        isAiming: true,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.8);
+    expect(rig.joints.leftShoulder.rotation.y).toBeLessThan(-0.4);
+
+    const muzzlePos = rig.getMuzzleWorldPosition();
+    expect(Number.isFinite(muzzlePos.x)).toBe(true);
+    expect(Number.isFinite(muzzlePos.y)).toBe(true);
+    expect(Number.isFinite(muzzlePos.z)).toBe(true);
+    expect(muzzlePos.z).toBeGreaterThan(0.25);
+
+    rig.dispose();
+  });
+
+  it('spawns, updates, expires, guards NaN/range, clears, and disposes all 4 Wave-10 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:hammer_slam
+    bus.emit('vfx:hammer_slam', {
+      position: { x: 4, y: 0, z: -6 },
+      radius: 5.5,
+    });
+    expect(vfx.getActiveHammerSlamCount()).toBe(1);
+
+    // 2. vfx:hammer_bounce
+    bus.emit('vfx:hammer_bounce', {
+      position: { x: -3, y: 0.2, z: 5 },
+    });
+    expect(vfx.getActiveHammerBounceCount()).toBe(1);
+
+    // 3. vfx:flare_trail
+    bus.emit('vfx:flare_trail', {
+      origin: { x: 0, y: 1.6, z: 0 },
+      target: { x: 18, y: 24, z: -12 },
+      radius: 75,
+    });
+    expect(vfx.getActiveFlareTrailCount()).toBe(1);
+
+    // 4. vfx:water_wake
+    bus.emit('vfx:water_wake', {
+      position: { x: -20, y: 0, z: 30 },
+      yaw: 0.75,
+      speed: 22,
+    });
+    expect(vfx.getActiveWaterWakeCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    // Advance 0.30s -> all 4 remain active with finite transforms
+    for (let i = 0; i < 6; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveHammerSlamCount()).toBe(1);
+    expect(vfx.getActiveHammerBounceCount()).toBe(1);
+    expect(vfx.getActiveFlareTrailCount()).toBe(1);
+    expect(vfx.getActiveWaterWakeCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Advance to 0.65s -> hammer_bounce (0.64s) expires
+    for (let i = 0; i < 7; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveHammerBounceCount()).toBe(0);
+    expect(vfx.getActiveWaterWakeCount()).toBe(1);
+    expect(vfx.getActiveHammerSlamCount()).toBe(1);
+    expect(vfx.getActiveFlareTrailCount()).toBe(1);
+
+    // Advance to 0.75s -> water_wake (0.72s) expires
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveWaterWakeCount()).toBe(0);
+    expect(vfx.getActiveHammerSlamCount()).toBe(1);
+    expect(vfx.getActiveFlareTrailCount()).toBe(1);
+
+    // Advance to 0.85s -> hammer_slam (0.78s) expires; flare_trail stays active
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveHammerSlamCount()).toBe(0);
+    expect(vfx.getActiveFlareTrailCount()).toBe(1);
+
+    // Advance past 1.20s -> flare_trail (1.15s) expires cleanly back to pool
+    for (let i = 0; i < 7; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveFlareTrailCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Strict NaN / Infinity guards
+    bus.emit('vfx:hammer_slam', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+      radius: 5.5,
+    });
+    bus.emit('vfx:hammer_bounce', {
+      position: { x: 0, y: Number.POSITIVE_INFINITY, z: 0 },
+    });
+    bus.emit('vfx:flare_trail', {
+      origin: { x: Number.NaN, y: 1, z: 0 },
+      target: { x: 10, y: 10, z: 10 },
+      radius: 75,
+    });
+    bus.emit('vfx:flare_trail', {
+      origin: { x: 0, y: 1, z: 0 },
+      target: { x: 10, y: 10, z: Number.NEGATIVE_INFINITY },
+      radius: 75,
+    });
+    bus.emit('vfx:water_wake', {
+      position: { x: 0, y: 0, z: Number.NaN },
+      yaw: 0,
+      speed: 12,
+    });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Zero-length flare origin==target & invalid radius/yaw/speed safely clamped without NaN transforms
+    bus.emit('vfx:hammer_slam', {
+      position: { x: 2, y: 0, z: 2 },
+      radius: -15,
+    });
+    bus.emit('vfx:flare_trail', {
+      origin: { x: 5, y: 10, z: 5 },
+      target: { x: 5, y: 10, z: 5 },
+      radius: Number.NaN,
+    });
+    bus.emit('vfx:water_wake', {
+      position: { x: 8, y: 0, z: 8 },
+      yaw: Number.NaN,
+      speed: -10,
+    });
+    expect(vfx.getActiveHammerSlamCount()).toBe(1);
+    expect(vfx.getActiveFlareTrailCount()).toBe(1);
+    expect(vfx.getActiveWaterWakeCount()).toBe(1);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 4 Wave-10 pools immediately
+    bus.emit('vfx:hammer_bounce', { position: { x: 0, y: 0, z: 0 } });
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    vfx.clear();
+    expect(vfx.getActiveHammerSlamCount()).toBe(0);
+    expect(vfx.getActiveHammerBounceCount()).toBe(0);
+    expect(vfx.getActiveFlareTrailCount()).toBe(0);
+    expect(vfx.getActiveWaterWakeCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 4 Wave-10 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:hammer_slam', { position: { x: 0, y: 0, z: 0 }, radius: 5.5 });
+    bus.emit('vfx:hammer_bounce', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:flare_trail', {
+      origin: { x: 0, y: 1, z: 0 },
+      target: { x: 10, y: 15, z: 10 },
+      radius: 75,
+    });
+    bus.emit('vfx:water_wake', { position: { x: 0, y: 0, z: 0 }, yaw: 0, speed: 12 });
+    expect(vfx.getActiveHammerSlamCount()).toBe(0);
+    expect(vfx.getActiveHammerBounceCount()).toBe(0);
+    expect(vfx.getActiveFlareTrailCount()).toBe(0);
+    expect(vfx.getActiveWaterWakeCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });
