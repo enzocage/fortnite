@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 158 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 158 Nitefort SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -1763,7 +1763,7 @@ export class SoundSynthesizer {
   }
 
   private playUiPlay(t: number, target: AudioNode, vol: number, pitch: number): number {
-    // Punchy Fortnite-style "DROP IN" power chord slam
+    // Punchy Nitefort "DROP IN" power chord slam
     this.tone(target, t, {
       type: 'sine',
       freqStart: 110 * pitch,

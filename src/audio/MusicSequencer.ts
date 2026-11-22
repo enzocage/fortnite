@@ -30,7 +30,7 @@ export function midiToFreq(midi: number): number {
 
 // 32-step (2 bars of 16th notes) procedural patterns per track
 export const MUSIC_PATTERNS: Record<ActiveMusicTrackId, TrackPattern> = {
-  // Atmospheric heroic Fortnite-inspired lobby synth theme (108 BPM, C minor)
+  // Atmospheric heroic Nitefort lobby synth theme (108 BPM, C minor)
   lobby: {
     bpm: 108,
     steps: 32,

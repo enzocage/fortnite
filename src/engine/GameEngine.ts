@@ -95,7 +95,7 @@ interface ActiveBotVisual {
   gliderId: string;
 }
 
-export interface FortdropDebugAPI {
+export interface NitefortDebugAPI {
   getState(): Record<string, unknown>;
   forceStartMatch(): void;
   jumpFromBus(): boolean;
@@ -134,7 +134,7 @@ export interface FortdropDebugAPI {
 
 declare global {
   interface Window {
-    __GAME__?: FortdropDebugAPI;
+    __GAME__?: NitefortDebugAPI;
   }
 }
 

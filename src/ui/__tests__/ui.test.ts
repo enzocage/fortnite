@@ -1642,7 +1642,7 @@ describe('Wave 3 UI: Game Modes, Weapon Wraps, Overshield, Visual Audio, Match Q
     expect(reloaded.weaponWrapId).toBe('midas_gold');
 
     store.set(
-      'fortdrop_lobby_v1',
+      'nitefort_lobby_v1',
       JSON.stringify({ gameMode: 'invalid_mode', weaponWrapId: 'missing_wrap' }),
     );
     const sanitized = loadStoredLobbyConfig();
@@ -2157,7 +2157,7 @@ describe('Wave 4 UI: Skydiving Contrails, Reality Augments, Capture Bar, Tactica
     expect(loadStoredLobbyConfig().contrailId).toBe('void_lightning');
 
     store.set(
-      'fortdrop_lobby_v1',
+      'nitefort_lobby_v1',
       JSON.stringify({ contrailId: 'invalid_contrail_xyz' }),
     );
     expect(loadStoredLobbyConfig().contrailId).toBe('wind_stream');
@@ -2475,7 +2475,7 @@ describe('Wave 4 UI: Skydiving Contrails, Reality Augments, Capture Bar, Tactica
         progress: 1,
         captured: true,
         ownerId: 'player',
-        ownerName: 'FORTDROPPER',
+        ownerName: 'NITEFORTER',
       },
       {
         id: 'cp-2',
@@ -2610,7 +2610,7 @@ describe('Wave 5 UI: Career Tab & Rank, Crosshair Studio, Gold Bars, Kinetic Das
     });
 
     store.set(
-      'fortdrop_career_v1',
+      'nitefort_career_v1',
       JSON.stringify({ xp: 600, level: 2, wins: 1, elims: 4, matchesPlayed: 2, damageDealt: 500, bestPlacement: 1 }),
     );
     expect(loadCareerStats().goldBars).toBe(STARTING_GOLD_BARS);
@@ -3076,7 +3076,7 @@ describe('Wave 6 UI: Victory Crowns, Medallions, Duos Lobby/HUD, Weapon Bunkers,
 
     // Existing legacy Career localStorage without Wave 6 fields
     store.set(
-      'fortdrop_career_v1',
+      'nitefort_career_v1',
       JSON.stringify({
         xp: 1200,
         level: 3,

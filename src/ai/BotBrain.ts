@@ -1471,7 +1471,7 @@ function decloakBot(bot: BotEntity, ctx: BotWorldContext): void {
 
 /**
  * Selects the optimal usable healing item (consumable, `chug_splash`, or `chug_cannon`) respecting
- * Fortnite's heal caps (mini shields cap at 50 shield, bandages cap at 75 HP)
+ * Nitefort's heal caps (mini shields cap at 50 shield, bandages cap at 75 HP)
  * and mini-before-big shield priority.
  */
 export function selectHealingItem(

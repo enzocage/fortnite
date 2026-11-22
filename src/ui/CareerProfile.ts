@@ -2,7 +2,7 @@ import { MAX_GOLD_BARS, STARTING_GOLD_BARS } from '../core';
 import type { MatchSummary } from '../types';
 
 export const MAX_CAREER_LEVEL = 100;
-const CAREER_STORAGE_KEY = 'fortdrop_career_v1';
+const CAREER_STORAGE_KEY = 'nitefort_career_v1';
 
 export interface CareerRankInfo {
   tier: 'BRONZE' | 'SILVER' | 'GOLD' | 'PLATINUM' | 'DIAMOND' | 'UNREAL';

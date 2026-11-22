@@ -1,1 +1,1 @@
-export { GameEngine, type FortdropDebugAPI } from './GameEngine';
+export { GameEngine, type NitefortDebugAPI } from './GameEngine';

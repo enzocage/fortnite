@@ -44,11 +44,11 @@ import { getCrownSvg, getGoldBarSvg, getWeaponSvg } from './WeaponIcons';
 
 export type LobbyTabId = 'play' | 'locker' | 'career' | 'controls' | 'settings';
 
-const SETTINGS_STORAGE_KEY = 'fortdrop_settings_v1';
-const LOBBY_STORAGE_KEY = 'fortdrop_lobby_v1';
+const SETTINGS_STORAGE_KEY = 'nitefort_settings_v1';
+const LOBBY_STORAGE_KEY = 'nitefort_lobby_v1';
 
 export const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
-  playerName: 'FORTDROPPER',
+  playerName: 'NITEFORTER',
   difficulty: 'standard',
   botCount: 29,
   skinId: SKINS[0]?.id ?? 'sky_striker',
@@ -230,7 +230,7 @@ export class LobbyScreen {
     brand.className = 'fdr-brand';
     brand.innerHTML = `
       <div class="fdr-brand-inner">
-        <span class="fdr-brand-title">FORTDROP ROYALE</span>
+        <span class="fdr-brand-title">NITEFORT</span>
         <span class="fdr-brand-tag">BATTLE ISLAND</span>
       </div>
     `;
@@ -560,7 +560,7 @@ export class LobbyScreen {
     nameInput.value = this.config.playerName;
     nameInput.addEventListener('input', () => {
       const cleaned = nameInput.value.trim().slice(0, 18);
-      this.config.playerName = cleaned || 'FORTDROPPER';
+      this.config.playerName = cleaned || 'NITEFORTER';
       saveStoredLobbyConfig(this.config);
       this.updateBadge();
     });

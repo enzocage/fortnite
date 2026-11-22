@@ -172,7 +172,7 @@ export class FullMapOverlay {
     const titleWrap = document.createElement('div');
     const titleEl = document.createElement('div');
     titleEl.className = 'fdr-fullmap-title';
-    titleEl.textContent = 'FORTDROP ISLAND — TACTICAL MAP';
+    titleEl.textContent = 'NITEFORT ISLAND — TACTICAL MAP';
     this.hintEl = document.createElement('div');
     this.hintEl.className = 'fdr-fullmap-hint';
     this.hintEl.textContent =
