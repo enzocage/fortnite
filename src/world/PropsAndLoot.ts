@@ -95,6 +95,8 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'railgun',
   'grappler',
   'kinetic_blade',
+  'jetpack',
+  'plasma_flamethrower',
 ];
 
 const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
@@ -114,6 +116,8 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'pistol',
   'grappler',
   'kinetic_blade',
+  'jetpack',
+  'plasma_flamethrower',
 ];
 
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
@@ -130,6 +134,8 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'burst_ar',
   'grappler',
   'kinetic_blade',
+  'jetpack',
+  'plasma_flamethrower',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
@@ -1880,6 +1886,103 @@ export class PropsAndLoot {
         cap.position.y = 0.19;
         empGroup.add(canister, coilTop, coilBot, cap);
         itemMesh = empGroup;
+      } else if (def.isJetpack) {
+        const jetpackGroup = new THREE.Group();
+        const darkMetalMat = this.getMat('loot_jetpack_metal', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#1e293b',
+            roughness: 0.34,
+            metalness: 0.82,
+          }),
+        );
+        const thrusterGlowMat = this.getMat('loot_jetpack_glow', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#38bdf8',
+            emissive: '#0ea5e9',
+            emissiveIntensity: 1.55,
+            roughness: 0.18,
+            metalness: 0.3,
+          }),
+        );
+        const coreBox = new THREE.Mesh(
+          this.getGeo('loot_jetpack_pack', () => new THREE.BoxGeometry(0.28, 0.34, 0.15)),
+          darkMetalMat,
+        );
+        const podGeo = this.getGeo('loot_jetpack_pod', () => new THREE.CylinderGeometry(0.08, 0.09, 0.38, 10));
+        const nozzleGeo = this.getGeo('loot_jetpack_nozzle', () => new THREE.CylinderGeometry(0.055, 0.09, 0.1, 10));
+        const podL = new THREE.Mesh(podGeo, itemMat);
+        podL.position.set(-0.15, 0.02, 0);
+        const podR = new THREE.Mesh(podGeo, itemMat);
+        podR.position.set(0.15, 0.02, 0);
+        const nozzleL = new THREE.Mesh(nozzleGeo, darkMetalMat);
+        nozzleL.position.set(-0.15, -0.21, 0);
+        const nozzleR = new THREE.Mesh(nozzleGeo, darkMetalMat);
+        nozzleR.position.set(0.15, -0.21, 0);
+        const ventCore = new THREE.Mesh(
+          this.getGeo('loot_jetpack_core', () => new THREE.OctahedronGeometry(0.075, 0)),
+          thrusterGlowMat,
+        );
+        ventCore.position.set(0, 0.02, 0.09);
+        jetpackGroup.add(coreBox, podL, podR, nozzleL, nozzleR, ventCore);
+        itemMesh = jetpackGroup;
+      } else if (def.isFlamethrower) {
+        const flameGroup = new THREE.Group();
+        const tankMat = this.getMat('loot_flame_tank', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#ea580c',
+            emissive: '#c2410c',
+            emissiveIntensity: 0.45,
+            roughness: 0.35,
+            metalness: 0.55,
+          }),
+        );
+        const pilotMat = this.getMat('loot_flame_pilot', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#fde047',
+            emissive: '#f97316',
+            emissiveIntensity: 1.75,
+            roughness: 0.15,
+            metalness: 0.2,
+          }),
+        );
+        const receiver = new THREE.Mesh(
+          this.getGeo('loot_flame_body', () => new THREE.BoxGeometry(0.16, 0.17, 0.52)),
+          itemMat,
+        );
+        const fuelCanister = new THREE.Mesh(
+          this.getGeo('loot_flame_canister', () => {
+            const g = new THREE.CylinderGeometry(0.088, 0.088, 0.34, 10);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          tankMat,
+        );
+        fuelCanister.position.set(0, -0.13, 0.06);
+        const nozzleTube = new THREE.Mesh(
+          this.getGeo('loot_flame_nozzle', () => {
+            const g = new THREE.CylinderGeometry(0.048, 0.068, 0.34, 8);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          itemMat,
+        );
+        nozzleTube.position.set(0, 0.02, 0.38);
+        const pilotFlame = new THREE.Mesh(
+          this.getGeo('loot_flame_pilot_geo', () => {
+            const g = new THREE.ConeGeometry(0.06, 0.15, 8);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          pilotMat,
+        );
+        pilotFlame.position.set(0, 0.02, 0.61);
+        const grip = new THREE.Mesh(
+          this.getGeo('loot_gun_grip', () => new THREE.BoxGeometry(0.12, 0.22, 0.14)),
+          itemMat,
+        );
+        grip.position.set(0, -0.14, -0.16);
+        flameGroup.add(receiver, fuelCanister, nozzleTube, pilotFlame, grip);
+        itemMesh = flameGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),

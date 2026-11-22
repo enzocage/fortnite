@@ -69,6 +69,13 @@ export interface GrindRailLoopState {
   gain: number;
 }
 
+export interface JetpackLoopState {
+  active: boolean;
+  fuelRatio: number;
+  freqHz: number;
+  gain: number;
+}
+
 export const BIOME_AMBIENCE_PROFILES: Record<
   BiomeType,
   Omit<BiomeAmbienceProfile, 'stormOverlayGain' | 'stormFilterFreq' | 'stormFilterQ'>
@@ -310,6 +317,17 @@ interface GrindRailRig {
   noiseSource: AudioBufferSourceNode | null;
 }
 
+interface JetpackRig {
+  masterGain: GainNode;
+  bandpassFilter: BiquadFilterNode | null;
+  rumbleGain: GainNode;
+  turbineGain: GainNode;
+  noiseGain: GainNode | null;
+  oscA: OscillatorNode;
+  oscB: OscillatorNode;
+  noiseSource: AudioBufferSourceNode | null;
+}
+
 /**
  * Pure gain calculation for the Master, SFX, and Music buses.
  * Clamps all inputs safely to [0, 1] and treats non-finite values as 0.
@@ -370,6 +388,10 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'emp_blast':
     case 'forecast_scan':
     case 'rumble_lead_change':
+    case 'train_horn':
+    case 'train_hack_complete':
+    case 'meteor_whistle':
+    case 'meteor_impact':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -400,6 +422,7 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'revive_tick':
     case 'railgun_charge':
     case 'bush_rustle':
+    case 'low_g_jump':
       return 1;
     case 'augment_select':
     case 'tactical_ping':
@@ -416,6 +439,9 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'shot_suppressed':
     case 'mod_install':
     case 'rumble_respawn':
+    case 'jetpack_ignite':
+    case 'flame_burst':
+    case 'hop_crystal_consume':
     default:
       return 2;
   }
@@ -450,6 +476,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 70;
     case 'gold_pickup':
     case 'crown_glint':
+    case 'low_g_jump':
       return 75;
     case 'augment_ready':
     case 'augment_select':
@@ -474,6 +501,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'shot_suppressed':
       return 90;
     case 'grind_attach':
+    case 'hop_crystal_consume':
       return 95;
     case 'slurp_barrel_break':
     case 'kinetic_slash':
@@ -487,6 +515,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 115;
     case 'ally_hired':
       return 120;
+    case 'flame_burst':
+      return 125;
     case 'grappler_fire':
       return 130;
     case 'knocked_down':
@@ -500,6 +530,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 155;
     case 'kinetic_dash':
       return 160;
+    case 'jetpack_ignite':
+      return 165;
     case 'shot_combat_smg':
       return 175;
     case 'vehicle_horn':
@@ -520,6 +552,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'vault_unlock':
     case 'flag_captured':
     case 'forecast_scan':
+    case 'train_hack_complete':
       return 220;
     case 'drone_explode':
       return 230;
@@ -538,10 +571,16 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 260;
     case 'reboot_complete':
       return 280;
+    case 'train_horn':
+      return 300;
+    case 'meteor_whistle':
+      return 320;
     case 'weather_thunder':
     case 'loot_island_spawn':
     case 'rumble_lead_change':
       return 350;
+    case 'meteor_impact':
+      return 380;
     default:
       return 175;
   }
@@ -601,6 +640,12 @@ export class AudioEngine {
   private grindRailSpeed = 0;
   private grindRailFreqHz = 0;
   private grindRailGain = 0;
+
+  private jetpackRig: JetpackRig | null = null;
+  private jetpackActive = false;
+  private jetpackFuelRatio = 0;
+  private jetpackFreqHz = 0;
+  private jetpackGain = 0;
 
   constructor(
     eventBus: EventBus,
@@ -668,6 +713,7 @@ export class AudioEngine {
       this.teardownVehicleEngine();
       this.teardownWindRush();
       this.teardownGrindRailLoop();
+      this.teardownJetpackLoop();
     }
   }
 
@@ -678,6 +724,7 @@ export class AudioEngine {
       this.teardownVehicleEngine();
       this.teardownWindRush();
       this.teardownGrindRailLoop();
+      this.teardownJetpackLoop();
     }
   }
 
@@ -1178,6 +1225,70 @@ export class AudioEngine {
     };
   }
 
+  /**
+   * Maintains a continuous dual-thruster rocket flame & turbine synthesizer loop
+   * while the Skyforge Jetpack is thrusting, modulated smoothly by remaining fuelRatio [0, 1].
+   * Safe in headless/Node environments without throwing when Web Audio nodes are mocked.
+   */
+  updateJetpackLoop(active: boolean, fuelRatio: number): void {
+    if (this.disposed) return;
+
+    const cleanFuel = Number.isFinite(fuelRatio) ? clamp(fuelRatio, 0, 1) : 0;
+
+    if (!active || this.paused || this.isSfxMuted()) {
+      this.teardownJetpackLoop();
+      return;
+    }
+
+    if (!this.ctx && (this.unlocked || typeof window === 'undefined')) {
+      this.ensureContext();
+    }
+
+    if (
+      !this.ctx ||
+      !this.sfxGain ||
+      this.ctx.state === 'closed' ||
+      (!this.unlocked && this.ctx.state === 'suspended')
+    ) {
+      this.teardownJetpackLoop();
+      return;
+    }
+
+    if (
+      this.jetpackActive &&
+      this.jetpackRig &&
+      Math.abs(this.jetpackFuelRatio - cleanFuel) < 0.005
+    ) {
+      return;
+    }
+
+    this.pruneVoices(this.ctx.currentTime);
+
+    if (!this.jetpackActive && !this.ensurePolyphonyRoom(2)) {
+      return;
+    }
+
+    if (!this.jetpackRig) {
+      this.jetpackRig = this.createJetpackRig(this.ctx, this.sfxGain);
+      if (!this.jetpackRig) {
+        return;
+      }
+    }
+
+    this.jetpackActive = true;
+    this.jetpackFuelRatio = cleanFuel;
+    this.applyJetpackParams(this.ctx, this.jetpackRig, cleanFuel);
+  }
+
+  getJetpackLoopState(): JetpackLoopState {
+    return {
+      active: this.jetpackActive,
+      fuelRatio: this.jetpackFuelRatio,
+      freqHz: this.jetpackFreqHz,
+      gain: this.jetpackGain,
+    };
+  }
+
   getActiveVoiceCount(): number {
     if (this.ctx) {
       this.pruneVoices(this.ctx.currentTime);
@@ -1204,6 +1315,7 @@ export class AudioEngine {
     }
     this.unsubscribers.length = 0;
 
+    this.teardownJetpackLoop();
     this.teardownGrindRailLoop();
     this.teardownWindRush();
     this.teardownVehicleEngine();
@@ -1384,7 +1496,8 @@ export class AudioEngine {
       (this.ambienceActive ? 1 : 0) +
       (this.vehicleEngineActive ? 1 : 0) +
       (this.windRushActive ? 1 : 0) +
-      (this.grindRailActive ? 1 : 0)
+      (this.grindRailActive ? 1 : 0) +
+      (this.jetpackActive ? 1 : 0)
     );
   }
 
@@ -2059,6 +2172,172 @@ export class AudioEngine {
     this.safeDisconnect(rig.noiseGain);
     this.safeDisconnect(rig.humGain);
     this.safeDisconnect(rig.plasmaGain);
+    this.safeDisconnect(rig.bandpassFilter);
+    this.safeDisconnect(rig.masterGain);
+  }
+
+  private createJetpackRig(ctx: AudioContext, destination: AudioNode): JetpackRig | null {
+    if (typeof ctx.createGain !== 'function' || typeof ctx.createOscillator !== 'function') {
+      return null;
+    }
+
+    let masterGain: GainNode | null = null;
+    let bandpassFilter: BiquadFilterNode | null = null;
+    let rumbleGain: GainNode | null = null;
+    let turbineGain: GainNode | null = null;
+    let noiseGain: GainNode | null = null;
+    let oscA: OscillatorNode | null = null;
+    let oscB: OscillatorNode | null = null;
+    let noiseSource: AudioBufferSourceNode | null = null;
+
+    try {
+      const now = ctx.currentTime;
+      masterGain = ctx.createGain();
+      this.setParam(masterGain.gain, 0.0001, now);
+      masterGain.connect(destination);
+
+      bandpassFilter = this.safeCreateFilter(ctx);
+      if (bandpassFilter) {
+        bandpassFilter.type = 'bandpass';
+        this.setParam(bandpassFilter.frequency, 420, now);
+        this.setParam(bandpassFilter.Q, 1.4, now);
+        bandpassFilter.connect(masterGain);
+      }
+      const target: AudioNode = bandpassFilter ?? masterGain;
+
+      rumbleGain = ctx.createGain();
+      this.setParam(rumbleGain.gain, 0.0001, now);
+      rumbleGain.connect(target);
+
+      turbineGain = ctx.createGain();
+      this.setParam(turbineGain.gain, 0.0001, now);
+      turbineGain.connect(target);
+
+      oscA = ctx.createOscillator();
+      oscA.type = 'sawtooth';
+      this.setParam(oscA.frequency, 105, now);
+      oscA.connect(rumbleGain);
+
+      oscB = ctx.createOscillator();
+      oscB.type = 'triangle';
+      this.setParam(oscB.frequency, 194.25, now);
+      oscB.detune?.setValueAtTime?.(8, now);
+      oscB.connect(turbineGain);
+
+      try {
+        const noiseBuf = this.buildLoopNoiseBuffer(ctx, 0x7a3f5d, 0.42, 0.28, true);
+        if (noiseBuf && typeof ctx.createBufferSource === 'function') {
+          noiseSource = ctx.createBufferSource();
+          noiseSource.buffer = noiseBuf;
+          noiseSource.loop = true;
+          noiseGain = ctx.createGain();
+          this.setParam(noiseGain.gain, 0.0001, now);
+          noiseSource.connect(noiseGain);
+          noiseGain.connect(target);
+          noiseSource.start(now);
+        }
+      } catch {
+        this.safeDisconnect(noiseSource);
+        this.safeDisconnect(noiseGain);
+        noiseSource = null;
+        noiseGain = null;
+      }
+
+      oscA.start(now);
+      oscB.start(now);
+
+      return {
+        masterGain,
+        bandpassFilter,
+        rumbleGain,
+        turbineGain,
+        noiseGain,
+        oscA,
+        oscB,
+        noiseSource,
+      };
+    } catch {
+      this.safeDisconnect(noiseSource);
+      this.safeDisconnect(noiseGain);
+      this.safeDisconnect(oscA);
+      this.safeDisconnect(oscB);
+      this.safeDisconnect(rumbleGain);
+      this.safeDisconnect(turbineGain);
+      this.safeDisconnect(bandpassFilter);
+      this.safeDisconnect(masterGain);
+      return null;
+    }
+  }
+
+  private applyJetpackParams(ctx: AudioContext, rig: JetpackRig, fuelRatio: number): void {
+    const now = ctx.currentTime;
+    const fuelNorm = clamp(fuelRatio, 0, 1);
+    const freqHz = clamp(105 + fuelNorm * 95, 105, 200);
+    const turbineHz = freqHz * 1.85;
+    const filterHz = clamp(420 + fuelNorm * 980, 420, 1400);
+    const filterQ = 1.4 + fuelNorm * 0.9;
+    const rumbleLevel = Math.max(0.0001, 0.042 + fuelNorm * 0.048);
+    const turbineLevel = Math.max(0.0001, 0.028 + fuelNorm * 0.036);
+    const noiseLevel = Math.max(0.0001, 0.035 + fuelNorm * 0.055);
+    const masterLevel = clamp(0.055 + fuelNorm * 0.085, 0.0001, 0.14);
+
+    this.jetpackFreqHz = freqHz;
+    this.jetpackGain = masterLevel;
+
+    try {
+      this.smoothParam(rig.oscA.frequency, freqHz, now, 0.05, 0.075);
+      this.smoothParam(rig.oscB.frequency, turbineHz, now, 0.05, 0.075);
+      if (rig.bandpassFilter) {
+        this.smoothParam(rig.bandpassFilter.frequency, filterHz, now, 0.055, 0.08);
+        this.smoothParam(rig.bandpassFilter.Q, filterQ, now, 0.055, 0.08);
+      }
+      this.smoothParam(rig.rumbleGain.gain, rumbleLevel, now, 0.055, 0.08);
+      this.smoothParam(rig.turbineGain.gain, turbineLevel, now, 0.055, 0.08);
+      if (rig.noiseGain) {
+        this.smoothParam(rig.noiseGain.gain, noiseLevel, now, 0.055, 0.08);
+      }
+      this.smoothParam(rig.masterGain.gain, masterLevel, now, 0.055, 0.08);
+    } catch {
+      // Gracefully tolerate incomplete AudioNode mocks
+    }
+  }
+
+  private teardownJetpackLoop(): void {
+    const rig = this.jetpackRig;
+    this.jetpackRig = null;
+    this.jetpackActive = false;
+    this.jetpackFuelRatio = 0;
+    this.jetpackFreqHz = 0;
+    this.jetpackGain = 0;
+
+    if (!rig) return;
+
+    const now = this.ctx ? this.ctx.currentTime : 0;
+    const stopAt = now + 0.05;
+    try {
+      this.rampParam(rig.masterGain.gain, 0.0001, now, 0.04);
+      this.rampParam(rig.rumbleGain.gain, 0.0001, now, 0.04);
+      this.rampParam(rig.turbineGain.gain, 0.0001, now, 0.04);
+      if (rig.noiseGain) {
+        this.rampParam(rig.noiseGain.gain, 0.0001, now, 0.04);
+      }
+    } catch {
+      // Ignore ramp errors during teardown
+    }
+
+    for (const src of [rig.oscA, rig.oscB, rig.noiseSource]) {
+      if (!src) continue;
+      try {
+        src.stop(stopAt);
+      } catch {
+        // Ignore stop errors during teardown
+      }
+      this.safeDisconnect(src);
+    }
+
+    this.safeDisconnect(rig.noiseGain);
+    this.safeDisconnect(rig.rumbleGain);
+    this.safeDisconnect(rig.turbineGain);
     this.safeDisconnect(rig.bandpassFilter);
     this.safeDisconnect(rig.masterGain);
   }

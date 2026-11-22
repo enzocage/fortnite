@@ -24,6 +24,7 @@ import {
 } from '../../core';
 import type {
   AmmoType,
+  ApexTrainState,
   AugmentId,
   BiomeType,
   BuildPieceType,
@@ -40,6 +41,7 @@ import type {
   MatchQuest,
   MatchSummary,
   MedallionId,
+  MeteorCraterEntity,
   ModBenchEntity,
   NpcSpecialistEntity,
   RebootVanEntity,
@@ -73,6 +75,7 @@ import {
   DEFAULT_LOBBY_CONFIG,
   deriveMatchHighlightBadges,
   drawFrontierMapOverlay,
+  drawSkyforgeMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -102,6 +105,8 @@ import {
   getGoldBarSvg,
   getGrindRailSvg,
   getHeadingFromYaw,
+  getHopCrystalSvg,
+  getJetpackFlameSvg,
   getKillStreakCallout,
   getLootIslandIconSvg,
   getMaterialIconSvg,
@@ -121,6 +126,7 @@ import {
   getTacticalPingIconSvg,
   getTankerSvg,
   getTotalXpForLevel,
+  getTrainSvg,
   getTrapSvg,
   getUpgradeBenchIconSvg,
   getVaultKeySvg,
@@ -145,6 +151,7 @@ import {
   resetCareerStats,
   resolveFrontierOverlayArgs,
   resolveKeybinds,
+  resolveSkyforgeOverlayArgs,
   sanitizeGameMode,
   saveStoredLobbyConfig,
   saveStoredSettings,
@@ -153,6 +160,7 @@ import {
   updateGoldBars,
   updateVictoryCrown,
   type WorldFrontierOverlay,
+  type WorldSkyforgeOverlay,
   worldToMapNorm,
   xpForLevelStep,
 } from '../index';
@@ -422,9 +430,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 29 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 31 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(29);
+    expect(weaponIds.length).toBe(31);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -436,7 +444,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8 upgraded icons have rich multi-element custom artwork
+    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9 upgraded icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -453,6 +461,8 @@ describe('WeaponIcons & SVG assets', () => {
       'minigun',
       'port_a_bunker',
       'emp_grenade',
+      'jetpack',
+      'plasma_flamethrower',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -4525,7 +4535,7 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     hud.dispose();
   });
 
-  it('forwards setWorldFrontierOverlay to FullMapOverlay (24 legend rows, golden forecast rings, mod benches, forecast towers, blue allies before POI labels) & shows Team Rumble MatchOverlay summary', () => {
+  it('forwards setWorldFrontierOverlay to FullMapOverlay (26 legend rows, golden forecast rings, mod benches, forecast towers, blue allies before POI labels) & shows Team Rumble MatchOverlay summary', () => {
     const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
     const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
 
@@ -4600,12 +4610,12 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     const bus = new EventBus();
     const ui = new UIManager(root as unknown as HTMLElement, bus);
 
-    // 1. Legend has exactly 24 rows including MOD BENCH & FORECAST TOWER
+    // 1. Legend has exactly 26 rows including MOD BENCH, FORECAST TOWER, APEX TRAIN & RIFT CRATER
     const legend = root.findByClass('fdr-map-legend');
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(24);
+    expect(legendRowCount).toBe(26);
     expect(legend?.textContent).toContain('MOD BENCH');
     expect(legend?.textContent).toContain('FORECAST TOWER');
 
@@ -4740,6 +4750,544 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     });
     expect(root.findByClass('fdr-summary-card')?.textContent).toContain('TEAM RUMBLE DEFEAT');
     expect(root.findByClass('fdr-rumble-score-pill')?.textContent).toBe('BLUE 21 - 25 RED');
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip Row, Train Hack Channel, Skyforge Map & Highlights)', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave-9 SVGs (jetpack, plasma_flamethrower, getTrainSvg, getHopCrystalSvg), WorldSkyforgeOverlay & TRAIN HEIST / SKY RIDER highlights', () => {
+    for (const id of ['jetpack', 'plasma_flamethrower'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    for (const svg of [
+      getTrainSvg(),
+      getHopCrystalSvg(),
+      getJetpackFlameSvg(),
+    ]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+
+    const sampleTrain: ApexTrainState = {
+      active: true,
+      x: 110,
+      y: 12,
+      z: -45,
+      yaw: 0.4,
+      speed: 11.5,
+      t: 0.25,
+      trackPoints: [
+        { x: -160, y: 12, z: -120 },
+        { x: 160, y: 12, z: -120 },
+        { x: 160, y: 12, z: 120 },
+        { x: -160, y: 12, z: 120 },
+      ],
+      chestHacked: false,
+      chestHackProgress: 0,
+      chestCooldownSec: 0,
+      carPositions: [
+        { x: 110, y: 12, z: -45, yaw: 0.4 },
+        { x: 96, y: 12, z: -52, yaw: 0.4 },
+      ],
+    };
+    const sampleCraters: MeteorCraterEntity[] = [
+      {
+        id: 'crater-1',
+        poiId: 'crystal_basin',
+        x: -35,
+        y: 11,
+        z: 42,
+        radius: 10,
+        crystalAvailable: true,
+        crystalRespawnSec: 0,
+      },
+    ];
+
+    const byArgs: WorldSkyforgeOverlay = resolveSkyforgeOverlayArgs(
+      sampleTrain,
+      sampleCraters,
+    );
+    expect(byArgs.train?.x).toBe(110);
+    expect(byArgs.craters.length).toBe(1);
+
+    const byObj: WorldSkyforgeOverlay = resolveSkyforgeOverlayArgs({
+      train: sampleTrain,
+      craters: sampleCraters,
+    });
+    expect(byObj.train?.z).toBe(-45);
+    expect(byObj.craters[0].id).toBe('crater-1');
+
+    // Minimal Node canvas mock WITHOUT fillText, strokeText, ellipse, rotate, or strokeRect!
+    const directCalls: string[] = [];
+    const safeCtx = {
+      save: () => directCalls.push('save'),
+      restore: () => directCalls.push('restore'),
+      translate: () => directCalls.push('translate'),
+      beginPath: () => directCalls.push('beginPath'),
+      closePath: () => directCalls.push('closePath'),
+      moveTo: () => directCalls.push('moveTo'),
+      lineTo: () => directCalls.push('lineTo'),
+      arc: () => directCalls.push('arc'),
+      fill: () => directCalls.push('fill'),
+      stroke: () => directCalls.push('stroke'),
+      fillRect: () => directCalls.push('fillRect'),
+      setLineDash: () => directCalls.push('setLineDash'),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    drawSkyforgeMapOverlay(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      220,
+      220 / 280,
+      (wx, wz) => ({ x: 110 + wx * (220 / 280), y: 110 + wz * (220 / 280) }),
+      byArgs,
+      undefined,
+      1200,
+    );
+    expect(directCalls).toContain('closePath');
+    expect(directCalls).toContain('setLineDash');
+    expect(directCalls).toContain('translate');
+    expect(directCalls).toContain('arc');
+    expect(directCalls).toContain('fillRect');
+
+    const badges = deriveMatchHighlightBadges({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 4,
+      damageDealt: 880,
+      shotsFired: 40,
+      shotsHit: 20,
+      accuracy: 50,
+      headshots: 1,
+      structuresBuilt: 3,
+      chestsOpened: 2,
+      survivalTimeSec: 185,
+      trainChestsHacked: 1,
+      hopCrystalsUsed: 2,
+    });
+    const trainBadge = badges.find((b) => b.label === 'TRAIN HEIST');
+    const skyBadge = badges.find((b) => b.label === 'SKY RIDER');
+    expect(trainBadge?.tone).toBe('gold');
+    expect(skyBadge?.tone).toBe('cyan');
+  });
+
+  it('renders HUD status chip row (Stealth + Jetpack Fuel Bar + Low-G Hop Chip), Train Hack channel bar & Node-safe Minimap Skyforge overlay', () => {
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    // Minimal 2D canvas context WITHOUT fillText, strokeText, or ellipse!
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => miniMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    // 1. Default idle state: chip row & all 3 chips hidden, positioned directly above vitals
+    hud.update(makeBaseHUDState());
+    const bottomCenter = hudRoot.findByClass('fdr-bottom-center');
+    const chipRow = bottomCenter?.findByClass('fdr-status-chip-row');
+    const stealthPill = chipRow?.findByClass('fdr-stealth-pill');
+    const jetpackPill = chipRow?.findByClass('fdr-jetpack-pill');
+    const lowGPill = chipRow?.findByClass('fdr-lowg-pill');
+    const vitalsStack = bottomCenter?.findByClass('fdr-vitals-stack');
+    const channelBar = bottomCenter?.findByClass('fdr-channel-bar');
+
+    expect(chipRow).not.toBeNull();
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(true);
+    expect(stealthPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(jetpackPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(lowGPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(bottomCenter?.children.indexOf(chipRow!)).toBeGreaterThanOrEqual(0);
+    expect(bottomCenter?.children.indexOf(chipRow!)).toBeLessThan(
+      bottomCenter?.children.indexOf(vitalsStack!) ?? 999,
+    );
+    expect(chipRow?.children).toEqual([stealthPill, jetpackPill, lowGPill]);
+
+    // 2. All 3 status chips active + Train Hack channel bar + Minimap Skyforge Overlay
+    const trainState: ApexTrainState = {
+      active: true,
+      x: 24,
+      y: 12,
+      z: -16,
+      yaw: 0,
+      speed: 11.5,
+      t: 0.1,
+      trackPoints: [
+        { x: -120, y: 12, z: -120 },
+        { x: 120, y: 12, z: -120 },
+        { x: 120, y: 12, z: 120 },
+        { x: -120, y: 12, z: 120 },
+      ],
+      chestHacked: false,
+      chestHackProgress: 0.65,
+      chestCooldownSec: 0,
+      carPositions: [
+        { x: 24, y: 12, z: -16, yaw: 0 },
+        { x: 10, y: 12, z: -16, yaw: 0 },
+      ],
+    };
+    const craters: MeteorCraterEntity[] = [
+      {
+        id: 'crater-mini',
+        poiId: 'metro_towers',
+        x: -22,
+        y: 12,
+        z: 18,
+        radius: 10,
+        crystalAvailable: true,
+        crystalRespawnSec: 0,
+      },
+    ];
+    hud.setWorldSkyforgeOverlay(trainState, craters);
+    miniDrawCalls.length = 0;
+
+    hud.update(
+      makeBaseHUDState({
+        isStealthed: true,
+        jetpackFuel: 72,
+        isJetpackThrusting: true,
+        lowGravityRemainingSec: 11.4,
+        trainHackProgress: 0.65,
+        slots: [
+          { uid: 'pick', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+          { uid: 'jp', weaponId: 'jetpack', rarity: 'epic', magAmmo: 0, stackCount: 1 },
+          { uid: 'pf', weaponId: 'plasma_flamethrower', rarity: 'legendary', magAmmo: 60, stackCount: 1 },
+          null,
+          null,
+          null,
+        ],
+        activeSlot: 2,
+      }),
+    );
+
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(false);
+    expect(stealthPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(stealthPill?.textContent).toContain('HIDDEN');
+
+    expect(jetpackPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(jetpackPill?.classList.contains('thrusting')).toBe(true);
+    expect(jetpackPill?.dataset.thrusting).toBe('true');
+    expect(jetpackPill?.findByClass('fdr-jetpack-fill')?.style.width).toBe('72%');
+    expect(jetpackPill?.textContent).toContain('72%');
+
+    expect(lowGPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(lowGPill?.dataset.lowG).toBe('true');
+    expect(lowGPill?.textContent).toContain('LOW-G HOP 12s');
+
+    // Train Hack channel bar
+    expect(channelBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(channelBar?.classList.contains('train-hack')).toBe(true);
+    expect(channelBar?.textContent).toContain('HACKING APEX EXPRESS...');
+    expect(channelBar?.textContent).toContain('65%');
+    expect(channelBar?.findByClass('fdr-channel-fill')?.style.width).toBe('65%');
+
+    // Hotbar renders bespoke jetpack & plasma_flamethrower SVGs
+    const slotCards = hudRoot.findAllByClass('fdr-slot-card');
+    expect(slotCards[1]?.innerHTML).toContain(getWeaponSvg('jetpack'));
+    expect(slotCards[2]?.innerHTML).toContain(getWeaponSvg('plasma_flamethrower'));
+
+    // Minimap rendered rail closePath, crater & train translate safely without fillText/ellipse
+    const miniSize = 220;
+    const miniPxPerMeter = miniSize / 280;
+    const hasTrainTranslate = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + 24 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + -16 * miniPxPerMeter)) < 0.5,
+    );
+    const hasCraterTranslate = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + -22 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + 18 * miniPxPerMeter)) < 0.5,
+    );
+    expect(hasTrainTranslate).toBe(true);
+    expect(hasCraterTranslate).toBe(true);
+    expect(miniDrawCalls.some((c) => c.op === 'closePath')).toBe(true);
+
+    // 3. Zero fuel keeps jetpack pill visible (at 0% + low class); null hides all cleanly
+    hud.update(
+      makeBaseHUDState({
+        isStealthed: false,
+        jetpackFuel: 0,
+        isJetpackThrusting: false,
+        lowGravityRemainingSec: 0,
+        trainHackProgress: null,
+      }),
+    );
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(false);
+    expect(jetpackPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(jetpackPill?.classList.contains('low')).toBe(true);
+    expect(jetpackPill?.findByClass('fdr-jetpack-fill')?.style.width).toBe('0%');
+    expect(lowGPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(channelBar?.classList.contains('fdr-hidden')).toBe(true);
+
+    hud.update(
+      makeBaseHUDState({
+        isStealthed: false,
+        jetpackFuel: null,
+        lowGravityRemainingSec: null,
+      }),
+    );
+    expect(jetpackPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(true);
+
+    hud.dispose();
+  });
+
+  it('forwards setWorldSkyforgeOverlay to FullMapOverlay (26 legend rows, closed rail loop, train carriage & craters before POI labels) & shows TRAIN HEIST / SKY RIDER highlights on MatchOverlay', () => {
+    const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+
+    // FullMap mock WITHOUT ellipse
+    const fullMockCtx = {
+      clearRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => fullDrawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => fullDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => fullDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => fullDrawCalls.push({ op: 'arc', args }),
+      fill: () => fullDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => fullDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => fullDrawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => fullDrawCalls.push({ op: 'rotate', args }),
+      setLineDash: (...args: unknown[]) => fullDrawCalls.push({ op: 'setLineDash', args }),
+      fillText: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    let canvasCount = 0;
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          const idx = canvasCount++;
+          (el as unknown as { getContext: () => unknown }).getContext = () =>
+            idx === 0 ? miniMockCtx : fullMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. Legend has exactly 26 rows including APEX TRAIN & RIFT CRATER
+    const legend = root.findByClass('fdr-map-legend');
+    const legendRowCount = (
+      legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
+    ).length;
+    expect(legendRowCount).toBe(26);
+    expect(legend?.textContent).toContain('APEX TRAIN');
+    expect(legend?.textContent).toContain('RIFT CRATER');
+
+    // 2. setWorldSkyforgeOverlay forwards to FullMap & Minimap before POI labels
+    const train: ApexTrainState = {
+      active: true,
+      x: 135,
+      y: 12,
+      z: -60,
+      yaw: 0.7,
+      speed: 11.5,
+      t: 0.4,
+      trackPoints: [
+        { x: -180, y: 12, z: -150 },
+        { x: 180, y: 12, z: -150 },
+        { x: 180, y: 12, z: 150 },
+        { x: -180, y: 12, z: 150 },
+      ],
+      chestHacked: false,
+      chestHackProgress: 0,
+      chestCooldownSec: 0,
+      carPositions: [
+        { x: 135, y: 12, z: -60, yaw: 0.7 },
+        { x: 122, y: 12, z: -68, yaw: 0.7 },
+      ],
+    };
+    const craters: MeteorCraterEntity[] = [
+      {
+        id: 'mc-1',
+        poiId: 'sunny_suburbs',
+        x: -140,
+        y: 14,
+        z: -115,
+        radius: 10,
+        crystalAvailable: true,
+        crystalRespawnSec: 0,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldSkyforgeOverlay(train, craters);
+    ui.toggleFullMap(true);
+    fullDrawCalls.length = 0;
+    miniDrawCalls.length = 0;
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        playerPos: { x: 0, y: 10, z: 0 },
+      }),
+    );
+
+    const findFullTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return fullDrawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const craterIdx = findFullTranslateIdx(-140, -115);
+    const trainIdx = findFullTranslateIdx(135, -60);
+    const firstPoiLabelIdx = fullDrawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+    expect(craterIdx).toBeGreaterThanOrEqual(0);
+    expect(trainIdx).toBeGreaterThanOrEqual(0);
+    expect(firstPoiLabelIdx).toBeGreaterThan(craterIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(trainIdx);
+
+    // 3. MatchOverlay shows TRAIN HEIST & SKY RIDER badges
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 7,
+      damageDealt: 1420,
+      shotsFired: 60,
+      shotsHit: 32,
+      accuracy: 53,
+      headshots: 2,
+      structuresBuilt: 5,
+      chestsOpened: 4,
+      survivalTimeSec: 210,
+      trainChestsHacked: 1,
+      hopCrystalsUsed: 3,
+    });
+    const highlightsRow = root.findByClass('fdr-highlights-row');
+    expect(highlightsRow?.textContent).toContain('TRAIN HEIST');
+    expect(highlightsRow?.textContent).toContain('SKY RIDER');
 
     ui.dispose();
   });

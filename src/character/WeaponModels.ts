@@ -19,6 +19,7 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'rocket_launcher',
   'mythic_blade_rifle',
   'grappler',
+  'plasma_flamethrower',
 ]);
 
 const THROWABLE_WEAPONS = new Set<WeaponId>([
@@ -1748,6 +1749,123 @@ function buildEmpGrenade(): THREE.Group {
   return group;
 }
 
+function buildJetpack(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_jetpack';
+  group.userData.wrapDisabled = true;
+
+  const chassisDark = makeStandardMat('#1e293b', 0.4, 0.62);
+  const skySteel = makeStandardMat('#64748b', 0.28, 0.78);
+  const brightAlloy = makeStandardMat('#cbd5e1', 0.24, 0.85);
+  const cyanCore = makeStandardMat('#22d3ee', 0.14, 0.18, '#22d3ee', 0.94);
+  const amberVent = makeStandardMat('#f59e0b', 0.18, 0.22, '#fbbf24', 0.85);
+
+  // Compact handheld/icon thruster pack chassis + top carry grip handle
+  addBox(group, 0.115, 0.145, 0.068, chassisDark, 0, 0.048, 0.02);
+  addBox(group, 0.095, 0.036, 0.076, skySteel, 0, 0.098, 0.02);
+  addBox(group, 0.082, 0.018, 0.022, brightAlloy, 0, 0.148, 0.02);
+  addBox(group, 0.016, 0.03, 0.02, skySteel, -0.032, 0.132, 0.02);
+  addBox(group, 0.016, 0.03, 0.02, skySteel, 0.032, 0.132, 0.02);
+
+  // Central glowing cyan fuel-cell core & amber vent ribs
+  addBox(group, 0.032, 0.092, 0.076, cyanCore, 0, 0.048, 0.022);
+  addBox(group, 0.048, 0.02, 0.078, amberVent, 0, 0.008, 0.022);
+
+  // Twin side metallic thruster pods + intake cones + flared exhaust nozzles
+  for (const side of [-1, 1] as const) {
+    const px = side * 0.072;
+    addCylinder(group, 0.032, 0.034, 0.145, skySteel, px, 0.052, 0.012, 0, 0, 0, 10);
+    addCylinder(group, 0.016, 0.032, 0.038, brightAlloy, px, 0.142, 0.012, 0, 0, 0, 10);
+    addCylinder(group, 0.036, 0.036, 0.018, amberVent, px, 0.082, 0.012, 0, 0, 0, 10);
+    // Flared exhaust nozzle & glowing inner thruster ring
+    addCylinder(group, 0.024, 0.038, 0.046, chassisDark, px, -0.042, 0.008, 0.12, 0, 0, 10);
+    addCylinder(group, 0.022, 0.022, 0.014, cyanCore, px, -0.064, 0.004, 0.12, 0, 0, 10);
+  }
+
+  return group;
+}
+
+function buildPlasmaFlamethrower(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_plasma_flamethrower';
+
+  const darkChassis = makeStandardMat('#0f172a', 0.42, 0.58);
+  const gunmetal = makeStandardMat('#334155', 0.34, 0.65);
+  const steel = makeStandardMat('#94a3b8', 0.24, 0.84);
+  const canisterRed = makeStandardMat('#dc2626', 0.34, 0.32);
+  const hazardAmber = makeStandardMat('#f59e0b', 0.3, 0.45, '#f59e0b', 0.25);
+  const plasmaCyan = makeStandardMat('#22d3ee', 0.12, 0.18, '#22d3ee', 0.92);
+  const pilotOrange = makeStandardMat('#f97316', 0.12, 0.12, '#fb923c', 1.05);
+  const pilotCore = makeStandardMat('#fef08a', 0.08, 0.1, '#fde047', 1.15);
+
+  // Pistol grip, trigger guard & rear reinforced stock
+  addBox(group, 0.042, 0.12, 0.052, darkChassis, 0, -0.024, -0.015, 0.22, 0, 0);
+  addBox(group, 0.016, 0.032, 0.056, darkChassis, 0, 0.018, 0.048);
+  tagWrapTarget(addBox(group, 0.054, 0.086, 0.20, gunmetal, 0, 0.064, -0.15, 0.06, 0, 0));
+  addBox(group, 0.056, 0.115, 0.032, darkChassis, 0, 0.052, -0.25);
+
+  // Main thermal torch receiver + vented forward shroud
+  tagWrapTarget(addBox(group, 0.076, 0.092, 0.34, gunmetal, 0, 0.074, 0.11));
+  tagWrapTarget(addBox(group, 0.068, 0.072, 0.22, gunmetal, 0, 0.082, 0.36));
+  // Top carry bar & pressure gauge dial
+  addBox(group, 0.026, 0.024, 0.26, darkChassis, 0, 0.145, 0.12);
+  addBox(group, 0.024, 0.032, 0.024, darkChassis, 0, 0.126, 0.01);
+  addBox(group, 0.024, 0.032, 0.024, darkChassis, 0, 0.126, 0.23);
+  addCylinder(group, 0.022, 0.022, 0.018, steel, 0.044, 0.105, 0.07, 0, 0, Math.PI / 2, 10);
+  addCylinder(group, 0.015, 0.015, 0.022, pilotCore, 0.046, 0.105, 0.07, 0, 0, Math.PI / 2, 10);
+
+  // Heavy pressurized underside plasma fuel canister + clamp straps + glowing fuel core
+  addCylinder(group, 0.066, 0.066, 0.26, canisterRed, 0, -0.022, 0.19, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.068, 0.068, 0.024, darkChassis, 0, -0.022, 0.11, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.068, 0.068, 0.024, darkChassis, 0, -0.022, 0.27, Math.PI / 2, 0, 0, 14);
+  addCylinder(group, 0.069, 0.069, 0.022, hazardAmber, 0, -0.022, 0.19, Math.PI / 2, 0, 0, 14);
+  addBox(group, 0.018, 0.024, 0.18, plasmaCyan, 0.062, -0.018, 0.19);
+  addBox(group, 0.018, 0.024, 0.18, plasmaCyan, -0.062, -0.018, 0.19);
+
+  // Dual thermal plasma nozzles + cooling fins + plasma rings
+  for (const side of [-1, 1] as const) {
+    const nx = side * 0.028;
+    addCylinder(group, 0.017, 0.020, 0.22, steel, nx, 0.088, 0.48, Math.PI / 2, 0, 0, 10);
+    addCylinder(group, 0.023, 0.023, 0.042, darkChassis, nx, 0.088, 0.58, Math.PI / 2, 0, 0, 10);
+    addMesh(
+      group,
+      new THREE.TorusGeometry(0.022, 0.0055, 6, 12),
+      plasmaCyan,
+      nx,
+      0.088,
+      0.52,
+      0,
+      0,
+      0,
+    );
+  }
+
+  // Forward igniter prong + glowing orange pilot flame cone & bright yellow core
+  addBox(group, 0.012, 0.014, 0.085, hazardAmber, 0, 0.056, 0.58, -0.18, 0, 0);
+  addMesh(
+    group,
+    new THREE.ConeGeometry(0.024, 0.072, 8),
+    pilotOrange,
+    0,
+    0.078,
+    0.64,
+    Math.PI / 2,
+    0,
+    0,
+  );
+  addMesh(
+    group,
+    new THREE.SphereGeometry(0.016, 8, 8),
+    pilotCore,
+    0,
+    0.078,
+    0.625,
+  );
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.088, 0.67);
+  return group;
+}
+
 const MOD_CHILD_NAMES = new Set([
   'mod_red_dot',
   'mod_suppressor',
@@ -1827,6 +1945,13 @@ function getWeaponModAnchors(weaponGroup: THREE.Group): WeaponModAnchors {
         redDot: [0, 0.150, 0.10],
         drumMag: [0, -0.045, 0.14],
         foregrip: [0, 0.002, 0.32],
+        suppressor: supPos,
+      };
+    case 'weapon_plasma_flamethrower':
+      return {
+        redDot: [0, 0.160, 0.12],
+        drumMag: [0, -0.055, 0.19],
+        foregrip: [0, 0.012, 0.36],
         suppressor: supPos,
       };
     default:
@@ -2055,6 +2180,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildMedkit();
     case 'slurp_juice':
       return buildSlurpJuice();
+    case 'jetpack':
+      return buildJetpack();
+    case 'plasma_flamethrower':
+      return buildPlasmaFlamethrower();
   }
 }
 

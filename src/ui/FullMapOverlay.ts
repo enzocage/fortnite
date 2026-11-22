@@ -1,5 +1,6 @@
 import { POIS, WORLD_SIZE } from '../core';
 import type {
+  ApexTrainState,
   CampfireEntity,
   CapturePointEntity,
   DroppedCrownEntity,
@@ -10,6 +11,7 @@ import type {
   HUDState,
   LaunchPadEntity,
   LootIslandState,
+  MeteorCraterEntity,
   ModBenchEntity,
   NpcSpecialistEntity,
   RebootVanEntity,
@@ -28,6 +30,7 @@ import {
   drawChapterMapOverlay,
   drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
+  drawSkyforgeMapOverlay,
   formatKeyCodeLabel,
   mapNormToWorld,
   type ResolvedChapterOverlay,
@@ -36,9 +39,11 @@ import {
   resolveFrontierOverlayArgs,
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
+  resolveSkyforgeOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
+  type WorldSkyforgeOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
@@ -49,6 +54,7 @@ import {
   getCrownSvg,
   getForecastTowerSvg,
   getGrindRailSvg,
+  getHopCrystalSvg,
   getLootIslandIconSvg,
   getMedallionSvg,
   getModBenchSvg,
@@ -56,6 +62,7 @@ import {
   getSkyRiftIconSvg,
   getSupplyDroneSvg,
   getTankerSvg,
+  getTrainSvg,
   getUpgradeBenchIconSvg,
   getVaultLockSvg,
   getVehicleIconSvg,
@@ -104,6 +111,10 @@ export class FullMapOverlay {
   private frontierOverlay: WorldFrontierOverlay = {
     modBenches: [],
     forecastTowers: [],
+  };
+  private skyforgeOverlay: WorldSkyforgeOverlay = {
+    train: null,
+    craters: [],
   };
 
   private open = false;
@@ -284,6 +295,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch forecasttower">${getForecastTowerSvg()}</span>
         <span>FORECAST TOWER</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch apextrain">${getTrainSvg()}</span>
+        <span>APEX TRAIN</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch riftcrater">${getHopCrystalSvg()}</span>
+        <span>RIFT CRATER</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -424,6 +443,21 @@ export class FullMapOverlay {
       modBenchesOrOverlay,
       forecastTowers,
     );
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldSkyforgeOverlay(
+    train: ApexTrainState | null,
+    craters: MeteorCraterEntity[],
+  ): void;
+  setWorldSkyforgeOverlay(overlay: WorldSkyforgeOverlay): void;
+  setWorldSkyforgeOverlay(
+    trainOrOverlay: ApexTrainState | null | WorldSkyforgeOverlay,
+    craters?: MeteorCraterEntity[],
+  ): void {
+    this.skyforgeOverlay = resolveSkyforgeOverlayArgs(trainOrOverlay, craters);
     if (this.open && this.lastState) {
       this.draw(this.lastState);
     }
@@ -1130,6 +1164,17 @@ export class FullMapOverlay {
       this.frontierOverlay,
       state.futureStormRings,
       state.teamRumble?.blueAllies,
+      performance.now(),
+    );
+
+    // Wave-9 Skyforge Overlay (Apex Express Railway Loop, Live Train, Rift Meteor Craters)
+    drawSkyforgeMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      this.skyforgeOverlay,
+      state.trainPos,
       performance.now(),
     );
 

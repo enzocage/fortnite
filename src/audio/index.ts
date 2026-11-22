@@ -13,6 +13,7 @@ export {
   type BiomeAmbienceState,
   type BusGains,
   type GrindRailLoopState,
+  type JetpackLoopState,
   type VehicleEngineState,
   type WindRushState,
 } from './AudioEngine';

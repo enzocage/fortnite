@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 120 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 128 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -304,6 +304,22 @@ export class SoundSynthesizer {
         return this.playRumbleRespawn(t, targetNode, vol, pitch);
       case 'rumble_lead_change':
         return this.playRumbleLeadChange(t, targetNode, vol, pitch);
+      case 'train_horn':
+        return this.playTrainHorn(t, targetNode, vol, pitch);
+      case 'train_hack_complete':
+        return this.playTrainHackComplete(t, targetNode, vol, pitch);
+      case 'jetpack_ignite':
+        return this.playJetpackIgnite(t, targetNode, vol, pitch);
+      case 'flame_burst':
+        return this.playFlameBurst(t, targetNode, vol, pitch);
+      case 'meteor_whistle':
+        return this.playMeteorWhistle(t, targetNode, vol, pitch);
+      case 'meteor_impact':
+        return this.playMeteorImpact(t, targetNode, vol, pitch);
+      case 'hop_crystal_consume':
+        return this.playHopCrystalConsume(t, targetNode, vol, pitch);
+      case 'low_g_jump':
+        return this.playLowGJump(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
         return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':
@@ -6423,6 +6439,630 @@ export class SoundSynthesizer {
       wet: 0.38,
     });
     return 0.86;
+  }
+
+  // --- Wave 9 Bespoke SFX ---
+
+  private playTrainHorn(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Heavy Apex Express locomotive sub-body resonance
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 78 * pitch,
+      freqEnd: 72 * pitch,
+      duration: 0.78,
+      attack: 0.03,
+      gain: 0.44 * vol,
+      wet: 0.34,
+    });
+    // Locomotive chime brass tone 1 (C#4)
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 277.18 * pitch,
+      freqEnd: 274 * pitch,
+      duration: 0.8,
+      attack: 0.025,
+      gain: 0.24 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1850,
+      filterFreqEnd: 1280,
+      wet: 0.38,
+    });
+    // Locomotive chime brass tone 2 (F4)
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 349.23 * pitch,
+      freqEnd: 345 * pitch,
+      duration: 0.78,
+      attack: 0.03,
+      gain: 0.22 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2150,
+      filterFreqEnd: 1480,
+      wet: 0.38,
+    });
+    // Locomotive chime brass tone 3 (A4)
+    this.tone(target, t + 0.01, {
+      type: 'triangle',
+      freqStart: 440.0 * pitch,
+      freqEnd: 435.0 * pitch,
+      duration: 0.76,
+      attack: 0.035,
+      gain: 0.19 * vol,
+      wet: 0.4,
+    });
+    // Horn flare upper harmonic fifth/seventh shimmer (C5)
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 523.25 * pitch,
+      freqEnd: 516.0 * pitch,
+      duration: 0.72,
+      attack: 0.04,
+      gain: 0.14 * vol,
+      wet: 0.42,
+    });
+    // Pressurized air-horn manifold roar
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.74,
+      attack: 0.02,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1400 * pitch,
+      filterFreqEnd: 860 * pitch,
+      filterQ: 1.5,
+      wet: 0.3,
+    });
+    // Crisp pneumatic horn valve blast attack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.18,
+      attack: 0.008,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2200,
+      wet: 0.32,
+    });
+    return 0.92;
+  }
+
+  private playTrainHackComplete(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Heavy armored vault-latch release sub-thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 130 * pitch,
+      freqEnd: 34 * pitch,
+      duration: 0.34,
+      gain: 0.56 * vol,
+      wet: 0.26,
+    });
+    // Hydraulic train-chest lock disengage sweep
+    this.tone(target, t + 0.02, {
+      type: 'sawtooth',
+      freqStart: 140 * pitch,
+      freqEnd: 360 * pitch,
+      duration: 0.22,
+      attack: 0.01,
+      gain: 0.22 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 720,
+      filterFreqEnd: 2100,
+      wet: 0.24,
+    });
+    // Celebratory heist-unlocked progression (D5 -> F#5 -> A5 -> D6)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.04, freq: 587.33, dur: 0.18, gain: 0.16 },
+        { offset: 0.11, freq: 739.99, dur: 0.2, gain: 0.17 },
+        { offset: 0.18, freq: 880.0, dur: 0.24, gain: 0.18 },
+        { offset: 0.26, freq: 1174.66, dur: 0.48, gain: 0.22 },
+      ],
+      'sine',
+      'triangle',
+      0.5,
+      0.34,
+    );
+    // Bright cyber-vault unlock FM sheen
+    this.playFmAura(
+      target,
+      t + 0.22,
+      0.52,
+      587.33 * pitch,
+      1174.66 * pitch,
+      293.66 * pitch,
+      587.33 * pitch,
+      110 * pitch,
+      0.16 * vol,
+      1600,
+      4200,
+      0.38,
+    );
+    // Mechanical deadbolt snap crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.09,
+      gain: 0.32 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2800 * pitch,
+      filterFreqEnd: 1100 * pitch,
+      filterQ: 1.8,
+      distort: true,
+      wet: 0.22,
+    });
+    // Pressurized carriage lid steam vent hiss
+    this.noise(target, t + 0.12, {
+      buffer: 'pink',
+      duration: 0.52,
+      attack: 0.02,
+      gain: 0.24 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2400,
+      wet: 0.34,
+    });
+    return 0.86;
+  }
+
+  private playJetpackIgnite(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Thruster ignition sub-kick punch
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 150 * pitch,
+      freqEnd: 42 * pitch,
+      duration: 0.24,
+      gain: 0.54 * vol,
+      wet: 0.22,
+    });
+    // Twin-nozzle turbine spool-up roar
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 95 * pitch,
+      freqEnd: 340 * pitch,
+      duration: 0.32,
+      attack: 0.015,
+      gain: 0.26 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 340 * pitch,
+      filterFreqEnd: 1650 * pitch,
+      filterQ: 1.8,
+      wet: 0.22,
+    });
+    // Secondary turbine harmonic whine
+    this.tone(target, t + 0.015, {
+      type: 'triangle',
+      freqStart: 190 * pitch,
+      freqEnd: 640 * pitch,
+      duration: 0.3,
+      attack: 0.02,
+      gain: 0.18 * vol,
+      wet: 0.2,
+    });
+    // Piezo igniter spark chirp
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 1350 * pitch,
+      freqEnd: 420 * pitch,
+      duration: 0.055,
+      gain: 0.16 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2600 * pitch,
+      filterQ: 2.5,
+      wet: 0.14,
+    });
+    // Sharp ignition spark snap
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.08,
+      gain: 0.42 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3200 * pitch,
+      filterFreqEnd: 950 * pitch,
+      filterQ: 1.5,
+      distort: true,
+      wet: 0.18,
+    });
+    // Pressurized rocket propellant flare
+    this.noise(target, t + 0.015, {
+      buffer: 'pink',
+      duration: 0.38,
+      attack: 0.01,
+      gain: 0.48 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2200 * pitch,
+      filterFreqEnd: 480,
+      distort: true,
+      wet: 0.28,
+    });
+    return 0.44;
+  }
+
+  private playFlameBurst(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Pressurized plasma fuel-jet thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 135 * pitch,
+      freqEnd: 48 * pitch,
+      duration: 0.16,
+      gain: 0.44 * vol,
+      wet: 0.18,
+    });
+    // Thermal flame core growl
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 112 * pitch,
+      freqEnd: 68 * pitch,
+      duration: 0.24,
+      attack: 0.008,
+      gain: 0.26 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 980 * pitch,
+      filterFreqEnd: 360,
+      wet: 0.2,
+    });
+    // Pilot-flame plasma jet hiss tone
+    this.tone(target, t + 0.01, {
+      type: 'triangle',
+      freqStart: 460 * pitch,
+      freqEnd: 240 * pitch,
+      duration: 0.18,
+      gain: 0.16 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1400 * pitch,
+      filterFreqEnd: 620 * pitch,
+      filterQ: 1.6,
+      wet: 0.18,
+    });
+    // Igniter valve trigger snap
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 920 * pitch,
+      freqEnd: 310 * pitch,
+      duration: 0.045,
+      gain: 0.15 * vol,
+      wet: 0.12,
+    });
+    // Roaring thermal plasma flame cone
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.28,
+      attack: 0.008,
+      gain: 0.56 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 720 * pitch,
+      filterFreqEnd: 1850 * pitch,
+      filterQ: 0.9,
+      distort: true,
+      wet: 0.24,
+    });
+    // Crackling ember & ionized sizzle
+    this.noise(target, t + 0.02, {
+      buffer: 'white',
+      duration: 0.24,
+      attack: 0.01,
+      gain: 0.28 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2800,
+      distort: true,
+      wet: 0.22,
+    });
+    return 0.34;
+  }
+
+  private playMeteorWhistle(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // High supersonic atmospheric descent scream
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 1950 * pitch,
+      freqEnd: 260 * pitch,
+      duration: 0.95,
+      attack: 0.06,
+      gain: 0.28 * vol,
+      wet: 0.4,
+    });
+    // Doppler-shifted whistle harmonic overtone
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 1280 * pitch,
+      freqEnd: 175 * pitch,
+      duration: 0.92,
+      attack: 0.07,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * pitch,
+      filterFreqEnd: 420 * pitch,
+      filterQ: 2.4,
+      wet: 0.38,
+    });
+    // Sub-atmospheric shock-bow rumble
+    this.tone(target, t + 0.04, {
+      type: 'sawtooth',
+      freqStart: 115 * pitch,
+      freqEnd: 46 * pitch,
+      duration: 0.9,
+      attack: 0.08,
+      gain: 0.24 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 520,
+      filterFreqEnd: 180,
+      wet: 0.32,
+    });
+    // Eerie rift plasma trail FM shimmer
+    this.playFmAura(
+      target,
+      t + 0.04,
+      0.85,
+      960 * pitch,
+      190 * pitch,
+      180 * pitch,
+      52 * pitch,
+      135 * pitch,
+      0.15 * vol,
+      2800,
+      460,
+      0.4,
+    );
+    // Supersonic air shear howl
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.96,
+      attack: 0.08,
+      gain: 0.44 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2800 * pitch,
+      filterFreqEnd: 380 * pitch,
+      filterQ: 2.8,
+      wet: 0.38,
+    });
+    // Trailing ionized atmospheric crackle
+    this.noise(target, t + 0.12, {
+      buffer: 'white',
+      duration: 0.78,
+      attack: 0.06,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3200,
+      wet: 0.36,
+    });
+    return 1.04;
+  }
+
+  private playMeteorImpact(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Seismic sub-bass earth strike slam
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 98 * pitch,
+      freqEnd: 20 * pitch,
+      duration: 0.88,
+      gain: 0.76 * vol,
+      wet: 0.4,
+    });
+    // Tectonic mid-bass impact punch
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 210 * pitch,
+      freqEnd: 34 * pitch,
+      duration: 0.42,
+      gain: 0.48 * vol,
+      wet: 0.32,
+    });
+    // Shattered rock & rift crystal crunch
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 380 * pitch,
+      freqEnd: 48 * pitch,
+      duration: 0.34,
+      gain: 0.32 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1800,
+      filterFreqEnd: 180,
+      wet: 0.34,
+    });
+    // Cosmic rift shockwave FM resonance
+    this.playFmAura(
+      target,
+      t + 0.02,
+      0.78,
+      420 * pitch,
+      54 * pitch,
+      110 * pitch,
+      28 * pitch,
+      195 * pitch,
+      0.24 * vol,
+      2400,
+      260,
+      0.42,
+    );
+    // Crystalline crater overtone ping
+    this.tone(target, t + 0.06, {
+      type: 'sine',
+      freqStart: 1320 * pitch,
+      freqEnd: 880 * pitch,
+      duration: 0.45,
+      gain: 0.14 * vol,
+      wet: 0.44,
+    });
+    // Sharp meteor ground-crack detonation
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.16,
+      gain: 0.54 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1900 * pitch,
+      filterFreqEnd: 420 * pitch,
+      filterQ: 1.3,
+      distort: true,
+      wet: 0.32,
+    });
+    // Heavy crater blast wave roar
+    this.noise(target, t + 0.02, {
+      buffer: 'pink',
+      duration: 0.92,
+      attack: 0.01,
+      gain: 0.62 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2200 * pitch,
+      filterFreqEnd: 140,
+      distort: true,
+      wet: 0.42,
+    });
+    // Settling gravel & cosmic dust tail
+    this.noise(target, t + 0.25, {
+      buffer: 'white',
+      duration: 0.65,
+      attack: 0.03,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3000 * pitch,
+      filterFreqEnd: 900 * pitch,
+      filterQ: 1.2,
+      wet: 0.36,
+    });
+    return 1.08;
+  }
+
+  private playHopCrystalConsume(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Crystalline shatter sub-pulse
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 240 * pitch,
+      freqEnd: 78 * pitch,
+      duration: 0.18,
+      gain: 0.34 * vol,
+      wet: 0.24,
+    });
+    // Anti-gravity upward crystalline sweep
+    this.tone(target, t + 0.02, {
+      type: 'sine',
+      freqStart: 330 * pitch,
+      freqEnd: 990 * pitch,
+      duration: 0.36,
+      attack: 0.02,
+      gain: 0.24 * vol,
+      wet: 0.36,
+    });
+    // Sparkling violet crystal FM aura
+    this.playFmAura(
+      target,
+      t + 0.03,
+      0.48,
+      880 * pitch,
+      1760 * pitch,
+      440 * pitch,
+      880 * pitch,
+      155 * pitch,
+      0.18 * vol,
+      2200,
+      5200,
+      0.42,
+    );
+    // Ethereal low-G hop crystal chime triad (A5 -> C#6 -> E6 -> A6)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.02, freq: 880.0, dur: 0.16, gain: 0.14 },
+        { offset: 0.08, freq: 1108.73, dur: 0.18, gain: 0.15 },
+        { offset: 0.14, freq: 1318.51, dur: 0.22, gain: 0.16 },
+        { offset: 0.21, freq: 1760.0, dur: 0.34, gain: 0.18 },
+      ],
+      'sine',
+      'triangle',
+      0.5,
+      0.4,
+    );
+    // Glassy crystal shard snap
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.11,
+      gain: 0.32 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 4200 * pitch,
+      filterFreqEnd: 1800 * pitch,
+      filterQ: 2.6,
+      wet: 0.32,
+    });
+    // Weightless rift vapor absorption whoosh
+    this.noise(target, t + 0.04, {
+      buffer: 'pink',
+      duration: 0.42,
+      attack: 0.02,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 950 * pitch,
+      filterFreqEnd: 2800 * pitch,
+      filterQ: 1.5,
+      wet: 0.36,
+    });
+    return 0.62;
+  }
+
+  private playLowGJump(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Springy anti-gravity launch sub-thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 135 * pitch,
+      freqEnd: 260 * pitch,
+      duration: 0.18,
+      gain: 0.32 * vol,
+      wet: 0.24,
+    });
+    // Buoyant upward zero-G glide
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 293.66 * pitch,
+      freqEnd: 783.99 * pitch,
+      duration: 0.32,
+      attack: 0.015,
+      gain: 0.26 * vol,
+      wet: 0.34,
+    });
+    // Shimmering fifth overtone float
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 440.0 * pitch,
+      freqEnd: 1174.66 * pitch,
+      duration: 0.28,
+      attack: 0.02,
+      gain: 0.16 * vol,
+      wet: 0.34,
+    });
+    // High crystalline weightless sparkle tail
+    this.tone(target, t + 0.08, {
+      type: 'sine',
+      freqStart: 1174.66 * pitch,
+      freqEnd: 1567.98 * pitch,
+      duration: 0.24,
+      attack: 0.02,
+      gain: 0.11 * vol,
+      wet: 0.38,
+    });
+    // Weightless air-cushion lift whoosh
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.3,
+      attack: 0.015,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 520 * pitch,
+      filterFreqEnd: 1900 * pitch,
+      filterQ: 1.5,
+      wet: 0.3,
+    });
+    // Crisp zero-G crystal lift sparkle
+    this.noise(target, t + 0.04, {
+      buffer: 'white',
+      duration: 0.22,
+      attack: 0.02,
+      gain: 0.12 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3400,
+      wet: 0.32,
+    });
+    return 0.42;
   }
 
   private playHarmonicProgression(

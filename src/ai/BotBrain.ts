@@ -1,5 +1,6 @@
 import type {
   AmmoType,
+  ApexTrainState,
   BuildPiece,
   CampfireEntity,
   CapturePointEntity,
@@ -9,9 +10,11 @@ import type {
   ItemInstance,
   LaunchPadEntity,
   MaterialType,
+  MeteorCraterEntity,
   POIDef,
   RiftEntity,
   SlurpBarrelEntity,
+  StormState,
   Vec3Like,
   VehicleEntity,
   WeaponId,
@@ -21,6 +24,8 @@ import {
   DBNO_BLEED_DPS,
   DBNO_MAX_HP,
   GLIDER_FORCE_HEIGHT,
+  GRID_XZ,
+  GRID_Y,
   MAX_MATS,
   POIS,
   RARITY_MULTIPLIER,
@@ -183,6 +188,76 @@ function isHealingItem(weaponId: WeaponId): boolean {
   return WEAPONS[weaponId].isConsumable || weaponId === 'chug_splash';
 }
 
+function isUtilityOnlyItem(weaponId: WeaponId): boolean {
+  const def = WEAPONS[weaponId];
+  return Boolean(
+    def?.isGrappler ||
+      def?.isShieldBubble ||
+      def?.isPortABunker ||
+      def?.isJetpack ||
+      weaponId === 'grappler' ||
+      weaponId === 'shield_bubble' ||
+      weaponId === 'port_a_bunker' ||
+      weaponId === 'jetpack',
+  );
+}
+
+export interface WeaponSelectionOptions {
+  nearBuilds?: boolean;
+  buildPieces?: ReadonlyArray<BuildPiece>;
+  targetPos?: Vec3Like;
+  botPos?: Vec3Like;
+}
+
+function hasBuildsNearEngagement(
+  buildPieces: ReadonlyArray<BuildPiece> | undefined,
+  botPos: Vec3Like,
+  targetPos?: Vec3Like,
+): boolean {
+  if (!buildPieces || buildPieces.length === 0) return false;
+  for (const p of buildPieces) {
+    if (p.hp <= 0) continue;
+    const cx =
+      p.type === 'wall' && p.dir === 'W'
+        ? p.gx * GRID_XZ
+        : (p.gx + 0.5) * GRID_XZ;
+    const cy = (p.gy + 0.5) * GRID_Y;
+    const cz =
+      p.type === 'wall' && p.dir === 'N'
+        ? p.gz * GRID_XZ
+        : (p.gz + 0.5) * GRID_XZ;
+    const nearBot =
+      dist2D(cx, cz, botPos.x, botPos.z) <= 8.0 && Math.abs(cy - botPos.y) <= 5.0;
+    const nearTarget =
+      targetPos !== undefined &&
+      dist2D(cx, cz, targetPos.x, targetPos.z) <= 8.0 &&
+      Math.abs(cy - targetPos.y) <= 5.0;
+    if (nearBot || nearTarget) return true;
+  }
+  return false;
+}
+
+function resolveNearBuildsFlag(
+  nearBuildsOrOptions?: boolean | WeaponSelectionOptions | ReadonlyArray<BuildPiece>,
+): boolean {
+  if (!nearBuildsOrOptions) return false;
+  if (typeof nearBuildsOrOptions === 'boolean') return nearBuildsOrOptions;
+  if (Array.isArray(nearBuildsOrOptions)) {
+    return nearBuildsOrOptions.some((p) => p.hp > 0);
+  }
+  const opts = nearBuildsOrOptions as WeaponSelectionOptions;
+  if (opts.nearBuilds !== undefined) return Boolean(opts.nearBuilds);
+  if (!opts.buildPieces || opts.buildPieces.length === 0) return false;
+  if (opts.botPos || opts.targetPos) {
+    return hasBuildsNearEngagement(
+      opts.buildPieces,
+      opts.botPos ?? opts.targetPos!,
+      opts.targetPos,
+    );
+  }
+  return opts.buildPieces.some((p) => p.hp > 0);
+}
+
 function isOffensiveThrowable(weaponId: WeaponId): boolean {
   return (
     weaponId === 'frag_grenade' ||
@@ -324,17 +399,10 @@ function scoreWeaponForDistance(
   item: ItemInstance,
   distance: number,
   hasLoadedMag: boolean,
+  nearBuilds = false,
 ): number {
   const def = WEAPONS[item.weaponId];
-  if (!def || isHealingItem(item.weaponId)) return -1;
-  if (
-    def.isGrappler ||
-    def.isShieldBubble ||
-    def.isPortABunker ||
-    item.weaponId === 'grappler' ||
-    item.weaponId === 'shield_bubble' ||
-    item.weaponId === 'port_a_bunker'
-  ) {
+  if (!def || isHealingItem(item.weaponId) || isUtilityOnlyItem(item.weaponId)) {
     return -1;
   }
 
@@ -374,6 +442,14 @@ function scoreWeaponForDistance(
     case 'combat_smg':
       if (distance > def.range) return 0.5;
       base = distance <= 22 ? 102 - distance * 0.65 : Math.max(6, 87.7 - (distance - 22) * 1.1);
+      break;
+    case 'plasma_flamethrower':
+      if (distance > def.range) return 0.5;
+      if (distance < 16) {
+        base = 118 - distance * 0.7 + (nearBuilds ? 34 : 0);
+      } else {
+        base = Math.max(18, 66 - (distance - 16) * 20);
+      }
       break;
     case 'minigun':
       if (distance > def.range) return 0.5;
@@ -440,22 +516,27 @@ function scoreWeaponForDistance(
 
 /**
  * Selects the highest-scoring weapon slot for the target distance,
- * skipping empty guns that have neither mag ammo nor reserve ammo.
+ * skipping empty guns that have neither mag ammo nor reserve ammo
+ * and excluding utility-only items such as `jetpack` / `grappler` / `shield_bubble` / `port_a_bunker`.
  */
 export function selectBestWeaponForDistance(
   items: (ItemInstance | null)[],
   distance: number,
   ammo?: Record<AmmoType, number>,
+  nearBuildsOrOptions?: boolean | WeaponSelectionOptions | ReadonlyArray<BuildPiece>,
 ): { slotIndex: number; item: ItemInstance } | null {
   let bestSlot = -1;
   let bestItem: ItemInstance | null = null;
   let bestScore = -1;
+  const nearBuilds = resolveNearBuildsFlag(nearBuildsOrOptions);
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (!item) continue;
     const def = WEAPONS[item.weaponId];
-    if (!def || isHealingItem(item.weaponId)) continue;
+    if (!def || isHealingItem(item.weaponId) || isUtilityOnlyItem(item.weaponId)) {
+      continue;
+    }
 
     if (def.isThrowable && item.stackCount <= 0) continue;
 
@@ -470,6 +551,7 @@ export function selectBestWeaponForDistance(
       item,
       distance,
       !def.isThrowable && isWeaponLoadedForScoring(item, ammo),
+      nearBuilds,
     );
     if (score > bestScore) {
       bestScore = score;
@@ -491,8 +573,9 @@ export function selectBestWeaponForRange(
   items: (ItemInstance | null)[],
   distance: number,
   ammo?: Record<AmmoType, number>,
+  nearBuildsOrOptions?: boolean | WeaponSelectionOptions | ReadonlyArray<BuildPiece>,
 ): { slotIndex: number; item: ItemInstance } | null {
-  return selectBestWeaponForDistance(items, distance, ammo);
+  return selectBestWeaponForDistance(items, distance, ammo, nearBuildsOrOptions);
 }
 
 export interface ThrowableDecision {
@@ -661,7 +744,13 @@ export function selectCloseQuartersWeapon(
     const item = items[i];
     if (!item) continue;
     const def = WEAPONS[item.weaponId];
-    if (!def || (def.category !== 'shotgun' && def.category !== 'smg')) continue;
+    if (
+      !def ||
+      isUtilityOnlyItem(item.weaponId) ||
+      (def.category !== 'shotgun' && def.category !== 'smg')
+    ) {
+      continue;
+    }
 
     if (def.ammoType !== null && ammo !== undefined) {
       const reserve = ammo[def.ammoType] ?? 0;
@@ -671,15 +760,17 @@ export function selectCloseQuartersWeapon(
     const base =
       item.weaponId === 'heavy_shotgun'
         ? 120
-        : item.weaponId === 'pump_shotgun'
-          ? 112
-          : item.weaponId === 'tac_shotgun'
-            ? 104
-            : item.weaponId === 'minigun'
-              ? 103
-              : item.weaponId === 'combat_smg'
-                ? 98
-                : 92;
+        : item.weaponId === 'plasma_flamethrower'
+          ? 116
+          : item.weaponId === 'pump_shotgun'
+            ? 112
+            : item.weaponId === 'tac_shotgun'
+              ? 104
+              : item.weaponId === 'minigun'
+                ? 103
+                : item.weaponId === 'combat_smg'
+                  ? 98
+                  : 92;
     const rarityMult = RARITY_MULTIPLIER[item.rarity] ?? 1.0;
     const score =
       base * rarityMult + (isWeaponLoadedForScoring(item, ammo) ? 15 : 0);
@@ -1096,7 +1187,13 @@ function tryBuildCover(
 
 function getWeaponOverallValue(item: ItemInstance): number {
   const def = WEAPONS[item.weaponId];
-  if (!def || isHealingItem(item.weaponId) || def.isThrowable || item.weaponId === 'pickaxe') {
+  if (
+    !def ||
+    isHealingItem(item.weaponId) ||
+    isUtilityOnlyItem(item.weaponId) ||
+    def.isThrowable ||
+    item.weaponId === 'pickaxe'
+  ) {
     return 0;
   }
   const rarityIdx = RARITY_ORDER.indexOf(item.rarity);
@@ -1104,6 +1201,7 @@ function getWeaponOverallValue(item: ItemInstance): number {
     mythic_blade_rifle: 62,
     railgun: 57,
     heavy_shotgun: 56,
+    plasma_flamethrower: 56,
     minigun: 55,
     rocket_launcher: 54,
     tactical_dmr: 53,
@@ -1125,7 +1223,12 @@ function countWeapons(bot: BotEntity): number {
   let count = 0;
   for (let i = 1; i < bot.inventory.items.length; i++) {
     const it = bot.inventory.items[i];
-    if (it && !isHealingItem(it.weaponId) && !WEAPONS[it.weaponId].isThrowable) {
+    if (
+      it &&
+      !isHealingItem(it.weaponId) &&
+      !isUtilityOnlyItem(it.weaponId) &&
+      !WEAPONS[it.weaponId].isThrowable
+    ) {
       count++;
     }
   }
@@ -1143,7 +1246,15 @@ function countHealingSlots(bot: BotEntity): number {
 
 function canUpgradeOrTakeItem(bot: BotEntity, candidate: ItemInstance): number {
   const def = WEAPONS[candidate.weaponId];
-  if (!def || candidate.weaponId === 'pickaxe' || def.isGrappler) return -1;
+  if (
+    !def ||
+    candidate.weaponId === 'pickaxe' ||
+    def.isGrappler ||
+    def.isJetpack ||
+    candidate.weaponId === 'jetpack'
+  ) {
+    return -1;
+  }
 
   // Stack existing consumables and throwables
   if (def.isConsumable || def.isThrowable) {
@@ -1710,6 +1821,66 @@ function handleReloading(bot: BotEntity, dt: number): void {
   }
 }
 
+const MAX_BOT_AIM_PITCH_RAD = 1.44;
+
+/**
+ * Computes clamped vertical aim pitch (radians) from `eyePos` toward `targetPos`
+ * (`targetPos.y - eyePos.y`), cleanly handling steep airborne jetpacking and low-gravity targets.
+ */
+export function computeAimPitch(
+  eyePos: Vec3Like,
+  targetPos: Vec3Like,
+  maxPitchRad = MAX_BOT_AIM_PITCH_RAD,
+): number {
+  const dx = targetPos.x - eyePos.x;
+  const dy = targetPos.y - eyePos.y;
+  const dz = targetPos.z - eyePos.z;
+  const horiz = Math.max(1e-4, Math.hypot(dx, dz));
+  return clamp(Math.atan2(dy, horiz), -maxPitchRad, maxPitchRad);
+}
+
+function resolveCombatAimPoint(
+  eye: Vec3Like,
+  target: Pick<BotCombatTarget, 'position' | 'eyePos' | 'velocity'>,
+  profile: DifficultyProfile,
+): { point: Vec3Like; isElevatedAirborne: boolean } {
+  const verticalDelta = target.eyePos.y - eye.y;
+  const isElevatedAirborne =
+    Math.abs(verticalDelta) >= 2.2 || Math.abs(target.velocity?.y ?? 0) >= 1.5;
+  const chestOffset = isElevatedAirborne
+    ? 0.22 * (1 - profile.headshotAimBias)
+    : 0.35 * (1 - profile.headshotAimBias);
+  return {
+    point: {
+      x: target.position.x,
+      y: target.eyePos.y - chestOffset,
+      z: target.position.z,
+    },
+    isElevatedAirborne,
+  };
+}
+
+function applyAimOrientation(
+  bot: BotEntity,
+  eye: Vec3Like,
+  aimPoint: Vec3Like,
+  turnSpeedRadPerSec: number,
+  dt: number,
+): { dx: number; dy: number; dz: number; horiz: number; targetYaw: number; aimDir: Vec3Like } {
+  const dx = aimPoint.x - eye.x;
+  const dy = aimPoint.y - eye.y;
+  const dz = aimPoint.z - eye.z;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  const aimDir: Vec3Like = { x: dx / len, y: dy / len, z: dz / len };
+  const horiz = Math.max(1e-4, Math.hypot(dx, dz));
+  const targetYaw = Math.atan2(dx, dz);
+  if (horiz >= 0.15) {
+    bot.yaw = lerpAngle(bot.yaw, targetYaw, clamp(turnSpeedRadPerSec * dt, 0, 1));
+  }
+  bot.pitch = computeAimPitch(eye, aimPoint, MAX_BOT_AIM_PITCH_RAD);
+  return { dx, dy, dz, horiz, targetYaw, aimDir };
+}
+
 function computeBallisticAimDir(
   from: Vec3Like,
   to: Vec3Like,
@@ -1719,11 +1890,11 @@ function computeBallisticAimDir(
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dz = to.z - from.z;
-  const horiz = Math.hypot(dx, dz) || 1;
+  const horiz = Math.max(1e-4, Math.hypot(dx, dz));
   const ratio = clamp((gravity * horiz) / Math.max(1, speed * speed), -0.95, 0.95);
   const arcPitch = 0.5 * Math.asin(ratio);
   const elevPitch = Math.atan2(dy, horiz);
-  const pitch = clamp(arcPitch + elevPitch * 0.65, -0.35, Math.PI * 0.34);
+  const pitch = clamp(arcPitch + elevPitch * 0.9, -0.45, Math.PI * 0.42);
   const cosP = Math.cos(pitch);
   return {
     x: (dx / horiz) * cosP,
@@ -1749,9 +1920,7 @@ function handleFireAndBurst(
   if (
     !activeItem ||
     isHealingItem(activeItem.weaponId) ||
-    activeItem.weaponId === 'shield_bubble' ||
-    activeItem.weaponId === 'port_a_bunker' ||
-    activeItem.weaponId === 'grappler'
+    isUtilityOnlyItem(activeItem.weaponId)
   ) {
     return;
   }
@@ -1759,10 +1928,14 @@ function handleFireAndBurst(
   const profile = DIFFICULTY_PROFILES[difficulty];
 
   const eye = getBotEyePos(bot);
-  // Aim at chest, blended slightly toward head based on difficulty
-  let aimTargetX = target.position.x;
-  let aimTargetY = target.eyePos.y - 0.35 * (1 - profile.headshotAimBias);
-  let aimTargetZ = target.position.z;
+  const { point: aimTarget, isElevatedAirborne } = resolveCombatAimPoint(
+    eye,
+    target,
+    profile,
+  );
+  let aimTargetX = aimTarget.x;
+  let aimTargetY = aimTarget.y;
+  let aimTargetZ = aimTarget.z;
 
   if (def.isProjectile) {
     const vehicle = ctx.getVehicles?.().find(
@@ -1774,8 +1947,9 @@ function handleFireAndBurst(
     if (targetVel) {
       const projSpd = Math.max(12, def.projectileSpeed || 60);
       const leadSec = clamp(distance / projSpd, 0, 0.75);
+      const yLeadScale = isElevatedAirborne ? 0.65 : 0.35;
       aimTargetX += targetVel.x * leadSec;
-      aimTargetY += targetVel.y * leadSec * 0.35;
+      aimTargetY += targetVel.y * leadSec * yLeadScale;
       aimTargetZ += targetVel.z * leadSec;
     }
     if (def.isBow && def.projectileSpeed > 0 && def.projectileGravity > 0) {
@@ -1784,17 +1958,13 @@ function handleFireAndBurst(
     }
   }
 
-  const dx = aimTargetX - eye.x;
-  const dy = aimTargetY - eye.y;
-  const dz = aimTargetZ - eye.z;
-  const len = Math.hypot(dx, dy, dz) || 1;
-  const aimDir: Vec3Like = { x: dx / len, y: dy / len, z: dz / len };
-
-  const targetYaw = Math.atan2(dx, dz);
-  const horiz = Math.hypot(dx, dz) || 1;
-  const targetPitch = Math.atan2(dy, horiz);
-  bot.yaw = lerpAngle(bot.yaw, targetYaw, clamp(profile.turnSpeedRadPerSec * dt, 0, 1));
-  bot.pitch = clamp(targetPitch, -1.2, 1.2);
+  const { horiz, targetYaw, aimDir } = applyAimOrientation(
+    bot,
+    eye,
+    { x: aimTargetX, y: aimTargetY, z: aimTargetZ },
+    profile.turnSpeedRadPerSec,
+    dt,
+  );
 
   // Pickaxe / Kinetic Blade melee fallback at point-blank range
   if (activeItem.weaponId === 'pickaxe' || activeItem.weaponId === 'kinetic_blade') {
@@ -1876,9 +2046,9 @@ function handleFireAndBurst(
   if (!hasLOS || bot.reactionTimer > 0 || bot.fireCooldown > 0) return;
   if (distance > def.range * 1.05) return;
 
-  // Don't fire until roughly facing target
+  // Don't fire until roughly facing target (bypass yaw gate when directly overhead)
   const yawDiff = Math.abs(normalizeAngle(targetYaw - bot.yaw));
-  if (yawDiff > 0.45) return;
+  if (horiz >= 0.5 && yawDiff > 0.45) return;
 
   bot.isAiming = distance > 14;
   const spread = computeBotSpread(
@@ -2280,9 +2450,9 @@ function selectBestFirearmForRange(
     if (
       !def ||
       item.weaponId === 'pickaxe' ||
+      item.weaponId === 'kinetic_blade' ||
       def.isThrowable ||
-      def.isGrappler ||
-      def.isShieldBubble ||
+      isUtilityOnlyItem(item.weaponId) ||
       isHealingItem(item.weaponId)
     ) {
       continue;
@@ -2477,19 +2647,13 @@ function tryShootExplosiveBarrel(
   const item = firearm.item;
   const def = WEAPONS[item.weaponId];
   const eye = getBotEyePos(bot);
-  const dx = aimPoint.x - eye.x;
-  const dy = aimPoint.y - eye.y;
-  const dz = aimPoint.z - eye.z;
-  const horiz = Math.hypot(dx, dz) || 0.001;
-  const targetYaw = Math.atan2(dx, dz);
-  const targetPitch = Math.atan2(dy, horiz);
-
-  bot.yaw = lerpAngle(
-    bot.yaw,
-    targetYaw,
-    clamp(profile.turnSpeedRadPerSec * safeDt, 0, 1),
+  const { targetYaw } = applyAimOrientation(
+    bot,
+    eye,
+    aimPoint,
+    profile.turnSpeedRadPerSec,
+    safeDt,
   );
-  bot.pitch = clamp(targetPitch, -1.2, 1.2);
 
   if (!isWeaponReadyToFire(bot, item)) {
     if (
@@ -2573,6 +2737,9 @@ function getPreferredCombatRange(
   ) {
     return { min: 8, max: 22 };
   }
+  if (weaponId === 'plasma_flamethrower') {
+    return { min: 3.5, max: 13 };
+  }
   if (weaponId === 'minigun') {
     return { min: 7, max: 24 };
   }
@@ -2651,8 +2818,8 @@ function stepCombatState(
   if (blockingBubble) {
     // Avoid wasting AR/sniper bursts into an active shield bubble dome
     bot.burstQueue = 0;
-    const faceYaw = Math.atan2(target.position.x - eye.x, target.position.z - eye.z);
-    bot.yaw = lerpAngle(bot.yaw, faceYaw, clamp(profile.turnSpeedRadPerSec * safeDt, 0, 1));
+    const { point: aimTarget } = resolveCombatAimPoint(eye, target, profile);
+    applyAimOrientation(bot, eye, aimTarget, profile.turnSpeedRadPerSec, safeDt);
     if (
       cqcWeapon &&
       (targetBubble !== null ||
@@ -2673,6 +2840,7 @@ function stepCombatState(
     }
     handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
   } else {
+    const buildPieces = ctx.getBuildPieces?.();
     // Check tactical throwables (`frag_grenade` / `shockwave_grenade`) against clustered or boxed enemies
     const throwDecision =
       !isFarLOD && bot.reloadTimer <= 0 && bot.burstQueue <= 0
@@ -2681,7 +2849,7 @@ function stepCombatState(
             target,
             ctx.getCombatTargets(),
             hasLOS,
-            ctx.getBuildPieces?.(),
+            buildPieces,
             squadmates,
             ctx.gameMode,
           )
@@ -2694,10 +2862,16 @@ function stepCombatState(
       }
       handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
     } else {
-      const chosen = selectBestWeaponForDistance(
+      const nearBuilds = hasBuildsNearEngagement(
+        buildPieces,
+        bot.position,
+        target.position,
+      );
+      const chosen = selectBestWeaponForRange(
         bot.inventory.items,
         distance,
         bot.inventory.ammo,
+        nearBuilds,
       );
       if (chosen) {
         if (bot.inventory.activeSlot !== chosen.slotIndex) {
@@ -2705,6 +2879,9 @@ function stepCombatState(
           bot.burstQueue = 0;
         }
         handleFireAndBurst(bot, ctx, difficulty, target, distance, hasLOS, safeDt, squadmates);
+      } else {
+        const { point: aimTarget } = resolveCombatAimPoint(eye, target, profile);
+        applyAimOrientation(bot, eye, aimTarget, profile.turnSpeedRadPerSec, safeDt);
       }
     }
   }
@@ -3104,6 +3281,129 @@ function resolveValidNoiseTarget(
   return pos;
 }
 
+const TRAIN_OPPORTUNITY_RANGE = 75;
+const CRATER_OPPORTUNITY_RANGE = 60;
+
+/**
+ * Selects an active, unhacked `ApexTrainState` within 75m inside the safe zone
+ * for opportunistic mid-game rotation.
+ */
+export function selectTrainTarget(
+  bot: Pick<
+    BotEntity,
+    | 'position'
+    | 'state'
+    | 'isBoss'
+    | 'isAlly'
+    | 'isDuoPartner'
+    | 'ignoredTargetId'
+    | 'ignoredTargetUntil'
+  >,
+  train: ApexTrainState | null | undefined,
+  storm: Pick<StormState, 'currentCenterX' | 'currentCenterZ' | 'currentRadius'>,
+  elapsed = 0,
+): ApexTrainState | null {
+  if (!train || !train.active || train.chestHacked || train.chestCooldownSec > 0) {
+    return null;
+  }
+  if (
+    bot.isBoss ||
+    bot.isAlly ||
+    bot.isDuoPartner ||
+    bot.state === 'bus' ||
+    bot.state === 'skydiving' ||
+    bot.state === 'gliding' ||
+    bot.state === 'combat' ||
+    bot.state === 'healing' ||
+    bot.state === 'knocked' ||
+    bot.state === 'reviving' ||
+    bot.state === 'eliminated'
+  ) {
+    return null;
+  }
+  if (bot.ignoredTargetId === 'apex_train' && elapsed < bot.ignoredTargetUntil) {
+    return null;
+  }
+  if (!Number.isFinite(train.x) || !Number.isFinite(train.z)) return null;
+  if (isInVolcanoLavaHazard(train.x, train.z)) return null;
+  if (
+    storm.currentRadius > 0 &&
+    dist2D(train.x, train.z, storm.currentCenterX, storm.currentCenterZ) >
+      Math.max(0, storm.currentRadius - 6)
+  ) {
+    return null;
+  }
+  const d = dist2D(bot.position.x, bot.position.z, train.x, train.z);
+  return d <= TRAIN_OPPORTUNITY_RANGE ? train : null;
+}
+
+/**
+ * Selects an available `MeteorCraterEntity` Hop Crystal within 60m inside the safe zone
+ * for opportunistic mid-game rotation.
+ */
+export function selectMeteorCraterTarget(
+  bot: Pick<
+    BotEntity,
+    | 'position'
+    | 'state'
+    | 'isBoss'
+    | 'isAlly'
+    | 'isDuoPartner'
+    | 'craterTargetId'
+    | 'ignoredTargetId'
+    | 'ignoredTargetUntil'
+  >,
+  craters: ReadonlyArray<MeteorCraterEntity>,
+  storm: Pick<StormState, 'currentCenterX' | 'currentCenterZ' | 'currentRadius'>,
+  elapsed = 0,
+): MeteorCraterEntity | null {
+  if (
+    bot.isBoss ||
+    bot.isAlly ||
+    bot.isDuoPartner ||
+    bot.state === 'bus' ||
+    bot.state === 'skydiving' ||
+    bot.state === 'gliding' ||
+    bot.state === 'combat' ||
+    bot.state === 'healing' ||
+    bot.state === 'knocked' ||
+    bot.state === 'reviving' ||
+    bot.state === 'eliminated' ||
+    craters.length === 0
+  ) {
+    return null;
+  }
+
+  let best: MeteorCraterEntity | null = null;
+  let bestScore = Infinity;
+  for (const crater of craters) {
+    if (!crater.crystalAvailable) continue;
+    if (crater.id === bot.ignoredTargetId && elapsed < bot.ignoredTargetUntil) continue;
+    if (!Number.isFinite(crater.x) || !Number.isFinite(crater.z)) continue;
+    if (Math.abs(crater.y - bot.position.y) > 14) continue;
+    if (isInVolcanoLavaHazard(crater.x, crater.z)) continue;
+    if (
+      storm.currentRadius > 0 &&
+      dist2D(crater.x, crater.z, storm.currentCenterX, storm.currentCenterZ) >
+        Math.max(0, storm.currentRadius - 6)
+    ) {
+      continue;
+    }
+    const d = dist2D(bot.position.x, bot.position.z, crater.x, crater.z);
+    const maxRange =
+      bot.craterTargetId === crater.id
+        ? CRATER_OPPORTUNITY_RANGE + 8
+        : CRATER_OPPORTUNITY_RANGE;
+    if (d > maxRange) continue;
+    const score = d - (crater.id === bot.craterTargetId ? 5 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = crater;
+    }
+  }
+  return best;
+}
+
 function stepRotatingState(
   bot: BotEntity,
   ctx: BotWorldContext,
@@ -3156,12 +3456,85 @@ function stepRotatingState(
   }
 
   let destination: Vec3Like | null = null;
+  let targetingOpportunity = false;
+  let forceOpportunitySprint = false;
   const investigatingNoise =
     !needRotateStorm && weaponCount > 0 && validNoisePos !== null;
   if (investigatingNoise) {
     destination = validNoisePos;
     bot.launchPadTargetId = null;
-  } else if (
+    bot.craterTargetId = null;
+    bot.craterDwellTimer = 0;
+  } else if (!needRotateStorm && !inStormNow && !isFarLOD && !bot.isAlly && !bot.isDuoPartner) {
+    const trainTarget = selectTrainTarget(bot, ctx.getTrainState?.(), ctx.storm, elapsed);
+    const craterTarget = selectMeteorCraterTarget(
+      bot,
+      ctx.getMeteorCraters?.() ?? [],
+      ctx.storm,
+      elapsed,
+    );
+
+    let chosenKind: 'train' | 'crater' | null = null;
+    if (trainTarget && craterTarget) {
+      const trainScore =
+        dist2D(bot.position.x, bot.position.z, trainTarget.x, trainTarget.z) - 12;
+      const craterScore = dist2D(
+        bot.position.x,
+        bot.position.z,
+        craterTarget.x,
+        craterTarget.z,
+      );
+      chosenKind = trainScore <= craterScore ? 'train' : 'crater';
+    } else if (trainTarget) {
+      chosenKind = 'train';
+    } else if (craterTarget) {
+      chosenKind = 'crater';
+    }
+
+    if (chosenKind === 'train' && trainTarget) {
+      bot.craterTargetId = null;
+      bot.craterDwellTimer = 0;
+      bot.launchPadTargetId = null;
+      bot.moveTarget = { x: trainTarget.x, y: trainTarget.y, z: trainTarget.z };
+      const dTrain = dist2D(bot.position.x, bot.position.z, trainTarget.x, trainTarget.z);
+      if (dTrain <= 2.2) return emptyMoveIntent();
+      destination = bot.moveTarget;
+      targetingOpportunity = true;
+      forceOpportunitySprint = dTrain > 8;
+    } else if (chosenKind === 'crater' && craterTarget) {
+      if (bot.craterTargetId !== craterTarget.id) {
+        bot.craterTargetId = craterTarget.id;
+        bot.craterDwellTimer = 0;
+      }
+      bot.launchPadTargetId = null;
+      bot.moveTarget = { x: craterTarget.x, y: craterTarget.y, z: craterTarget.z };
+      const dCrater = dist2D(bot.position.x, bot.position.z, craterTarget.x, craterTarget.z);
+      if (dCrater <= 2.2) {
+        bot.craterDwellTimer = (bot.craterDwellTimer ?? 0) + safeDt;
+        if (bot.craterDwellTimer >= 2.5) {
+          bot.ignoredTargetId = craterTarget.id;
+          bot.ignoredTargetUntil = elapsed + 30.0;
+          bot.craterTargetId = null;
+          bot.craterDwellTimer = 0;
+          bot.moveTarget = pickSafeDestination(bot, ctx);
+        } else {
+          return emptyMoveIntent();
+        }
+      } else {
+        destination = bot.moveTarget;
+        targetingOpportunity = true;
+      }
+    } else {
+      bot.craterTargetId = null;
+      bot.craterDwellTimer = 0;
+    }
+  } else {
+    bot.craterTargetId = null;
+    bot.craterDwellTimer = 0;
+  }
+
+  if (
+    !destination &&
     !needRotateStorm &&
     !bot.isBoss &&
     !bot.isAlly &&
@@ -3254,6 +3627,7 @@ function stepRotatingState(
   if (
     !needRotateStorm &&
     !investigatingNoise &&
+    !targetingOpportunity &&
     !bot.isBoss &&
     !isFarLOD &&
     bot.scanCooldown <= 0
@@ -3286,14 +3660,16 @@ function stepRotatingState(
   const d = dist2D(bot.position.x, bot.position.z, destination.x, destination.z);
   if (d <= 2.0) return emptyMoveIntent();
 
+  const sprintNow =
+    inStormNow || farFromSafeZone || Boolean(bot.launchPadTargetId) || forceOpportunitySprint;
   const intent = moveTowardPoint(
     bot,
     destination.x,
     destination.z,
     safeDt,
-    inStormNow || farFromSafeZone || bot.launchPadTargetId ? 0 : 15,
+    sprintNow ? 0 : 15,
   );
-  if (inStormNow || farFromSafeZone || bot.launchPadTargetId) {
+  if (sprintNow) {
     bot.isSprinting = true;
     intent.speed = SPRINT_SPEED;
   }
@@ -3340,7 +3716,8 @@ function recoverIfStuck(
     bot.chestTargetId ||
     bot.harvestTargetId ||
     bot.captureTargetId ||
-    bot.riftTargetId
+    bot.riftTargetId ||
+    bot.craterTargetId
   ) {
     bot.ignoredTargetId =
       bot.lootTargetId ??
@@ -3348,6 +3725,7 @@ function recoverIfStuck(
       bot.harvestTargetId ??
       bot.captureTargetId ??
       bot.riftTargetId ??
+      bot.craterTargetId ??
       null;
     bot.ignoredTargetUntil = elapsed + 6.0;
     bot.lootTargetId = null;
@@ -3355,6 +3733,8 @@ function recoverIfStuck(
     bot.harvestTargetId = null;
     bot.captureTargetId = null;
     bot.riftTargetId = null;
+    bot.craterTargetId = null;
+    bot.craterDwellTimer = 0;
     bot.moveTarget = pickSafeDestination(bot, ctx);
   }
 }
@@ -3449,18 +3829,13 @@ function trySlurpBarrelRecovery(
     y: bestBarrel.y + 0.65,
     z: bestBarrel.z,
   };
-  const dx = aimPoint.x - eye.x;
-  const dy = aimPoint.y - eye.y;
-  const dz = aimPoint.z - eye.z;
-  const horiz = Math.hypot(dx, dz) || 0.001;
-  const targetYaw = Math.atan2(dx, dz);
-  const targetPitch = Math.atan2(dy, horiz);
-  bot.yaw = lerpAngle(
-    bot.yaw,
-    targetYaw,
-    clamp(profile.turnSpeedRadPerSec * safeDt, 0, 1),
+  const { targetYaw } = applyAimOrientation(
+    bot,
+    eye,
+    aimPoint,
+    profile.turnSpeedRadPerSec,
+    safeDt,
   );
-  bot.pitch = clamp(targetPitch, -1.2, 1.2);
 
   const weaponChoice = selectBestWeaponForDistance(
     bot.inventory.items,
@@ -5050,6 +5425,7 @@ export function updateBot(
   }
 
   let intent: MoveIntent | null = riftIntent ?? null;
+  let aimingAtSlurpBarrel = false;
   if (!intent && !isPlayerCompanion && bot.state !== 'healing') {
     intent = trySlurpBarrelRecovery(
       bot,
@@ -5060,6 +5436,9 @@ export function updateBot(
       safeDt,
       isFarLOD,
     );
+    if (intent) {
+      aimingAtSlurpBarrel = true;
+    }
     if (!intent) {
       intent = tryCampfireHealing(
         bot,
@@ -5082,6 +5461,11 @@ export function updateBot(
         isFarLOD,
       );
     }
+  }
+
+  if (bot.state !== 'combat' && !aimingAtSlurpBarrel && Math.abs(bot.pitch) > 0) {
+    bot.pitch = damp(bot.pitch, 0, 8, safeDt);
+    if (Math.abs(bot.pitch) < 1e-3) bot.pitch = 0;
   }
 
   if (!intent) {
@@ -5247,16 +5631,63 @@ export class BotBrain {
     items: (ItemInstance | null)[],
     distance: number,
     ammo?: Record<AmmoType, number>,
+    nearBuildsOrOptions?: boolean | WeaponSelectionOptions | ReadonlyArray<BuildPiece>,
   ): { slotIndex: number; item: ItemInstance } | null {
-    return selectBestWeaponForDistance(items, distance, ammo);
+    return selectBestWeaponForDistance(items, distance, ammo, nearBuildsOrOptions);
   }
 
   selectBestWeaponForRange(
     items: (ItemInstance | null)[],
     distance: number,
     ammo?: Record<AmmoType, number>,
+    nearBuildsOrOptions?: boolean | WeaponSelectionOptions | ReadonlyArray<BuildPiece>,
   ): { slotIndex: number; item: ItemInstance } | null {
-    return selectBestWeaponForRange(items, distance, ammo);
+    return selectBestWeaponForRange(items, distance, ammo, nearBuildsOrOptions);
+  }
+
+  computeAimPitch(
+    eyePos: Vec3Like,
+    targetPos: Vec3Like,
+    maxPitchRad = MAX_BOT_AIM_PITCH_RAD,
+  ): number {
+    return computeAimPitch(eyePos, targetPos, maxPitchRad);
+  }
+
+  selectTrainTarget(
+    bot: Pick<
+      BotEntity,
+      | 'position'
+      | 'state'
+      | 'isBoss'
+      | 'isAlly'
+      | 'isDuoPartner'
+      | 'ignoredTargetId'
+      | 'ignoredTargetUntil'
+    >,
+    train: ApexTrainState | null | undefined,
+    storm: Pick<StormState, 'currentCenterX' | 'currentCenterZ' | 'currentRadius'>,
+    elapsed = 0,
+  ): ApexTrainState | null {
+    return selectTrainTarget(bot, train, storm, elapsed);
+  }
+
+  selectMeteorCraterTarget(
+    bot: Pick<
+      BotEntity,
+      | 'position'
+      | 'state'
+      | 'isBoss'
+      | 'isAlly'
+      | 'isDuoPartner'
+      | 'craterTargetId'
+      | 'ignoredTargetId'
+      | 'ignoredTargetUntil'
+    >,
+    craters: ReadonlyArray<MeteorCraterEntity>,
+    storm: Pick<StormState, 'currentCenterX' | 'currentCenterZ' | 'currentRadius'>,
+    elapsed = 0,
+  ): MeteorCraterEntity | null {
+    return selectMeteorCraterTarget(bot, craters, storm, elapsed);
   }
 
   selectThrowableForCombat(

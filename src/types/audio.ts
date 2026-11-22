@@ -120,7 +120,15 @@ export type SoundEventId =
   | 'forecast_scan'
   | 'bush_rustle'
   | 'rumble_respawn'
-  | 'rumble_lead_change';
+  | 'rumble_lead_change'
+  | 'train_horn'
+  | 'train_hack_complete'
+  | 'jetpack_ignite'
+  | 'flame_burst'
+  | 'meteor_whistle'
+  | 'meteor_impact'
+  | 'hop_crystal_consume'
+  | 'low_g_jump';
 
 export type MusicTrackId =
   | 'none'

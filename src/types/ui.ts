@@ -220,6 +220,11 @@ export interface HUDState {
     respawningInSec: number | null;
     blueAllies?: Array<{ x: number; z: number }>;
   } | null;
+  jetpackFuel?: number | null;
+  isJetpackThrusting?: boolean;
+  lowGravityRemainingSec?: number | null;
+  trainHackProgress?: number | null;
+  trainPos?: { x: number; z: number; yaw: number; chestHacked: boolean } | null;
 }
 
 export interface MatchQuest {
@@ -299,6 +304,9 @@ export interface MatchSummary {
     red: number;
     target: number;
   };
+  trainChestsHacked?: number;
+  hopCrystalsUsed?: number;
+  flameDamage?: number;
 }
 
 export interface BannerMessage {

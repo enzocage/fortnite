@@ -40,6 +40,12 @@ import {
   GRID_XZ,
   GRID_Y,
   GRIND_RAIL_SPEED,
+  JETPACK_BURN_RATE,
+  JETPACK_MAX_FUEL,
+  JETPACK_RECHARGE_RATE,
+  JETPACK_THRUST_ACCEL,
+  LOW_GRAVITY_DURATION_SEC,
+  LOW_GRAVITY_SCALE,
   MAX_GOLD_BARS,
   MEDALLIONS,
   PLAYER_CROUCH_HEIGHT,
@@ -85,6 +91,7 @@ import type {
   WorldFrontierBridge,
   WorldOverdriveBridge,
   WorldRiftCaptureBridge,
+  WorldSkyforgeBridge,
   WorldStationBridge,
   WorldTraversalBridge,
 } from './GameplayTypes';
@@ -118,6 +125,7 @@ export class PlayerController {
   private chapterBridge: WorldChapterBridge | null = null;
   private overdriveBridge: WorldOverdriveBridge | null = null;
   private frontierBridge: WorldFrontierBridge | null = null;
+  private skyforgeBridge: WorldSkyforgeBridge | null = null;
   private duoReviveBridge: DuoReviveBridge | null = null;
   private duoRebootBridge: DuoRebootBridge | null = null;
   private augmentManager: AugmentManager;
@@ -128,6 +136,7 @@ export class PlayerController {
   private onNpcHired: ((npc: NpcSpecialistEntity) => void) | null = null;
   private onLootIslandCaptured: ((lootPos?: Vec3Like) => void) | null = null;
   private onDroneDestroyed: ((res: SupplyDroneDamageResult) => void) | null = null;
+  private onTrainChestHacked: ((lootPos: Vec3Like) => void) | null = null;
   private eventBus: EventBus;
   private settings: GameSettings;
 
@@ -178,6 +187,13 @@ export class PlayerController {
   private currentBushId: string | null = null;
   private stealthBreakTimer = 0;
   private hasStormForecast = false;
+  private jetpackFuel = JETPACK_MAX_FUEL;
+  private isJetpackThrusting = false;
+  private jetpackDryLock = false;
+  private jetpackVfxTimer = 0;
+  private lowGravityTimer = 0;
+  private isHackingTrainChest = false;
+  private trainHackProgress: number | null = null;
 
   private gameMode: GameModeId = 'solo';
   private overshield = 0;
@@ -318,6 +334,9 @@ export class PlayerController {
     modsInstalled: 0,
     bunkersDeployed: 0,
     empHits: 0,
+    trainChestsHacked: 0,
+    hopCrystalsUsed: 0,
+    flameDamage: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -368,6 +387,7 @@ export class PlayerController {
       chapterBridge?: WorldChapterBridge | null;
       overdriveBridge?: WorldOverdriveBridge | null;
       frontierBridge?: WorldFrontierBridge | null;
+      skyforgeBridge?: WorldSkyforgeBridge | null;
       duoReviveBridge?: DuoReviveBridge | null;
       duoRebootBridge?: DuoRebootBridge | null;
       augmentManager?: AugmentManager | null;
@@ -379,6 +399,7 @@ export class PlayerController {
       onNpcHired?: ((npc: NpcSpecialistEntity) => void) | null;
       onLootIslandCaptured?: ((lootPos?: Vec3Like) => void) | null;
       onDroneDestroyed?: ((res: SupplyDroneDamageResult) => void) | null;
+      onTrainChestHacked?: ((lootPos: Vec3Like) => void) | null;
     },
   ) {
     this.camera = camera;
@@ -419,6 +440,9 @@ export class PlayerController {
     if (options?.frontierBridge !== undefined) {
       this.setFrontierBridge(options.frontierBridge);
     }
+    if (options?.skyforgeBridge !== undefined) {
+      this.setSkyforgeBridge(options.skyforgeBridge);
+    }
     if (options?.duoReviveBridge !== undefined) {
       this.setDuoReviveBridge(options.duoReviveBridge);
     }
@@ -448,6 +472,9 @@ export class PlayerController {
     }
     if (options?.onDroneDestroyed !== undefined) {
       this.setOnDroneDestroyed(options.onDroneDestroyed);
+    }
+    if (options?.onTrainChestHacked !== undefined) {
+      this.setOnTrainChestHacked(options.onTrainChestHacked);
     }
 
     this.unsubHitmarker = this.eventBus.on('combat:hitmarker', (ev) => {
@@ -574,6 +601,34 @@ export class PlayerController {
     return this.frontierBridge;
   }
 
+  setSkyforgeBridge(bridge: WorldSkyforgeBridge | null): void {
+    this.skyforgeBridge = bridge;
+    if (!bridge) {
+      this.cancelTrainChestHack();
+    }
+  }
+
+  getSkyforgeBridge(): WorldSkyforgeBridge | null {
+    return this.skyforgeBridge;
+  }
+
+  setOnTrainChestHacked(cb: ((lootPos: Vec3Like) => void) | null): void {
+    this.onTrainChestHacked = cb;
+  }
+
+  setLowGravityTimer(sec: number): void {
+    if (!Number.isFinite(sec)) return;
+    this.lowGravityTimer = Math.max(0, sec);
+  }
+
+  setJetpackFuel(fuel: number): void {
+    if (!Number.isFinite(fuel)) return;
+    this.jetpackFuel = clamp(fuel, 0, JETPACK_MAX_FUEL);
+    if (this.jetpackFuel > 0) {
+      this.jetpackDryLock = false;
+    }
+  }
+
   private isModdableFirearm(
     item: ItemInstance | null,
     slotIndex: number,
@@ -586,7 +641,8 @@ export class PlayerController {
       def.isConsumable ||
       def.isThrowable ||
       def.isGrappler ||
-      def.isKineticBlade
+      def.isKineticBlade ||
+      def.isJetpack
     ) {
       return false;
     }
@@ -706,7 +762,11 @@ export class PlayerController {
     this.cancelActionsOnModeChange();
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
+    this.cancelTrainChestHack();
+    this.isJetpackThrusting = false;
+    this.cancelTrainChestHack();
     this.clearHeldInputs();
+    this.weapons.clearActorBurn('player');
 
     this.health = 100;
     this.maxHealth = 100;
@@ -728,6 +788,11 @@ export class PlayerController {
     this.minigunHeat = 0;
     this.minigunOverheated = false;
     this.minigunOverheatTimer = 0;
+    this.jetpackFuel = JETPACK_MAX_FUEL;
+    this.isJetpackThrusting = false;
+    this.jetpackDryLock = false;
+    this.jetpackVfxTimer = 0;
+    this.lowGravityTimer = 0;
     this.isSliding = false;
     this.isCrouching = false;
     this.isStealthed = false;
@@ -961,6 +1026,8 @@ export class PlayerController {
     this.cancelActionsOnModeChange();
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
+    this.cancelTrainChestHack();
+    this.isJetpackThrusting = false;
     this.isAiming = false;
     this.isScoped = false;
     this.isSprinting = false;
@@ -1399,6 +1466,8 @@ export class PlayerController {
       this.minigunSpinTimer = 0;
       this.cancelPartnerRevive();
       this.cancelPartnerReboot();
+      this.cancelTrainChestHack();
+      this.isJetpackThrusting = false;
     }
     if (phase === 'victory' || phase === 'eliminated' || phase === 'lobby') {
       this.building.setPreviewVisible(false);
@@ -1593,6 +1662,12 @@ export class PlayerController {
       },
       onImpulse: (impulse, grantFallImmunity) =>
         this.applyExternalImpulse(impulse, grantFallImmunity),
+      onFlameDamage: (damage) => {
+        if (damage > 0) {
+          this.stats.flameDamage = (this.stats.flameDamage ?? 0) + damage;
+          this.stats.damageDealt += damage;
+        }
+      },
     };
   }
 
@@ -1747,6 +1822,13 @@ export class PlayerController {
     this.currentBushId = null;
     this.stealthBreakTimer = 0;
     this.hasStormForecast = false;
+    this.jetpackFuel = JETPACK_MAX_FUEL;
+    this.isJetpackThrusting = false;
+    this.jetpackDryLock = false;
+    this.jetpackVfxTimer = 0;
+    this.lowGravityTimer = 0;
+    this.cancelTrainChestHack();
+    this.weapons.clearActorBurn('player');
     this.stats = {
       damageDealt: 0,
       shotsFired: 0,
@@ -1764,6 +1846,9 @@ export class PlayerController {
       modsInstalled: 0,
       bunkersDeployed: 0,
       empHits: 0,
+      trainChestsHacked: 0,
+      hopCrystalsUsed: 0,
+      flameDamage: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -2055,6 +2140,11 @@ export class PlayerController {
     this.minigunSpinTimer = 0;
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
+    this.cancelTrainChestHack();
+    this.isJetpackThrusting = false;
+    this.jetpackDryLock = false;
+    this.lowGravityTimer = 0;
+    this.weapons.clearActorBurn('player');
     this.incomingReviveProgress = null;
     this.incomingReviveLabel = null;
     this.activeZipline = null;
@@ -2176,6 +2266,7 @@ export class PlayerController {
     if (code === this.getResolvedKeybinds().interact) {
       if (this.isRevivingPartner) this.cancelPartnerRevive();
       if (this.isRebootingPartner) this.cancelPartnerReboot();
+      if (this.isHackingTrainChest) this.cancelTrainChestHack();
     }
   }
 
@@ -2224,6 +2315,8 @@ export class PlayerController {
     this.minigunSpinTimer = 0;
     this.cancelPartnerRevive();
     this.cancelPartnerReboot();
+    this.cancelTrainChestHack();
+    this.isJetpackThrusting = false;
     this.lastDraggedEditTile = -1;
   }
 
@@ -2645,13 +2738,23 @@ export class PlayerController {
           this.slideTimer = 0;
           this.isCrouching = false;
           const burstSpeed = Math.max(this.slideSpeed * 1.08, 12.5);
+          const lowGJumpScale = this.lowGravityTimer > 0 ? 1.25 : 1.0;
           this.velocity.x = this.slideDir.x * burstSpeed;
           this.velocity.z = this.slideDir.z * burstSpeed;
-          this.velocity.y = 9.0;
+          this.velocity.y = 9.0 * lowGJumpScale;
           this.grounded = false;
           this.wasAirborne = true;
           this.fallPeakY = this.position.y;
-          this.eventBus.emit('sound:play', { id: 'jump', position: this.position, spatial: true });
+          if (this.lowGravityTimer > 0) {
+            this.fallImmune = true;
+            this.eventBus.emit('sound:play', {
+              id: 'low_g_jump',
+              position: this.position,
+              spatial: true,
+            });
+          } else {
+            this.eventBus.emit('sound:play', { id: 'jump', position: this.position, spatial: true });
+          }
           break;
         }
         if (this.tryMantle()) {
@@ -2673,14 +2776,25 @@ export class PlayerController {
             isSprintingNow && this.hasMedallion('medallion_agility')
               ? 1.22
               : 1.0;
-          this.velocity.y = 8.4 * augmentJumpScale * agilityJumpScale;
+          const lowGJumpScale = this.lowGravityTimer > 0 ? 1.25 : 1.0;
+          this.velocity.y = 8.4 * augmentJumpScale * agilityJumpScale * lowGJumpScale;
           this.grounded = false;
           this.wasAirborne = true;
           this.fallPeakY = this.position.y;
-          this.eventBus.emit('sound:play', { id: 'jump', position: this.position, spatial: true });
+          if (this.lowGravityTimer > 0) {
+            this.fallImmune = true;
+            this.eventBus.emit('sound:play', {
+              id: 'low_g_jump',
+              position: this.position,
+              spatial: true,
+            });
+          } else {
+            this.eventBus.emit('sound:play', { id: 'jump', position: this.position, spatial: true });
+          }
         } else if (
           !this.isSwimming &&
           !this.isMantling &&
+          (this.inventory.findSlotByWeapon('jetpack') === -1 || this.jetpackFuel <= 0) &&
           this.augmentManager.hasAugment('aerialist')
         ) {
           const terrainY = this.terrain.getHeightAt(this.position.x, this.position.z);
@@ -2717,6 +2831,7 @@ export class PlayerController {
     if (e.code === this.getResolvedKeybinds().interact) {
       if (this.isRevivingPartner) this.cancelPartnerRevive();
       if (this.isRebootingPartner) this.cancelPartnerReboot();
+      if (this.isHackingTrainChest) this.cancelTrainChestHack();
     }
   }
 
@@ -2762,6 +2877,11 @@ export class PlayerController {
     this.rebootTimer = 0;
     this.rebootTickSoundTimer = 0;
     this.activeRebootVanId = null;
+  }
+
+  private cancelTrainChestHack(): void {
+    this.isHackingTrainChest = false;
+    this.trainHackProgress = null;
   }
 
   private cycleBuildMaterial(): void {
@@ -2882,12 +3002,16 @@ export class PlayerController {
       item.weaponId !== 'pickaxe' &&
       !def.isKineticBlade &&
       !def.isGrappler &&
-      !def.isThrowable
+      !def.isThrowable &&
+      !def.isJetpack
     ) {
       this.stats.shotsFired += 1;
       if (res.shotsHit > 0) this.stats.shotsHit += 1;
       this.stats.headshots += res.headshots;
       this.stats.damageDealt += res.damageDealt;
+      if (item.weaponId === 'plasma_flamethrower' && res.damageDealt > 0) {
+        this.stats.flameDamage = (this.stats.flameDamage ?? 0) + res.damageDealt;
+      }
     }
 
     if (res.destroyedDrones && res.destroyedDrones.length > 0) {
@@ -2926,10 +3050,18 @@ export class PlayerController {
   }
 
   private tryUseActiveSlot(isInitialPress: boolean): void {
-    if (this.isKnocked || this.isRevivingPartner || this.isRebootingPartner) return;
+    if (
+      this.isKnocked ||
+      this.isRevivingPartner ||
+      this.isRebootingPartner ||
+      this.isHackingTrainChest
+    ) {
+      return;
+    }
     const item = this.inventory.getActiveItem();
     if (!item) return;
     const def = WEAPONS[item.weaponId];
+    if (def.isJetpack || item.weaponId === 'jetpack') return;
 
     if (def.isConsumable) {
       if (!isInitialPress || this.healTimer > 0) return;
@@ -3584,7 +3716,7 @@ export class PlayerController {
     if (slotIndex < 1 || slotIndex > 5 || !item) return null;
     if (item.weaponId === 'pickaxe') return null;
     const def = WEAPONS[item.weaponId];
-    if (!def || def.isConsumable || def.isThrowable || def.isGrappler) {
+    if (!def || def.isConsumable || def.isThrowable || def.isGrappler || def.isJetpack) {
       return null;
     }
     if (
@@ -3651,6 +3783,8 @@ export class PlayerController {
     kind:
       | 'revive_partner'
       | 'reboot_van'
+      | 'train_chest'
+      | 'hop_crystal'
       | 'dropped_medallion'
       | 'dropped_crown'
       | 'weapon_bunker'
@@ -3721,6 +3855,8 @@ export class PlayerController {
       kind:
         | 'revive_partner'
         | 'reboot_van'
+        | 'train_chest'
+        | 'hop_crystal'
         | 'dropped_medallion'
         | 'dropped_crown'
         | 'weapon_bunker'
@@ -3944,6 +4080,51 @@ export class PlayerController {
               },
             };
           }
+        }
+      }
+    }
+
+    if (this.skyforgeBridge) {
+      const trainState = this.skyforgeBridge.getTrainState();
+      if (
+        (!trainState || (trainState.active && !trainState.chestHacked)) &&
+        this.skyforgeBridge.isNearTrainChest(this.position)
+      ) {
+        const chestPos = trainState?.carPositions?.[1] ?? trainState;
+        const d = chestPos
+          ? Math.min(2.2, dist3D(this.position, chestPos))
+          : 1.5;
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'train_chest',
+            id: 'apex_train_chest',
+            prompt: {
+              label: `HOLD [${interactKey}] HACK TRAIN CHEST`,
+              key: interactKey,
+              rarity: 'mythic',
+            },
+          };
+        }
+      }
+
+      const crater = this.skyforgeBridge.findNearbyHopCrystal(this.position);
+      if (crater && crater.crystalAvailable) {
+        const d = Math.min(
+          2.4,
+          dist3D(this.position, { x: crater.x, y: crater.y, z: crater.z }),
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            kind: 'hop_crystal',
+            id: crater.id,
+            prompt: {
+              label: 'CONSUME HOP CRYSTAL (LOW-G)',
+              key: interactKey,
+              rarity: 'epic',
+            },
+          };
         }
       }
     }
@@ -4608,6 +4789,73 @@ export class PlayerController {
         this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
         return;
       }
+
+      if (candidate.kind === 'train_chest' && this.skyforgeBridge) {
+        const trainState = this.skyforgeBridge.getTrainState();
+        if (
+          (trainState && (!trainState.active || trainState.chestHacked)) ||
+          !this.skyforgeBridge.isNearTrainChest(this.position)
+        ) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        if (!this.isHackingTrainChest) {
+          this.reloadTimer = 0;
+          this.healTimer = 0;
+          this.healLabel = null;
+          this.isDrawingBow = false;
+          this.bowDrawElapsed = 0;
+          this.bowCharge = 0;
+          this.isChargingRailgun = false;
+          this.railgunChargeElapsed = 0;
+          this.railgunCharge = 0;
+          this.isHackingTrainChest = true;
+          this.trainHackProgress = clamp(trainState?.chestHackProgress ?? 0, 0, 1);
+        }
+        return;
+      }
+
+      if (candidate.kind === 'hop_crystal' && this.skyforgeBridge) {
+        let emittedConsumeSfx = false;
+        let emittedAuraVfx = false;
+        const unsubSfx = this.eventBus.on('sound:play', (ev) => {
+          if (ev.id === 'hop_crystal_consume') emittedConsumeSfx = true;
+        });
+        const unsubVfx = this.eventBus.on('vfx:hop_crystal_aura', () => {
+          emittedAuraVfx = true;
+        });
+        const consumed = this.skyforgeBridge.consumeHopCrystal(candidate.id);
+        unsubSfx();
+        unsubVfx();
+        if (!consumed || !consumed.ok) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        this.lowGravityTimer = LOW_GRAVITY_DURATION_SEC;
+        this.stats.hopCrystalsUsed = (this.stats.hopCrystalsUsed ?? 0) + 1;
+        if (!emittedConsumeSfx) {
+          this.eventBus.emit('sound:play', {
+            id: 'hop_crystal_consume',
+            position: { ...consumed.position },
+            spatial: true,
+          });
+        }
+        if (!emittedAuraVfx) {
+          this.eventBus.emit('vfx:hop_crystal_aura', {
+            position: { ...consumed.position },
+          });
+        }
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        return;
+      }
     }
 
     // Fallback: Attach to nearby Grind Rail or overhead Energy Zipline
@@ -4765,7 +5013,7 @@ export class PlayerController {
       return;
     }
 
-    if (this.isRevivingPartner || this.isRebootingPartner) {
+    if (this.isRevivingPartner || this.isRebootingPartner || this.isHackingTrainChest) {
       this.interactPrompt = null;
       this.canRepairBuild = false;
       return;
@@ -5111,6 +5359,9 @@ export class PlayerController {
     if (this.phase !== 'playing') {
       this.isStealthed = false;
       this.currentBushId = null;
+      this.isJetpackThrusting = false;
+    } else if (this.lowGravityTimer > 0) {
+      this.lowGravityTimer = Math.max(0, this.lowGravityTimer - safeDt);
     }
 
     const activeItem = this.inventory.getActiveItem();
@@ -5552,9 +5803,95 @@ export class PlayerController {
       !this.isBuildMode &&
       !this.building.getEditState().active &&
       !activeDef.isConsumable &&
+      !activeDef.isJetpack &&
       activeItem?.weaponId !== 'pickaxe' &&
-      activeItem?.weaponId !== 'kinetic_blade';
+      activeItem?.weaponId !== 'kinetic_blade' &&
+      activeItem?.weaponId !== 'jetpack';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
+
+    const hasJetpack = this.inventory.findSlotByWeapon('jetpack') !== -1;
+    const jetpackSelected =
+      !this.isBuildMode &&
+      !this.building.getEditState().active &&
+      activeItem?.weaponId === 'jetpack';
+    const wantsJetpackInput =
+      hasJetpack &&
+      !this.isKnocked &&
+      !this.isRevivingPartner &&
+      !this.isRebootingPartner &&
+      !this.isHackingTrainChest &&
+      ((!this.grounded && this.keysDown.has('Space')) ||
+        (jetpackSelected && this.leftMouseDown));
+
+    if (!wantsJetpackInput || (this.grounded && !(jetpackSelected && this.leftMouseDown))) {
+      this.jetpackDryLock = false;
+    }
+
+    const wasJetpackThrusting = this.isJetpackThrusting;
+    this.isJetpackThrusting =
+      wantsJetpackInput && !this.jetpackDryLock && this.jetpackFuel > 0;
+
+    if (this.isJetpackThrusting) {
+      const fullBurn = JETPACK_BURN_RATE * dt;
+      const burnAmount = Math.min(this.jetpackFuel, fullBurn);
+      const thrustFrac = fullBurn > 0 ? burnAmount / fullBurn : 0;
+      this.jetpackFuel = Math.max(0, this.jetpackFuel - burnAmount);
+      if (this.jetpackFuel <= 1e-6) {
+        this.jetpackFuel = 0;
+        this.jetpackDryLock = true;
+      }
+      this.velocity.y = Math.min(
+        14.0,
+        this.velocity.y + JETPACK_THRUST_ACCEL * dt * thrustFrac,
+      );
+      this.grounded = false;
+      this.wasAirborne = true;
+      this.fallImmune = true;
+      this.fallPeakY = Math.max(this.fallPeakY, this.position.y);
+      this.isCrouching = false;
+      this.isSliding = false;
+      this.healTimer = 0;
+      this.healLabel = null;
+      if (!wasJetpackThrusting) {
+        this.eventBus.emit('sound:play', {
+          id: 'jetpack_ignite',
+          position: { ...this.position },
+          spatial: true,
+        });
+        this.jetpackVfxTimer = 0;
+      }
+      this.jetpackVfxTimer -= dt;
+      if (this.jetpackVfxTimer <= 0) {
+        this.jetpackVfxTimer = 0.06;
+        const sinYaw = Math.sin(this.characterYaw);
+        const cosYaw = Math.cos(this.characterYaw);
+        this.eventBus.emit('vfx:jetpack_flame', {
+          position: {
+            x: this.position.x - sinYaw * 0.28,
+            y: this.position.y + 1.05,
+            z: this.position.z - cosYaw * 0.28,
+          },
+          direction: {
+            x: -sinYaw * 0.15,
+            y: -1,
+            z: -cosYaw * 0.15,
+          },
+          intensity: clamp(
+            0.65 + (this.jetpackFuel / JETPACK_MAX_FUEL) * 0.35,
+            0.5,
+            1.0,
+          ),
+        });
+      }
+    } else {
+      this.jetpackVfxTimer = 0;
+      if (hasJetpack && this.jetpackFuel < JETPACK_MAX_FUEL) {
+        this.jetpackFuel = Math.min(
+          JETPACK_MAX_FUEL,
+          this.jetpackFuel + JETPACK_RECHARGE_RATE * dt,
+        );
+      }
+    }
 
     if (this.isSliding) {
       if (rightInput !== 0) {
@@ -5600,17 +5937,25 @@ export class PlayerController {
 
       const targetVx = wishX * targetSpeed;
       const targetVz = wishZ * targetSpeed;
-      const accel = this.grounded ? 16.0 : this.fallImmune ? 1.2 : 5.5;
+      const accel = this.grounded
+        ? 16.0
+        : this.isJetpackThrusting
+          ? 6.5
+          : this.fallImmune
+            ? 1.2
+            : 5.5;
       this.velocity.x = damp(this.velocity.x, targetVx, accel, dt);
       this.velocity.z = damp(this.velocity.z, targetVz, accel, dt);
     }
 
-    const gravScale =
+    const augmentGravScale =
       !this.grounded && this.augmentManager.hasAugment('parkour_boost')
         ? 0.84
         : 1.0;
+    const lowGravScale = this.lowGravityTimer > 0 ? LOW_GRAVITY_SCALE : 1.0;
+    const gravScale = augmentGravScale * lowGravScale;
 
-    if (inWater) {
+    if (inWater && !this.isJetpackThrusting) {
       // Shallow swim buoyancy at water surface
       const swimY = WATER_LEVEL - 0.8;
       if (this.position.y < swimY) {
@@ -5640,13 +5985,30 @@ export class PlayerController {
     this.position = res.position;
     this.velocity = res.velocity;
 
+    let groundMaterial = res.groundMaterial;
+    const trainSupport =
+      this.skyforgeBridge?.getTrainPlatformSupport(this.position) ?? null;
+    const supportedByTrain =
+      trainSupport !== null &&
+      !this.isJetpackThrusting &&
+      this.velocity.y <= 0.01 &&
+      this.position.y <= trainSupport.deckY + 0.45 &&
+      this.position.y >= trainSupport.deckY - 0.85;
+    if (supportedByTrain && trainSupport) {
+      this.position.x = clamp(this.position.x + trainSupport.deltaX, -390, 390);
+      this.position.z = clamp(this.position.z + trainSupport.deltaZ, -390, 390);
+      this.position.y = trainSupport.deckY;
+      this.velocity.y = 0;
+      groundMaterial = 'metal';
+    }
+
     const onStructure =
-      res.grounded &&
-      (res.groundMaterial === 'wood' ||
-        res.groundMaterial === 'brick' ||
-        res.groundMaterial === 'metal');
+      (res.grounded || supportedByTrain) &&
+      (groundMaterial === 'wood' ||
+        groundMaterial === 'brick' ||
+        groundMaterial === 'metal');
     this.isSwimming = inWater && !onStructure;
-    this.grounded = res.grounded || this.isSwimming;
+    this.grounded = res.grounded || supportedByTrain || this.isSwimming;
 
     // Keep inside island playable bounds
     this.position.x = clamp(this.position.x, -390, 390);
@@ -5686,7 +6048,12 @@ export class PlayerController {
     } else {
       if (!prevGrounded && this.wasAirborne) {
         const fallDistance = this.fallPeakY - this.position.y;
-        if (!this.fallImmune && fallDistance > 13 && this.isAlive()) {
+        if (
+          !this.fallImmune &&
+          this.lowGravityTimer <= 0 &&
+          fallDistance > 13 &&
+          this.isAlive()
+        ) {
           const fallDmg = clamp(Math.round((fallDistance - 13) * 5), 1, 100);
           this.applyDamage({
             targetId: 'player',
@@ -5802,7 +6169,7 @@ export class PlayerController {
       this.footstepTimer -= dt * (this.isSprinting ? 1.45 : 1.0);
       if (this.footstepTimer <= 0) {
         this.footstepTimer = 0.36;
-        const footId = this.resolveFootstepSound(res.groundMaterial);
+        const footId = this.resolveFootstepSound(groundMaterial);
         this.eventBus.emit('sound:play', {
           id: footId,
           position: { ...this.position },
@@ -6184,8 +6551,10 @@ export class PlayerController {
       !this.isBuildMode &&
       !this.building.getEditState().active &&
       !activeDef.isConsumable &&
+      !activeDef.isJetpack &&
       activeItem?.weaponId !== 'pickaxe' &&
-      activeItem?.weaponId !== 'kinetic_blade';
+      activeItem?.weaponId !== 'kinetic_blade' &&
+      activeItem?.weaponId !== 'jetpack';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
     if (this.isAiming || this.isFiring) {
@@ -6556,6 +6925,70 @@ export class PlayerController {
         this.lastBuildPreview = null;
         this.isFiring = false;
         return;
+      }
+    }
+
+    // Apex Express Train Chest 3.0s hack channel (hold [E] near Train Chest)
+    if (this.isHackingTrainChest) {
+      const interactCode = this.getResolvedKeybinds().interact;
+      const trainState = this.skyforgeBridge?.getTrainState() ?? null;
+      const nearChest = Boolean(this.skyforgeBridge?.isNearTrainChest(this.position));
+      if (
+        !this.skyforgeBridge ||
+        !this.keysDown.has(interactCode) ||
+        !this.isAlive() ||
+        this.isKnocked ||
+        this.activeVehicleId !== null ||
+        this.activeZipline !== null ||
+        this.activeGrindRail !== null ||
+        this.isBuildMode ||
+        this.isSliding ||
+        this.isMantling ||
+        this.moveSpeed > 3.5 ||
+        (trainState && (!trainState.active || trainState.chestHacked)) ||
+        !nearChest
+      ) {
+        this.cancelTrainChestHack();
+      } else {
+        this.reloadTimer = 0;
+        this.healTimer = 0;
+        this.healLabel = null;
+        this.isDrawingBow = false;
+        this.bowDrawElapsed = 0;
+        this.bowCharge = 0;
+        this.isChargingRailgun = false;
+        this.railgunChargeElapsed = 0;
+        this.railgunCharge = 0;
+
+        let emittedHackSfx = false;
+        const unsubSfx = this.eventBus.on('sound:play', (ev) => {
+          if (ev.id === 'train_hack_complete') emittedHackSfx = true;
+        });
+        const hackRes = this.skyforgeBridge.advanceTrainChestHack(dt, 'player');
+        unsubSfx();
+
+        if (!hackRes) {
+          this.cancelTrainChestHack();
+        } else {
+          this.trainHackProgress = clamp(hackRes.progress, 0, 1);
+          if (hackRes.completed) {
+            this.addGoldBars(150, hackRes.lootPos);
+            this.stats.trainChestsHacked = (this.stats.trainChestsHacked ?? 0) + 1;
+            if (!emittedHackSfx) {
+              this.eventBus.emit('sound:play', {
+                id: 'train_hack_complete',
+                position: { ...hackRes.lootPos },
+                spatial: true,
+              });
+            }
+            this.onTrainChestHacked?.(hackRes.lootPos);
+            this.cancelTrainChestHack();
+          }
+          this.building.setPreviewVisible(false);
+          this.lastBuildPreview = null;
+          this.isFiring = false;
+          return;
+        }
       }
     }
 
@@ -6993,6 +7426,10 @@ export class PlayerController {
       weaponMods: activeItem?.mods ? [...activeItem.mods] : [],
       isStealthed: this.isStealthed,
       teamId: this.gameMode === 'team_rumble' ? 'team_blue' : undefined,
+      hasJetpack: this.inventory.findSlotByWeapon('jetpack') !== -1,
+      isJetpackThrusting: this.isJetpackThrusting,
+      hasLowGravityBuff: this.lowGravityTimer > 0,
+      isBurning: this.weapons.isActorBurning('player'),
     };
   }
 
@@ -7073,6 +7510,7 @@ export class PlayerController {
           !this.isMantling &&
           this.activeVehicleId === null &&
           this.activeZipline === null &&
+          (this.inventory.findSlotByWeapon('jetpack') === -1 || this.jetpackFuel <= 0) &&
           this.augmentManager.hasAugment('aerialist') &&
           Math.min(
             altitude,
@@ -7152,6 +7590,15 @@ export class PlayerController {
       isStealthed: this.isStealthed,
       hasStormForecast: this.hasStormForecast,
       activeWeaponMods: activeItem?.mods ? [...activeItem.mods] : [],
+      jetpackFuel:
+        this.inventory.findSlotByWeapon('jetpack') !== -1 ? this.jetpackFuel : null,
+      isJetpackThrusting: this.isJetpackThrusting,
+      lowGravityRemainingSec:
+        this.lowGravityTimer > 0 ? this.lowGravityTimer : null,
+      trainHackProgress:
+        this.isHackingTrainChest && this.trainHackProgress !== null
+          ? clamp(this.trainHackProgress, 0, 1)
+          : null,
     };
   }
 }

@@ -4,12 +4,16 @@ import {
   EventBus,
   GRIND_RAIL_SPEED,
   ISLAND_RADIUS,
+  METEOR_CRATER_CRYSTAL_RESPAWN_SEC,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   POIS,
   REBOOT_VAN_COOLDOWN_SEC,
   STEP_HEIGHT,
   STORM_PHASES,
+  TRAIN_CHEST_COOLDOWN_SEC,
+  TRAIN_HACK_DURATION_SEC,
+  TRAIN_SPEED_MPS,
   WATER_LEVEL,
   WEAPON_MOD_COST_GOLD,
   WEAPONS,
@@ -34,6 +38,7 @@ import {
   type SupplyDroneDamageResult,
   type Wave7ShowcaseResult,
   type Wave8ShowcaseResult,
+  type Wave9ShowcaseResult,
 } from '../index';
 import type { WeatherKind } from '../../types';
 
@@ -3444,5 +3449,421 @@ describe('Wave-8 StormSystem Forecast Rings & Team Rumble, Loot Pools & Sky Shad
     expect(skyMat.uniforms.uOvercast.value).toBeGreaterThan(0.7);
 
     fx.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-9 Apex Express Train, Meteor Craters & Showcase', () => {
+  it('runs Apex Express Moving Loot Train on closed-loop rails with flatbed riding, 3.0s hack, cooldown & periodic horn', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    const soundSpy = vi.fn();
+    bus.on('sound:play', soundSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 1.2) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 3.0 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    // 1. Track geometry & closed-loop clearance
+    const trackPoints = interactables.getTrainTrackPoints();
+    expect(trackPoints.length).toBeGreaterThanOrEqual(40);
+    for (const pt of trackPoints) {
+      expect(Number.isFinite(pt.x)).toBe(true);
+      expect(Number.isFinite(pt.y)).toBe(true);
+      expect(Number.isFinite(pt.z)).toBe(true);
+      expect(pt.y).toBeGreaterThan(WATER_LEVEL + 1.0);
+      expect(pt.y).toBeGreaterThanOrEqual(terrain.getHeightAt(pt.x, pt.z) + 0.1);
+      expect(isClearOfBuildings(pt.x, pt.y, pt.z, 1.5), `Track point (${pt.x.toFixed(1)}, ${pt.y.toFixed(1)}, ${pt.z.toFixed(1)}) hits building`).toBe(true);
+    }
+
+    const trainGroup = interactables.getGroup().getObjectByName('ApexExpressTrain') as THREE.Group;
+    const locoGroup = interactables.getGroup().getObjectByName('ApexTrainLocomotive') as THREE.Group;
+    const car1Group = interactables.getGroup().getObjectByName('ApexTrainCargoCar1') as THREE.Group;
+    const car2Group = interactables.getGroup().getObjectByName('ApexTrainCargoCar2') as THREE.Group;
+    const chestGroup = interactables.getGroup().getObjectByName('ApexTrainHackChest') as THREE.Group;
+    expect(trainGroup).toBeDefined();
+    expect(locoGroup).toBeDefined();
+    expect(car1Group).toBeDefined();
+    expect(car2Group).toBeDefined();
+    expect(chestGroup).toBeDefined();
+
+    // 2. Train initial state & continuous closed-loop motion + periodic train_horn
+    const s0 = interactables.getTrainState();
+    expect(s0.active).toBe(true);
+    expect(s0.speed).toBe(TRAIN_SPEED_MPS);
+    expect(s0.carPositions).toHaveLength(2);
+    expect(s0.chestHacked).toBe(false);
+    expect(s0.chestHackProgress).toBe(0);
+    expect(s0.chestCooldownSec).toBe(0);
+    expect(s0.trackPoints.length).toBe(trackPoints.length);
+
+    // Mutating returned snapshot must not corrupt internal state
+    s0.carPositions[0].x = 99999;
+    expect(interactables.getTrainState().carPositions[0].x).not.toBe(99999);
+
+    for (let i = 0; i < 20; i++) {
+      interactables.update(0.5, (i + 1) * 0.5);
+    }
+    const s1 = interactables.getTrainState();
+    expect(s1.t).not.toBeCloseTo(0, 3);
+    expect(Math.hypot(s1.x - locoGroup.position.x, s1.z - locoGroup.position.z)).toBeLessThan(1e-4);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'train_horn' }));
+
+    // 3. Flatbed getTrainPlatformSupport riding detection on Cargo Car 1 & Cargo Car 2
+    const beforeRide = interactables.getTrainState();
+    const car1Before = beforeRide.carPositions[0];
+    const car2Before = beforeRide.carPositions[1];
+    const rider1 = { x: car1Before.x, y: car1Before.y + 1.05, z: car1Before.z };
+    const rider2 = { x: car2Before.x, y: car2Before.y + 1.05, z: car2Before.z };
+
+    interactables.update(0.1, 10.1);
+    const afterRide = interactables.getTrainState();
+    const sup1 = interactables.getTrainPlatformSupport(rider1);
+    const sup2 = interactables.getTrainPlatformSupport(rider2);
+    expect(sup1).not.toBeNull();
+    expect(sup2).not.toBeNull();
+    expect(sup1!.deltaX).toBeCloseTo(afterRide.carPositions[0].x - car1Before.x, 4);
+    expect(sup1!.deltaZ).toBeCloseTo(afterRide.carPositions[0].z - car1Before.z, 4);
+    expect(sup1!.deckY).toBeCloseTo(afterRide.carPositions[0].y + 1.05, 4);
+
+    // Applying delta keeps rider centered on Cargo Car 1
+    rider1.x += sup1!.deltaX;
+    rider1.z += sup1!.deltaZ;
+    rider1.y = sup1!.deckY;
+    expect(Math.hypot(rider1.x - afterRide.carPositions[0].x, rider1.z - afterRide.carPositions[0].z)).toBeLessThan(0.05);
+
+    // Off-train, ground-level under train, high airborne, and NaN checks return null
+    expect(interactables.getTrainPlatformSupport({ x: afterRide.x, y: afterRide.y + 1.05, z: afterRide.z })).toBeNull();
+    expect(interactables.getTrainPlatformSupport({ x: afterRide.carPositions[0].x, y: afterRide.carPositions[0].y, z: afterRide.carPositions[0].z })).toBeNull();
+    expect(interactables.getTrainPlatformSupport({ x: afterRide.carPositions[0].x, y: afterRide.carPositions[0].y + 5.0, z: afterRide.carPositions[0].z })).toBeNull();
+    expect(interactables.getTrainPlatformSupport({ x: Number.NaN, y: 12, z: 0 })).toBeNull();
+
+    // 4. Train Chest proximity + 3.0s hack + 75s cooldown reset
+    expect(interactables.isNearTrainChest(rider1)).toBe(true);
+    expect(interactables.isNearTrainChest({ x: rider1.x + 25, y: rider1.y, z: rider1.z })).toBe(false);
+    expect(interactables.isNearTrainChest({ x: rider1.x, y: Number.NaN, z: rider1.z })).toBe(false);
+
+    expect(interactables.advanceTrainChestHack(0, 'player')).toBeNull();
+    expect(interactables.advanceTrainChestHack(1.0, '')).toBeNull();
+
+    const hackHalf = interactables.advanceTrainChestHack(TRAIN_HACK_DURATION_SEC * 0.5, 'player');
+    expect(hackHalf).not.toBeNull();
+    expect(hackHalf!.completed).toBe(false);
+    expect(hackHalf!.progress).toBeCloseTo(0.5, 4);
+    expect(interactables.getTrainState().chestHacked).toBe(false);
+
+    const hackComplete = interactables.advanceTrainChestHack(TRAIN_HACK_DURATION_SEC * 0.5, 'player');
+    expect(hackComplete).not.toBeNull();
+    expect(hackComplete!.completed).toBe(true);
+    expect(hackComplete!.progress).toBe(1);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'train_hack_complete' }));
+
+    const hackedState = interactables.getTrainState();
+    expect(hackedState.chestHacked).toBe(true);
+    expect(hackedState.chestCooldownSec).toBe(TRAIN_CHEST_COOLDOWN_SEC);
+    expect(interactables.isNearTrainChest(rider1)).toBe(false);
+    expect(interactables.advanceTrainChestHack(0.5, 'player')).toBeNull();
+
+    // Tick cooldown to completion
+    interactables.update(TRAIN_CHEST_COOLDOWN_SEC + 0.5, 90);
+    const cooledState = interactables.getTrainState();
+    expect(cooledState.chestHacked).toBe(false);
+    expect(cooledState.chestCooldownSec).toBe(0);
+    expect(cooledState.chestHackProgress).toBe(0);
+
+    // 5. reset() & dispose()
+    interactables.reset();
+    const resetState = interactables.getTrainState();
+    expect(resetState.active).toBe(true);
+    expect(resetState.t).toBe(0);
+    expect(resetState.chestHacked).toBe(false);
+    expect(resetState.chestCooldownSec).toBe(0);
+
+    interactables.dispose();
+    expect(interactables.getTrainState().active).toBe(false);
+    expect(interactables.getTrainTrackPoints()).toHaveLength(0);
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('constructs 6 Zero-Point Meteor Impact Craters clear of water/buildings/props with Hop Crystal consume, respawn & meteor strike', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const auraSpy = vi.fn();
+    const meteorVfxSpy = vi.fn();
+    const soundSpy = vi.fn();
+    bus.on('vfx:hop_crystal_aura', auraSpy);
+    bus.on('vfx:meteor_strike', meteorVfxSpy);
+    bus.on('sound:play', soundSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 2.0) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 2.8 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    const craters = interactables.getMeteorCraters();
+    expect(craters).toHaveLength(6);
+
+    for (const c of craters) {
+      expect(c.crystalAvailable).toBe(true);
+      expect(c.crystalRespawnSec).toBe(0);
+      expect(c.radius).toBeGreaterThan(3);
+      expect(terrain.isWater(c.x, c.z)).toBe(false);
+      expect(c.y).toBeCloseTo(terrain.getHeightAt(c.x, c.z), 4);
+      expect(terrain.getNormalAt(c.x, c.z).y, `${c.id} (${c.x}, ${c.z})`).toBeGreaterThan(0.86);
+      expect(isClearOfBuildings(c.x, c.y, c.z, 2.0), `${c.id} overlaps building`).toBe(true);
+
+      const blockingProp = pal.getProps().find((p) => Math.hypot(c.x - p.x, c.z - p.z) < p.radius + 1.5);
+      expect(blockingProp, `${c.id} (${c.x}, ${c.z}) near prop ${blockingProp?.kind} at (${blockingProp?.x.toFixed(1)}, ${blockingProp?.z.toFixed(1)})`).toBeUndefined();
+
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(c.x - veh.x, c.z - veh.z)).toBeGreaterThan(4.0);
+      }
+      for (const mb of interactables.getModBenches()) {
+        expect(Math.hypot(c.x - mb.x, c.z - mb.z)).toBeGreaterThan(4.0);
+      }
+      for (const ft of interactables.getForecastTowers()) {
+        expect(Math.hypot(c.x - ft.x, c.z - ft.z)).toBeGreaterThan(4.0);
+      }
+      for (const wb of interactables.getWeaponBunkers()) {
+        expect(Math.hypot(c.x - wb.x, c.z - wb.z)).toBeGreaterThan(4.0);
+      }
+
+      const craterGroup = interactables.getGroup().getObjectByName(`MeteorCrater_${c.id}`) as THREE.Group;
+      const clusterGroup = interactables.getGroup().getObjectByName(`HopCrystalCluster_${c.id}`) as THREE.Group;
+      expect(craterGroup).toBeDefined();
+      expect(clusterGroup).toBeDefined();
+      expect(clusterGroup.visible).toBe(true);
+    }
+
+    // Consume Hop Crystal + respawn timer
+    const c0 = craters[0];
+    const cluster0 = interactables.getGroup().getObjectByName(`HopCrystalCluster_${c0.id}`) as THREE.Group;
+    expect(interactables.findNearbyHopCrystal({ x: c0.x + 2.0, y: c0.y, z: c0.z })?.id).toBe(c0.id);
+    expect(interactables.findNearbyHopCrystal({ x: c0.x + 15.0, y: c0.y, z: c0.z })).toBeNull();
+    expect(interactables.findNearbyHopCrystal({ x: Number.NaN, y: c0.y, z: c0.z })).toBeNull();
+
+    const consumed = interactables.consumeHopCrystal(c0.id);
+    expect(consumed).not.toBeNull();
+    expect(consumed!.ok).toBe(true);
+    expect(c0.crystalAvailable).toBe(false);
+    expect(c0.crystalRespawnSec).toBe(METEOR_CRATER_CRYSTAL_RESPAWN_SEC);
+    expect(cluster0.visible).toBe(false);
+    expect(auraSpy).toHaveBeenCalledTimes(1);
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'hop_crystal_consume' }));
+    expect(interactables.consumeHopCrystal(c0.id)).toBeNull();
+    expect(interactables.findNearbyHopCrystal({ x: c0.x, y: c0.y, z: c0.z })).toBeNull();
+
+    // Tick halfway then full respawn
+    interactables.update(20, 20);
+    expect(c0.crystalAvailable).toBe(false);
+    expect(c0.crystalRespawnSec).toBeCloseTo(METEOR_CRATER_CRYSTAL_RESPAWN_SEC - 20, 4);
+
+    interactables.update(30, 50);
+    expect(c0.crystalAvailable).toBe(true);
+    expect(c0.crystalRespawnSec).toBe(0);
+    expect(cluster0.visible).toBe(true);
+
+    // Meteor shower strike event
+    interactables.triggerMeteorShowerStrike({ x: 10, y: 12, z: -20 });
+    expect(meteorVfxSpy).toHaveBeenCalledWith({
+      position: { x: 10, y: 12, z: -20 },
+      radius: 7.5,
+    });
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'meteor_impact' }));
+    interactables.triggerMeteorShowerStrike({ x: Number.NaN, y: 12, z: -20 });
+    expect(meteorVfxSpy).toHaveBeenCalledTimes(1);
+
+    // reset() restores consumed crystals immediately
+    interactables.consumeHopCrystal(c0.id);
+    expect(c0.crystalAvailable).toBe(false);
+    interactables.reset();
+    expect(c0.crystalAvailable).toBe(true);
+    expect(c0.crystalRespawnSec).toBe(0);
+    expect(cluster0.visible).toBe(true);
+
+    vehicles.dispose();
+    interactables.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('supports qaPlaceWave9Showcase(centerPos, yaw) and clears showcase extras cleanly on reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    const center = { x: -75, y: terrain.getHeightAt(-75, -12), z: -12 };
+    const yaw = 0.35;
+    const showcase: Wave9ShowcaseResult = interactables.qaPlaceWave9Showcase(center, yaw);
+
+    expect(showcase.crater.id).toBe('crater_qa_showcase');
+    expect(showcase.crater.crystalAvailable).toBe(true);
+    expect(terrain.isWater(showcase.crater.x, showcase.crater.z)).toBe(false);
+    expect(Math.hypot(showcase.crater.x - center.x, showcase.crater.z - center.z)).toBeLessThan(12);
+    expect(interactables.getMeteorCraters()).toHaveLength(7);
+
+    expect(showcase.train.active).toBe(true);
+    expect(showcase.train.carPositions).toHaveLength(2);
+    expect(showcase.train.chestHacked).toBe(false);
+    const car1 = showcase.train.carPositions[0];
+    expect(Math.hypot(car1.x - center.x, car1.z - center.z)).toBeLessThan(16);
+
+    // Train Chest & flatbed support work on showcase train
+    const chestSpot = { x: car1.x, y: car1.y + 1.05, z: car1.z };
+    expect(interactables.getTrainPlatformSupport(chestSpot)).not.toBeNull();
+    expect(interactables.isNearTrainChest(chestSpot)).toBe(true);
+
+    // Calling qaPlaceWave9Showcase again replaces showcase crater cleanly without leaking
+    interactables.qaPlaceWave9Showcase(center, yaw);
+    expect(interactables.getMeteorCraters()).toHaveLength(7);
+
+    // reset() restores base 6 craters and base island mid-ring track
+    interactables.reset();
+    expect(interactables.getMeteorCraters()).toHaveLength(6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+
+    interactables.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('Wave-9 Loot Pools, 3D Pickup Meshes & Full GLSL Shader Uniform Validation', () => {
+  it('spawns jetpack and plasma_flamethrower across floor, chest, and supply-drop pools with crisp multi-part 3D pickup meshes', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 360; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('jetpack')).toBe(true);
+    expect(floorIds.has('plasma_flamethrower')).toBe(true);
+    expect(chestIds.has('jetpack')).toBe(true);
+    expect(chestIds.has('plasma_flamethrower')).toBe(true);
+
+    const dropsBeforeSupply = pal.getLootDrops().length;
+    for (let i = 0; i < 85; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    const supplyIds = new Set(
+      pal
+        .getLootDrops()
+        .slice(dropsBeforeSupply)
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(supplyIds.has('jetpack')).toBe(true);
+    expect(supplyIds.has('plasma_flamethrower')).toBe(true);
+
+    // Verify bespoke multi-part 3D pickup meshes for jetpack & plasma_flamethrower
+    const groupBefore = pal.getGroup().children.length;
+    pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'jetpack_mesh_test', weaponId: 'jetpack', rarity: 'legendary', magAmmo: 0, stackCount: 1 } },
+    );
+    const jetpackDropGroup = pal.getGroup().children[groupBefore] as THREE.Group;
+    const jetpackSilhouette = jetpackDropGroup.children[1] as THREE.Group;
+    expect(jetpackSilhouette).toBeInstanceOf(THREE.Group);
+    expect(jetpackSilhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.spawnLootDrop(
+      { x: 4, y: 12, z: 0 },
+      { item: { uid: 'flame_mesh_test', weaponId: 'plasma_flamethrower', rarity: 'epic', magAmmo: 60, stackCount: 1 } },
+    );
+    const flameDropGroup = pal.getGroup().children[groupBefore + 1] as THREE.Group;
+    const flameSilhouette = flameDropGroup.children[1] as THREE.Group;
+    expect(flameSilhouette).toBeInstanceOf(THREE.Group);
+    expect(flameSilhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('validates all GLSL ShaderMaterial uniforms and smoothstep bounds across EnvironmentFX, StormSystem & WorldBuilder', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const storm = new StormSystem(4201, 'solo');
+
+    const shaderMats: THREE.ShaderMaterial[] = [];
+    for (const root of [fx.getGroup(), world.group, storm.getMesh()]) {
+      root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof THREE.ShaderMaterial) {
+          shaderMats.push(obj.material);
+        }
+      });
+    }
+    expect(shaderMats.length).toBeGreaterThanOrEqual(6);
+
+    for (const mat of shaderMats) {
+      for (const glsl of [mat.vertexShader, mat.fragmentShader]) {
+        const smoothMatches = [
+          ...glsl.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g),
+        ];
+        for (const m of smoothMatches) {
+          expect(Number(m[1])).toBeLessThan(Number(m[2]));
+        }
+        const usedUniforms = new Set(glsl.match(/\bu[A-Z][A-Za-z0-9_]*/g) ?? []);
+        for (const uName of usedUniforms) {
+          expect(glsl).toMatch(
+            new RegExp(`uniform\\s+(?:float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\\s+${uName}\\b`),
+          );
+          expect(mat.uniforms[uName]).toBeDefined();
+        }
+      }
+    }
+
+    storm.dispose();
+    fx.dispose();
+    builder.dispose();
+    terrain.dispose();
   });
 });

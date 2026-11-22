@@ -29,7 +29,9 @@ export type WeaponId =
   | 'shield_potion'
   | 'bandages'
   | 'medkit'
-  | 'slurp_juice';
+  | 'slurp_juice'
+  | 'jetpack'
+  | 'plasma_flamethrower';
 
 export type WeaponCategory =
   | 'pickaxe'
@@ -110,6 +112,11 @@ export interface WeaponDef {
   empShieldDamage?: number;
   empDisableSec?: number;
   overheatLockSec?: number;
+  isJetpack?: boolean;
+  isFlamethrower?: boolean;
+  burnDps?: number;
+  burnDurationSec?: number;
+  woodDamageMult?: number;
   allowedRarities: Rarity[];
 }
 

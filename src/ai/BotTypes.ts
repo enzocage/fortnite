@@ -1,6 +1,7 @@
 import type {
   AmmoType,
   AnimState,
+  ApexTrainState,
   BotAIState,
   BotPersonality,
   BuildPiece,
@@ -18,6 +19,7 @@ import type {
   LootDrop,
   MaterialType,
   MedallionId,
+  MeteorCraterEntity,
   Rarity,
   RiftEntity,
   SlurpBarrelEntity,
@@ -330,6 +332,8 @@ export interface BotEntity {
   isReviving?: boolean;
   isGrinding?: boolean;
   bowCharge?: number;
+  craterTargetId?: string | null;
+  craterDwellTimer?: number;
 }
 
 export interface BotWorldContext {
@@ -412,6 +416,8 @@ export interface BotWorldContext {
     id: string,
     dmg: number,
   ) => { exploded: boolean; position: Vec3Like; blastRadius: number; blastDamage: number } | null;
+  getTrainState?: () => ApexTrainState | null;
+  getMeteorCraters?: () => MeteorCraterEntity[];
   onAllySupportEvent?: (event: AllySupportEvent) => void;
   gameMode?: GameModeId;
   playerKnocked?: boolean;

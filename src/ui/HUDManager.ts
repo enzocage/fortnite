@@ -1,5 +1,6 @@
 import { DBNO_MAX_HP, EMOTES, WEAPON_MODS, WEAPONS, WORLD_SIZE } from '../core';
 import type {
+  ApexTrainState,
   AugmentId,
   BuildPieceType,
   DamageNumberEvent,
@@ -15,6 +16,7 @@ import type {
   KillFeedEntry,
   MatchQuest,
   MaterialType,
+  MeteorCraterEntity,
   ModBenchEntity,
   RebootVanEntity,
   SlurpTankerEntity,
@@ -32,6 +34,7 @@ import {
   drawChapterMapOverlay,
   drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
+  drawSkyforgeMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -56,10 +59,12 @@ import {
   resolveFrontierOverlayArgs,
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
+  resolveSkyforgeOverlayArgs,
   selectVisibleVisualSoundCues,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
+  type WorldSkyforgeOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
@@ -71,6 +76,8 @@ import {
   getCaptureFlagIconSvg,
   getCrownSvg,
   getGoldBarSvg,
+  getHopCrystalSvg,
+  getJetpackFlameSvg,
   getLootIslandIconSvg,
   getMaterialIconSvg,
   getMedallionSvg,
@@ -221,6 +228,10 @@ export class HUDManager {
     modBenches: [],
     forecastTowers: [],
   };
+  private skyforgeOverlay: WorldSkyforgeOverlay = {
+    train: null,
+    craters: [],
+  };
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
@@ -272,7 +283,13 @@ export class HUDManager {
   private rebootLabelEl: HTMLSpanElement;
   private rebootPctEl: HTMLSpanElement;
   private rebootFillEl: HTMLDivElement;
+  private statusChipRowEl: HTMLDivElement;
   private stealthPillEl: HTMLDivElement;
+  private jetpackPillEl: HTMLDivElement;
+  private jetpackFillEl: HTMLDivElement;
+  private jetpackPctEl: HTMLSpanElement;
+  private lowGPillEl: HTMLDivElement;
+  private lowGLabelEl: HTMLSpanElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -422,6 +439,8 @@ export class HUDManager {
   private lastRebootKey = '';
   private lastRumbleKey = '';
   private lastStealthKey = false;
+  private lastJetpackKey = '';
+  private lastLowGKey = '';
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -1076,6 +1095,9 @@ export class HUDManager {
     this.vitalsStackEl = document.createElement('div');
     this.vitalsStackEl.className = 'fdr-vitals-stack';
 
+    this.statusChipRowEl = document.createElement('div');
+    this.statusChipRowEl.className = 'fdr-status-chip-row fdr-hidden';
+
     this.stealthPillEl = document.createElement('div');
     this.stealthPillEl.className = 'fdr-stealth-pill fdr-hidden';
     this.stealthPillEl.dataset.stealthed = 'false';
@@ -1085,6 +1107,40 @@ export class HUDManager {
     const stealthLabel = document.createElement('span');
     stealthLabel.textContent = 'HIDDEN';
     this.stealthPillEl.append(stealthIcon, stealthLabel);
+
+    this.jetpackPillEl = document.createElement('div');
+    this.jetpackPillEl.className = 'fdr-jetpack-pill fdr-hidden';
+    this.jetpackPillEl.dataset.thrusting = 'false';
+    this.jetpackPillEl.dataset.fuel = '0';
+    const jetpackIcon = document.createElement('span');
+    jetpackIcon.className = 'fdr-jetpack-icon';
+    jetpackIcon.innerHTML = getJetpackFlameSvg();
+    const jetpackTrack = document.createElement('div');
+    jetpackTrack.className = 'fdr-jetpack-track';
+    this.jetpackFillEl = document.createElement('div');
+    this.jetpackFillEl.className = 'fdr-jetpack-fill';
+    jetpackTrack.appendChild(this.jetpackFillEl);
+    this.jetpackPctEl = document.createElement('span');
+    this.jetpackPctEl.className = 'fdr-jetpack-pct';
+    this.jetpackPctEl.textContent = '100%';
+    this.jetpackPillEl.append(jetpackIcon, jetpackTrack, this.jetpackPctEl);
+
+    this.lowGPillEl = document.createElement('div');
+    this.lowGPillEl.className = 'fdr-lowg-pill fdr-hidden';
+    this.lowGPillEl.dataset.lowG = 'false';
+    const lowGIcon = document.createElement('span');
+    lowGIcon.className = 'fdr-lowg-icon';
+    lowGIcon.innerHTML = getHopCrystalSvg();
+    this.lowGLabelEl = document.createElement('span');
+    this.lowGLabelEl.className = 'fdr-lowg-label';
+    this.lowGLabelEl.textContent = 'LOW-G HOP 0s';
+    this.lowGPillEl.append(lowGIcon, this.lowGLabelEl);
+
+    this.statusChipRowEl.append(
+      this.stealthPillEl,
+      this.jetpackPillEl,
+      this.lowGPillEl,
+    );
 
     this.staminaWrapEl = document.createElement('div');
     this.staminaWrapEl.className = 'fdr-stamina-wrap fdr-hidden';
@@ -1154,7 +1210,7 @@ export class HUDManager {
       this.dbnoBarEl,
       this.reviveBarEl,
       this.rebootBarEl,
-      this.stealthPillEl,
+      this.statusChipRowEl,
       this.vitalsStackEl,
     );
 
@@ -1717,6 +1773,19 @@ export class HUDManager {
     this.lastMinimapDraw = 0;
   }
 
+  setWorldSkyforgeOverlay(
+    train: ApexTrainState | null,
+    craters: MeteorCraterEntity[],
+  ): void;
+  setWorldSkyforgeOverlay(overlay: WorldSkyforgeOverlay): void;
+  setWorldSkyforgeOverlay(
+    trainOrOverlay: ApexTrainState | null | WorldSkyforgeOverlay,
+    craters?: MeteorCraterEntity[],
+  ): void {
+    this.skyforgeOverlay = resolveSkyforgeOverlayArgs(trainOrOverlay, craters);
+    this.lastMinimapDraw = 0;
+  }
+
   setVisible(visible: boolean): void {
     this.visible = visible;
     this.containerEl.classList.toggle('fdr-hidden', !visible);
@@ -1843,6 +1912,21 @@ export class HUDManager {
     this.stealthPillEl.classList.add('fdr-hidden');
     this.stealthPillEl.dataset.stealthed = 'false';
     this.lastStealthKey = false;
+    this.jetpackPillEl.classList.add('fdr-hidden');
+    this.jetpackPillEl.classList.remove('thrusting', 'low');
+    this.jetpackPillEl.dataset.thrusting = 'false';
+    this.jetpackPillEl.dataset.fuel = '0';
+    this.jetpackFillEl.style.width = '0%';
+    this.jetpackPctEl.textContent = '0%';
+    this.lastJetpackKey = '';
+    this.lowGPillEl.classList.add('fdr-hidden');
+    this.lowGPillEl.dataset.lowG = 'false';
+    this.lowGLabelEl.textContent = 'LOW-G HOP 0s';
+    this.lastLowGKey = '';
+    this.statusChipRowEl.classList.add('fdr-hidden');
+    this.channelEl.classList.add('fdr-hidden');
+    this.channelEl.classList.remove('train-hack');
+    this.lastChannelKey = '';
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
     }
@@ -2059,6 +2143,7 @@ export class HUDManager {
     this.updateWave6HUD(state);
     this.updateWave7HUD(state);
     this.updateWave8HUD(state);
+    this.updateWave9HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2386,7 +2471,16 @@ export class HUDManager {
 
     let chLabel = '';
     let chProg: number | null = null;
-    if (state.healProgress !== null) {
+    let isTrainHack = false;
+    if (
+      !state.spectating &&
+      typeof state.trainHackProgress === 'number' &&
+      Number.isFinite(state.trainHackProgress)
+    ) {
+      chLabel = 'HACKING APEX EXPRESS...';
+      chProg = state.trainHackProgress;
+      isTrainHack = true;
+    } else if (state.healProgress !== null) {
       chLabel = state.healLabel || 'HEALING';
       chProg = state.healProgress;
     } else if (state.reloadProgress !== null) {
@@ -2395,10 +2489,11 @@ export class HUDManager {
     }
 
     const pct = chProg !== null ? Math.max(0, Math.min(100, Math.round(chProg * 100))) : -1;
-    const cKey = `${chLabel}:${pct}`;
+    const cKey = `${chLabel}:${pct}:${isTrainHack ? 1 : 0}`;
     if (cKey !== this.lastChannelKey) {
       this.lastChannelKey = cKey;
       this.channelEl.classList.toggle('fdr-hidden', chProg === null);
+      this.channelEl.classList.toggle('train-hack', isTrainHack);
       if (chProg !== null) {
         this.channelLabelEl.textContent = chLabel;
         this.channelPctEl.textContent = `${pct}%`;
@@ -3339,6 +3434,60 @@ export class HUDManager {
     }
   }
 
+  private updateWave9HUD(state: HUDState): void {
+    // 1. Compact Jetpack Fuel Bar Pill (.fdr-jetpack-pill)
+    const hasJetpack =
+      !state.spectating &&
+      state.jetpackFuel != null &&
+      typeof state.jetpackFuel === 'number' &&
+      Number.isFinite(state.jetpackFuel);
+    const fuelPct = hasJetpack
+      ? Math.max(0, Math.min(100, Math.round(state.jetpackFuel ?? 0)))
+      : -1;
+    const thrusting = hasJetpack && Boolean(state.isJetpackThrusting);
+    const jetpackKey = hasJetpack ? `${fuelPct}:${thrusting ? 1 : 0}` : '';
+    if (jetpackKey !== this.lastJetpackKey) {
+      this.lastJetpackKey = jetpackKey;
+      this.jetpackPillEl.classList.toggle('fdr-hidden', !hasJetpack);
+      this.jetpackPillEl.classList.toggle('thrusting', thrusting);
+      this.jetpackPillEl.classList.toggle('low', hasJetpack && fuelPct <= 20);
+      this.jetpackPillEl.dataset.thrusting = thrusting ? 'true' : 'false';
+      this.jetpackPillEl.dataset.fuel = hasJetpack ? String(fuelPct) : '0';
+      if (hasJetpack) {
+        this.jetpackFillEl.style.width = `${fuelPct}%`;
+        this.jetpackPctEl.textContent = `${fuelPct}%`;
+      } else {
+        this.jetpackFillEl.style.width = '0%';
+      }
+    }
+
+    // 2. Low-G Hop Buff Chip (.fdr-lowg-pill)
+    const rawLowG =
+      !state.spectating &&
+      typeof state.lowGravityRemainingSec === 'number' &&
+      Number.isFinite(state.lowGravityRemainingSec) &&
+      state.lowGravityRemainingSec > 0
+        ? Math.max(1, Math.ceil(state.lowGravityRemainingSec))
+        : 0;
+    const hasLowG = rawLowG > 0;
+    const lowGKey = hasLowG ? String(rawLowG) : '';
+    if (lowGKey !== this.lastLowGKey) {
+      this.lastLowGKey = lowGKey;
+      this.lowGPillEl.classList.toggle('fdr-hidden', !hasLowG);
+      this.lowGPillEl.dataset.lowG = hasLowG ? 'true' : 'false';
+      if (hasLowG) {
+        this.lowGPillEl.dataset.remainingSec = String(rawLowG);
+        this.lowGLabelEl.textContent = `LOW-G HOP ${rawLowG}s`;
+      } else {
+        delete this.lowGPillEl.dataset.remainingSec;
+      }
+    }
+
+    // 3. Keep horizontal status chip row collapsed when all 3 chips are hidden
+    const anyChipVisible = this.lastStealthKey || hasJetpack || hasLowG;
+    this.statusChipRowEl.classList.toggle('fdr-hidden', !anyChipVisible);
+  }
+
   private updateCenterCombat(state: HUDState, now: number): void {
     if (this.lastScoped !== state.isScoped) {
       this.lastScoped = state.isScoped;
@@ -3628,6 +3777,17 @@ export class HUDManager {
       this.frontierOverlay,
       state.futureStormRings,
       state.teamRumble?.blueAllies,
+      performance.now(),
+    );
+
+    // Wave-9 Skyforge Overlay (Apex Express Railway Loop, Live Train, Rift Meteor Craters)
+    drawSkyforgeMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      this.skyforgeOverlay,
+      state.trainPos,
       performance.now(),
     );
 

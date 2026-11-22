@@ -122,6 +122,7 @@ export interface FortdropDebugAPI {
   giveWave6Loadout(): void;
   giveWave7Loadout(): void;
   giveWave8Loadout(): void;
+  giveWave9Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -195,6 +196,7 @@ export class GameEngine {
   private totalPlayers = 26;
   private stormTickAccum = 0;
   private nextSupplyDropTime = 45;
+  private nextMeteorStrikeTime = 50;
   private playerGliderFactor = 0;
   private victoryTimer = 0;
   private victoryPendingSummary = false;
@@ -413,6 +415,10 @@ export class GameEngine {
       this.worldInteractables.getModBenches(),
       this.worldInteractables.getForecastTowers(),
     );
+    this.uiManager.setWorldSkyforgeOverlay(
+      this.worldInteractables.getTrainState(),
+      this.worldInteractables.getMeteorCraters(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.gameMode = this.lobbyConfig.gameMode ?? 'solo';
@@ -491,6 +497,10 @@ export class GameEngine {
     this.playerController.setChapterBridge(this.worldInteractables);
     this.playerController.setOverdriveBridge(this.worldInteractables);
     this.playerController.setFrontierBridge(this.worldInteractables);
+    this.playerController.setSkyforgeBridge(this.worldInteractables);
+    this.playerController.setOnTrainChestHacked((lootPos) => {
+      this.handleTrainChestHacked(lootPos);
+    });
     this.playerController.setOnDroneDestroyed((res) => {
       this.handleSupplyDroneDestroyed(res);
     });
@@ -608,7 +618,7 @@ export class GameEngine {
     this.enterLobby();
     if (typeof window !== 'undefined') {
       const search = new URLSearchParams(window.location.search);
-      const qaPoi = search.get('qaPoi');
+      const qaPoi = search.get('qaPoi') ?? (search.has('qaWave9') ? 'sunny_suburbs' : null);
       if (qaPoi && POIS.some((p) => p.id === qaPoi)) {
         const qaModeParam = search.get('qaMode');
         const qaMode: GameModeId | undefined =
@@ -643,7 +653,44 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (search.has('qaWave8')) {
+        if (search.has('qaWave9')) {
+          window.__GAME__?.giveWave9Loadout();
+          this.playerController.setJetpackFuel(78);
+          this.playerController.setLowGravityTimer(12.5);
+          this.playerController.setGoldBars(700);
+
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          this.worldInteractables.qaPlaceWave9Showcase(p, yaw);
+
+          this.collision.setPropColliders([
+            ...this.propsAndLoot.getActivePropColliders(),
+            ...this.propsAndLoot.getActiveLlamaColliders(),
+            ...this.worldInteractables.getColliders(),
+            ...this.vehicleSystem.getActiveVehicleColliders(),
+          ]);
+          this.uiManager.setWorldChapterOverlay(
+            this.worldInteractables.getWeaponBunkers(),
+            this.worldInteractables.getSlurpTankers(),
+            this.worldInteractables.getDroppedMedallions(),
+            this.worldInteractables.getDroppedCrowns(),
+          );
+          this.uiManager.setWorldOverdriveOverlay(
+            this.worldInteractables.getGrindRails(),
+            this.worldInteractables.getRebootVans(),
+            this.worldInteractables.getSupplyDrones(),
+          );
+          this.uiManager.setWorldFrontierOverlay(
+            this.worldInteractables.getModBenches(),
+            this.worldInteractables.getForecastTowers(),
+          );
+          this.uiManager.setWorldSkyforgeOverlay(
+            this.worldInteractables.getTrainState(),
+            this.worldInteractables.getMeteorCraters(),
+          );
+          this.syncPlayerRig(this.playerController.getCharacterRenderState(), 1 / 60);
+          this.pushHUDState(false);
+        } else if (search.has('qaWave8')) {
           window.__GAME__?.giveWave8Loadout();
           this.playerController.setGoldBars(600);
           this.playerController.unlockStormForecast(true);
@@ -1145,6 +1192,8 @@ export class GameEngine {
       get playerStealthed() {
         return Boolean(self.playerController.getHudSnapshot().isStealthed);
       },
+      getTrainState: () => this.worldInteractables.getTrainState(),
+      getMeteorCraters: () => this.worldInteractables.getMeteorCraters(),
       getSquadmates: (squadId: string) =>
         this.botManager.getAliveBots().filter((b) => b.squadId === squadId),
       getMedallionHolders: () => this.botManager.getMedallionHolders(),
@@ -1434,6 +1483,7 @@ export class GameEngine {
       this.audioEngine.updateVehicleEngine(false, 0, false);
       this.audioEngine.updateWindRush(false, 0);
     this.audioEngine.updateGrindRailLoop(false, 0);
+    this.audioEngine.updateJetpackLoop(false, 0);
     }
   }
 
@@ -1554,6 +1604,7 @@ export class GameEngine {
     this.audioEngine.updateVehicleEngine(false, 0, false);
     this.audioEngine.updateWindRush(false, 0);
     this.audioEngine.updateGrindRailLoop(false, 0);
+    this.audioEngine.updateJetpackLoop(false, 0);
     this.phase = 'lobby';
     this.victoryPendingSummary = false;
     this.matchSummaryShown = false;
@@ -1607,6 +1658,7 @@ export class GameEngine {
     this.audioEngine.updateVehicleEngine(false, 0, false);
     this.audioEngine.updateWindRush(false, 0);
     this.audioEngine.updateGrindRailLoop(false, 0);
+    this.audioEngine.updateJetpackLoop(false, 0);
     this.lobbyActiveEmote = null;
     this.lobbyEmoteTimer = 0;
     this.activeEmoteMusic = null;
@@ -1616,6 +1668,7 @@ export class GameEngine {
     this.survivalTimeSec = 0;
     this.stormTickAccum = 0;
     this.nextSupplyDropTime = this.gameMode === 'blitz' ? 28 : 45;
+    this.nextMeteorStrikeTime = this.gameMode === 'blitz' ? 35 : 50;
     this.playerGliderFactor = 0;
     this.teamRumbleRespawnTimer = null;
     this.victoryTimer = 0;
@@ -1675,6 +1728,10 @@ export class GameEngine {
     this.uiManager.setWorldFrontierOverlay(
       this.worldInteractables.getModBenches(),
       this.worldInteractables.getForecastTowers(),
+    );
+    this.uiManager.setWorldSkyforgeOverlay(
+      this.worldInteractables.getTrainState(),
+      this.worldInteractables.getMeteorCraters(),
     );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
@@ -1915,6 +1972,10 @@ export class GameEngine {
       this.worldInteractables.getModBenches(),
       this.worldInteractables.getForecastTowers(),
     );
+    this.uiManager.setWorldSkyforgeOverlay(
+      this.worldInteractables.getTrainState(),
+      this.worldInteractables.getMeteorCraters(),
+    );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
       this.nextSupplyDropTime += 55;
@@ -1933,6 +1994,30 @@ export class GameEngine {
           durationMs: 3000,
         });
       }
+    }
+
+    if (this.matchElapsed >= this.nextMeteorStrikeTime) {
+      this.nextMeteorStrikeTime += 65;
+      const craters = this.worldInteractables.getMeteorCraters();
+      const st = this.stormSystem.getState();
+      const pick =
+        craters.length > 0
+          ? craters[Math.floor(Math.random() * craters.length)]
+          : {
+              x: st.currentCenterX + (Math.random() - 0.5) * 45,
+              z: st.currentCenterZ + (Math.random() - 0.5) * 45,
+            };
+      const strikePos: Vec3Like = {
+        x: pick.x,
+        y: this.terrain.getHeightAt(pick.x, pick.z),
+        z: pick.z,
+      };
+      this.eventBus.emit('sound:play', {
+        id: 'meteor_whistle',
+        position: strikePos,
+        spatial: true,
+      });
+      this.worldInteractables.triggerMeteorShowerStrike(strikePos);
     }
 
     // 3. Storm update + Player storm damage + Weapon Bunker Phase 2 Unlock
@@ -2078,6 +2163,10 @@ export class GameEngine {
     this.audioEngine.updateGrindRailLoop(
       Boolean(pHudSnap.isGrinding) && currPlayerPhase === 'playing' && !this.paused,
       GRIND_RAIL_SPEED,
+    );
+    this.audioEngine.updateJetpackLoop(
+      Boolean(pHudSnap.isJetpackThrusting) && currPlayerPhase === 'playing' && !this.paused,
+      clamp((pHudSnap.jetpackFuel ?? 0) / 100, 0, 1),
     );
     if (activeVeh && currPlayerPhase === 'playing') {
       if (this.prevVehicleDistPos) {
@@ -2781,6 +2870,9 @@ export class GameEngine {
       modsInstalled: stats.modsInstalled ?? 0,
       bunkersDeployed: stats.bunkersDeployed ?? 0,
       empHits: stats.empHits ?? 0,
+      trainChestsHacked: stats.trainChestsHacked ?? 0,
+      hopCrystalsUsed: stats.hopCrystalsUsed ?? 0,
+      flameDamage: Math.round(stats.flameDamage ?? 0),
       teamRumbleScore:
         this.gameMode === 'team_rumble'
           ? (() => {
@@ -2794,6 +2886,8 @@ export class GameEngine {
         ...(stats.knocks && stats.knocks >= 3 ? ['DUOS ENFORCER'] : []),
         ...(stats.modsInstalled && stats.modsInstalled >= 1 ? ['MODDED PRO'] : []),
         ...(stats.empHits && stats.empHits >= 1 ? ['EMP BREAKER'] : []),
+        ...(stats.trainChestsHacked && stats.trainChestsHacked >= 1 ? ['TRAIN HEIST'] : []),
+        ...(stats.hopCrystalsUsed && stats.hopCrystalsUsed >= 1 ? ['SKY RIDER'] : []),
       ],
     };
     this.lastMatchSummary = summary;
@@ -2838,7 +2932,8 @@ export class GameEngine {
       s.includes('qaWave5') ||
       s.includes('qaWave6') ||
       s.includes('qaWave7') ||
-      s.includes('qaWave8')
+      s.includes('qaWave8') ||
+      s.includes('qaWave9')
     );
   }
 
@@ -2958,6 +3053,39 @@ export class GameEngine {
       subtitle: 'MYTHIC KINETIC BLADE, TACTICAL DMR & +350 GOLD UNLOCKED',
       tone: 'victory',
       durationMs: 4000,
+    });
+  }
+
+  private handleTrainChestHacked(lootPos: Vec3Like): void {
+    this.eventBus.emit('ui:banner', {
+      id: `train_chest_${Date.now()}`,
+      title: 'APEX EXPRESS CHEST HACKED!',
+      subtitle: 'MYTHIC WEAPONRY, JETPACK, SLURP & +150 GOLD CLAIMED',
+      tone: 'victory',
+      durationMs: 3600,
+    });
+    const trainRewards: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic'; stack: number }> = [
+      { id: 'plasma_flamethrower', rarity: 'mythic', stack: 1 },
+      { id: 'heavy_shotgun', rarity: 'legendary', stack: 1 },
+      { id: 'jetpack', rarity: 'legendary', stack: 1 },
+      { id: 'slurp_juice', rarity: 'epic', stack: 2 },
+    ];
+    trainRewards.forEach((entry, idx) => {
+      const a = (idx / trainRewards.length) * Math.PI * 2;
+      const def = WEAPONS[entry.id];
+      this.propsAndLoot.spawnLootDrop(
+        { x: lootPos.x, y: lootPos.y + 0.55, z: lootPos.z },
+        {
+          item: {
+            uid: `train_loot_${Date.now()}_${idx}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          },
+        },
+        { x: Math.cos(a) * 1.9, y: 2.2, z: Math.sin(a) * 1.9 },
+      );
     });
   }
 
@@ -3301,6 +3429,20 @@ export class GameEngine {
               blueAllies: this.botManager.getBlueAllyPositions(),
             }
           : null,
+      jetpackFuel: snap.jetpackFuel ?? null,
+      isJetpackThrusting: Boolean(snap.isJetpackThrusting),
+      lowGravityRemainingSec: snap.lowGravityRemainingSec ?? null,
+      trainHackProgress: snap.trainHackProgress ?? null,
+      trainPos: (() => {
+        const trainSt = this.worldInteractables.getTrainState();
+        if (!trainSt || !trainSt.active) return null;
+        return {
+          x: trainSt.x,
+          z: trainSt.z,
+          yaw: trainSt.yaw,
+          chestHacked: trainSt.chestHacked,
+        };
+      })(),
     };
 
     this.uiManager.updateHUD(hudState);
@@ -3895,6 +4037,48 @@ export class GameEngine {
         inv.setActiveSlot(1);
         engine.pushHUDState(false);
       },
+      giveWave9Loadout() {
+        const inv = engine.playerController.getInventory();
+        inv.reset();
+        const flameDef = WEAPONS.plasma_flamethrower;
+        inv.addItem({
+          uid: 'qa_w9_plasma_flamethrower_0',
+          weaponId: 'plasma_flamethrower',
+          rarity: 'mythic',
+          magAmmo: flameDef.magSize,
+          stackCount: 1,
+        });
+        inv.addItem({
+          uid: 'qa_w9_mythic_blade_rifle_1',
+          weaponId: 'mythic_blade_rifle',
+          rarity: 'mythic',
+          magAmmo: Math.round(WEAPONS.mythic_blade_rifle.magSize * 1.45),
+          stackCount: 1,
+          mods: ['red_dot', 'suppressor', 'drum_mag', 'foregrip'],
+        });
+        const extras: Array<{ id: WeaponId; rarity: 'legendary' | 'epic' | 'rare'; stack: number }> = [
+          { id: 'jetpack', rarity: 'legendary', stack: 1 },
+          { id: 'port_a_bunker', rarity: 'epic', stack: 2 },
+          { id: 'chug_splash', rarity: 'rare', stack: 4 },
+        ];
+        extras.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w9_${entry.id}_${i + 2}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('light', 240);
+        inv.addAmmo('medium', 200);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
       forceAugmentOffer() {
         const offer = engine.augmentManager.forceOffer();
         engine.pushHUDState(false);
@@ -3940,6 +4124,7 @@ export class GameEngine {
     this.audioEngine.updateVehicleEngine(false, 0, false);
     this.audioEngine.updateWindRush(false, 0);
     this.audioEngine.updateGrindRailLoop(false, 0);
+    this.audioEngine.updateJetpackLoop(false, 0);
     this.audioEngine.dispose();
     this.uiManager.dispose();
 

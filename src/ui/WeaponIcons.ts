@@ -299,6 +299,29 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <rect x="17" y="24" width="30" height="3.2" fill="#38bdf8" opacity="0.85"/>
     <rect x="17" y="42" width="30" height="3.2" fill="#38bdf8" opacity="0.85"/>
   </svg>`,
+
+  jetpack: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M22 14H42L45 20V38H19V20L22 14Z" fill="#334155" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="13" y="12" width="13" height="29" rx="5.5" fill="#94a3b8" stroke="#0f172a" stroke-width="2"/>
+    <rect x="38" y="12" width="13" height="29" rx="5.5" fill="#94a3b8" stroke="#0f172a" stroke-width="2"/>
+    <rect x="16" y="18" width="7" height="12" rx="2" fill="#22d3ee"/>
+    <rect x="41" y="18" width="7" height="12" rx="2" fill="#22d3ee"/>
+    <circle cx="32" cy="26" r="5" fill="#f59e0b" stroke="#0f172a" stroke-width="1.6"/>
+    <circle cx="32" cy="26" r="2.2" fill="#fef08a"/>
+    <path d="M15 41H24L22 46H17L15 41ZM40 41H49L47 46H42L40 41Z" fill="#475569" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M16.5 46L19.5 57L22.5 46H16.5ZM41.5 46L44.5 57L47.5 46H41.5Z" fill="#fb923c" stroke="#fde047" stroke-width="1.2" stroke-linejoin="round"/>
+  </svg>`,
+
+  plasma_flamethrower: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M5 35L15 30H42V38H30L27 48H20L22 38H14L7 42L5 35Z" fill="#475569" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="16" y="25" width="27" height="8" rx="2" fill="#f8fafc" stroke="#0f172a" stroke-width="1.8"/>
+    <rect x="27" y="36" width="17" height="10" rx="4.5" fill="#f97316" stroke="#0f172a" stroke-width="1.8"/>
+    <rect x="30" y="39" width="11" height="3.2" rx="1.2" fill="#fde047"/>
+    <rect x="43" y="26.5" width="10" height="5" rx="1" fill="#94a3b8" stroke="#0f172a" stroke-width="1.5"/>
+    <path d="M53 26C57 24 61 27 60 30C59 33 55 34 53 31.5V26Z" fill="#fb923c" stroke="#fef08a" stroke-width="1.3" stroke-linejoin="round"/>
+    <circle cx="56" cy="29" r="2.2" fill="#fef08a"/>
+    <rect x="21" y="27.5" width="17" height="3" rx="1" fill="#ef4444"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {
@@ -823,5 +846,36 @@ export function getStealthLeafSvg(): string {
     <path d="M16 10V26M16 15L20 12.5M16 19.5L12 17" stroke="#dcfce7" stroke-width="1.7" stroke-linecap="round"/>
     <circle cx="11" cy="21" r="1.6" fill="#4ade80"/>
     <circle cx="21" cy="20" r="1.6" fill="#4ade80"/>
+  </svg>`;
+}
+
+export function getTrainSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M3 25H29" stroke="#fbbf24" stroke-width="2" stroke-linecap="round"/>
+    <path d="M4 13H22L28 19V23H4V13Z" fill="#334155" stroke="#0f172a" stroke-width="1.7" stroke-linejoin="round"/>
+    <rect x="7" y="9" width="11" height="4" rx="1.2" fill="#475569" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="6.5" y="15.5" width="12.5" height="3.2" rx="1" fill="#22d3ee"/>
+    <circle cx="25.5" cy="20" r="2" fill="#ffd000"/>
+    <circle cx="9" cy="24" r="2.6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.4"/>
+    <circle cx="19" cy="24" r="2.6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.4"/>
+  </svg>`;
+}
+
+export function getHopCrystalSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <ellipse cx="16" cy="24.5" rx="11" ry="4" fill="#312e81" stroke="#c084fc" stroke-width="1.5"/>
+    <path d="M16 4L21.5 13L18.5 24H13.5L10.5 13L16 4Z" fill="#a855f7" stroke="#f5d0fe" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M16 4L18.5 13L16 24L13.5 13L16 4Z" fill="#e879f9"/>
+    <path d="M7.5 14L11 17.5L10.5 23H7.5L6.5 18.5L7.5 14Z" fill="#9333ea" stroke="#e9d5ff" stroke-width="1.3" stroke-linejoin="round"/>
+    <path d="M24.5 14L25.5 18.5L24.5 23H21.5L21 17.5L24.5 14Z" fill="#7e22ce" stroke="#e9d5ff" stroke-width="1.3" stroke-linejoin="round"/>
+    <circle cx="23.5" cy="7.5" r="1.5" fill="#f5d0fe"/>
+    <circle cx="9" cy="8.5" r="1.2" fill="#22d3ee"/>
+  </svg>`;
+}
+
+export function getJetpackFlameSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+    <path d="M12 2C12 2 18.5 7.5 18.5 13.5C18.5 17.6 15.6 21 12 21C8.4 21 5.5 17.6 5.5 13.5C5.5 9.6 8.2 7 9.8 5.4C9.8 7.6 11.2 8.6 11.2 8.6C11 6.2 12 2 12 2Z" fill="#fb923c" stroke="#fde047" stroke-width="1.4" stroke-linejoin="round"/>
+    <path d="M12 10.5C12 10.5 15 13 15 15.8C15 17.6 13.7 19 12 19C10.3 19 9 17.6 9 15.8C9 13.5 12 10.5 12 10.5Z" fill="#22d3ee"/>
   </svg>`;
 }

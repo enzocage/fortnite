@@ -53,6 +53,9 @@ export function shouldActivateContrail(
 
 const CONTRAIL_WHITE = new THREE.Color('#ffffff');
 const CONTRAIL_PARTICLES_PER_LIMB = 6;
+const BURNING_EMBER_COLOR = new THREE.Color('#f97316');
+const LOW_G_MOTES_PER_BOOT = 4;
+const BURNING_EMBER_MOTE_COUNT = 6;
 
 function normalizeWeaponMods(mods?: WeaponModId[]): WeaponModId[] {
   if (!mods || mods.length === 0) return [];
@@ -329,6 +332,42 @@ export class CharacterRig {
   private contrailSecondaryMat: THREE.MeshBasicMaterial | null = null;
   private contrailCoreMat: THREE.MeshBasicMaterial | null = null;
   private readonly contrailStreams: ContrailLimbStream[] = [];
+  private jetpackEquipped = false;
+  private jetpackThrusting = false;
+  private jetpackTime = 0;
+  private jetpackBackGroup: THREE.Group | null = null;
+  private jetpackFlameGroup: THREE.Group | null = null;
+  private readonly jetpackFlameCones: THREE.Mesh[] = [];
+  private readonly jetpackFlameCoreCones: THREE.Mesh[] = [];
+  private jetpackFlameOuterMat: THREE.MeshBasicMaterial | null = null;
+  private jetpackFlameCoreMat: THREE.MeshBasicMaterial | null = null;
+  private jetpackCoreVentMat: THREE.MeshStandardMaterial | null = null;
+  private jetpackAmberVentMat: THREE.MeshStandardMaterial | null = null;
+  private lowGravityBuffActive = false;
+  private lowGravityTime = 0;
+  private readonly lowGravityBootAuras: THREE.Group[] = [];
+  private readonly lowGravityBootRings: THREE.Mesh[] = [];
+  private readonly lowGravityBootHalos: THREE.Mesh[] = [];
+  private readonly lowGravityBootMotes: THREE.Mesh[][] = [];
+  private lowGravityRingMat: THREE.MeshStandardMaterial | null = null;
+  private lowGravityHaloMat: THREE.MeshBasicMaterial | null = null;
+  private lowGravityMoteMat: THREE.MeshBasicMaterial | null = null;
+  private burningActive = false;
+  private burningTime = 0;
+  private readonly skinEmissiveTargets: Array<{
+    mat: THREE.MeshStandardMaterial;
+    baseEmissive: THREE.Color;
+    baseIntensity: number;
+  }> = [];
+  private burningEmberGroup: THREE.Group | null = null;
+  private burningEmberMat: THREE.MeshBasicMaterial | null = null;
+  private readonly burningEmberMotes: Array<{
+    mesh: THREE.Mesh;
+    angle: number;
+    radius: number;
+    speed: number;
+    phase: number;
+  }> = [];
   private disposed = false;
 
   constructor(skin?: SkinDef, pickaxe?: PickaxeDef, glider?: GliderDef, contrailId?: string) {
@@ -512,6 +551,7 @@ export class CharacterRig {
       grp.parent?.remove(grp);
     }
     this.skinVisualRoots.length = 0;
+    this.skinEmissiveTargets.length = 0;
     this.backblingParts = { style: 'none' };
   }
 
@@ -543,6 +583,14 @@ export class CharacterRig {
     const irisMat = makeMat('#0ea5e9', 0.22, 0.12);
     const pupilMat = makeMat('#020617', 0.18, 0.0);
     const catchlightMat = makeMat('#ffffff', 0.1, 0.0, '#ffffff', 0.45);
+
+    for (const mat of [primary, secondary, accent, armorSteel, bootMat, soleMat]) {
+      this.skinEmissiveTargets.push({
+        mat,
+        baseEmissive: mat.emissive.clone(),
+        baseIntensity: mat.emissiveIntensity,
+      });
+    }
 
     // --- Hips & Tactical Utility Belt + Pouches ---
     const hipVis = this.attachVisualGroup(this.joints.hips, 'hips_visual');
@@ -711,6 +759,10 @@ export class CharacterRig {
     // --- Articulated Backbling ---
     const backVis = this.attachVisualGroup(this.joints.backblingSocket, 'backbling_visual');
     this.buildBackbling(backVis, primary, secondary, accent, armorSteel);
+
+    if (this.burningActive) {
+      this.applyBurningMaterialTint(this.burningTime);
+    }
   }
 
   private buildHeadgear(
@@ -1180,6 +1232,7 @@ export class CharacterRig {
 
     if (this.activeWeaponGroup) {
       this.activeWeaponGroup.visible = false;
+      this.activeWeaponGroup.scale.setScalar(0.001);
     }
 
     let nextGroup = this.weaponCache.get(targetKey);
@@ -1196,6 +1249,7 @@ export class CharacterRig {
     }
 
     nextGroup.visible = true;
+    nextGroup.scale.setScalar(1);
     this.activeWeaponGroup = nextGroup;
     this.syncActiveWeaponMods();
   }
@@ -1317,6 +1371,30 @@ export class CharacterRig {
     }
     if (state.medallionCount !== undefined) {
       this.setMedallionCount(state.medallionCount);
+    }
+    if (state.hasJetpack !== undefined || state.isJetpackThrusting !== undefined) {
+      const hasPack =
+        state.hasJetpack !== undefined ? Boolean(state.hasJetpack) : this.jetpackEquipped;
+      const thrusting = hasPack && Boolean(state.isJetpackThrusting);
+      this.setJetpackState(
+        hasPack,
+        thrusting,
+        thrusting ? this.jetpackTime + 1 / 60 : this.jetpackTime,
+      );
+    }
+    if (state.hasLowGravityBuff !== undefined) {
+      const active = Boolean(state.hasLowGravityBuff);
+      this.setLowGravityBuff(
+        active,
+        active ? this.lowGravityTime + 1 / 60 : this.lowGravityTime,
+      );
+    }
+    if (state.isBurning !== undefined) {
+      const burning = Boolean(state.isBurning);
+      this.setBurningState(
+        burning,
+        burning ? this.burningTime + 1 / 60 : this.burningTime,
+      );
     }
   }
 
@@ -2297,6 +2375,430 @@ export class CharacterRig {
     }
   }
 
+  private buildJetpackBackGroup(): void {
+    const grp = new THREE.Group();
+    grp.name = 'jetpack_back_group';
+    grp.position.set(0, 0.11, -0.158);
+
+    const chassisDark = makeMat('#1e293b', 0.4, 0.62);
+    const skySteel = makeMat('#475569', 0.3, 0.78);
+    const brightAlloy = makeMat('#cbd5e1', 0.24, 0.85);
+    const coreVentMat = makeMat('#22d3ee', 0.14, 0.2, '#22d3ee', 0.65);
+    const amberVentMat = makeMat('#f59e0b', 0.18, 0.24, '#fbbf24', 0.5);
+
+    // Central armored Skyforge pack spine + upper cowling + shoulder mount struts
+    createPart(grp, new THREE.BoxGeometry(0.20, 0.28, 0.10), chassisDark, 0, 0.01, 0);
+    createPart(grp, new THREE.BoxGeometry(0.17, 0.11, 0.118), skySteel, 0, 0.09, -0.008);
+    createPart(grp, new THREE.BoxGeometry(0.22, 0.04, 0.09), brightAlloy, 0, 0.14, 0.025);
+    for (const side of [-1, 1] as const) {
+      createPart(grp, new THREE.BoxGeometry(0.036, 0.045, 0.12), skySteel, side * 0.09, 0.13, 0.055);
+    }
+
+    // Central glowing cyan core vent bar & amber thermal vents
+    createPart(grp, new THREE.BoxGeometry(0.052, 0.17, 0.114), coreVentMat, 0, 0.0, -0.012);
+    createPart(grp, new THREE.BoxGeometry(0.10, 0.024, 0.118), amberVentMat, 0, -0.09, -0.014);
+    createPart(grp, new THREE.BoxGeometry(0.10, 0.024, 0.118), amberVentMat, 0, 0.06, -0.014);
+
+    // Twin metallic thruster pods + intake cones + stabilizer fins + flared exhaust nozzles
+    for (const side of [-1, 1] as const) {
+      const px = side * 0.132;
+      createPart(grp, new THREE.CylinderGeometry(0.052, 0.056, 0.28, 12), skySteel, px, 0.01, -0.012);
+      createPart(grp, new THREE.CylinderGeometry(0.022, 0.052, 0.065, 12), brightAlloy, px, 0.18, -0.012);
+      createPart(grp, new THREE.CylinderGeometry(0.059, 0.059, 0.028, 12), amberVentMat, px, 0.065, -0.012);
+      createPart(grp, new THREE.CylinderGeometry(0.058, 0.058, 0.024, 12), coreVentMat, px, -0.055, -0.012);
+      // Swept stabilizer winglet
+      createPart(grp, new THREE.BoxGeometry(0.055, 0.11, 0.024), brightAlloy, side * 0.182, 0.04, -0.015, 0, 0, side * -0.22);
+      // Flared thruster exhaust nozzle
+      createPart(grp, new THREE.CylinderGeometry(0.038, 0.062, 0.085, 12), chassisDark, px, -0.165, -0.02, 0.14, 0, 0);
+      createPart(grp, new THREE.CylinderGeometry(0.034, 0.034, 0.018, 10), coreVentMat, px, -0.205, -0.026, 0.14, 0, 0);
+    }
+
+    // Animated twin thrust flame cones (hidden until state.isJetpackThrusting is true)
+    const flameGroup = new THREE.Group();
+    flameGroup.name = 'jetpack_flame_group';
+    flameGroup.visible = false;
+    flameGroup.scale.setScalar(0.001);
+
+    const flameOuterMat = new THREE.MeshBasicMaterial({
+      color: 0xf97316,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const flameCoreMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this.jetpackFlameCones.length = 0;
+    this.jetpackFlameCoreCones.length = 0;
+
+    for (const side of [-1, 1] as const) {
+      const px = side * 0.132;
+      const outerCone = new THREE.Mesh(new THREE.ConeGeometry(0.064, 0.34, 10, 1, true), flameOuterMat);
+      outerCone.position.set(px, -0.35, -0.044);
+      outerCone.rotation.x = Math.PI + 0.14;
+      outerCone.castShadow = false;
+      flameGroup.add(outerCone);
+      this.jetpackFlameCones.push(outerCone);
+
+      const coreCone = new THREE.Mesh(new THREE.ConeGeometry(0.034, 0.24, 8), flameCoreMat);
+      coreCone.position.set(px, -0.31, -0.038);
+      coreCone.rotation.x = Math.PI + 0.14;
+      coreCone.castShadow = false;
+      flameGroup.add(coreCone);
+      this.jetpackFlameCoreCones.push(coreCone);
+    }
+
+    grp.add(flameGroup);
+    this.joints.chest.add(grp);
+
+    this.jetpackBackGroup = grp;
+    this.jetpackFlameGroup = flameGroup;
+    this.jetpackFlameOuterMat = flameOuterMat;
+    this.jetpackFlameCoreMat = flameCoreMat;
+    this.jetpackCoreVentMat = coreVentMat;
+    this.jetpackAmberVentMat = amberVentMat;
+  }
+
+  public setJetpackState(equipped: boolean, thrusting: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    if (!equipped) {
+      this.jetpackEquipped = false;
+      this.jetpackThrusting = false;
+      this.joints.backblingSocket.visible = true;
+      if (this.jetpackBackGroup) {
+        this.jetpackBackGroup.visible = false;
+        this.jetpackBackGroup.scale.setScalar(0.001);
+      }
+      if (this.jetpackFlameGroup) {
+        this.jetpackFlameGroup.visible = false;
+        this.jetpackFlameGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.jetpackBackGroup) {
+      this.buildJetpackBackGroup();
+    }
+
+    this.jetpackEquipped = true;
+    this.jetpackThrusting = Boolean(thrusting);
+    this.joints.backblingSocket.visible = false;
+
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.jetpackTime = elapsed;
+    }
+    const t = this.jetpackTime;
+
+    const grp = this.jetpackBackGroup!;
+    grp.visible = true;
+    grp.scale.setScalar(1);
+
+    if (this.jetpackCoreVentMat) {
+      this.jetpackCoreVentMat.emissiveIntensity = this.jetpackThrusting
+        ? 1.35 + 0.25 * Math.sin(t * 28)
+        : 0.65;
+    }
+    if (this.jetpackAmberVentMat) {
+      this.jetpackAmberVentMat.emissiveIntensity = this.jetpackThrusting
+        ? 1.45 + 0.3 * Math.cos(t * 32)
+        : 0.5;
+    }
+
+    const flameGrp = this.jetpackFlameGroup!;
+    if (!this.jetpackThrusting) {
+      flameGrp.visible = false;
+      flameGrp.scale.setScalar(0.001);
+      return;
+    }
+
+    flameGrp.visible = true;
+    flameGrp.scale.setScalar(1);
+
+    const pulseY = 1.0 + 0.28 * Math.sin(t * 42);
+    const pulseXZ = 0.94 + 0.16 * Math.cos(t * 34);
+    for (let i = 0; i < this.jetpackFlameCones.length; i++) {
+      const phase = i === 0 ? 1 : -1;
+      const cone = this.jetpackFlameCones[i];
+      cone.scale.set(pulseXZ, pulseY + phase * 0.08 * Math.sin(t * 50), pulseXZ);
+      cone.rotation.y = t * 14 * phase;
+    }
+    for (let i = 0; i < this.jetpackFlameCoreCones.length; i++) {
+      const core = this.jetpackFlameCoreCones[i];
+      core.scale.set(pulseXZ * 0.95, pulseY * 1.08, pulseXZ * 0.95);
+    }
+    if (this.jetpackFlameOuterMat) {
+      this.jetpackFlameOuterMat.opacity = 0.82 + 0.15 * Math.sin(t * 36);
+    }
+    if (this.jetpackFlameCoreMat) {
+      this.jetpackFlameCoreMat.opacity = 0.9 + 0.08 * Math.cos(t * 44);
+    }
+  }
+
+  private buildLowGravityBootAuras(): void {
+    this.lowGravityBootAuras.length = 0;
+    this.lowGravityBootRings.length = 0;
+    this.lowGravityBootHalos.length = 0;
+    this.lowGravityBootMotes.length = 0;
+
+    const ringMat = makeMat('#a855f7', 0.14, 0.25, '#a855f7', 1.05);
+    const haloMat = new THREE.MeshBasicMaterial({
+      color: 0xc084fc,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const moteMat = new THREE.MeshBasicMaterial({
+      color: 0xe9d5ff,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this.lowGravityRingMat = ringMat;
+    this.lowGravityHaloMat = haloMat;
+    this.lowGravityMoteMat = moteMat;
+
+    const footJoints = [this.joints.leftFoot, this.joints.rightFoot];
+    for (let f = 0; f < footJoints.length; f++) {
+      const aura = new THREE.Group();
+      aura.name = `low_gravity_boot_aura_${f}`;
+      aura.visible = false;
+      aura.scale.setScalar(0.001);
+
+      const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.012, 6, 18), ringMat);
+      ringMesh.rotation.x = Math.PI / 2;
+      ringMesh.position.set(0, 0.02, 0.03);
+      ringMesh.castShadow = false;
+      aura.add(ringMesh);
+      this.lowGravityBootRings.push(ringMesh);
+
+      const haloMesh = new THREE.Mesh(new THREE.RingGeometry(0.11, 0.17, 20), haloMat);
+      haloMesh.rotation.x = -Math.PI / 2;
+      haloMesh.position.set(0, -0.055, 0.03);
+      haloMesh.castShadow = false;
+      aura.add(haloMesh);
+      this.lowGravityBootHalos.push(haloMesh);
+
+      const motes: THREE.Mesh[] = [];
+      for (let m = 0; m < LOW_G_MOTES_PER_BOOT; m++) {
+        const mote = new THREE.Mesh(new THREE.OctahedronGeometry(0.024, 0), moteMat);
+        mote.castShadow = false;
+        aura.add(mote);
+        motes.push(mote);
+      }
+      this.lowGravityBootMotes.push(motes);
+
+      footJoints[f].add(aura);
+      this.lowGravityBootAuras.push(aura);
+    }
+  }
+
+  public setLowGravityBuff(active: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    if (!active) {
+      this.lowGravityBuffActive = false;
+      for (const aura of this.lowGravityBootAuras) {
+        aura.visible = false;
+        aura.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (this.lowGravityBootAuras.length === 0) {
+      this.buildLowGravityBootAuras();
+    }
+
+    this.lowGravityBuffActive = true;
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.lowGravityTime = elapsed;
+    }
+    const t = this.lowGravityTime;
+
+    for (let f = 0; f < this.lowGravityBootAuras.length; f++) {
+      const aura = this.lowGravityBootAuras[f];
+      aura.visible = true;
+      aura.scale.setScalar(1);
+
+      const ring = this.lowGravityBootRings[f];
+      if (ring) {
+        ring.rotation.z = t * 2.8 * (f === 0 ? 1 : -1);
+        ring.position.y = 0.015 + Math.sin(t * 4.5 + f) * 0.02;
+        ring.scale.setScalar(1 + 0.08 * Math.sin(t * 5.2));
+      }
+
+      const halo = this.lowGravityBootHalos[f];
+      if (halo) {
+        halo.scale.setScalar(1 + 0.14 * Math.sin(t * 4.2 + f));
+      }
+
+      const motes = this.lowGravityBootMotes[f];
+      if (motes) {
+        for (let m = 0; m < motes.length; m++) {
+          const prog = (t * 1.4 + m / LOW_G_MOTES_PER_BOOT + f * 0.25) % 1;
+          const ang = t * 3.4 + (m / LOW_G_MOTES_PER_BOOT) * Math.PI * 2;
+          const rad = 0.13 + Math.sin(prog * Math.PI) * 0.03;
+          motes[m].position.set(
+            Math.cos(ang) * rad,
+            -0.02 + prog * 0.18,
+            0.03 + Math.sin(ang) * rad,
+          );
+          motes[m].rotation.y = t * 5 + m;
+          motes[m].scale.setScalar(Math.max(0.25, Math.sin(prog * Math.PI) * 1.1));
+        }
+      }
+    }
+
+    if (this.lowGravityHaloMat) {
+      this.lowGravityHaloMat.opacity = 0.42 + 0.24 * Math.sin(t * 4.6);
+    }
+    if (this.lowGravityMoteMat) {
+      this.lowGravityMoteMat.opacity = 0.72 + 0.24 * Math.cos(t * 5.4);
+    }
+  }
+
+  private buildBurningEmberGroup(): void {
+    const grp = new THREE.Group();
+    grp.name = 'burning_ember_aura';
+    grp.position.set(0, 0.06, 0);
+    grp.visible = false;
+    grp.scale.setScalar(0.001);
+
+    const emberMat = new THREE.MeshBasicMaterial({
+      color: 0xfb923c,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.burningEmberMat = emberMat;
+    this.burningEmberMotes.length = 0;
+
+    for (let i = 0; i < BURNING_EMBER_MOTE_COUNT; i++) {
+      const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.028, 0), emberMat);
+      mesh.castShadow = false;
+      grp.add(mesh);
+      this.burningEmberMotes.push({
+        mesh,
+        angle: (i / BURNING_EMBER_MOTE_COUNT) * Math.PI * 2,
+        radius: 0.24 + (i % 2) * 0.05,
+        speed: 1.4 + (i % 3) * 0.35,
+        phase: i / BURNING_EMBER_MOTE_COUNT,
+      });
+    }
+
+    this.joints.chest.add(grp);
+    this.burningEmberGroup = grp;
+  }
+
+  private applyBurningMaterialTint(t: number): void {
+    const flicker = 0.34 + 0.14 * Math.sin(t * 14);
+    for (let i = 0; i < this.skinEmissiveTargets.length; i++) {
+      const target = this.skinEmissiveTargets[i];
+      target.mat.emissive.copy(target.baseEmissive).lerp(BURNING_EMBER_COLOR, 0.45);
+      target.mat.emissiveIntensity = target.baseIntensity + flicker;
+    }
+  }
+
+  private restoreBaseMaterialTint(): void {
+    for (let i = 0; i < this.skinEmissiveTargets.length; i++) {
+      const target = this.skinEmissiveTargets[i];
+      target.mat.emissive.copy(target.baseEmissive);
+      target.mat.emissiveIntensity = target.baseIntensity;
+    }
+  }
+
+  public setBurningState(active: boolean, elapsed?: number): void {
+    if (this.disposed) return;
+
+    if (!active) {
+      this.burningActive = false;
+      this.restoreBaseMaterialTint();
+      if (this.burningEmberGroup) {
+        this.burningEmberGroup.visible = false;
+        this.burningEmberGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.burningEmberGroup) {
+      this.buildBurningEmberGroup();
+    }
+
+    this.burningActive = true;
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.burningTime = elapsed;
+    }
+    const t = this.burningTime;
+
+    this.applyBurningMaterialTint(t);
+
+    const grp = this.burningEmberGroup!;
+    grp.visible = true;
+    grp.scale.setScalar(1);
+
+    for (let i = 0; i < this.burningEmberMotes.length; i++) {
+      const mt = this.burningEmberMotes[i];
+      const prog = (t * mt.speed + mt.phase) % 1;
+      const ang = mt.angle + t * 2.4;
+      mt.mesh.position.set(
+        Math.cos(ang) * mt.radius,
+        -0.18 + prog * 0.56,
+        Math.sin(ang) * mt.radius,
+      );
+      mt.mesh.rotation.set(t * 4, t * 5 + i, 0);
+      mt.mesh.scale.setScalar(Math.max(0.25, 1.15 * (1 - prog * 0.7)));
+    }
+
+    if (this.burningEmberMat) {
+      this.burningEmberMat.opacity = 0.74 + 0.22 * Math.sin(t * 16);
+    }
+  }
+
+  public hasJetpackEquipped(): boolean {
+    return this.jetpackEquipped;
+  }
+
+  public isJetpackFlameVisible(): boolean {
+    return (
+      this.jetpackEquipped &&
+      this.jetpackThrusting &&
+      Boolean(this.jetpackFlameGroup?.visible)
+    );
+  }
+
+  public getJetpackBackGroup(): THREE.Group | null {
+    return this.jetpackBackGroup;
+  }
+
+  public hasLowGravityBuff(): boolean {
+    return this.lowGravityBuffActive;
+  }
+
+  public getLowGravityBootAuras(): readonly THREE.Group[] {
+    return this.lowGravityBootAuras;
+  }
+
+  public isBurningActive(): boolean {
+    return this.burningActive;
+  }
+
+  public getBurningEmberGroup(): THREE.Group | null {
+    return this.burningEmberGroup;
+  }
+
   public isBossAuraEnabled(): boolean {
     return this.bossAuraEnabled;
   }
@@ -2453,6 +2955,44 @@ export class CharacterRig {
       this.duoPartnerHaloMat = null;
       this.duoPartnerAuraEnabled = false;
     }
+
+    if (this.jetpackBackGroup) {
+      disposeObject3D(this.jetpackBackGroup);
+      this.jetpackBackGroup.parent?.remove(this.jetpackBackGroup);
+      this.jetpackBackGroup = null;
+      this.jetpackFlameGroup = null;
+      this.jetpackFlameCones.length = 0;
+      this.jetpackFlameCoreCones.length = 0;
+      this.jetpackFlameOuterMat = null;
+      this.jetpackFlameCoreMat = null;
+      this.jetpackCoreVentMat = null;
+      this.jetpackAmberVentMat = null;
+      this.jetpackEquipped = false;
+      this.jetpackThrusting = false;
+    }
+
+    for (const aura of this.lowGravityBootAuras) {
+      disposeObject3D(aura);
+      aura.parent?.remove(aura);
+    }
+    this.lowGravityBootAuras.length = 0;
+    this.lowGravityBootRings.length = 0;
+    this.lowGravityBootHalos.length = 0;
+    this.lowGravityBootMotes.length = 0;
+    this.lowGravityRingMat = null;
+    this.lowGravityHaloMat = null;
+    this.lowGravityMoteMat = null;
+    this.lowGravityBuffActive = false;
+
+    if (this.burningEmberGroup) {
+      disposeObject3D(this.burningEmberGroup);
+      this.burningEmberGroup.parent?.remove(this.burningEmberGroup);
+      this.burningEmberGroup = null;
+      this.burningEmberMat = null;
+      this.burningEmberMotes.length = 0;
+      this.burningActive = false;
+    }
+    this.skinEmissiveTargets.length = 0;
 
     disposeObject3D(this.joints.root);
     this.joints.root.parent?.remove(this.joints.root);

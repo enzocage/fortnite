@@ -877,6 +877,116 @@ interface ForecastPulseSlot {
   sparks: ForecastPulseSpark[];
 }
 
+interface JetpackFlameSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface JetpackFlameSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  intensity: number;
+  group: THREE.Group;
+  leftCone: THREE.Mesh;
+  rightCone: THREE.Mesh;
+  outerMat: THREE.MeshBasicMaterial;
+  leftCoreCone: THREE.Mesh;
+  rightCoreCone: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  sparks: JetpackFlameSpark[];
+}
+
+interface FlameStreamPuff {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+  isCyanCore: boolean;
+}
+
+interface FlameStreamSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  range: number;
+  group: THREE.Group;
+  outerConeMesh: THREE.Mesh;
+  outerConeMat: THREE.MeshBasicMaterial;
+  coreConeMesh: THREE.Mesh;
+  coreConeMat: THREE.MeshBasicMaterial;
+  puffs: FlameStreamPuff[];
+}
+
+interface MeteorStrikeEmber {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+  isRock: boolean;
+}
+
+interface MeteorStrikeSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  meteorMesh: THREE.Mesh;
+  meteorMat: THREE.MeshBasicMaterial;
+  trailConeMesh: THREE.Mesh;
+  trailConeMat: THREE.MeshBasicMaterial;
+  innerTrailMesh: THREE.Mesh;
+  innerTrailMat: THREE.MeshBasicMaterial;
+  blastSphereMesh: THREE.Mesh;
+  blastSphereMat: THREE.MeshBasicMaterial;
+  coreFlashMesh: THREE.Mesh;
+  coreFlashMat: THREE.MeshBasicMaterial;
+  shockRingMesh: THREE.Mesh;
+  shockRingMat: THREE.MeshBasicMaterial;
+  outerShockRingMesh: THREE.Mesh;
+  outerShockRingMat: THREE.MeshBasicMaterial;
+  tiltedRingMesh: THREE.Mesh;
+  tiltedRingMat: THREE.MeshBasicMaterial;
+  embers: MeteorStrikeEmber[];
+}
+
+interface HopCrystalMote {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface HopCrystalAuraSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  groundRingMesh: THREE.Mesh;
+  groundRingMat: THREE.MeshBasicMaterial;
+  levitateRingMesh: THREE.Mesh;
+  levitateRingMat: THREE.MeshBasicMaterial;
+  auraShellMesh: THREE.Mesh;
+  auraShellMat: THREE.MeshBasicMaterial;
+  motes: HopCrystalMote[];
+}
+
 function getWeaponModColor(modId: WeaponModId): string {
   const found = WEAPON_MODS.find((m) => m.id === modId);
   return found?.accentColor ?? '#38bdf8';
@@ -1022,6 +1132,14 @@ const WEAPON_MOD_POOL_SIZE = 8;
 const WEAPON_MOD_SPARK_COUNT = 12;
 const FORECAST_PULSE_POOL_SIZE = 6;
 const FORECAST_PULSE_SPARK_COUNT = 12;
+const JETPACK_FLAME_POOL_SIZE = 24;
+const JETPACK_FLAME_SPARK_COUNT = 8;
+const FLAME_STREAM_POOL_SIZE = 24;
+const FLAME_STREAM_PUFF_COUNT = 10;
+const METEOR_STRIKE_POOL_SIZE = 6;
+const METEOR_STRIKE_EMBER_COUNT = 16;
+const HOP_CRYSTAL_AURA_POOL_SIZE = 10;
+const HOP_CRYSTAL_MOTE_COUNT = 12;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -1098,6 +1216,10 @@ export class VFXManager {
   private readonly empBlasts: EmpBlastSlot[] = [];
   private readonly weaponMods: WeaponModSlot[] = [];
   private readonly forecastPulses: ForecastPulseSlot[] = [];
+  private readonly jetpackFlames: JetpackFlameSlot[] = [];
+  private readonly flameStreams: FlameStreamSlot[] = [];
+  private readonly meteorStrikes: MeteorStrikeSlot[] = [];
+  private readonly hopCrystalAuras: HopCrystalAuraSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -1154,6 +1276,10 @@ export class VFXManager {
   private empBlastCursor = 0;
   private weaponModCursor = 0;
   private forecastPulseCursor = 0;
+  private jetpackFlameCursor = 0;
+  private flameStreamCursor = 0;
+  private meteorStrikeCursor = 0;
+  private hopCrystalAuraCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -4360,6 +4486,431 @@ export class VFXManager {
         sparks,
       });
     }
+
+    // 39. Skyforge Jetpack Twin Thruster Flame Plumes
+    for (let i = 0; i < JETPACK_FLAME_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_jetpack_flame';
+      group.visible = false;
+
+      const outerMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+
+      const leftCone = new THREE.Mesh(this.unitConeGeo, outerMat);
+      leftCone.position.set(-0.135, 0, 0.22);
+      leftCone.rotation.x = Math.PI / 2;
+      leftCone.scale.set(0.18, 0.48, 0.18);
+      group.add(leftCone);
+
+      const rightCone = new THREE.Mesh(this.unitConeGeo, outerMat);
+      rightCone.position.set(0.135, 0, 0.22);
+      rightCone.rotation.x = Math.PI / 2;
+      rightCone.scale.set(0.18, 0.48, 0.18);
+      group.add(rightCone);
+
+      const leftCoreCone = new THREE.Mesh(this.unitConeGeo, coreMat);
+      leftCoreCone.position.set(-0.135, 0, 0.17);
+      leftCoreCone.rotation.x = Math.PI / 2;
+      leftCoreCone.scale.set(0.095, 0.32, 0.095);
+      group.add(leftCoreCone);
+
+      const rightCoreCone = new THREE.Mesh(this.unitConeGeo, coreMat);
+      rightCoreCone.position.set(0.135, 0, 0.17);
+      rightCoreCone.rotation.x = Math.PI / 2;
+      rightCoreCone.scale.set(0.095, 0.32, 0.095);
+      group.add(rightCoreCone);
+
+      const sparks: JetpackFlameSpark[] = [];
+      for (let s = 0; s < JETPACK_FLAME_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0x38bdf8 : s % 2 === 0 ? 0xfef08a : 0xf97316,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.08,
+        });
+      }
+
+      this.root.add(group);
+      this.jetpackFlames.push({
+        active: false,
+        age: 0,
+        duration: 0.26,
+        intensity: 1,
+        group,
+        leftCone,
+        rightCone,
+        outerMat,
+        leftCoreCone,
+        rightCoreCone,
+        coreMat,
+        sparks,
+      });
+    }
+
+    // 40. Dragon's Breath Plasma Flamethrower Stream
+    for (let i = 0; i < FLAME_STREAM_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_flame_stream';
+      group.visible = false;
+
+      const outerConeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.62,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerConeMesh = new THREE.Mesh(this.unitConeGeo, outerConeMat);
+      outerConeMesh.rotation.x = -Math.PI / 2;
+      group.add(outerConeMesh);
+
+      const coreConeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreConeMesh = new THREE.Mesh(this.unitConeGeo, coreConeMat);
+      coreConeMesh.rotation.x = -Math.PI / 2;
+      group.add(coreConeMesh);
+
+      const puffs: FlameStreamPuff[] = [];
+      for (let p = 0; p < FLAME_STREAM_PUFF_COUNT; p++) {
+        const isCyanCore = p % 4 === 0;
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: isCyanCore ? 0x38bdf8 : p % 2 === 0 ? 0xfb923c : 0xfde047,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = isCyanCore ? this.unitCrystalGeo : this.unitSphereGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        puffs.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.32,
+          isCyanCore,
+        });
+      }
+
+      this.root.add(group);
+      this.flameStreams.push({
+        active: false,
+        age: 0,
+        duration: 0.36,
+        range: 14,
+        group,
+        outerConeMesh,
+        outerConeMat,
+        coreConeMesh,
+        coreConeMat,
+        puffs,
+      });
+    }
+
+    // 41. Dramatic Falling Meteor Strike + Fiery Shock Ring
+    const meteorUpTrailDir = new THREE.Vector3(-0.32, 0.93, -0.18).normalize();
+    const meteorTrailQuat = new THREE.Quaternion().setFromUnitVectors(this.upAxis, meteorUpTrailDir);
+    for (let i = 0; i < METEOR_STRIKE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_meteor_strike';
+      group.visible = false;
+
+      const meteorMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfb923c,
+          transparent: true,
+          opacity: 0.98,
+        }),
+      );
+      const meteorMesh = new THREE.Mesh(this.unitCrystalGeo, meteorMat);
+      group.add(meteorMesh);
+
+      const trailConeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const trailConeMesh = new THREE.Mesh(this.unitConeGeo, trailConeMat);
+      trailConeMesh.quaternion.copy(meteorTrailQuat);
+      group.add(trailConeMesh);
+
+      const innerTrailMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const innerTrailMesh = new THREE.Mesh(this.unitConeGeo, innerTrailMat);
+      innerTrailMesh.quaternion.copy(meteorTrailQuat);
+      group.add(innerTrailMesh);
+
+      const blastSphereMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const blastSphereMesh = new THREE.Mesh(this.unitSphereGeo, blastSphereMat);
+      group.add(blastSphereMesh);
+
+      const coreFlashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef9c3,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreFlashMesh = new THREE.Mesh(this.unitSphereGeo, coreFlashMat);
+      group.add(coreFlashMesh);
+
+      const shockRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const shockRingMesh = new THREE.Mesh(this.unitRingGeo, shockRingMat);
+      shockRingMesh.rotation.x = -Math.PI / 2;
+      shockRingMesh.position.y = 0.14;
+      group.add(shockRingMesh);
+
+      const outerShockRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xef4444,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerShockRingMesh = new THREE.Mesh(this.unitRingGeo, outerShockRingMat);
+      outerShockRingMesh.rotation.x = -Math.PI / 2;
+      outerShockRingMesh.position.y = 0.10;
+      group.add(outerShockRingMesh);
+
+      const tiltedRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const tiltedRingMesh = new THREE.Mesh(this.unitRingGeo, tiltedRingMat);
+      tiltedRingMesh.rotation.set(Math.PI / 3, 0, Math.PI / 5);
+      group.add(tiltedRingMesh);
+
+      const embers: MeteorStrikeEmber[] = [];
+      for (let e = 0; e < METEOR_STRIKE_EMBER_COUNT; e++) {
+        const isRock = e % 3 === 0;
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: isRock ? 0x57534e : e % 2 === 0 ? 0xfbbf24 : 0xf97316,
+            transparent: true,
+            opacity: 1,
+            depthWrite: isRock,
+            blending: isRock ? THREE.NormalBlending : THREE.AdditiveBlending,
+          }),
+        );
+        const geo = isRock ? this.unitBoxGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        embers.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.25,
+          isRock,
+        });
+      }
+
+      this.root.add(group);
+      this.meteorStrikes.push({
+        active: false,
+        age: 0,
+        duration: 1.45,
+        radius: 10,
+        group,
+        meteorMesh,
+        meteorMat,
+        trailConeMesh,
+        trailConeMat,
+        innerTrailMesh,
+        innerTrailMat,
+        blastSphereMesh,
+        blastSphereMat,
+        coreFlashMesh,
+        coreFlashMat,
+        shockRingMesh,
+        shockRingMat,
+        outerShockRingMesh,
+        outerShockRingMat,
+        tiltedRingMesh,
+        tiltedRingMat,
+        embers,
+      });
+    }
+
+    // 42. Hop Crystal Low-Gravity Aura (shimmering violet anti-gravity rings + rising crystal shards)
+    for (let i = 0; i < HOP_CRYSTAL_AURA_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_hop_crystal_aura';
+      group.visible = false;
+
+      const groundRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const groundRingMesh = new THREE.Mesh(this.unitRingGeo, groundRingMat);
+      groundRingMesh.rotation.x = -Math.PI / 2;
+      groundRingMesh.position.y = 0.08;
+      group.add(groundRingMesh);
+
+      const levitateRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xc084fc,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const levitateRingMesh = new THREE.Mesh(this.hexRingGeo, levitateRingMat);
+      levitateRingMesh.rotation.x = -Math.PI / 2;
+      group.add(levitateRingMesh);
+
+      const auraShellMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x8b5cf6,
+          transparent: true,
+          opacity: 0.34,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const auraShellMesh = new THREE.Mesh(this.hexPrismGeo, auraShellMat);
+      group.add(auraShellMesh);
+
+      const motes: HopCrystalMote[] = [];
+      for (let m = 0; m < HOP_CRYSTAL_MOTE_COUNT; m++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: m % 3 === 0 ? 0xf3e8ff : m % 2 === 0 ? 0xc084fc : 0xa855f7,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        motes.push({
+          mesh,
+          material,
+          angle: (m / HOP_CRYSTAL_MOTE_COUNT) * Math.PI * 2,
+          radius: 0.55,
+          speedY: 2.2,
+          spin: 4.5,
+          baseScale: 0.11,
+        });
+      }
+
+      this.root.add(group);
+      this.hopCrystalAuras.push({
+        active: false,
+        age: 0,
+        duration: 0.95,
+        group,
+        groundRingMesh,
+        groundRingMat,
+        levitateRingMesh,
+        levitateRingMat,
+        auraShellMesh,
+        auraShellMat,
+        motes,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -4540,6 +5091,14 @@ export class VFXManager {
       this.eventBus.on('vfx:emp_blast', (e) => this.spawnEmpBlast(e.position, e.radius)),
       this.eventBus.on('vfx:weapon_mod', (e) => this.spawnWeaponMod(e.position, e.modId)),
       this.eventBus.on('vfx:forecast_pulse', (e) => this.spawnForecastPulse(e.position)),
+      this.eventBus.on('vfx:jetpack_flame', (e) =>
+        this.spawnJetpackFlame(e.position, e.direction, e.intensity),
+      ),
+      this.eventBus.on('vfx:flame_stream', (e) =>
+        this.spawnFlameStream(e.origin, e.direction, e.range),
+      ),
+      this.eventBus.on('vfx:meteor_strike', (e) => this.spawnMeteorStrike(e.position, e.radius)),
+      this.eventBus.on('vfx:hop_crystal_aura', (e) => this.spawnHopCrystalAura(e.position)),
     );
   }
 
@@ -4601,6 +5160,9 @@ export class VFXManager {
     } else if (weaponId === 'minigun') {
       scale = 1.25;
       color = 0xfb923c;
+    } else if (weaponId === 'plasma_flamethrower') {
+      scale = 1.45;
+      color = 0xf97316;
     } else if (weaponId === 'heavy_shotgun') {
       scale = 1.55;
       color = 0xf59e0b;
@@ -4642,11 +5204,12 @@ export class VFXManager {
     slot.material.opacity = 0.95;
     slot.group.visible = true;
 
-    // Eject spinning brass casing or shotgun shell for bullet/shell firearms (not arrows or railgun energy slugs)
+    // Eject spinning brass casing or shotgun shell for bullet/shell firearms (not arrows, railgun slugs, or plasma flamethrower)
     const ammoType = WEAPONS[weaponId]?.ammoType;
     if (
       weaponId !== 'boom_bow' &&
       weaponId !== 'railgun' &&
+      weaponId !== 'plasma_flamethrower' &&
       (ammoType === 'light' ||
         ammoType === 'medium' ||
         ammoType === 'heavy' ||
@@ -6613,6 +7176,200 @@ export class VFXManager {
         sp.material.opacity = fade;
       }
     }
+
+    // 40. Skyforge Jetpack Twin Thruster Flame Plumes
+    for (let i = 0; i < JETPACK_FLAME_POOL_SIZE; i++) {
+      const jf = this.jetpackFlames[i];
+      if (!jf.active) continue;
+      jf.age += safeDt;
+      const t = jf.age / jf.duration;
+      if (t >= 1) {
+        jf.active = false;
+        jf.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const flicker = 0.88 + 0.24 * Math.sin(jf.age * 46);
+      const coneScaleXZ = (0.16 + 0.08 * jf.intensity) * (1 - 0.45 * t) * flicker;
+      const coneScaleY = (0.38 + 0.24 * jf.intensity) * (0.85 + 0.3 * fade);
+      jf.leftCone.scale.set(coneScaleXZ, coneScaleY, coneScaleXZ);
+      jf.rightCone.scale.set(coneScaleXZ, coneScaleY, coneScaleXZ);
+      jf.leftCoreCone.scale.set(coneScaleXZ * 0.52, coneScaleY * 0.68, coneScaleXZ * 0.52);
+      jf.rightCoreCone.scale.set(coneScaleXZ * 0.52, coneScaleY * 0.68, coneScaleXZ * 0.52);
+      jf.outerMat.opacity = 0.92 * fade;
+      jf.coreMat.opacity = 0.96 * fade;
+
+      for (let s = 0; s < JETPACK_FLAME_SPARK_COUNT; s++) {
+        const sp = jf.sparks[s];
+        sp.mesh.position.x += sp.vx * safeDt;
+        sp.mesh.position.y += sp.vy * safeDt;
+        sp.mesh.position.z += sp.vz * safeDt;
+        sp.mesh.rotation.y += 8 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.6 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 41. Dragon's Breath Plasma Flamethrower Stream
+    for (let i = 0; i < FLAME_STREAM_POOL_SIZE; i++) {
+      const fs = this.flameStreams[i];
+      if (!fs.active) continue;
+      fs.age += safeDt;
+      const t = fs.age / fs.duration;
+      if (t >= 1) {
+        fs.active = false;
+        fs.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const extend = 0.35 + 0.65 * Math.min(1, t * 2.2);
+      const streamLen = fs.range * extend;
+      const tipSpread = Math.max(0.45, fs.range * 0.16) * (0.7 + 0.5 * t);
+
+      fs.outerConeMesh.position.z = streamLen * 0.5;
+      fs.outerConeMesh.scale.set(tipSpread, streamLen, tipSpread);
+      fs.outerConeMat.opacity = 0.62 * fade;
+
+      fs.coreConeMesh.position.z = streamLen * 0.34;
+      fs.coreConeMesh.scale.set(tipSpread * 0.48, streamLen * 0.68, tipSpread * 0.48);
+      fs.coreConeMat.opacity = 0.85 * fade;
+
+      const puffCurve = 1 + 0.8 * Math.sin(t * Math.PI);
+      for (let p = 0; p < FLAME_STREAM_PUFF_COUNT; p++) {
+        const pf = fs.puffs[p];
+        pf.mesh.position.x += pf.vx * safeDt;
+        pf.mesh.position.y += pf.vy * safeDt;
+        pf.mesh.position.z += pf.vz * safeDt;
+        pf.mesh.rotation.x += pf.rx * safeDt;
+        pf.mesh.rotation.y += pf.ry * safeDt;
+        pf.mesh.scale.setScalar(pf.baseScale * puffCurve * (1 - 0.35 * t));
+        pf.material.opacity = (pf.isCyanCore ? 0.92 : 0.84) * fade;
+      }
+    }
+
+    // 42. Dramatic Falling Meteor Strike + Fiery Shock Ring
+    for (let i = 0; i < METEOR_STRIKE_POOL_SIZE; i++) {
+      const ms = this.meteorStrikes[i];
+      if (!ms.active) continue;
+      ms.age += safeDt;
+      const t = ms.age / ms.duration;
+      if (t >= 1) {
+        ms.active = false;
+        ms.group.visible = false;
+        continue;
+      }
+
+      const impactFrac = 0.22;
+      const descentFrac = clamp(t / impactFrac, 0, 1);
+      const mx = -9.0 * (1 - descentFrac);
+      const my = 0.3 + 25.7 * (1 - descentFrac);
+      const mz = -5.0 * (1 - descentFrac);
+
+      const trailFade = t < impactFrac ? 1 : Math.max(0, 1 - (t - impactFrac) * 5.0);
+      ms.meteorMesh.position.set(mx, my, mz);
+      ms.meteorMesh.rotation.x += 7 * safeDt;
+      ms.meteorMesh.rotation.y += 9 * safeDt;
+      ms.meteorMesh.scale.setScalar(Math.max(0.05, 1.35 * trailFade));
+      ms.meteorMat.opacity = 0.98 * trailFade;
+
+      ms.trailConeMesh.position.set(mx - 0.32 * 4.5, my + 0.93 * 4.5, mz - 0.18 * 4.5);
+      ms.trailConeMesh.scale.set(1.5 * Math.max(0.1, trailFade), 9.5 * Math.max(0.1, trailFade), 1.5 * Math.max(0.1, trailFade));
+      ms.trailConeMat.opacity = 0.78 * trailFade;
+
+      ms.innerTrailMesh.position.set(mx - 0.32 * 3.5, my + 0.93 * 3.5, mz - 0.18 * 3.5);
+      ms.innerTrailMesh.scale.set(0.75 * Math.max(0.1, trailFade), 7.5 * Math.max(0.1, trailFade), 0.75 * Math.max(0.1, trailFade));
+      ms.innerTrailMat.opacity = 0.92 * trailFade;
+
+      if (t < impactFrac) {
+        ms.blastSphereMesh.scale.setScalar(0.1);
+        ms.blastSphereMat.opacity = 0;
+        ms.coreFlashMesh.scale.setScalar(0.1);
+        ms.coreFlashMat.opacity = 0;
+        ms.shockRingMesh.scale.setScalar(0.2);
+        ms.shockRingMat.opacity = 0;
+        ms.outerShockRingMesh.scale.setScalar(0.2);
+        ms.outerShockRingMat.opacity = 0;
+        ms.tiltedRingMesh.scale.setScalar(0.2);
+        ms.tiltedRingMat.opacity = 0;
+      } else {
+        const impactT = clamp((t - impactFrac) / (1 - impactFrac), 0, 1);
+        const easeOut = 1 - Math.pow(1 - impactT, 3);
+        const fade = 1 - impactT;
+
+        const expand = Math.min(1, impactT * 2.4);
+        ms.blastSphereMesh.scale.setScalar(ms.radius * 0.95 * (0.2 + 0.85 * expand));
+        ms.blastSphereMat.opacity = 0.85 * fade;
+
+        ms.coreFlashMesh.scale.setScalar(ms.radius * 0.55 * (0.15 + 0.9 * Math.min(1, impactT * 3.2)));
+        ms.coreFlashMat.opacity = Math.max(0, 0.96 * (1 - impactT * 1.65));
+
+        ms.shockRingMesh.scale.setScalar(ms.radius * (0.25 + 1.45 * easeOut));
+        ms.shockRingMat.opacity = 0.95 * fade;
+
+        ms.outerShockRingMesh.scale.setScalar(ms.radius * (0.35 + 1.85 * easeOut));
+        ms.outerShockRingMat.opacity = 0.9 * fade * fade;
+
+        ms.tiltedRingMesh.rotation.y += 4.2 * safeDt;
+        ms.tiltedRingMesh.scale.setScalar(ms.radius * (0.22 + 1.2 * easeOut));
+        ms.tiltedRingMat.opacity = 0.84 * fade;
+
+        for (let e = 0; e < METEOR_STRIKE_EMBER_COUNT; e++) {
+          const em = ms.embers[e];
+          em.mesh.visible = true;
+          em.vy -= (em.isRock ? 18.0 : 11.5) * safeDt;
+          em.mesh.position.x += em.vx * safeDt;
+          em.mesh.position.y = Math.max(0.02, em.mesh.position.y + em.vy * safeDt);
+          em.mesh.position.z += em.vz * safeDt;
+          em.mesh.rotation.x += em.rx * safeDt;
+          em.mesh.rotation.y += em.ry * safeDt;
+          em.mesh.scale.setScalar(em.baseScale * (1 - 0.5 * impactT));
+          em.material.opacity = fade;
+        }
+      }
+    }
+
+    // 43. Hop Crystal Low-Gravity Aura
+    for (let i = 0; i < HOP_CRYSTAL_AURA_POOL_SIZE; i++) {
+      const hc = this.hopCrystalAuras[i];
+      if (!hc.active) continue;
+      hc.age += safeDt;
+      const t = hc.age / hc.duration;
+      if (t >= 1) {
+        hc.active = false;
+        hc.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      hc.groundRingMesh.scale.setScalar(0.55 + 2.0 * easeOut);
+      hc.groundRingMat.opacity = 0.94 * fade;
+
+      hc.levitateRingMesh.position.y = 0.15 + 2.15 * easeOut;
+      hc.levitateRingMesh.rotation.z += 4.2 * safeDt;
+      hc.levitateRingMesh.scale.setScalar(0.45 + 1.15 * easeOut);
+      hc.levitateRingMat.opacity = 0.9 * fade;
+
+      hc.auraShellMesh.position.y = 0.9 + 0.85 * t;
+      hc.auraShellMesh.rotation.y -= 2.4 * safeDt;
+      hc.auraShellMesh.scale.set(0.75 + 0.5 * easeOut, 1.5 + 0.9 * t, 0.75 + 0.5 * easeOut);
+      hc.auraShellMat.opacity = 0.36 * fade;
+
+      for (let m = 0; m < HOP_CRYSTAL_MOTE_COUNT; m++) {
+        const mt = hc.motes[m];
+        const ang = mt.angle + hc.age * mt.spin;
+        const rad = mt.radius * (1 + 0.35 * t);
+        mt.mesh.position.x = Math.cos(ang) * rad;
+        mt.mesh.position.y += mt.speedY * safeDt;
+        mt.mesh.position.z = Math.sin(ang) * rad;
+        mt.mesh.rotation.y += 6 * safeDt;
+        mt.mesh.scale.setScalar(mt.baseScale * (1 - 0.45 * t));
+        mt.material.opacity = fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -7825,6 +8582,204 @@ export class VFXManager {
     }
   }
 
+  private spawnJetpackFlame(position: Vec3Like, direction: Vec3Like, intensity: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.jetpackFlames[this.jetpackFlameCursor];
+    this.jetpackFlameCursor = (this.jetpackFlameCursor + 1) % JETPACK_FLAME_POOL_SIZE;
+
+    const rawDir = isFiniteVec3(direction) ? direction : { x: 0, y: -1, z: 0 };
+    const lenSq = rawDir.x * rawDir.x + rawDir.y * rawDir.y + rawDir.z * rawDir.z;
+    const safeDir: Vec3Like = lenSq >= 1e-8 ? rawDir : { x: 0, y: -1, z: 0 };
+    const safeIntensity = clamp(Number.isFinite(intensity) && intensity > 0 ? intensity : 1, 0.1, 2.5);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.26;
+    slot.intensity = safeIntensity;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    this.orientToDirection(slot.group, safeDir, this.zAxis);
+    slot.group.visible = true;
+
+    const coneXZ = 0.16 + 0.08 * safeIntensity;
+    const coneY = 0.38 + 0.24 * safeIntensity;
+    slot.leftCone.scale.set(coneXZ, coneY, coneXZ);
+    slot.rightCone.scale.set(coneXZ, coneY, coneXZ);
+    slot.leftCoreCone.scale.set(coneXZ * 0.52, coneY * 0.68, coneXZ * 0.52);
+    slot.rightCoreCone.scale.set(coneXZ * 0.52, coneY * 0.68, coneXZ * 0.52);
+    slot.outerMat.opacity = 0.92;
+    slot.coreMat.opacity = 0.96;
+
+    for (let s = 0; s < JETPACK_FLAME_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      const sideX = s % 2 === 0 ? -0.135 : 0.135;
+      sp.baseScale = 0.06 + this.nextRand() * 0.045;
+      sp.mesh.position.set(
+        sideX + (this.nextRand() - 0.5) * 0.06,
+        (this.nextRand() - 0.5) * 0.06,
+        0.15 + this.nextRand() * 0.12,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.95;
+      sp.mesh.visible = true;
+      sp.vx = (this.nextRand() - 0.5) * 1.4;
+      sp.vy = (this.nextRand() - 0.5) * 1.4;
+      sp.vz = (3.4 + this.nextRand() * 3.8) * (0.6 + 0.4 * safeIntensity);
+    }
+  }
+
+  private spawnFlameStream(origin: Vec3Like, direction: Vec3Like, range: number): void {
+    if (this.disposed || !isFiniteVec3(origin)) return;
+
+    const slot = this.flameStreams[this.flameStreamCursor];
+    this.flameStreamCursor = (this.flameStreamCursor + 1) % FLAME_STREAM_POOL_SIZE;
+
+    const rawDir = isFiniteVec3(direction) ? direction : { x: 0, y: 0, z: 1 };
+    const lenSq = rawDir.x * rawDir.x + rawDir.y * rawDir.y + rawDir.z * rawDir.z;
+    const safeDir: Vec3Like = lenSq >= 1e-8 ? rawDir : { x: 0, y: 0, z: 1 };
+    const safeRange = clamp(Number.isFinite(range) && range > 0 ? range : 14, 1.5, 45);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.36;
+    slot.range = safeRange;
+
+    slot.group.position.set(origin.x, origin.y, origin.z);
+    this.orientToDirection(slot.group, safeDir, this.zAxis);
+    slot.group.visible = true;
+
+    const initLen = safeRange * 0.35;
+    const initSpread = Math.max(0.45, safeRange * 0.14);
+    slot.outerConeMesh.position.set(0, 0, initLen * 0.5);
+    slot.outerConeMesh.scale.set(initSpread, initLen, initSpread);
+    slot.outerConeMat.opacity = 0.62;
+
+    slot.coreConeMesh.position.set(0, 0, initLen * 0.34);
+    slot.coreConeMesh.scale.set(initSpread * 0.48, initLen * 0.68, initSpread * 0.48);
+    slot.coreConeMat.opacity = 0.85;
+
+    for (let p = 0; p < FLAME_STREAM_PUFF_COUNT; p++) {
+      const pf = slot.puffs[p];
+      const ang = this.nextRand() * Math.PI * 2;
+      const radialSpread = 0.4 + this.nextRand() * 1.3;
+      pf.vx = Math.cos(ang) * radialSpread;
+      pf.vy = Math.sin(ang) * radialSpread + 0.45;
+      pf.vz = safeRange * (1.85 + this.nextRand() * 1.15);
+      pf.rx = (this.nextRand() - 0.5) * 10;
+      pf.ry = (this.nextRand() - 0.5) * 10;
+      pf.baseScale = Math.max(0.24, safeRange * 0.036 * (0.75 + this.nextRand() * 0.5));
+      pf.mesh.position.set(
+        (this.nextRand() - 0.5) * 0.16,
+        (this.nextRand() - 0.5) * 0.16,
+        0.2 + this.nextRand() * 0.6,
+      );
+      pf.mesh.scale.setScalar(pf.baseScale);
+      pf.material.opacity = 0.9;
+      pf.mesh.visible = true;
+    }
+  }
+
+  private spawnMeteorStrike(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.meteorStrikes[this.meteorStrikeCursor];
+    this.meteorStrikeCursor = (this.meteorStrikeCursor + 1) % METEOR_STRIKE_POOL_SIZE;
+
+    const safeRadius = clamp(Number.isFinite(radius) && radius > 0 ? radius : 10, 1.5, 60);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.45;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.meteorMesh.position.set(-9.0, 26.0, -5.0);
+    slot.meteorMesh.scale.setScalar(1.35);
+    slot.meteorMat.opacity = 0.98;
+
+    slot.trailConeMesh.position.set(-9.0 - 0.32 * 4.5, 26.0 + 0.93 * 4.5, -5.0 - 0.18 * 4.5);
+    slot.trailConeMesh.scale.set(1.5, 9.5, 1.5);
+    slot.trailConeMat.opacity = 0.78;
+
+    slot.innerTrailMesh.position.set(-9.0 - 0.32 * 3.5, 26.0 + 0.93 * 3.5, -5.0 - 0.18 * 3.5);
+    slot.innerTrailMesh.scale.set(0.75, 7.5, 0.75);
+    slot.innerTrailMat.opacity = 0.92;
+
+    slot.blastSphereMesh.scale.setScalar(0.1);
+    slot.blastSphereMat.opacity = 0;
+    slot.coreFlashMesh.scale.setScalar(0.1);
+    slot.coreFlashMat.opacity = 0;
+    slot.shockRingMesh.scale.setScalar(0.2);
+    slot.shockRingMat.opacity = 0;
+    slot.outerShockRingMesh.scale.setScalar(0.2);
+    slot.outerShockRingMat.opacity = 0;
+    slot.tiltedRingMesh.rotation.set(Math.PI / 3, this.nextRand() * Math.PI, Math.PI / 5);
+    slot.tiltedRingMesh.scale.setScalar(0.2);
+    slot.tiltedRingMat.opacity = 0;
+
+    for (let e = 0; e < METEOR_STRIKE_EMBER_COUNT; e++) {
+      const em = slot.embers[e];
+      const ang = (e / METEOR_STRIKE_EMBER_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const spd = safeRadius * (0.85 + this.nextRand() * 1.1);
+      em.vx = Math.cos(ang) * spd;
+      em.vy = safeRadius * (0.65 + this.nextRand() * 0.95);
+      em.vz = Math.sin(ang) * spd;
+      em.rx = (this.nextRand() - 0.5) * 14;
+      em.ry = (this.nextRand() - 0.5) * 14;
+      em.baseScale = Math.max(0.16, safeRadius * (em.isRock ? 0.042 : 0.036));
+      em.mesh.position.set(0, 0.2, 0);
+      em.mesh.scale.setScalar(em.baseScale);
+      em.material.opacity = 1;
+      em.mesh.visible = false;
+    }
+  }
+
+  private spawnHopCrystalAura(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.hopCrystalAuras[this.hopCrystalAuraCursor];
+    this.hopCrystalAuraCursor = (this.hopCrystalAuraCursor + 1) % HOP_CRYSTAL_AURA_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.95;
+
+    slot.group.position.set(position.x, position.y + 0.05, position.z);
+    slot.group.visible = true;
+
+    slot.groundRingMesh.scale.setScalar(0.55);
+    slot.groundRingMat.opacity = 0.94;
+
+    slot.levitateRingMesh.position.set(0, 0.15, 0);
+    slot.levitateRingMesh.rotation.set(-Math.PI / 2, 0, 0);
+    slot.levitateRingMesh.scale.setScalar(0.45);
+    slot.levitateRingMat.opacity = 0.9;
+
+    slot.auraShellMesh.position.set(0, 0.9, 0);
+    slot.auraShellMesh.scale.set(0.75, 1.5, 0.75);
+    slot.auraShellMat.opacity = 0.36;
+
+    for (let m = 0; m < HOP_CRYSTAL_MOTE_COUNT; m++) {
+      const mt = slot.motes[m];
+      mt.angle = (m / HOP_CRYSTAL_MOTE_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      mt.radius = 0.38 + this.nextRand() * 0.45;
+      mt.speedY = 1.9 + this.nextRand() * 1.8;
+      mt.spin = (m % 2 === 0 ? 1 : -1) * (3.8 + this.nextRand() * 2.4);
+      mt.baseScale = 0.085 + this.nextRand() * 0.055;
+      mt.mesh.position.set(
+        Math.cos(mt.angle) * mt.radius,
+        0.1 + this.nextRand() * 0.5,
+        Math.sin(mt.angle) * mt.radius,
+      );
+      mt.mesh.scale.setScalar(mt.baseScale);
+      mt.material.opacity = 0.96;
+      mt.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -7965,6 +8920,10 @@ export class VFXManager {
     for (const eb of this.empBlasts) if (eb.active) count++;
     for (const wm of this.weaponMods) if (wm.active) count++;
     for (const fp of this.forecastPulses) if (fp.active) count++;
+    for (const jf of this.jetpackFlames) if (jf.active) count++;
+    for (const fs of this.flameStreams) if (fs.active) count++;
+    for (const ms of this.meteorStrikes) if (ms.active) count++;
+    for (const hc of this.hopCrystalAuras) if (hc.active) count++;
     return count;
   }
 
@@ -8164,6 +9123,30 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveJetpackFlameCount(): number {
+    let count = 0;
+    for (const jf of this.jetpackFlames) if (jf.active) count++;
+    return count;
+  }
+
+  public getActiveFlameStreamCount(): number {
+    let count = 0;
+    for (const fs of this.flameStreams) if (fs.active) count++;
+    return count;
+  }
+
+  public getActiveMeteorStrikeCount(): number {
+    let count = 0;
+    for (const ms of this.meteorStrikes) if (ms.active) count++;
+    return count;
+  }
+
+  public getActiveHopCrystalAuraCount(): number {
+    let count = 0;
+    for (const hc of this.hopCrystalAuras) if (hc.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -8318,6 +9301,22 @@ export class VFXManager {
     for (const fp of this.forecastPulses) {
       fp.active = false;
       fp.group.visible = false;
+    }
+    for (const jf of this.jetpackFlames) {
+      jf.active = false;
+      jf.group.visible = false;
+    }
+    for (const fs of this.flameStreams) {
+      fs.active = false;
+      fs.group.visible = false;
+    }
+    for (const ms of this.meteorStrikes) {
+      ms.active = false;
+      ms.group.visible = false;
+    }
+    for (const hc of this.hopCrystalAuras) {
+      hc.active = false;
+      hc.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

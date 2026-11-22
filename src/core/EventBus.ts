@@ -186,6 +186,10 @@ export interface GameEventMap {
   'vfx:emp_blast': { position: Vec3Like; radius: number };
   'vfx:weapon_mod': { position: Vec3Like; modId: WeaponModId };
   'vfx:forecast_pulse': { position: Vec3Like };
+  'vfx:jetpack_flame': { position: Vec3Like; direction: Vec3Like; intensity: number };
+  'vfx:flame_stream': { origin: Vec3Like; direction: Vec3Like; range: number };
+  'vfx:meteor_strike': { position: Vec3Like; radius: number };
+  'vfx:hop_crystal_aura': { position: Vec3Like };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

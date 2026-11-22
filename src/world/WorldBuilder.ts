@@ -1136,7 +1136,7 @@ function buildFrostpeakCitadel(ctx: BuildContext): void {
         float flow = sin(vUv.y * 26.0 + uTime * 8.5) * 0.5 + 0.5;
         float streaks = sin(vUv.x * 22.0) * 0.5 + 0.5;
         vec3 waterCol = mix(vec3(0.18, 0.78, 0.96), vec3(0.88, 0.98, 1.0), flow * 0.45 + streaks * 0.25);
-        float foam = smoothstep(0.18, 0.0, vUv.y) * 0.7;
+        float foam = (1.0 - smoothstep(0.0, 0.18, vUv.y)) * 0.7;
         waterCol = mix(waterCol, vec3(1.0), foam);
         gl_FragColor = vec4(waterCol, 0.78);
       }

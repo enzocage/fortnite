@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  ApexTrainState,
   BuildPiece,
   CampfireEntity,
   CapturePointEntity,
@@ -10,6 +11,7 @@ import type {
   ItemInstance,
   LaunchPadEntity,
   LootDrop,
+  MeteorCraterEntity,
   NpcSpecialistEntity,
   RiftEntity,
   SlurpBarrelEntity,
@@ -46,6 +48,7 @@ import {
   DIFFICULTY_PROFILES,
   VOLCANO_LAVA_CENTER_X,
   VOLCANO_LAVA_CENTER_Z,
+  computeAimPitch,
   computeBotSpread,
   findIncomingVehicleThreat,
   isInVolcanoLavaHazard,
@@ -55,11 +58,14 @@ import {
   selectBestWeaponForDistance,
   selectBestWeaponForRange,
   selectCapturePointTarget,
+  selectCloseQuartersWeapon,
   selectEscapeRift,
   selectExplosiveBarrelTarget,
   selectHealingItem,
   selectLaunchPadForRotation,
+  selectMeteorCraterTarget,
   selectThrowableForCombat,
+  selectTrainTarget,
   shouldBotBuildDefense,
   shouldBotDeployShieldBubble,
   updateAnimState,
@@ -4314,5 +4320,402 @@ describe('Wave 8 Neon Frontier: Team Rumble, Stealth Bush & Tactical Items', () 
     retaliateBot.inventory.ammo.medium = 90;
     updateBot(retaliateBot, stealthedFarCtx, 'standard', { x: 0, y: 175, z: 0 }, 25, 0.05, false);
     expect(retaliateBot.targetEnemyId).toBe('player');
+  });
+});
+
+describe('Wave 9 Skyforge Rising: Plasma Flamethrower, Jetpack Exclusion, Train/Crater AI & Airborne Pitch', () => {
+  it('scores plasma_flamethrower high in <16m CQB with extra weight near builds, drops off >=16m, and skips empty light ammo', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 120, medium: 90, shells: 20, heavy: 10, rockets: 0 };
+
+    // 1. In <16m CQB, epic plasma_flamethrower beats pump_shotgun, combat_smg, and ar
+    const cqbLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'epic', 30),
+      makeItem('pump_shotgun', 'epic', 5),
+      makeItem('combat_smg', 'epic', 30),
+      makeItem('plasma_flamethrower', 'epic', 60),
+    ];
+    expect(selectBestWeaponForRange(cqbLoadout, 10, fullAmmo)?.item.weaponId).toBe(
+      'plasma_flamethrower',
+    );
+    expect(brain.selectBestWeaponForRange(cqbLoadout, 14, fullAmmo)?.item.weaponId).toBe(
+      'plasma_flamethrower',
+    );
+    // At >=16m (16m..25m), AR takes over cleanly
+    expect(selectBestWeaponForRange(cqbLoadout, 16, fullAmmo)?.item.weaponId).toBe('ar');
+    expect(selectBestWeaponForRange(cqbLoadout, 24, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // 2. Extra weight near builds: rare/epic flamethrower yields to legendary heavy_shotgun in open field,
+    //    but decisively wins when builds are nearby at <16m!
+    const buildBreachLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('heavy_shotgun', 'legendary', 5),
+      makeItem('plasma_flamethrower', 'epic', 60),
+    ];
+    expect(selectBestWeaponForRange(buildBreachLoadout, 10, fullAmmo, false)?.item.weaponId).toBe(
+      'heavy_shotgun',
+    );
+    expect(selectBestWeaponForRange(buildBreachLoadout, 10, fullAmmo, true)?.item.weaponId).toBe(
+      'plasma_flamethrower',
+    );
+    const nearbyWall: BuildPiece = {
+      id: 'wall_target',
+      key: '0_3_2_N',
+      type: 'wall',
+      material: 'wood',
+      gx: 0,
+      gy: 3,
+      gz: 2,
+      dir: 'N',
+      rotation: 0,
+      hp: 150,
+      maxHp: 150,
+      targetMaxHp: 150,
+      buildProgress: 1,
+      ownerId: 'player',
+      editMask: 0,
+      editVariant: 'full',
+      createdAt: 1,
+    };
+    expect(
+      brain.selectBestWeaponForRange(buildBreachLoadout, 10, fullAmmo, {
+        buildPieces: [nearbyWall],
+        botPos: { x: 0, y: 10, z: 0 },
+        targetPos: { x: 0, y: 10, z: 10 },
+      })?.item.weaponId,
+    ).toBe('plasma_flamethrower');
+
+    // 3. Skips empty plasma_flamethrower when magAmmo=0 & light ammo=0
+    const noLight = { ...fullAmmo, light: 0 };
+    const emptyFlame: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('plasma_flamethrower', 'mythic', 0),
+    ];
+    expect(selectBestWeaponForRange(emptyFlame, 8, noLight)?.item.weaponId).toBe('ar');
+
+    // 4. Live combat integration: bot surrounded by enemy wood builds chooses plasma_flamethrower over legendary heavy_shotgun
+    const boxedTarget: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 10 },
+      eyePos: { x: 0, y: 11.55, z: 10 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const combatCtx = makeMockContext({
+      getCombatTargets: () => [boxedTarget],
+      getBuildPieces: () => [nearbyWall],
+    });
+    const flameBot = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      targetEnemyId: 'player',
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    flameBot.inventory.items[1] = makeItem('heavy_shotgun', 'legendary', 5);
+    flameBot.inventory.items[2] = makeItem('plasma_flamethrower', 'epic', 60);
+    flameBot.inventory.ammo.shells = 20;
+    flameBot.inventory.ammo.light = 120;
+
+    updateBot(flameBot, combatCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(combatCtx.firedCalls).toHaveLength(1);
+    expect(combatCtx.firedCalls[0].weaponId).toBe('plasma_flamethrower');
+  });
+
+  it('cleanly excludes jetpack from bullet-weapon firing slots, CQB bubble pushes, barrel shots, and render weaponId', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 90, medium: 90, shells: 16, heavy: 10, rockets: 0 };
+
+    // Even when magAmmo is non-zero in mocks, jetpack must NEVER be selected as an attack weapon
+    const jetpackOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('jetpack', 'epic', 30, 1),
+    ];
+    expect(selectBestWeaponForRange(jetpackOnly, 10, fullAmmo)).toBeNull();
+    expect(selectBestWeaponForDistance(jetpackOnly, 25, fullAmmo)).toBeNull();
+    expect(brain.selectBestWeaponForRange(jetpackOnly, 8, fullAmmo)).toBeNull();
+    expect(selectCloseQuartersWeapon(jetpackOnly, fullAmmo)).toBeNull();
+
+    // At melee distance (1.8m), falls back to pickaxe rather than jetpack
+    expect(selectBestWeaponForRange(jetpackOnly, 1.8, fullAmmo)?.item.weaponId).toBe('pickaxe');
+
+    // With jetpack + pistol, always picks pistol over jetpack
+    const jetpackAndPistol: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('jetpack', 'legendary', 100, 1),
+      makeItem('pistol', 'common', 16),
+    ];
+    expect(selectBestWeaponForRange(jetpackAndPistol, 12, fullAmmo)?.item.weaponId).toBe(
+      'pistol',
+    );
+
+    // Barrel targeting must never attempt to shoot an explosive barrel with a jetpack
+    const target: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 12 },
+      eyePos: { x: 0, y: 11.55, z: 12 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      isPlayer: true,
+    };
+    const barrel: ExplosiveBarrelEntity = {
+      id: 'barrel_1',
+      x: 0,
+      y: 10,
+      z: 10,
+      hp: 60,
+      maxHp: 60,
+      blastRadius: 6,
+      blastDamage: 75,
+      exploded: false,
+    };
+    const jetpackBot = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    jetpackBot.inventory.items[1] = makeItem('jetpack', 'epic', 100, 1);
+    jetpackBot.inventory.activeSlot = 1;
+    expect(
+      selectExplosiveBarrelTarget(jetpackBot, target, [barrel], () => true),
+    ).toBeNull();
+
+    // updateBot with activeSlot forcibly on jetpack must NEVER fire jetpack
+    const ctx = makeMockContext({ getCombatTargets: () => [target] });
+    updateBot(jetpackBot, ctx, 'sweaty', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(ctx.firedCalls.some((c) => c.weaponId === 'jetpack')).toBe(false);
+
+    // BotManager.getRenderStates() safely hides jetpack from weaponId while surfacing hasJetpack
+    const mgr = new BotManager(ctx, 'standard', 303);
+    mgr.spawnBots(1, 20);
+    const managedBot = mgr.getBots()[0];
+    managedBot.state = 'rotating';
+    managedBot.inventory.items[1] = makeItem('jetpack', 'epic', 0, 1);
+    managedBot.inventory.activeSlot = 1;
+    const render = mgr.getRenderStates().find((r) => r.id === managedBot.id)!;
+    expect(render.hasJetpack).toBe(true);
+    expect(render.weaponId).toBe('pickaxe');
+    mgr.dispose();
+  });
+
+  it('opportunistically navigates safely rotating bots toward unhacked Apex Express Train or available Meteor Craters', () => {
+    const brain = new BotBrain();
+    const makeTrain = (overrides: Partial<ApexTrainState> = {}): ApexTrainState => ({
+      active: true,
+      x: 42,
+      y: 10,
+      z: 0,
+      yaw: 0,
+      speed: 11.5,
+      t: 0.2,
+      trackPoints: [],
+      chestHacked: false,
+      chestHackProgress: 0,
+      chestCooldownSec: 0,
+      carPositions: [],
+      ...overrides,
+    });
+    const makeCrater = (overrides: Partial<MeteorCraterEntity> = {}): MeteorCraterEntity => ({
+      id: 'crater_1',
+      poiId: 'metro_towers',
+      x: 0,
+      y: 10,
+      z: 36,
+      radius: 7,
+      crystalAvailable: true,
+      crystalRespawnSec: 0,
+      ...overrides,
+    });
+
+    // 1. Selector checks: valid vs hacked/inactive/unavailable/out-of-range/in-storm
+    const safeBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    const storm = makeDefaultStorm({ currentCenterX: 0, currentCenterZ: 0, currentRadius: 150 });
+    expect(selectTrainTarget(safeBot, makeTrain(), storm, 10)?.x).toBe(42);
+    expect(brain.selectTrainTarget(safeBot, makeTrain({ chestHacked: true }), storm, 10)).toBeNull();
+    expect(selectTrainTarget(safeBot, makeTrain({ active: false }), storm, 10)).toBeNull();
+    expect(selectTrainTarget(safeBot, makeTrain({ x: 110 }), storm, 10)).toBeNull();
+    expect(
+      selectTrainTarget(
+        safeBot,
+        makeTrain({ x: 60 }),
+        makeDefaultStorm({ currentCenterX: 0, currentCenterZ: 0, currentRadius: 50 }),
+        10,
+      ),
+    ).toBeNull();
+
+    expect(selectMeteorCraterTarget(safeBot, [makeCrater()], storm, 10)?.id).toBe('crater_1');
+    expect(
+      brain.selectMeteorCraterTarget(
+        safeBot,
+        [makeCrater({ crystalAvailable: false })],
+        storm,
+        10,
+      ),
+    ).toBeNull();
+    expect(
+      selectMeteorCraterTarget(safeBot, [makeCrater({ z: 95 })], storm, 10),
+    ).toBeNull();
+
+    // 2. Bot in safe 'rotating' state steers toward active unhacked Train and stops chasing if hacked
+    const trainState = makeTrain({ x: 40, y: 10, z: 0 });
+    const trainCtx = makeMockContext({
+      storm,
+      getTrainState: () => trainState,
+    });
+    const trainBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    trainBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    for (let i = 0; i < 12; i++) {
+      updateBot(trainBot, trainCtx, 'standard', { x: 0, y: 175, z: 0 }, 20 + i * 0.1, 0.1, false);
+    }
+    expect(trainBot.moveTarget).toEqual({ x: 40, y: 10, z: 0 });
+    expect(trainBot.position.x).toBeGreaterThan(5);
+
+    // Once hacked, train is no longer targeted
+    trainState.chestHacked = true;
+    trainBot.moveTarget = { x: -50, y: 10, z: 0 };
+    updateBot(trainBot, trainCtx, 'standard', { x: 0, y: 175, z: 0 }, 22, 0.1, false);
+    expect(trainBot.moveTarget?.x).not.toBe(40);
+
+    // 3. Bot in safe 'rotating' state steers toward available Meteor Crater Hop Crystal
+    const craters = [makeCrater({ id: 'crater_near', x: 0, y: 10, z: 32 })];
+    const craterCtx = makeMockContext({
+      storm,
+      getTrainState: () => null,
+      getMeteorCraters: () => craters,
+    });
+    const craterBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+    });
+    craterBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+
+    for (let i = 0; i < 12; i++) {
+      updateBot(craterBot, craterCtx, 'standard', { x: 0, y: 175, z: 0 }, 20 + i * 0.1, 0.1, false);
+    }
+    expect(craterBot.moveTarget).toEqual({ x: 0, y: 10, z: 32 });
+    expect(craterBot.position.z).toBeGreaterThan(4);
+
+    // 4. Bot outside Storm (needRotateStorm) ignores nearby Crater & Train and rotates back to safe zone
+    const stormCtx = makeMockContext({
+      storm: makeDefaultStorm({
+        currentCenterX: 0,
+        currentCenterZ: 0,
+        currentRadius: 80,
+        nextCenterX: 0,
+        nextCenterZ: 0,
+        nextRadius: 40,
+      }),
+      getTrainState: () => makeTrain({ x: 135, y: 10, z: 0 }),
+      getMeteorCraters: () => [makeCrater({ x: 130, y: 10, z: 0 })],
+    });
+    const stormBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 110, y: 10, z: 0 }, // outside 80m storm radius!
+      grounded: true,
+    });
+    stormBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    updateBot(stormBot, stormCtx, 'standard', { x: 0, y: 175, z: 0 }, 25, 0.1, false);
+    expect(stormBot.position.x).toBeLessThan(110);
+    expect(stormBot.moveTarget?.x ?? 999).toBeLessThan(100);
+  });
+
+  it('tracks elevated airborne jetpacking and low-gravity targets accurately with vertical aim pitch', () => {
+    const brain = new BotBrain();
+
+    // 1. Direct computeAimPitch handles moderate & steep overhead angles (> 1.2 rad) cleanly
+    const botEye: Vec3Like = { x: 0, y: 11.55, z: 0 };
+    const steepAirborneEye: Vec3Like = { x: 0, y: 29.55, z: 3 }; // dy=18, horiz=3 -> atan2(18,3) = 1.4056 rad
+    const steepPitch = computeAimPitch(botEye, steepAirborneEye);
+    expect(steepPitch).toBeGreaterThan(1.35);
+    expect(steepPitch).toBeCloseTo(Math.atan2(18, 3), 3);
+    expect(brain.computeAimPitch(botEye, { x: 0, y: 27.55, z: 0 })).toBeCloseTo(1.44, 3);
+    expect(computeAimPitch({ x: 0, y: 35, z: 0 }, { x: 0, y: 10, z: 4 })).toBeLessThan(-1.3);
+
+    // 2. Grounded bot engages airborne jetpacking player (+16m up, 12m away -> ~52 deg pitch)
+    const jetpackingTarget: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 26, z: 12 },
+      eyePos: { x: 0, y: 27.55, z: 12 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+      velocity: { x: 0, y: 7, z: 0 },
+    };
+    const ctx = makeMockContext({ getCombatTargets: () => [jetpackingTarget] });
+    const mgr = new BotManager(ctx, 'sweaty', 909);
+    mgr.spawnBots(1, 20);
+    const bot = mgr.getBots()[0];
+    bot.state = 'combat';
+    bot.position = { x: 0, y: 10, z: 0 };
+    bot.yaw = 0;
+    bot.grounded = true;
+    bot.targetEnemyId = 'player';
+    bot.reactionTimer = 0;
+    bot.fireCooldown = 0;
+    bot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    bot.inventory.ammo.medium = 90;
+
+    mgr.update(0.05, 12.0, { x: 0, y: 175, z: 0 }, jetpackingTarget.position);
+    expect(ctx.firedCalls).toHaveLength(1);
+    expect(ctx.firedCalls[0].aimDir.y).toBeGreaterThan(0.75);
+    expect(bot.pitch).toBeGreaterThan(0.85);
+    expect(mgr.getRenderStates()[0].pitch).toBeCloseTo(bot.pitch, 5);
+
+    // 3. Steep overhead jetpacker (horiz=2.5m, +18m above) overcomes old 1.2 rad ceiling & fires upward!
+    ctx.firedCalls.length = 0;
+    jetpackingTarget.position = { x: 0, y: 28, z: 2.5 };
+    jetpackingTarget.eyePos = { x: 0, y: 29.55, z: 2.5 };
+    bot.fireCooldown = 0;
+    mgr.update(0.05, 12.2, { x: 0, y: 175, z: 0 }, jetpackingTarget.position);
+    expect(ctx.firedCalls).toHaveLength(1);
+    expect(bot.pitch).toBeGreaterThan(1.3);
+    expect(ctx.firedCalls[0].aimDir.y).toBeGreaterThan(0.95);
+
+    // 4. Directly overhead target (dx=0, dz=0) fires straight up without yawDiff stall
+    ctx.firedCalls.length = 0;
+    jetpackingTarget.position = { x: 0, y: 24, z: 0 };
+    jetpackingTarget.eyePos = { x: 0, y: 25.55, z: 0 };
+    bot.yaw = Math.PI; // facing away, but target is directly overhead!
+    bot.fireCooldown = 0;
+    mgr.update(0.05, 12.4, { x: 0, y: 175, z: 0 }, jetpackingTarget.position);
+    expect(ctx.firedCalls).toHaveLength(1);
+    expect(ctx.firedCalls[0].aimDir.y).toBeGreaterThan(0.99);
+    expect(bot.pitch).toBeGreaterThan(1.4);
+
+    // 5. After airborne target disappears / combat ends, pitch smoothly returns toward 0
+    jetpackingTarget.alive = false;
+    bot.targetEnemyId = null;
+    bot.lastKnownEnemyPos = null;
+    for (let i = 1; i <= 15; i++) {
+      mgr.update(0.1, 13.0 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    }
+    expect(bot.state).not.toBe('combat');
+    expect(Math.abs(bot.pitch)).toBeLessThan(0.05);
+
+    mgr.dispose();
   });
 });

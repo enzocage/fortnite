@@ -373,6 +373,32 @@ export interface FutureStormRing {
   radius: number;
 }
 
+export interface ApexTrainState {
+  active: boolean;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  speed: number;
+  t: number;
+  trackPoints: Vec3Like[];
+  chestHacked: boolean;
+  chestHackProgress: number;
+  chestCooldownSec: number;
+  carPositions: Array<{ x: number; y: number; z: number; yaw: number }>;
+}
+
+export interface MeteorCraterEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  crystalAvailable: boolean;
+  crystalRespawnSec: number;
+}
+
 export interface SupplyDrop {
   id: string;
   x: number;

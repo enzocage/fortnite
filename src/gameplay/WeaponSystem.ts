@@ -70,6 +70,8 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   shield_bubble: 'pickaxe_swing',
   port_a_bunker: 'bunker_deploy',
   emp_grenade: 'emp_blast',
+  jetpack: 'jetpack_ignite',
+  plasma_flamethrower: 'flame_burst',
   mini_shield: 'ui_click',
   shield_potion: 'ui_click',
   bandages: 'ui_click',
@@ -258,6 +260,19 @@ interface PendingBurst {
   interval: number;
 }
 
+interface ActiveBurnState {
+  target: CombatActor;
+  attacker: CombatActor;
+  weaponId: WeaponId;
+  rarity: Rarity;
+  isPlayerAttacker: boolean;
+  burnDps: number;
+  remainingSec: number;
+  tickAccumulator: number;
+  dmgAccumulator: number;
+  onFlameDamage?: (damage: number) => void;
+}
+
 export class WeaponSystem {
   private collision: CollisionSystem;
   private building: BuildingSystem;
@@ -286,6 +301,7 @@ export class WeaponSystem {
   private projectiles: ActiveProjectile[] = [];
   private pendingBursts: PendingBurst[] = [];
   private shieldBubbles: ShieldBubbleState[] = [];
+  private activeBurns = new Map<string, ActiveBurnState>();
   private nextProjId = 1;
   private nextBubbleId = 1;
   private dmgNumSeq = 1;
@@ -421,6 +437,22 @@ export class WeaponSystem {
       }
     }
     return active;
+  }
+
+  isActorBurning(actorId: string): boolean {
+    const burn = this.activeBurns.get(actorId);
+    if (!burn || burn.remainingSec <= 1e-6) return false;
+    const live = this.actorsProvider?.().find((a) => a.id === actorId);
+    if (live && (!live.alive || live.hp <= 0)) return false;
+    return true;
+  }
+
+  clearActorBurn(actorId: string): void {
+    this.activeBurns.delete(actorId);
+  }
+
+  getActiveBurnCount(): number {
+    return this.activeBurns.size;
   }
 
   private raycastActors(
@@ -618,7 +650,7 @@ export class WeaponSystem {
 
   fireWeapon(params: FireWeaponParams): FireWeaponResult {
     const def = WEAPONS[params.item.weaponId];
-    if (!def || def.isConsumable) {
+    if (!def || def.isConsumable || def.isJetpack || params.item.weaponId === 'jetpack') {
       return { fired: false, shotsHit: 0, headshots: 0, damageDealt: 0 };
     }
 
@@ -634,6 +666,10 @@ export class WeaponSystem {
 
     if (def.isGrappler || params.item.weaponId === 'grappler') {
       return this.executeGrapplerShot(params, aimDir);
+    }
+
+    if (def.isFlamethrower || params.item.weaponId === 'plasma_flamethrower') {
+      return this.executeFlamethrowerBurst(params, aimDir);
     }
 
     if (def.isProjectile) {
@@ -3056,6 +3092,508 @@ export class WeaponSystem {
     };
   }
 
+  private registerActorBurn(params: FireWeaponParams, target: CombatActor): void {
+    if (!target.alive || target.hp <= 0) return;
+    const def = WEAPONS[params.item.weaponId];
+    const burnDps = def.burnDps ?? 8;
+    const burnDuration = def.burnDurationSec ?? 3.0;
+    const prev = this.activeBurns.get(target.id);
+    const paramCb = params.onFlameDamage;
+    const actorCb = params.actor.onFlameDamage;
+    const onFlameDamage =
+      paramCb && actorCb && paramCb !== actorCb
+        ? (dmg: number) => {
+            paramCb(dmg);
+            actorCb(dmg);
+          }
+        : (paramCb ?? actorCb);
+
+    this.activeBurns.set(target.id, {
+      target,
+      attacker: params.actor,
+      weaponId: params.item.weaponId,
+      rarity: params.item.rarity,
+      isPlayerAttacker: params.isPlayer,
+      burnDps,
+      remainingSec: burnDuration,
+      tickAccumulator: prev ? prev.tickAccumulator : 0,
+      dmgAccumulator: prev ? prev.dmgAccumulator : 0,
+      onFlameDamage,
+    });
+  }
+
+  private executeFlamethrowerBurst(
+    params: FireWeaponParams,
+    aimDir: Vec3Like,
+  ): FireWeaponResult {
+    const def = WEAPONS[params.item.weaponId];
+    const vBridge = params.vehicleBridge ?? this.vehicleBridge;
+    const sBridge = params.stationBridge ?? this.stationBridge;
+    const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
+    const chBridge = params.chapterBridge ?? this.chapterBridge;
+    const odBridge = params.overdriveBridge ?? this.overdriveBridge;
+    const mods = resolveWeaponMods(params.item, params.weaponMods);
+    const modFx = getWeaponModEffects(mods);
+    const magCap = getItemMagCapacity(params.item);
+    const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
+    const hasFirstAssault = Boolean(params.hasFirstAssault ?? params.actor.hasFirstAssault);
+    const hasCombatMedallion = Boolean(
+      params.hasCombatMedallion ?? params.actor.hasCombatMedallion,
+    );
+    const firstAssaultBoost =
+      hasFirstAssault && magCap > 0 && params.item.magAmmo === magCap;
+    const firstAssaultMult = firstAssaultBoost ? 1.25 : 1.0;
+    const combatMedallionMult = hasCombatMedallion ? 1.12 : 1.0;
+    const demolisherMult = hasDemolisher ? 1.3 : 1.0;
+
+    params.onAmmoConsumed?.();
+
+    const muzzle = params.muzzlePos ?? params.origin;
+    this.eventBus.emit('sound:play', {
+      id: SHOT_SOUND_MAP[params.item.weaponId],
+      position: muzzle,
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:flame_stream', {
+      origin: muzzle,
+      direction: aimDir,
+      range: def.range,
+    });
+    this.eventBus.emit('audio:noise', {
+      position: params.origin,
+      kind: 'gunfire',
+      sourceId: params.actor.id,
+      radius: 75 * modFx.noiseRadiusMult,
+    });
+
+    const rarityMult = RARITY_MULTIPLIER[params.item.rarity] ?? 1.0;
+    const baseStructDmg = Math.max(
+      1,
+      Math.round(def.structureDamage * rarityMult * demolisherMult),
+    );
+    const woodMult = def.woodDamageMult ?? 3.5;
+    const range = def.range;
+    const coneRadiusEnd = Math.max(1.5, def.splashRadius || 2.2);
+    const props = this.propsBridge.getProps();
+
+    const upRef =
+      Math.abs(aimDir.y) > 0.92 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    const rx = aimDir.y * upRef.z - aimDir.z * upRef.y;
+    const ry = aimDir.z * upRef.x - aimDir.x * upRef.z;
+    const rz = aimDir.x * upRef.y - aimDir.y * upRef.x;
+    const rLen = Math.hypot(rx, ry, rz) || 1;
+    const right = { x: rx / rLen, y: ry / rLen, z: rz / rLen };
+    const up = {
+      x: right.y * aimDir.z - right.z * aimDir.y,
+      y: right.z * aimDir.x - right.x * aimDir.z,
+      z: right.x * aimDir.y - right.y * aimDir.x,
+    };
+
+    const fanOffsets: ReadonlyArray<[number, number]> = [
+      [0, 0],
+      [-0.06, 0],
+      [0.06, 0],
+      [-0.12, 0],
+      [0.12, 0],
+      [0, 0.07],
+      [0, -0.07],
+    ];
+
+    const hitActorIds = new Set<string>();
+    const hitStructKeys = new Set<string>();
+    const destroyedDrones: SupplyDroneDamageResult[] = [];
+    let shotsHit = 0;
+    let headshots = 0;
+    let totalDamageDealt = 0;
+
+    const actorTeamId = params.actorTeamId ?? params.actor.teamId;
+
+    for (let f = 0; f < fanOffsets.length; f++) {
+      const [u, v] = fanOffsets[f];
+      const rayDir =
+        u === 0 && v === 0
+          ? aimDir
+          : normalizeVec({
+              x: aimDir.x + right.x * u + up.x * v,
+              y: aimDir.y + right.y * u + up.y * v,
+              z: aimDir.z + right.z * u + up.z * v,
+            });
+
+      const bubbleHit = this.raycastShieldBubbles(params.origin, rayDir, range);
+      const maxDist = bubbleHit ? bubbleHit.distance : range;
+
+      const worldHit = this.collision.raycastWorld(params.origin, rayDir, maxDist, {
+        checkBuilds: true,
+        checkProps: true,
+        props,
+      });
+      const entityMaxDist = worldHit.hit ? worldHit.distance : maxDist;
+      const barrelMaxDist =
+        worldHit.hit && worldHit.targetType === 'static'
+          ? Math.min(maxDist, worldHit.distance + 0.06)
+          : entityMaxDist;
+      const tankerMaxDist =
+        worldHit.hit &&
+        worldHit.targetType === 'static' &&
+        worldHit.targetId?.includes('tanker')
+          ? maxDist
+          : worldHit.hit && worldHit.targetType === 'static'
+            ? Math.min(maxDist, worldHit.distance + 0.12)
+            : entityMaxDist;
+
+      const actorHit = this.raycastActors(
+        params.origin,
+        rayDir,
+        entityMaxDist,
+        params.actor.id,
+        params.actor.squadId,
+        actorTeamId,
+      );
+      const droneHit = this.raycastSupplyDrones(
+        params.origin,
+        rayDir,
+        entityMaxDist,
+        odBridge,
+      );
+      const llamaHit = this.raycastLlamas(params.origin, rayDir, entityMaxDist);
+      const vehicleHit = this.raycastVehicles(
+        params.origin,
+        rayDir,
+        entityMaxDist,
+        vBridge,
+        params.actor.id,
+      );
+      const barrelHit = this.raycastSlurpBarrels(
+        params.origin,
+        rayDir,
+        barrelMaxDist,
+        sBridge,
+      );
+      const expBarrelHit = this.raycastExplosiveBarrels(
+        params.origin,
+        rayDir,
+        barrelMaxDist,
+        rcBridge,
+      );
+      const tankerHit = this.raycastSlurpTankers(
+        params.origin,
+        rayDir,
+        tankerMaxDist,
+        chBridge,
+      );
+
+      let chosenType:
+        | 'actor'
+        | 'drone'
+        | 'llama'
+        | 'vehicle'
+        | 'barrel'
+        | 'exp_barrel'
+        | 'tanker'
+        | 'world'
+        | 'bubble'
+        | 'none' = 'none';
+      let chosenDist = maxDist;
+      if (worldHit.hit && worldHit.distance <= chosenDist) {
+        chosenType = 'world';
+        chosenDist = worldHit.distance;
+      }
+      if (
+        expBarrelHit &&
+        expBarrelHit.distance <=
+          chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+      ) {
+        chosenType = 'exp_barrel';
+        chosenDist = expBarrelHit.distance;
+      }
+      if (
+        barrelHit &&
+        barrelHit.distance <=
+          chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+      ) {
+        chosenType = 'barrel';
+        chosenDist = barrelHit.distance;
+      }
+      if (
+        tankerHit &&
+        chBridge &&
+        ((chosenType === 'world' &&
+          worldHit.targetType === 'static' &&
+          worldHit.targetId?.includes('tanker')) ||
+          tankerHit.distance <=
+            chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.12 : 0))
+      ) {
+        chosenType = 'tanker';
+        chosenDist = tankerHit.distance;
+      }
+      if (vehicleHit && vehicleHit.distance <= chosenDist) {
+        chosenType = 'vehicle';
+        chosenDist = vehicleHit.distance;
+      }
+      if (llamaHit && llamaHit.distance <= chosenDist) {
+        chosenType = 'llama';
+        chosenDist = llamaHit.distance;
+      }
+      if (droneHit && droneHit.distance <= chosenDist) {
+        chosenType = 'drone';
+        chosenDist = droneHit.distance;
+      }
+      if (actorHit && actorHit.distance <= chosenDist) {
+        chosenType = 'actor';
+        chosenDist = actorHit.distance;
+      }
+      if (chosenType === 'none' && bubbleHit) {
+        chosenType = 'bubble';
+      }
+
+      if (chosenType === 'actor' && actorHit) {
+        if (!hitActorIds.has(actorHit.actor.id)) {
+          hitActorIds.add(actorHit.actor.id);
+          const rawDmg =
+            computeWeaponDamage(
+              params.item.weaponId,
+              params.item.rarity,
+              actorHit.distance,
+              actorHit.isHeadshot,
+            ) *
+            firstAssaultMult *
+            combatMedallionMult;
+          const ev = this.applyActorDamage(
+            params.actor,
+            actorHit.actor,
+            params.item.weaponId,
+            params.item.rarity,
+            rawDmg,
+            actorHit.isHeadshot,
+            actorHit.point,
+            actorHit.distance,
+            params.isPlayer,
+          );
+          shotsHit += 1;
+          if (actorHit.isHeadshot) headshots += 1;
+          totalDamageDealt += ev.damage;
+          this.registerActorBurn(params, actorHit.actor);
+        }
+      } else if (chosenType === 'drone' && droneHit && odBridge) {
+        const key = `drone:${droneHit.drone.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          const droneRes = odBridge.damageSupplyDrone(droneHit.drone.id, baseStructDmg);
+          if (droneRes) {
+            this.eventBus.emit('vfx:impact', {
+              position: droneHit.point,
+              normal: droneHit.normal,
+              material: 'metal',
+            });
+            shotsHit += 1;
+            totalDamageDealt += baseStructDmg;
+            if (droneRes.destroyed) {
+              destroyedDrones.push(droneRes);
+              params.onDroneDestroyed?.(droneRes);
+              this.onDroneDestroyed?.(droneRes);
+            }
+          }
+        }
+      } else if (chosenType === 'exp_barrel' && expBarrelHit && rcBridge) {
+        const key = `exp:${expBarrelHit.barrel.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.applyExplosiveBarrelHit(
+            rcBridge,
+            expBarrelHit.barrel.id,
+            baseStructDmg,
+            expBarrelHit.point,
+            expBarrelHit.normal,
+            params.actor,
+            params.isPlayer,
+          );
+        }
+      } else if (chosenType === 'barrel' && barrelHit && sBridge) {
+        const key = `slurp:${barrelHit.barrel.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.applySlurpBarrelHit(
+            sBridge,
+            barrelHit.barrel.id,
+            baseStructDmg,
+            barrelHit.point,
+            barrelHit.normal,
+            params.actor,
+          );
+        }
+      } else if (chosenType === 'tanker' && tankerHit && chBridge) {
+        const key = `tanker:${tankerHit.tanker.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.applySlurpTankerHit(
+            chBridge,
+            tankerHit.tanker.id,
+            baseStructDmg,
+            tankerHit.point,
+            tankerHit.normal,
+          );
+        }
+      } else if (chosenType === 'llama' && llamaHit) {
+        const key = `llama:${llamaHit.llama.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          this.propsBridge.damageLlama?.(
+            llamaHit.llama.id,
+            baseStructDmg,
+            llamaHit.point,
+          );
+          this.eventBus.emit('vfx:impact', {
+            position: llamaHit.point,
+            normal: llamaHit.normal,
+            material: 'wood',
+          });
+        }
+      } else if (chosenType === 'vehicle' && vehicleHit) {
+        const key = `veh:${vehicleHit.vehicle.id}`;
+        if (!hitStructKeys.has(key)) {
+          hitStructKeys.add(key);
+          vBridge?.damageVehicle(
+            vehicleHit.vehicle.id,
+            baseStructDmg,
+            vehicleHit.point,
+          );
+          this.eventBus.emit('vfx:impact', {
+            position: vehicleHit.point,
+            normal: vehicleHit.normal,
+            material: 'metal',
+          });
+        }
+      } else if (chosenType === 'world' && worldHit.hit) {
+        if (worldHit.targetType === 'build' && worldHit.targetId) {
+          const key = `build:${worldHit.targetId}`;
+          if (!hitStructKeys.has(key)) {
+            hitStructKeys.add(key);
+            const piece = this.building.getPieceById(worldHit.targetId);
+            const isWood = (piece?.material ?? worldHit.material) === 'wood';
+            const dmg = isWood
+              ? Math.max(1, Math.round(baseStructDmg * woodMult))
+              : baseStructDmg;
+            this.applyWorldHitDamage(worldHit, dmg);
+          }
+        } else if (worldHit.targetType === 'prop' && worldHit.targetId) {
+          const key = `prop:${worldHit.targetId}`;
+          if (!hitStructKeys.has(key)) {
+            hitStructKeys.add(key);
+            this.applyWorldHitDamage(worldHit, baseStructDmg);
+          }
+        } else if (f === 0) {
+          this.applyWorldHitDamage(worldHit, baseStructDmg);
+        }
+      } else if (chosenType === 'bubble' && bubbleHit && f === 0) {
+        this.eventBus.emit('vfx:impact', {
+          position: bubbleHit.point,
+          normal: bubbleHit.normal,
+          material: 'shield',
+        });
+        this.eventBus.emit('sound:play', {
+          id: 'shield_hit',
+          position: bubbleHit.point,
+          spatial: true,
+        });
+      }
+    }
+
+    // Cone proximity sweep for enemy actors inside the short-range thermal plume
+    const actors = this.actorsProvider ? this.actorsProvider() : [];
+    for (let i = 0; i < actors.length; i++) {
+      const actor = actors[i];
+      if (
+        !actor.alive ||
+        hitActorIds.has(actor.id) ||
+        isFriendlyCombatActor(
+          params.actor.id,
+          params.actor.squadId,
+          actorTeamId,
+          actor,
+        )
+      ) {
+        continue;
+      }
+
+      const midY = actor.position.y + actor.height * 0.5;
+      const toCenterX = actor.position.x - params.origin.x;
+      const toCenterY = midY - params.origin.y;
+      const toCenterZ = actor.position.z - params.origin.z;
+      const along =
+        toCenterX * aimDir.x + toCenterY * aimDir.y + toCenterZ * aimDir.z;
+      if (along < -actor.radius || along > range + actor.radius) continue;
+
+      const tClamped = clamp(along, 0, range);
+      const rayPtX = params.origin.x + aimDir.x * tClamped;
+      const rayPtY = params.origin.y + aimDir.y * tClamped;
+      const rayPtZ = params.origin.z + aimDir.z * tClamped;
+      const targetY = clamp(rayPtY, actor.position.y, actor.position.y + actor.height);
+      const perpDist = Math.hypot(
+        rayPtX - actor.position.x,
+        rayPtY - targetY,
+        rayPtZ - actor.position.z,
+      );
+      const coneRad = lerp(0.65, coneRadiusEnd, clamp(tClamped / range, 0, 1));
+      if (perpDist > coneRad + actor.radius) continue;
+
+      const targetPt = { x: actor.position.x, y: targetY, z: actor.position.z };
+      const distToTarget = dist3D(params.origin, targetPt);
+      if (distToTarget > range + actor.radius) continue;
+      if (this.isBlockedByShieldBubble(params.origin, targetPt)) continue;
+
+      const losDir =
+        distToTarget > 1e-5
+          ? {
+              x: (targetPt.x - params.origin.x) / distToTarget,
+              y: (targetPt.y - params.origin.y) / distToTarget,
+              z: (targetPt.z - params.origin.z) / distToTarget,
+            }
+          : aimDir;
+      const blocked = this.collision.raycastWorld(
+        params.origin,
+        losDir,
+        Math.max(0.1, distToTarget - actor.radius),
+        { checkBuilds: true, checkProps: false },
+      );
+      if (blocked.hit) continue;
+
+      hitActorIds.add(actor.id);
+      const rawDmg =
+        computeWeaponDamage(
+          params.item.weaponId,
+          params.item.rarity,
+          distToTarget,
+          false,
+        ) *
+        firstAssaultMult *
+        combatMedallionMult;
+      const ev = this.applyActorDamage(
+        params.actor,
+        actor,
+        params.item.weaponId,
+        params.item.rarity,
+        rawDmg,
+        false,
+        targetPt,
+        distToTarget,
+        params.isPlayer,
+      );
+      shotsHit += 1;
+      totalDamageDealt += ev.damage;
+      this.registerActorBurn(params, actor);
+    }
+
+    return {
+      fired: true,
+      shotsHit,
+      headshots,
+      damageDealt: totalDamageDealt,
+      bloomScale: modFx.bloomMult,
+      recoilScale: modFx.recoilMult,
+      ...(destroyedDrones.length > 0 ? { destroyedDrones } : {}),
+    };
+  }
+
   private emitBlastCameraShake(impactPos: Vec3Like, baseIntensity: number, isPlayer: boolean): void {
     let shouldEmit = isPlayer;
     let intensity = baseIntensity;
@@ -4017,12 +4555,70 @@ export class WeaponSystem {
         }
       }
     }
+
+    // 3. Tick active Plasma Flamethrower burn DOTs
+    if (this.activeBurns.size > 0) {
+      const burnDt = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 10) : 0;
+      if (burnDt > 0) {
+        const liveActors = this.actorsProvider ? this.actorsProvider() : null;
+        for (const [targetId, burn] of Array.from(this.activeBurns.entries())) {
+          const liveTarget =
+            liveActors?.find((a) => a.id === targetId) ?? burn.target;
+          if (!liveTarget.alive || liveTarget.hp <= 0) {
+            this.activeBurns.delete(targetId);
+            continue;
+          }
+
+          const step = Math.min(burnDt, burn.remainingSec);
+          burn.remainingSec = Math.max(0, burn.remainingSec - step);
+          burn.tickAccumulator += step;
+          burn.dmgAccumulator += burn.burnDps * step;
+
+          const shouldTick =
+            burn.tickAccumulator >= 0.25 - 1e-6 || burn.remainingSec <= 1e-6;
+          if (shouldTick) {
+            const tickDmg =
+              burn.remainingSec <= 1e-6
+                ? Math.round(burn.dmgAccumulator)
+                : Math.floor(burn.dmgAccumulator + 1e-6);
+            while (burn.tickAccumulator >= 0.25 - 1e-6) {
+              burn.tickAccumulator = Math.max(0, burn.tickAccumulator - 0.25);
+            }
+            if (tickDmg >= 1) {
+              burn.dmgAccumulator = Math.max(0, burn.dmgAccumulator - tickDmg);
+              const hitPoint = {
+                x: liveTarget.position.x,
+                y: liveTarget.position.y + liveTarget.height * 0.6,
+                z: liveTarget.position.z,
+              };
+              const ev = this.applyActorDamage(
+                burn.attacker,
+                liveTarget,
+                burn.weaponId,
+                burn.rarity,
+                tickDmg,
+                false,
+                hitPoint,
+                dist3D(burn.attacker.position, liveTarget.position),
+                burn.isPlayerAttacker,
+              );
+              burn.onFlameDamage?.(ev.damage);
+            }
+          }
+
+          if (burn.remainingSec <= 1e-6 || !liveTarget.alive || liveTarget.hp <= 0) {
+            this.activeBurns.delete(targetId);
+          }
+        }
+      }
+    }
   }
 
   clear(): void {
     this.projectiles = [];
     this.pendingBursts = [];
     this.shieldBubbles = [];
+    this.activeBurns.clear();
     this.explodingBarrelIds.clear();
     this.rupturingTankerIds.clear();
     this.twinMagSlowUids.clear();

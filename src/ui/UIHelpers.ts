@@ -13,6 +13,7 @@ import {
   WORLD_SIZE,
 } from '../core';
 import type {
+  ApexTrainState,
   AugmentDef,
   AugmentId,
   BiomeType,
@@ -32,6 +33,7 @@ import type {
   MatchSummary,
   MedallionDef,
   MedallionId,
+  MeteorCraterEntity,
   ModBenchEntity,
   Rarity,
   RebootVanEntity,
@@ -1180,7 +1182,8 @@ function classifyHighlightTone(
   if (
     label.includes('CROWN') ||
     label.includes('VICTORY') ||
-    label.includes('MEDALLION')
+    label.includes('MEDALLION') ||
+    label.includes('HEIST')
   ) {
     return 'gold';
   }
@@ -1195,7 +1198,7 @@ function classifyHighlightTone(
 
 /**
  * Combines explicit `summary.highlights` with auto-derived Match Highlight badges
- * (e.g. CROWNED, REBOOT HERO, DRONE HUNTER, TRAP MASTER, SHARPSHOOTER, BUILDER PRO).
+ * (e.g. CROWNED, TRAIN HEIST, SKY RIDER, REBOOT HERO, DRONE HUNTER, TRAP MASTER, SHARPSHOOTER, BUILDER PRO).
  */
 export function deriveMatchHighlightBadges(
   summary: MatchSummary,
@@ -1231,6 +1234,12 @@ export function deriveMatchHighlightBadges(
 
   if (summary.crownedVictory) {
     pushBadge('CROWNED', 'gold');
+  }
+  if ((summary.trainChestsHacked ?? 0) >= 1) {
+    pushBadge('TRAIN HEIST', 'gold');
+  }
+  if ((summary.hopCrystalsUsed ?? 0) >= 1) {
+    pushBadge('SKY RIDER', 'cyan');
   }
   if ((summary.reboots ?? 0) >= 1) {
     pushBadge('REBOOT HERO', 'cyan');
@@ -1443,6 +1452,248 @@ export function drawFrontierMapOverlay(
       ctx.lineWidth = 1.2;
       ctx.fill();
       ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+export interface WorldSkyforgeOverlay {
+  train: ApexTrainState | null;
+  craters: MeteorCraterEntity[];
+}
+
+export function resolveSkyforgeOverlayArgs(
+  trainOrOverlay: ApexTrainState | null | Partial<WorldSkyforgeOverlay> = null,
+  craters: MeteorCraterEntity[] = [],
+): WorldSkyforgeOverlay {
+  if (trainOrOverlay === null || trainOrOverlay === undefined) {
+    return {
+      train: null,
+      craters: Array.isArray(craters) ? craters : [],
+    };
+  }
+  if (
+    typeof trainOrOverlay === 'object' &&
+    ('train' in trainOrOverlay || 'craters' in trainOrOverlay) &&
+    !('trackPoints' in trainOrOverlay) &&
+    !('carPositions' in trainOrOverlay)
+  ) {
+    const ov = trainOrOverlay as Partial<WorldSkyforgeOverlay>;
+    return {
+      train: ov.train ?? null,
+      craters: Array.isArray(ov.craters) ? ov.craters : [],
+    };
+  }
+  return {
+    train: trainOrOverlay as ApexTrainState,
+    craters: Array.isArray(craters) ? craters : [],
+  };
+}
+
+/**
+ * Draws Wave-9 Skyforge overlay items (closed Apex Express railway loop,
+ * live moving Apex Express Train carriage icon, and glowing violet Rift Meteor Craters)
+ * without fillText, strokeText, or ellipse (Node test mock safe).
+ */
+export function drawSkyforgeMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  overlay: WorldSkyforgeOverlay,
+  trainPosFallback?: HUDState['trainPos'],
+  nowMs = performance.now(),
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.006);
+  const train = overlay?.train ?? null;
+
+  // 1. Closed Apex Express Railway Loop
+  if (train && Array.isArray(train.trackPoints) && train.trackPoints.length >= 2) {
+    const pxPts = train.trackPoints.map((pt) => toPx(pt.x, pt.z));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of pxPts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    if (!(maxX < -24 || minX > size + 24 || maxY < -24 || minY > size + 24)) {
+      const traceClosedTrack = () => {
+        ctx.beginPath();
+        ctx.moveTo(pxPts[0].x, pxPts[0].y);
+        for (let i = 1; i < pxPts.length; i++) {
+          ctx.lineTo(pxPts[i].x, pxPts[i].y);
+        }
+        ctx.closePath();
+      };
+
+      ctx.save();
+      traceClosedTrack();
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.58)';
+      ctx.lineWidth = 4.8;
+      ctx.stroke();
+
+      traceClosedTrack();
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.78)';
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+
+      ctx.setLineDash?.([4, 6]);
+      traceClosedTrack();
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.75)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.setLineDash?.([]);
+      ctx.restore();
+    }
+  }
+
+  // 2. Glowing Violet Rift Meteor Craters & Hop Crystals
+  const craters = Array.isArray(overlay?.craters) ? overlay.craters : [];
+  for (const crater of craters) {
+    if (!crater || !Number.isFinite(crater.x) || !Number.isFinite(crater.z)) {
+      continue;
+    }
+    const cp = toPx(crater.x, crater.z);
+    const radPx = Math.max(7.2, Math.min(18, (crater.radius || 8) * pxPerMeter));
+    if (
+      cp.x + radPx < -16 ||
+      cp.x - radPx > size + 16 ||
+      cp.y + radPx < -16 ||
+      cp.y - radPx > size + 16
+    ) {
+      continue;
+    }
+    const ready = Boolean(crater.crystalAvailable);
+    ctx.save();
+    ctx.translate(cp.x, cp.y);
+
+    if (ready) {
+      ctx.beginPath();
+      ctx.arc(0, 0, radPx + 1.8 + pulse * 1.6, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(192, 132, 252, 0.72)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(0, 0, radPx, 0, Math.PI * 2);
+    ctx.fillStyle = ready ? 'rgba(59, 7, 100, 0.88)' : 'rgba(30, 27, 46, 0.78)';
+    ctx.fill();
+    ctx.strokeStyle = ready ? '#c084fc' : '#64748b';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Central Hop Crystal shard diamond
+    ctx.beginPath();
+    ctx.moveTo(0, -4.8);
+    ctx.lineTo(3.5, 0);
+    ctx.lineTo(0, 4.8);
+    ctx.lineTo(-3.5, 0);
+    ctx.closePath();
+    ctx.fillStyle = ready ? '#e879f9' : '#64748b';
+    ctx.fill();
+    ctx.strokeStyle = ready ? '#f5d0fe' : '#94a3b8';
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+
+    if (ready) {
+      ctx.beginPath();
+      ctx.arc(0, -1.2, 1.3, 0, Math.PI * 2);
+      ctx.fillStyle = '#fae8ff';
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // 3. Live Moving Apex Express Train Carriage Icon
+  const useFallback =
+    trainPosFallback &&
+    Number.isFinite(trainPosFallback.x) &&
+    Number.isFinite(trainPosFallback.z);
+  const loco = useFallback
+    ? trainPosFallback
+    : train && train.active !== false && Number.isFinite(train.x) && Number.isFinite(train.z)
+      ? train
+      : null;
+
+  if (loco) {
+    // Trailing cargo cars when aligned with live locomotive position
+    const carsAligned =
+      train &&
+      train.active !== false &&
+      Array.isArray(train.carPositions) &&
+      (!useFallback || Math.hypot(loco.x - train.x, loco.z - train.z) < 2.0);
+    if (carsAligned && train.carPositions.length > 0) {
+      for (const car of train.carPositions) {
+        if (!car || !Number.isFinite(car.x) || !Number.isFinite(car.z)) continue;
+        if (Math.hypot(car.x - loco.x, car.z - loco.z) < 1.5) continue;
+        const carp = toPx(car.x, car.z);
+        if (carp.x < -16 || carp.x > size + 16 || carp.y < -16 || carp.y > size + 16) {
+          continue;
+        }
+        ctx.save();
+        ctx.translate(carp.x, carp.y);
+        if (Number.isFinite(car.yaw)) {
+          ctx.rotate?.(-car.yaw);
+        }
+        ctx.fillStyle = '#334155';
+        ctx.fillRect(-4.2, -2.5, 8.4, 5.0);
+        ctx.fillStyle = loco.chestHacked ? '#38bdf8' : '#ffd000';
+        ctx.fillRect(-2.4, -1.2, 4.8, 2.4);
+        ctx.restore();
+      }
+    }
+
+    const tp = toPx(loco.x, loco.z);
+    if (!(tp.x < -18 || tp.x > size + 18 || tp.y < -18 || tp.y > size + 18)) {
+      const hacked = Boolean(loco.chestHacked);
+      ctx.save();
+      ctx.translate(tp.x, tp.y);
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 9.2 + pulse * 1.6, 0, Math.PI * 2);
+      ctx.strokeStyle = hacked
+        ? 'rgba(34, 211, 238, 0.6)'
+        : 'rgba(255, 208, 0, 0.78)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 8.0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+      ctx.fill();
+      ctx.strokeStyle = hacked ? '#22d3ee' : '#ffd000';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      if (Number.isFinite(loco.yaw)) {
+        ctx.rotate?.(-loco.yaw);
+      }
+
+      // Armored Locomotive Carriage Body + Cowcatcher + Headlamp
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(-5.0, -3.0, 7.8, 6.0);
+      ctx.beginPath();
+      ctx.moveTo(2.8, -3.0);
+      ctx.lineTo(5.6, 0);
+      ctx.lineTo(2.8, 3.0);
+      ctx.closePath();
+      ctx.fillStyle = hacked ? '#38bdf8' : '#f59e0b';
+      ctx.fill();
+
+      ctx.fillStyle = '#22d3ee';
+      ctx.fillRect(-3.6, -1.2, 4.8, 2.4);
+
+      ctx.beginPath();
+      ctx.arc(4.6, 0, 1.3, 0, Math.PI * 2);
+      ctx.fillStyle = '#fef08a';
+      ctx.fill();
+
       ctx.restore();
     }
   }

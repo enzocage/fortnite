@@ -151,7 +151,8 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
     weaponId === 'boom_bow' ||
     weaponId === 'railgun' ||
     weaponId === 'rocket_launcher' ||
-    weaponId === 'mythic_blade_rifle'
+    weaponId === 'mythic_blade_rifle' ||
+    weaponId === 'plasma_flamethrower'
   );
 }
 
@@ -469,6 +470,28 @@ export class CharacterAnimator {
       rig.setMedallionCount(state.medallionCount, data.time);
     } else if (rig.getMedallionCount() > 0) {
       rig.setMedallionCount(rig.getMedallionCount(), data.time);
+    }
+
+    // 11. Sync Skyforge Back-Mounted Jetpack, Low-Gravity Boot Aura & Burning Ember tint
+    if (state.hasJetpack !== undefined || state.isJetpackThrusting !== undefined) {
+      const hasPack =
+        state.hasJetpack !== undefined ? Boolean(state.hasJetpack) : rig.hasJetpackEquipped();
+      const thrusting = hasPack && Boolean(state.isJetpackThrusting);
+      rig.setJetpackState(hasPack, thrusting, data.time);
+    } else if (rig.hasJetpackEquipped()) {
+      rig.setJetpackState(true, rig.isJetpackFlameVisible(), data.time);
+    }
+
+    if (state.hasLowGravityBuff !== undefined) {
+      rig.setLowGravityBuff(Boolean(state.hasLowGravityBuff), data.time);
+    } else if (rig.hasLowGravityBuff()) {
+      rig.setLowGravityBuff(true, data.time);
+    }
+
+    if (state.isBurning !== undefined) {
+      rig.setBurningState(Boolean(state.isBurning), data.time);
+    } else if (rig.isBurningActive()) {
+      rig.setBurningState(true, data.time);
     }
   }
 
@@ -1123,7 +1146,7 @@ export class CharacterAnimator {
       return;
     }
 
-    if (isConsumable(weapon)) {
+    if (isConsumable(weapon) || weapon === 'jetpack') {
       p.rShRx = -0.78;
       p.rShRy = 0.32;
       p.rElRx = -0.82;

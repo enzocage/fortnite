@@ -137,6 +137,14 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   bush_rustle: true,
   rumble_respawn: true,
   rumble_lead_change: true,
+  train_horn: true,
+  train_hack_complete: true,
+  jetpack_ignite: true,
+  flame_burst: true,
+  meteor_whistle: true,
+  meteor_impact: true,
+  hop_crystal_consume: true,
+  low_g_jump: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -467,14 +475,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 120 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 128 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(120);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(128);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -1281,6 +1289,150 @@ describe('SoundSynthesizer', () => {
     const sparseDest = sparseFilterCtx.createGain();
     const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
     for (const id of wave8Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 9 SFX with strictly positive ramps >= 0.0001 across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave9Ids: SoundEventId[] = [
+      'train_horn',
+      'train_hack_complete',
+      'jetpack_ignite',
+      'flame_burst',
+      'meteor_whistle',
+      'meteor_impact',
+      'hop_crystal_consume',
+      'low_g_jump',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave9Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (
+        id === 'train_hack_complete' ||
+        id === 'meteor_whistle' ||
+        id === 'meteor_impact' ||
+        id === 'hop_crystal_consume'
+      ) {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.flame_burst).toBeGreaterThan(0.28);
+    expect(durations.flame_burst).toBeLessThan(0.45);
+    expect(durations.low_g_jump).toBeGreaterThan(0.35);
+    expect(durations.jetpack_ignite).toBeGreaterThan(0.38);
+    expect(durations.hop_crystal_consume).toBeGreaterThan(0.55);
+    expect(durations.train_hack_complete).toBeGreaterThan(0.75);
+    expect(durations.train_horn).toBeGreaterThan(0.8);
+    expect(durations.meteor_whistle).toBeGreaterThan(0.95);
+    expect(durations.meteor_impact).toBeGreaterThan(1.0);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave9Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave9Ids) {
       expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
     }
     sparseSynth.dispose();
@@ -2859,5 +3011,263 @@ describe('AudioEngine', () => {
     expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
 
     engine.dispose();
+  });
+
+  it('assigns explicit Wave-9 priorities, max hear distances, spatial culling, and manages updateJetpackLoop cleanly', async () => {
+    expect(getSoundPriority('train_horn')).toBe(3);
+    expect(getSoundPriority('train_hack_complete')).toBe(3);
+    expect(getSoundPriority('meteor_whistle')).toBe(3);
+    expect(getSoundPriority('meteor_impact')).toBe(3);
+    expect(getSoundPriority('jetpack_ignite')).toBe(2);
+    expect(getSoundPriority('flame_burst')).toBe(2);
+    expect(getSoundPriority('hop_crystal_consume')).toBe(2);
+    expect(getSoundPriority('low_g_jump')).toBe(1);
+
+    expect(getMaxHearDistance('low_g_jump')).toBe(75);
+    expect(getMaxHearDistance('hop_crystal_consume')).toBe(95);
+    expect(getMaxHearDistance('flame_burst')).toBe(125);
+    expect(getMaxHearDistance('jetpack_ignite')).toBe(165);
+    expect(getMaxHearDistance('train_hack_complete')).toBe(220);
+    expect(getMaxHearDistance('train_horn')).toBe(300);
+    expect(getMaxHearDistance('meteor_whistle')).toBe(320);
+    expect(getMaxHearDistance('meteor_impact')).toBe(380);
+
+    const bus = new EventBus();
+
+    // 1. Headless safety (no AudioContext)
+    const headless = new AudioEngine(bus);
+    expect(() => headless.updateJetpackLoop(true, 1.0)).not.toThrow();
+    expect(() => headless.updateJetpackLoop(true, Number.NaN)).not.toThrow();
+    expect(() => headless.updateJetpackLoop(true, -0.5)).not.toThrow();
+    expect(() => headless.updateJetpackLoop(true, 3.2)).not.toThrow();
+    expect(() => headless.updateJetpackLoop(false, 0)).not.toThrow();
+    expect(headless.getJetpackLoopState()).toEqual({
+      active: false,
+      fuelRatio: 0,
+      freqHz: 0,
+      gain: 0,
+    });
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    // 2. Suspended or muted contexts do not spawn jetpack oscillators
+    const suspendedCtx = new MockAudioContext();
+    suspendedCtx.state = 'suspended';
+    const suspendedEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => suspendedCtx as unknown as AudioContext,
+    });
+    suspendedEngine.updateJetpackLoop(true, 0.85);
+    expect(suspendedCtx.oscillators.length).toBe(0);
+    expect(suspendedEngine.getJetpackLoopState().active).toBe(false);
+    suspendedEngine.dispose();
+
+    const mutedCtx = new MockAudioContext();
+    const mutedEngine = new AudioEngine(
+      bus,
+      { ...DEFAULT_SETTINGS, sfxVolume: 0 },
+      { contextFactory: () => mutedCtx as unknown as AudioContext },
+    );
+    await mutedEngine.unlock();
+    mutedEngine.updateJetpackLoop(true, 0.75);
+    expect(mutedCtx.oscillators.length).toBe(0);
+    expect(mutedEngine.getJetpackLoopState().active).toBe(false);
+    mutedEngine.dispose();
+
+    // 3. Active AudioContext: spatial culling, jetpack loop lifecycle, fuel modulation, pause/mute/dispose cleanup
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'low_g_jump', position: { x: 70, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'hop_crystal_consume', position: { x: 90, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'flame_burst', position: { x: 120, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'jetpack_ignite', position: { x: 160, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'train_hack_complete', position: { x: 215, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'train_horn', position: { x: 290, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'meteor_whistle', position: { x: 310, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'meteor_impact', position: { x: 370, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'low_g_jump', position: { x: 85, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'hop_crystal_consume', position: { x: 105, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'flame_burst', position: { x: 135, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'jetpack_ignite', position: { x: 175, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'train_hack_complete', position: { x: 235, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'train_horn', position: { x: 315, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'meteor_whistle', position: { x: 335, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'meteor_impact', position: { x: 395, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // Clear active one-shots so jetpack loop voice counts are isolated
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+
+    const oscBeforeJetpack = mockCtx.oscillators.length;
+    const srcBeforeJetpack = mockCtx.bufferSources.length;
+
+    // Lazy start at 0 fuelRatio
+    engine.updateJetpackLoop(true, 0);
+    const lowFuelState = engine.getJetpackLoopState();
+    expect(lowFuelState.active).toBe(true);
+    expect(lowFuelState.fuelRatio).toBe(0);
+    expect(lowFuelState.freqHz).toBeCloseTo(105, 1);
+    expect(lowFuelState.gain).toBeGreaterThan(0);
+    expect(engine.getActiveVoiceCount()).toBe(1);
+    expect(mockCtx.oscillators.length - oscBeforeJetpack).toBe(2);
+    expect(mockCtx.bufferSources.length - srcBeforeJetpack).toBe(1);
+    const jetpackOscs = mockCtx.oscillators.slice(oscBeforeJetpack);
+    const jetpackSrc = mockCtx.bufferSources[srcBeforeJetpack];
+    expect(jetpackOscs.every((o) => o.started && !o.stopped)).toBe(true);
+    expect(jetpackSrc.loop).toBe(true);
+    expect(jetpackSrc.started).toBe(true);
+    expect(jetpackSrc.stopped).toBe(false);
+
+    // Calling repeatedly with identical fuelRatio allocates zero extra nodes
+    for (let i = 0; i < 40; i++) {
+      engine.updateJetpackLoop(true, 0);
+    }
+    expect(mockCtx.oscillators.length - oscBeforeJetpack).toBe(2);
+    expect(mockCtx.bufferSources.length - srcBeforeJetpack).toBe(1);
+
+    // Fuel ratio modulation across 0 -> 0.5 -> 1.0 scales thrust pitch & gain cleanly
+    engine.updateJetpackLoop(true, 0.5);
+    const midFuelState = engine.getJetpackLoopState();
+    expect(midFuelState.freqHz).toBeGreaterThan(lowFuelState.freqHz);
+    expect(midFuelState.gain).toBeGreaterThan(lowFuelState.gain);
+    expect(jetpackOscs[0].frequency.value).toBeCloseTo(midFuelState.freqHz, 2);
+    expect(jetpackOscs[1].frequency.value).toBeCloseTo(midFuelState.freqHz * 1.85, 2);
+
+    engine.updateJetpackLoop(true, 1.0);
+    const fullFuelState = engine.getJetpackLoopState();
+    expect(fullFuelState.freqHz).toBeGreaterThan(midFuelState.freqHz);
+    expect(fullFuelState.freqHz).toBeCloseTo(200, 1);
+    expect(fullFuelState.gain).toBeGreaterThan(midFuelState.gain);
+
+    // Clamps extreme/NaN fuelRatio values safely without allocating extra nodes
+    engine.updateJetpackLoop(true, 4.5);
+    expect(engine.getJetpackLoopState().fuelRatio).toBe(1);
+    expect(engine.getJetpackLoopState().freqHz).toBeCloseTo(200, 1);
+    engine.updateJetpackLoop(true, Number.NaN);
+    expect(engine.getJetpackLoopState().fuelRatio).toBe(0);
+    expect(engine.getJetpackLoopState().freqHz).toBeCloseTo(105, 1);
+    expect(mockCtx.oscillators.length - oscBeforeJetpack).toBe(2);
+
+    // Clean stop on active=false
+    engine.updateJetpackLoop(false, 0);
+    expect(engine.getJetpackLoopState()).toEqual({
+      active: false,
+      fuelRatio: 0,
+      freqHz: 0,
+      gain: 0,
+    });
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(jetpackOscs.every((o) => o.stopped && o.disconnected)).toBe(true);
+    expect(jetpackSrc.stopped).toBe(true);
+    expect(jetpackSrc.disconnected).toBe(true);
+
+    // Restart, then setPaused(true) tears down active jetpack loop cleanly
+    engine.updateJetpackLoop(true, 0.75);
+    expect(engine.getJetpackLoopState().active).toBe(true);
+    engine.setPaused(true);
+    expect(engine.getJetpackLoopState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    engine.updateJetpackLoop(true, 0.9);
+    expect(engine.getJetpackLoopState().active).toBe(false);
+
+    // Unpause, restart, then mute stops loop cleanly
+    engine.setPaused(false);
+    engine.updateJetpackLoop(true, 0.8);
+    expect(engine.getJetpackLoopState().active).toBe(true);
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0 });
+    expect(engine.getJetpackLoopState().active).toBe(false);
+
+    // Unmute, restart, and verify dispose() stops everything cleanly and post-dispose calls are no-ops
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0.85 });
+    engine.updateJetpackLoop(true, 0.65);
+    expect(engine.getJetpackLoopState().active).toBe(true);
+    const oscBeforeDispose = mockCtx.oscillators.length;
+    engine.dispose();
+    expect(engine.getJetpackLoopState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.slice(oscBeforeJetpack).every((o) => o.stopped)).toBe(true);
+    engine.updateJetpackLoop(true, 0.9);
+    expect(mockCtx.oscillators.length).toBe(oscBeforeDispose);
+
+    // Polyphony stays bounded even under rapid Wave-9 SFX bursts
+    const burstCtx = new MockAudioContext();
+    const burstEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => burstCtx as unknown as AudioContext,
+    });
+    await burstEngine.unlock();
+    for (let i = 0; i < 30; i++) {
+      burstEngine.playSound({ id: 'meteor_impact' });
+    }
+    expect(burstEngine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+    burstEngine.dispose();
+
+    // 4. Minimal mocked Web Audio context without setTargetAtTime, createBiquadFilter, or createBufferSource
+    class MinimalLinearParam {
+      value = 0;
+      setValueAtTime(v: number): this {
+        this.value = v;
+        return this;
+      }
+      linearRampToValueAtTime(v: number): this {
+        this.value = v;
+        return this;
+      }
+      cancelScheduledValues(): this {
+        return this;
+      }
+    }
+    const minOscs: Array<{
+      frequency: MinimalLinearParam;
+      started: boolean;
+      stopped: boolean;
+      start: () => void;
+      stop: () => void;
+      connect: () => void;
+      disconnect: () => void;
+    }> = [];
+    const minCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => ({ gain: new MinimalLinearParam(), connect: () => {}, disconnect: () => {} }),
+      createOscillator: () => {
+        const o = {
+          type: 'sine',
+          frequency: new MinimalLinearParam(),
+          started: false,
+          stopped: false,
+          start() {
+            this.started = true;
+          },
+          stop() {
+            this.stopped = true;
+          },
+          connect() {},
+          disconnect() {},
+        };
+        minOscs.push(o);
+        return o;
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const fallbackEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => minCtx,
+    });
+    await fallbackEngine.unlock();
+    expect(() => fallbackEngine.updateJetpackLoop(true, 0.8)).not.toThrow();
+    expect(fallbackEngine.getJetpackLoopState().active).toBe(true);
+    expect(minOscs.length).toBe(2);
+    expect(minOscs[0].frequency.value).toBeGreaterThan(105);
+    expect(() => fallbackEngine.updateJetpackLoop(false, 0)).not.toThrow();
+    expect(minOscs.every((o) => o.stopped)).toBe(true);
+    fallbackEngine.dispose();
   });
 });

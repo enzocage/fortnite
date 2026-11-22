@@ -568,6 +568,8 @@ export class BotManager {
         riftCooldown: 0,
         riftTargetId: null,
         captureTargetId: null,
+        craterTargetId: null,
+        craterDwellTimer: 0,
       };
 
       this.bots.push(bot);
@@ -756,6 +758,8 @@ export class BotManager {
         riftCooldown: 0,
         riftTargetId: null,
         captureTargetId: null,
+        craterTargetId: null,
+        craterDwellTimer: 0,
       };
 
       this.bots.push(boss);
@@ -950,6 +954,8 @@ export class BotManager {
       riftCooldown: 0,
       riftTargetId: null,
       captureTargetId: null,
+      craterTargetId: null,
+      craterDwellTimer: 0,
     };
 
     this.bots.push(partner);
@@ -1203,6 +1209,8 @@ export class BotManager {
       riftCooldown: 0,
       riftTargetId: null,
       captureTargetId: null,
+      craterTargetId: null,
+      craterDwellTimer: 0,
       isAlly: true,
       allyRole: npc.role,
       allyAbilityCooldown: 0,
@@ -1325,6 +1333,7 @@ export class BotManager {
     partner.animState = 'glide';
     partner.position = { x: spawnX, y: spawnY, z: spawnZ };
     partner.velocity = { x: 0, y: -3.5, z: 0 };
+    partner.pitch = 0;
     partner.grounded = false;
     partner.gliderOpen = true;
     partner.gliderFactor = 0.5;
@@ -1334,6 +1343,8 @@ export class BotManager {
     partner.isFiring = false;
     partner.isBuilding = false;
     partner.isGrinding = false;
+    partner.craterTargetId = null;
+    partner.craterDwellTimer = 0;
     partner.emoteId = null;
     partner.moveSpeed = 0;
     partner.recoilKick = 0;
@@ -1847,6 +1858,7 @@ export class BotManager {
     bot.bleedOutHp = DBNO_MAX_HP;
     bot.hp = DBNO_MAX_HP;
     bot.shield = 0;
+    bot.pitch = 0;
     bot.moveSpeed = 0;
     bot.isFiring = false;
     bot.isAiming = false;
@@ -1854,6 +1866,8 @@ export class BotManager {
     bot.isSprinting = false;
     bot.isCrouching = false;
     bot.isGrinding = false;
+    bot.craterTargetId = null;
+    bot.craterDwellTimer = 0;
     bot.burstQueue = 0;
     bot.reloadTimer = 0;
     bot.healTimer = 0;
@@ -2143,11 +2157,14 @@ export class BotManager {
     bot.isReviving = false;
     bot.reviveProgress = 0;
     bot.reviveTargetId = null;
+    bot.pitch = 0;
     bot.moveSpeed = 0;
     bot.isFiring = false;
     bot.isAiming = false;
     bot.isBuilding = false;
     bot.isGrinding = false;
+    bot.craterTargetId = null;
+    bot.craterDwellTimer = 0;
     bot.gliderOpen = false;
     bot.gliderFactor = 0;
 
@@ -2558,6 +2575,7 @@ export class BotManager {
     bot.state = 'skydiving';
     bot.animState = 'skydive';
     bot.grounded = false;
+    bot.pitch = 0;
     bot.gliderOpen = false;
     bot.gliderFactor = 0;
     bot.isCrouching = false;
@@ -2566,6 +2584,8 @@ export class BotManager {
     bot.isFiring = false;
     bot.isBuilding = false;
     bot.isGrinding = false;
+    bot.craterTargetId = null;
+    bot.craterDwellTimer = 0;
     bot.emoteId = null;
     bot.moveSpeed = 0;
     bot.recoilKick = 0;
@@ -2626,6 +2646,9 @@ export class BotManager {
   getRenderStates(): BotRenderState[] {
     return this.bots.map((bot) => {
       const activeItem = bot.inventory.items[bot.inventory.activeSlot];
+      const hasJetpack = bot.inventory.items.some((it) => it?.weaponId === 'jetpack');
+      const displayWeaponId: WeaponId =
+        activeItem && activeItem.weaponId !== 'jetpack' ? activeItem.weaponId : 'pickaxe';
       const meds = bot.medallions ? [...bot.medallions] : [];
       const medallionCount = Math.max(meds.length, bot.medallionCount ?? 0);
       const isKnocked = Boolean(bot.isKnocked || bot.state === 'knocked');
@@ -2647,7 +2670,8 @@ export class BotManager {
         yaw: bot.yaw,
         pitch: bot.pitch,
         animState: bot.animState,
-        weaponId: activeItem ? activeItem.weaponId : 'pickaxe',
+        weaponId: displayWeaponId,
+        hasJetpack,
         isAiming: bot.isAiming,
         isFiring: bot.isFiring,
         isBuilding: bot.isBuilding,

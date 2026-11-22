@@ -1,5 +1,6 @@
 import type {
   AmmoType,
+  ApexTrainState,
   AugmentId,
   BuildPiece,
   BuildPieceType,
@@ -22,6 +23,7 @@ import type {
   LootLlamaEntity,
   MaterialType,
   MedallionId,
+  MeteorCraterEntity,
   ModBenchEntity,
   NpcSpecialistEntity,
   Rarity,
@@ -218,6 +220,24 @@ export interface WorldFrontierBridge {
   isInsideStealthBush(pos: Vec3Like): StealthBushEntity | null;
 }
 
+export interface WorldSkyforgeBridge {
+  getTrainState(): ApexTrainState | null;
+  getTrainPlatformSupport(
+    pos: Vec3Like,
+  ): { deckY: number; deltaX: number; deltaZ: number } | null;
+  isNearTrainChest(pos: Vec3Like, radius?: number): boolean;
+  advanceTrainChestHack(
+    dt: number,
+    actorId: string,
+  ): { completed: boolean; progress: number; lootPos: Vec3Like } | null;
+  getMeteorCraters(): MeteorCraterEntity[];
+  findNearbyHopCrystal(
+    pos: Vec3Like,
+    radius?: number,
+  ): MeteorCraterEntity | null;
+  consumeHopCrystal(id: string): { ok: boolean; position: Vec3Like } | null;
+}
+
 export interface EmpDetonationReport {
   attackerId: string;
   isPlayer: boolean;
@@ -315,6 +335,7 @@ export interface CombatActor {
   onDamage?: (ev: DamageEvent) => void;
   onHeal?: (hpAdded: number, shieldAdded: number) => void;
   onImpulse?: (impulse: Vec3Like, grantFallImmunity: boolean) => void;
+  onFlameDamage?: (damage: number) => void;
 }
 
 export interface RaycastOptions {
@@ -369,6 +390,7 @@ export interface FireWeaponParams {
   onDroneDestroyed?: (res: SupplyDroneDamageResult) => void;
   onBunkerDeployed?: (report: BunkerDeploymentReport) => void;
   onEmpHit?: (report: EmpDetonationReport) => void;
+  onFlameDamage?: (damage: number) => void;
 }
 
 export interface FireWeaponResult {
@@ -405,6 +427,9 @@ export interface PlayerMatchStats {
   modsInstalled?: number;
   bunkersDeployed?: number;
   empHits?: number;
+  trainChestsHacked?: number;
+  hopCrystalsUsed?: number;
+  flameDamage?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -504,4 +529,8 @@ export interface PlayerHudSnapshot {
   isStealthed?: boolean;
   hasStormForecast?: boolean;
   activeWeaponMods?: WeaponModId[];
+  jetpackFuel?: number | null;
+  isJetpackThrusting?: boolean;
+  lowGravityRemainingSec?: number | null;
+  trainHackProgress?: number | null;
 }

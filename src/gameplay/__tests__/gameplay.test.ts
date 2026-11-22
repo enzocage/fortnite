@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type {
+  ApexTrainState,
   AugmentId,
   BiomeType,
   CampfireEntity,
@@ -21,6 +22,7 @@ import type {
   LootLlamaEntity,
   MatchQuest,
   MedallionId,
+  MeteorCraterEntity,
   ModBenchEntity,
   NpcSpecialistEntity,
   POIDef,
@@ -57,6 +59,11 @@ import {
   GRID_XZ,
   GRID_Y,
   GRIND_RAIL_SPEED,
+  JETPACK_BURN_RATE,
+  JETPACK_MAX_FUEL,
+  JETPACK_RECHARGE_RATE,
+  LOW_GRAVITY_DURATION_SEC,
+  LOW_GRAVITY_SCALE,
   MAX_GOLD_BARS,
   MAX_MATS,
   PLAYER_CROUCH_HEIGHT,
@@ -69,6 +76,7 @@ import {
   STARTING_GOLD_BARS,
   TEAM_RUMBLE_RESPAWN_SEC,
   TEAM_RUMBLE_TARGET_SCORE,
+  TRAIN_HACK_DURATION_SEC,
   UPGRADE_COSTS,
   WEAPONS,
   WEAPON_MODS,
@@ -108,6 +116,7 @@ import {
   type WorldFrontierBridge,
   type WorldOverdriveBridge,
   type WorldRiftCaptureBridge,
+  type WorldSkyforgeBridge,
   type WorldStationBridge,
 } from '../index';
 
@@ -6288,5 +6297,521 @@ describe('Wave 8 Gameplay Systems (Weapon Mods, Port-A-Bunker, EMP Grenade, Fore
     expect(augments.getIntervalSec()).toBe(AUGMENT_INTERVAL_BLITZ);
     augments.update(AUGMENT_INTERVAL_BLITZ, AUGMENT_INTERVAL_BLITZ);
     expect(augments.getPendingChoices()).not.toBeNull();
+  });
+});
+
+describe('Wave 9 Gameplay Systems (Skyforge Jetpack, Plasma Flamethrower, Hop Crystals, Apex Express Train)', () => {
+  function setupWave9Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave9Tester');
+    player.setPhase('playing');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  it('powers Skyforge Jetpack airborne Jump & active-slot LMB thrust, fuel burn/recharge, VFX/SFX, and fall damage immunity', () => {
+    expect(WEAPON_SOUND_MAP.jetpack).toBe('jetpack_ignite');
+    expect(WEAPON_SOUND_MAP.plasma_flamethrower).toBe('flame_burst');
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+
+    const { bus, player } = setupWave9Harness();
+    const sounds: SoundEventId[] = [];
+    const flameVfx: Array<{ position: Vec3Like; direction: Vec3Like; intensity: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:jetpack_flame', (ev) => flameVfx.push(ev));
+
+    // Without Jetpack in inventory -> null fuel & false flags
+    expect(player.getHudSnapshot().jetpackFuel).toBeNull();
+    expect(player.getHudSnapshot().isJetpackThrusting).toBe(false);
+    expect(player.getCharacterRenderState().hasJetpack).toBe(false);
+
+    // Equip Jetpack in slot 2 while holding Pickaxe in slot 1
+    player.getInventory().addItem({
+      uid: 'jp_1',
+      weaponId: 'jetpack',
+      rarity: 'epic',
+      magAmmo: 0,
+      stackCount: 1,
+    });
+    expect(player.getHudSnapshot().jetpackFuel).toBe(JETPACK_MAX_FUEL);
+    expect(player.getCharacterRenderState().hasJetpack).toBe(true);
+
+    // Hold Jump while airborne (even when another slot is active) -> thrusts upward & burns fuel
+    player.pressKey('Space');
+    let t = 0;
+    let peakY = 0;
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      peakY = Math.max(peakY, player.getPosition().y);
+    }
+    expect(peakY).toBeGreaterThan(4.5);
+    expect(player.getHudSnapshot().isJetpackThrusting).toBe(true);
+    expect(player.getCharacterRenderState().isJetpackThrusting).toBe(true);
+    expect(player.getHudSnapshot().jetpackFuel!).toBeCloseTo(
+      JETPACK_MAX_FUEL - JETPACK_BURN_RATE * 1.0,
+      1,
+    );
+    expect(sounds).toContain('jetpack_ignite');
+    expect(flameVfx.length).toBeGreaterThanOrEqual(1);
+    expect(player.isFallImmune()).toBe(true);
+
+    // Release Jump at high altitude (~20m) and fall all the way down -> fallImmune cancels fall damage
+    player.releaseKey('Space');
+    player.teleport({ x: 0, y: 20, z: 0 });
+    player.setJetpackFuel(80);
+    player.pressKey('Space'); // thrust briefly mid-air
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('Space');
+    expect(player.isFallImmune()).toBe(true);
+
+    for (let i = 0; i < 80; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getPosition().y).toBeCloseTo(0, 1);
+    expect(player.getHealth()).toBe(100);
+    expect(sounds).not.toContain('fall_damage');
+
+    // Recharges at JETPACK_RECHARGE_RATE * dt when not thrusting
+    player.setJetpackFuel(20);
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.0s
+    }
+    expect(player.getHudSnapshot().jetpackFuel!).toBeCloseTo(
+      20 + JETPACK_RECHARGE_RATE * 1.0,
+      1,
+    );
+
+    // Holding LMB while 'jetpack' slot is active launches straight off the ground
+    player.pressKey('Digit2'); // select jetpack slot
+    expect(player.getHudSnapshot().activeWeaponId).toBe('jetpack');
+    const fuelBeforeLmb = player.getHudSnapshot().jetpackFuel!;
+    player.setMouseButton(0, true);
+    for (let i = 0; i < 16; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 0.8s
+    }
+    player.setMouseButton(0, false);
+    expect(player.getPosition().y).toBeGreaterThan(0.8);
+    expect(player.getHudSnapshot().jetpackFuel!).toBeLessThan(fuelBeforeLmb);
+    expect(player.getStats().shotsFired).toBe(0);
+  });
+
+  it("fires Dragon's Breath Plasma Flamethrower with 3.5x wood burn, flame_stream VFX, and 8 DPS x 3.0s burn DOT", () => {
+    const { bus, building, weapons, player } = setupWave9Harness();
+    const sounds: SoundEventId[] = [];
+    const flameStreams: Array<{ origin: Vec3Like; direction: Vec3Like; range: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:flame_stream', (ev) => flameStreams.push(ev));
+
+    // 1. 3.5x woodDamageMult vs brick BuildPiece
+    const woodWall = building.placePieceForEntity('bot', 'wall', 'wood', 0, 0, -1, 'N', 0)!;
+    const brickWall = building.placePieceForEntity('bot', 'wall', 'brick', 2, 0, -1, 'N', 0)!;
+    woodWall.hp = 150;
+    brickWall.hp = 300;
+    const flameItem: ItemInstance = {
+      uid: 'ft_1',
+      weaponId: 'plasma_flamethrower',
+      rarity: 'epic',
+      magAmmo: 60,
+      stackCount: 1,
+    };
+
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: flameItem,
+      origin: { x: 2, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: flameItem,
+      origin: { x: 10, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+
+    const woodDmg = 150 - woodWall.hp;
+    const brickDmg = 300 - brickWall.hp;
+    expect(brickDmg).toBe(Math.round(WEAPONS.plasma_flamethrower.structureDamage * RARITY_MULTIPLIER.epic));
+    expect(woodDmg).toBe(Math.round(brickDmg * (WEAPONS.plasma_flamethrower.woodDamageMult ?? 3.5)));
+    expect(sounds).toContain('flame_burst');
+    expect(flameStreams.length).toBe(2);
+    expect(flameStreams[0].range).toBe(WEAPONS.plasma_flamethrower.range);
+
+    // 2. Cone actor hit + 8 DPS x 3.0s burn DOT (24 DOT damage) + onFlameDamage + stats.flameDamage
+    // First confirm unbroken brick wall at (gx=2, x=8..12, z=-4) blocks flame behind it
+    const enemyBlockedByWall: CombatActor = {
+      id: 'bot_flame_blocked',
+      name: 'WallBlocked',
+      position: { x: 10, y: 0, z: -10 },
+      eyePos: { x: 10, y: 1.6, z: -10 },
+      hp: 100,
+      shield: 0,
+      maxHp: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const enemyInRange: CombatActor = {
+      id: 'bot_flame_1',
+      name: 'FlameTarget',
+      position: { x: 20.9, y: 0, z: -10 }, // slightly off-center inside cone (<= 18m)
+      eyePos: { x: 20.9, y: 1.6, z: -10 },
+      hp: 100,
+      shield: 0,
+      maxHp: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      onDamage: () => {},
+    };
+    const enemyOutOfRange: CombatActor = {
+      id: 'bot_flame_far',
+      name: 'FarSafeTarget',
+      position: { x: 20, y: 0, z: -22 }, // > 18m range
+      eyePos: { x: 20, y: 1.6, z: -22 },
+      hp: 100,
+      shield: 0,
+      maxHp: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [
+      player.getCombatActor(),
+      enemyBlockedByWall,
+      enemyInRange,
+      enemyOutOfRange,
+    ]);
+
+    const shieldRes = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: flameItem,
+      origin: { x: 10, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(brickWall.hp).toBeGreaterThan(0);
+    expect(shieldRes.shotsHit).toBe(0);
+    expect(enemyBlockedByWall.hp).toBe(100);
+
+    player.getInventory().addItem({
+      uid: 'ft_player',
+      weaponId: 'plasma_flamethrower',
+      rarity: 'epic',
+      magAmmo: 60,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+    player.teleport({ x: 20, y: 0, z: 0 });
+    player.setLook(Math.PI, 0);
+    player.update(0.1, 0.1); // clear 1/12s fireCooldown from earlier direct shot
+    player.setMouseButton(0, true);
+    player.update(0.05, 0.15);
+    player.setMouseButton(0, false);
+
+    const hpAfterDirect = enemyInRange.hp;
+    expect(hpAfterDirect).toBeLessThan(100);
+    expect(enemyOutOfRange.hp).toBe(100);
+    const directFlameDmg = 100 - hpAfterDirect;
+    expect(player.getStats().flameDamage).toBe(directFlameDmg);
+
+    // Tick 3.0s of burn DOT at 8 DPS -> 24 DOT damage total
+    for (let i = 0; i < 60; i++) {
+      weapons.update(0.05);
+    }
+    expect(hpAfterDirect - enemyInRange.hp).toBe(24);
+    expect(player.getStats().flameDamage).toBe(directFlameDmg + 24);
+    expect(weapons.getActiveBurnCount()).toBe(0);
+
+    // Extra ticks after 3.0s deal zero further DOT
+    const hpAtEnd = enemyInRange.hp;
+    for (let i = 0; i < 20; i++) {
+      weapons.update(0.05);
+    }
+    expect(enemyInRange.hp).toBe(hpAtEnd);
+
+    // Enemy hitting player marks CharacterRenderState.isBurning and weapons.clear() cancels it cleanly
+    let customFlameDmg = 0;
+    const enemyFlamer: CombatActor = {
+      id: 'bot_pyro',
+      name: 'PyroBot',
+      position: { x: 20, y: 0, z: -5 },
+      eyePos: { x: 20, y: 1.5, z: -5 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      onFlameDamage: (d) => {
+        customFlameDmg += d;
+      },
+    };
+    weapons.fireWeapon({
+      actor: enemyFlamer,
+      item: flameItem,
+      origin: { x: 20, y: 1.5, z: -5 },
+      aimDir: { x: 0, y: 0, z: 1 },
+      spreadRad: 0,
+      isPlayer: false,
+    });
+    expect(player.getCharacterRenderState().isBurning).toBe(true);
+    weapons.update(0.5);
+    expect(customFlameDmg).toBe(4); // 8 DPS * 0.5s
+    weapons.clear();
+    expect(player.getCharacterRenderState().isBurning).toBe(false);
+    expect(weapons.getActiveBurnCount()).toBe(0);
+    weapons.update(1.0);
+    expect(customFlameDmg).toBe(4);
+  });
+
+  it('activates Low-Gravity Hop Crystal buff via [E] with 0.52x gravity, boosted jump height, fall immunity, and countdown', () => {
+    expect(LOW_GRAVITY_DURATION_SEC).toBe(15);
+    expect(LOW_GRAVITY_SCALE).toBeCloseTo(0.52, 4);
+
+    const { bus, player } = setupWave9Harness();
+    const sounds: SoundEventId[] = [];
+    const hopAuras: Vec3Like[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:hop_crystal_aura', (ev) => hopAuras.push(ev.position));
+
+    const craters: MeteorCraterEntity[] = [
+      {
+        id: 'crater_1',
+        poiId: 'crater_depot',
+        x: 0,
+        y: 0,
+        z: -2.2,
+        radius: 5.5,
+        crystalAvailable: true,
+        crystalRespawnSec: 0,
+      },
+    ];
+    const skyforgeBridge: WorldSkyforgeBridge = {
+      getTrainState: () => null,
+      getTrainPlatformSupport: () => null,
+      isNearTrainChest: () => false,
+      advanceTrainChestHack: () => null,
+      getMeteorCraters: () => craters,
+      findNearbyHopCrystal: (pos) =>
+        craters.find(
+          (c) =>
+            c.crystalAvailable &&
+            dist3D(pos, { x: c.x, y: c.y, z: c.z }) <= c.radius,
+        ) ?? null,
+      consumeHopCrystal: (id) => {
+        const c = craters.find((item) => item.id === id && item.crystalAvailable);
+        if (!c) return null;
+        c.crystalAvailable = false;
+        c.crystalRespawnSec = 45;
+        return { ok: true, position: { x: c.x, y: c.y, z: c.z } };
+      },
+    };
+    player.setSkyforgeBridge(skyforgeBridge);
+
+    // Measure normal jump peak height first (with no buff)
+    player.teleport({ x: 10, y: 0, z: 10 });
+    player.pressKey('Space');
+    player.releaseKey('Space');
+    let t = 0;
+    let normalPeakY = 0;
+    for (let i = 0; i < 30; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      normalPeakY = Math.max(normalPeakY, player.getPosition().y);
+    }
+
+    // Move near Meteor Crater Hop Crystal and press [E]
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.05, t + 0.05);
+    expect(player.getInteractPrompt()?.label).toContain('HOP CRYSTAL');
+    player.pressKey('KeyE');
+    player.releaseKey('KeyE');
+
+    expect(craters[0].crystalAvailable).toBe(false);
+    expect(player.getStats().hopCrystalsUsed).toBe(1);
+    expect(player.getHudSnapshot().lowGravityRemainingSec).toBeCloseTo(15, 1);
+    expect(player.getCharacterRenderState().hasLowGravityBuff).toBe(true);
+    expect(sounds).toContain('hop_crystal_consume');
+    expect(hopAuras.length).toBe(1);
+
+    // Jump under Low-G Hop Buff -> emits low_g_jump and reaches > 2.5x normal jump apex
+    player.pressKey('Space');
+    player.releaseKey('Space');
+    expect(sounds).toContain('low_g_jump');
+    let lowGPeakY = 0;
+    for (let i = 0; i < 40; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      lowGPeakY = Math.max(lowGPeakY, player.getPosition().y);
+    }
+    expect(lowGPeakY).toBeGreaterThan(normalPeakY * 2.4);
+
+    // Fall from >18m while low-G buff is active -> fall damage prevented
+    player.teleport({ x: 0, y: 20, z: 0 });
+    for (let i = 0; i < 60; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getPosition().y).toBeCloseTo(0, 1);
+    expect(player.getHealth()).toBe(100);
+    expect(sounds).not.toContain('fall_damage');
+
+    // QA helper + timer expiration clears HUD/render state
+    player.setLowGravityTimer(0.2);
+    expect(player.getHudSnapshot().lowGravityRemainingSec).toBeCloseTo(0.2, 2);
+    for (let i = 0; i < 6; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().lowGravityRemainingSec).toBeNull();
+    expect(player.getCharacterRenderState().hasLowGravityBuff).toBe(false);
+  });
+
+  it('carries standing player along Apex Express Train flatbed and completes 3.0s Train Chest hack for +150 Gold', () => {
+    expect(TRAIN_HACK_DURATION_SEC).toBeCloseTo(3.0, 3);
+
+    const { bus, player } = setupWave9Harness();
+    const sounds: SoundEventId[] = [];
+    const hackedCallbacks: Vec3Like[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    player.setOnTrainChestHacked((pos) => hackedCallbacks.push(pos));
+
+    const trainState: ApexTrainState = {
+      active: true,
+      x: 10,
+      y: 0,
+      z: 0,
+      yaw: Math.PI * 0.5,
+      speed: 11.5,
+      t: 0,
+      trackPoints: [
+        { x: 0, y: 0, z: 0 },
+        { x: 100, y: 0, z: 0 },
+      ],
+      chestHacked: false,
+      chestHackProgress: 0,
+      chestCooldownSec: 0,
+      carPositions: [
+        { x: 10, y: 0, z: 0, yaw: Math.PI * 0.5 },
+        { x: 0, y: 0, z: 0, yaw: Math.PI * 0.5 },
+      ],
+    };
+    const deckY = 1.85;
+    let hackElapsed = 0;
+    const stepTrainPerTick = 0.575; // 11.5 m/s * 0.05s
+
+    const skyforgeBridge: WorldSkyforgeBridge = {
+      getTrainState: () => trainState,
+      getTrainPlatformSupport: (pos) => {
+        const car = trainState.carPositions[1];
+        if (
+          Math.abs(pos.x - car.x) <= 4.5 &&
+          Math.abs(pos.z - car.z) <= 2.2 &&
+          pos.y >= deckY - 0.9 &&
+          pos.y <= deckY + 0.6
+        ) {
+          return { deckY, deltaX: stepTrainPerTick, deltaZ: 0 };
+        }
+        return null;
+      },
+      isNearTrainChest: (pos, radius = 3.5) => {
+        const car = trainState.carPositions[1];
+        return dist3D(pos, { x: car.x, y: deckY, z: car.z }) <= radius;
+      },
+      advanceTrainChestHack: (dt) => {
+        if (trainState.chestHacked) return null;
+        hackElapsed += dt;
+        const progress = Math.min(1, hackElapsed / TRAIN_HACK_DURATION_SEC);
+        trainState.chestHackProgress = progress;
+        const lootPos = {
+          x: trainState.carPositions[1].x,
+          y: deckY + 0.4,
+          z: trainState.carPositions[1].z,
+        };
+        if (progress >= 1 - 1e-6) {
+          trainState.chestHacked = true;
+          trainState.chestCooldownSec = 75;
+          return { completed: true, progress: 1, lootPos };
+        }
+        return { completed: false, progress, lootPos };
+      },
+      getMeteorCraters: () => [],
+      findNearbyHopCrystal: () => null,
+      consumeHopCrystal: () => null,
+    };
+    player.setSkyforgeBridge(skyforgeBridge);
+
+    // Place player on Cargo Car 1 flatbed
+    player.teleport({ x: 0, y: deckY, z: 0 });
+    let t = 0;
+    const advanceTrainTick = () => {
+      trainState.x += stepTrainPerTick;
+      trainState.carPositions[0].x += stepTrainPerTick;
+      trainState.carPositions[1].x += stepTrainPerTick;
+      t += 0.05;
+      player.update(0.05, t);
+    };
+
+    // Riding carry for 10 ticks -> player smoothly carried along X at deckY
+    for (let i = 0; i < 10; i++) {
+      advanceTrainTick();
+    }
+    expect(player.getPosition().x).toBeCloseTo(stepTrainPerTick * 10, 2);
+    expect(player.getPosition().y).toBeCloseTo(deckY, 3);
+    expect(player.getInteractPrompt()?.label).toContain('HACK TRAIN CHEST');
+
+    // Early [E] release cancels hack without awarding Gold
+    const goldBefore = player.getGoldBars();
+    player.pressKey('KeyE');
+    for (let i = 0; i < 10; i++) {
+      advanceTrainTick();
+    }
+    expect(player.getHudSnapshot().trainHackProgress!).toBeCloseTo(0.5 / 3.0, 2);
+    player.releaseKey('KeyE');
+    advanceTrainTick();
+    expect(player.getHudSnapshot().trainHackProgress).toBeNull();
+    expect(player.getGoldBars()).toBe(goldBefore);
+
+    // Hold [E] until 3.0s hack completes while riding moving train
+    player.pressKey('KeyE');
+    for (let i = 0; i < 52; i++) {
+      advanceTrainTick();
+      if (trainState.chestHacked) break;
+    }
+    player.releaseKey('KeyE');
+
+    expect(trainState.chestHacked).toBe(true);
+    expect(player.getStats().trainChestsHacked).toBe(1);
+    expect(player.getGoldBars()).toBe(goldBefore + 150);
+    expect(player.getHudSnapshot().trainHackProgress).toBeNull();
+    expect(sounds).toContain('train_hack_complete');
+    expect(hackedCallbacks.length).toBe(1);
+    expect(hackedCallbacks[0].x).toBeCloseTo(trainState.carPositions[1].x, 2);
   });
 });

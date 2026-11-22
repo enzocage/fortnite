@@ -150,4 +150,8 @@ export interface CharacterRenderState {
   weaponMods?: WeaponModId[];
   isStealthed?: boolean;
   teamId?: TeamId;
+  hasJetpack?: boolean;
+  isJetpackThrusting?: boolean;
+  hasLowGravityBuff?: boolean;
+  isBurning?: boolean;
 }

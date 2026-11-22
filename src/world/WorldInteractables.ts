@@ -3,13 +3,19 @@ import {
   EventBus,
   GRIND_RAIL_SPEED,
   MEDALLIONS,
+  METEOR_CRATER_CRYSTAL_RESPAWN_SEC,
   POIS,
   RARITY_COLORS,
   REBOOT_VAN_COOLDOWN_SEC,
+  TRAIN_CHEST_COOLDOWN_SEC,
+  TRAIN_HACK_DURATION_SEC,
+  TRAIN_SPEED_MPS,
+  WATER_LEVEL,
   WEAPON_MOD_COST_GOLD,
   WEAPONS,
 } from '../core';
 import type {
+  ApexTrainState,
   CampfireEntity,
   CapturePointEntity,
   ColliderBox,
@@ -22,6 +28,7 @@ import type {
   LaunchPadEntity,
   LootIslandState,
   MedallionId,
+  MeteorCraterEntity,
   ModBenchEntity,
   NpcSpecialistEntity,
   Rarity,
@@ -165,6 +172,28 @@ export interface Wave8ShowcaseResult {
   modBench: ModBenchEntity;
   forecastTower: ForecastTowerEntity;
   stealthBushes: StealthBushEntity[];
+}
+
+export interface TrainPlatformSupport {
+  deckY: number;
+  deltaX: number;
+  deltaZ: number;
+}
+
+export interface TrainChestHackResult {
+  completed: boolean;
+  progress: number;
+  lootPos: Vec3Like;
+}
+
+export interface HopCrystalConsumeResult {
+  ok: boolean;
+  position: Vec3Like;
+}
+
+export interface Wave9ShowcaseResult {
+  train: ApexTrainState;
+  crater: MeteorCraterEntity;
 }
 
 interface VendingMachineVisual {
@@ -391,6 +420,25 @@ interface StealthBushVisual {
   isQaShowcase?: boolean;
 }
 
+interface TrainCarMeta {
+  prevX: number;
+  prevY: number;
+  prevZ: number;
+  prevYaw: number;
+  deltaX: number;
+  deltaZ: number;
+}
+
+interface MeteorCraterVisual {
+  data: MeteorCraterEntity;
+  group: THREE.Group;
+  crystalGroup: THREE.Group;
+  shardsGroup: THREE.Group;
+  auraRing: THREE.Mesh;
+  baseShardsY: number;
+  isQaShowcase?: boolean;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -417,6 +465,42 @@ const STEALTH_BUSH_RADIUS = 1.85;
 const STEALTH_BUSH_RUSTLE_SEC = 0.55;
 const MOD_BENCH_NEARBY_RADIUS = 3.8;
 const FORECAST_TOWER_NEARBY_RADIUS = 4.2;
+const TRAIN_DECK_HEIGHT = 1.05;
+const TRAIN_CAR_HALF_W = 1.68;
+const TRAIN_CAR_HALF_L = 3.78;
+const TRAIN_CAR_1_DIST_BEHIND = 8.6;
+const TRAIN_CAR_2_DIST_BEHIND = 16.4;
+const TRAIN_CHEST_LOCAL_Z = 0.25;
+const TRAIN_CHEST_NEARBY_RADIUS = 3.5;
+const TRAIN_HORN_INITIAL_SEC = 8.0;
+const TRAIN_HORN_INTERVAL_SEC = 14.0;
+const TRAIN_HACK_DECAY_GRACE_SEC = 2.0;
+const TRAIN_HACK_DECAY_RATE_SEC = 4.5;
+const METEOR_CRATER_RADIUS = 5.2;
+const HOP_CRYSTAL_NEARBY_RADIUS = 4.2;
+const TRAIN_MID_RING_WAYPOINTS_XZ: ReadonlyArray<[number, number]> = [
+  [-38, -36],
+  [-8, -52],
+  [25, -52],
+  [66, -54],
+  [108, -88],
+  [132, -124],
+  [146, -64],
+  [144, 6],
+  [144, 66],
+  [130, 128],
+  [96, 128],
+  [56, 86],
+  [2, 86],
+  [-66, 98],
+  [-124, 86],
+  [-178, 38],
+  [-178, -36],
+  [-144, -98],
+  [-104, -84],
+  [-56, -86],
+  [-38, -60],
+];
 const BUNKER_LOOT_WEAPONS: readonly ('combat_smg' | 'boom_bow' | 'tactical_dmr')[] = [
   'combat_smg',
   'boom_bow',
@@ -426,6 +510,12 @@ const BUNKER_LOOT_WEAPONS: readonly ('combat_smg' | 'boom_bow' | 'tactical_dmr')
 const _tmpRailPos = new THREE.Vector3();
 const _tmpRailTan = new THREE.Vector3();
 const _tmpForwardZ = new THREE.Vector3(0, 0, 1);
+const _tmpUpY = new THREE.Vector3(0, 1, 0);
+const _tmpMat4 = new THREE.Matrix4();
+const _tmpQuat = new THREE.Quaternion();
+const _tmpScale = new THREE.Vector3(1, 1, 1);
+const _tmpPos = new THREE.Vector3();
+const _tmpLook = new THREE.Vector3();
 
 export class WorldInteractables {
   private group = new THREE.Group();
@@ -474,6 +564,44 @@ export class WorldInteractables {
   private forecastTowersMap = new Map<string, ForecastTowerVisual>();
   private stealthBushes: StealthBushEntity[] = [];
   private stealthBushesMap = new Map<string, StealthBushVisual>();
+  private meteorCraters: MeteorCraterEntity[] = [];
+  private meteorCratersMap = new Map<string, MeteorCraterVisual>();
+  private trainGroup!: THREE.Group;
+  private trainTrackGroup!: THREE.Group;
+  private trainTrackGeos: THREE.BufferGeometry[] = [];
+  private trainCurve!: THREE.CatmullRomCurve3;
+  private trainTrackLength = 1;
+  private trainTrackPoints: Vec3Like[] = [];
+  private trainState: ApexTrainState = {
+    active: true,
+    x: 0,
+    y: 0,
+    z: 0,
+    yaw: 0,
+    speed: TRAIN_SPEED_MPS,
+    t: 0,
+    trackPoints: [],
+    chestHacked: false,
+    chestHackProgress: 0,
+    chestCooldownSec: 0,
+    carPositions: [],
+  };
+  private trainCarMetas: TrainCarMeta[] = [];
+  private trainLocoGroup!: THREE.Group;
+  private trainLocoBoilerCore!: THREE.Mesh;
+  private trainLocoWheels: THREE.Object3D[] = [];
+  private trainCargoCarGroups: THREE.Group[] = [];
+  private trainCargoWheels: THREE.Object3D[] = [];
+  private trainChestGroup!: THREE.Group;
+  private trainChestLidPivot!: THREE.Group;
+  private trainChestHoloRing!: THREE.Mesh;
+  private trainChestAura!: THREE.Mesh;
+  private trainChestReadyMat!: THREE.MeshStandardMaterial;
+  private trainChestCooldownMat!: THREE.MeshStandardMaterial;
+  private trainHornTimer = TRAIN_HORN_INITIAL_SEC;
+  private trainHackIdleSec = 0;
+  private trainHackTouchedThisFrame = false;
+  private trainInQaShowcaseMode = false;
   private qaShowcaseGeos: THREE.BufferGeometry[] = [];
   private lootIslandState: LootIslandState = {
     active: false,
@@ -534,6 +662,8 @@ export class WorldInteractables {
     this.buildModBenches(terrain);
     this.buildForecastTowers(terrain);
     this.buildStealthBushes(terrain);
+    this.buildApexTrain(terrain);
+    this.buildMeteorCraters(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -5814,7 +5944,7 @@ export class WorldInteractables {
     return best.data;
   }
 
-  private removeQaShowcaseDynamicEntities(): void {
+  private removeQaShowcaseDynamicEntities(restoreTrainTrack = true): void {
     const qaBunkerId = 'bunker_qa_showcase';
     const qaBunker = this.weaponBunkersMap.get(qaBunkerId);
     if (qaBunker) {
@@ -5889,8 +6019,1214 @@ export class WorldInteractables {
       }
     }
 
+    const qaCraterId = 'crater_qa_showcase';
+    const qaCrater = this.meteorCratersMap.get(qaCraterId);
+    if (qaCrater) {
+      this.group.remove(qaCrater.group);
+      this.meteorCratersMap.delete(qaCraterId);
+      const idx = this.meteorCraters.findIndex((c) => c.id === qaCraterId);
+      if (idx >= 0) this.meteorCraters.splice(idx, 1);
+    }
+
     for (const g of this.qaShowcaseGeos) g.dispose();
     this.qaShowcaseGeos = [];
+
+    if (restoreTrainTrack && this.trainInQaShowcaseMode) {
+      this.buildTrainTrack(TRAIN_MID_RING_WAYPOINTS_XZ, false);
+      this.trainInQaShowcaseMode = false;
+      this.trainState.t = 0;
+      this.syncTrainTransforms(false, 0);
+    }
+  }
+
+  private createMeteorCraterEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    radius?: number;
+    isQaShowcase?: boolean;
+  }): MeteorCraterVisual {
+    const radius = spec.radius ?? METEOR_CRATER_RADIUS;
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: MeteorCraterEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      y,
+      z: spec.z,
+      radius,
+      crystalAvailable: true,
+      crystalRespawnSec: 0,
+    };
+    this.meteorCraters.push(data);
+
+    const basaltMat = this.getSharedMat('crater_basalt_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#18141f',
+        roughness: 0.92,
+        metalness: 0.14,
+      }),
+    );
+    const scorchMat = this.getSharedMat('crater_scorch_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#110d18',
+        emissive: '#3b0764',
+        emissiveIntensity: 0.32,
+        roughness: 0.95,
+        metalness: 0.08,
+      }),
+    );
+    const crystalMat = this.getSharedMat('crater_hop_crystal_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#d8b4fe',
+        emissive: '#a855f7',
+        emissiveIntensity: 1.75,
+        roughness: 0.14,
+        metalness: 0.28,
+        transparent: true,
+        opacity: 0.92,
+      }),
+    );
+    const crystalCoreMat = this.getSharedMat('crater_hop_core_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#f5d0fe',
+        emissive: '#e879f9',
+        emissiveIntensity: 2.0,
+        roughness: 0.12,
+        metalness: 0.22,
+      }),
+    );
+    const auraMat = this.getSharedMat('crater_hop_aura_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#c084fc',
+        transparent: true,
+        opacity: 0.56,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const discGeo = this.getSharedGeo('crater_scorch_disc', () => {
+      const g = new THREE.CylinderGeometry(1, 1.08, 0.16, 16);
+      return g;
+    });
+    const rimRockGeo = this.getSharedGeo('crater_rim_rock', () => new THREE.DodecahedronGeometry(0.95, 0));
+    const meteorCoreGeo = this.getSharedGeo('crater_meteor_core', () => new THREE.DodecahedronGeometry(0.75, 0));
+    const crystalSpireGeo = this.getSharedGeo('crater_crystal_spire', () => new THREE.OctahedronGeometry(0.45, 0));
+    const auraRingGeo = this.getSharedGeo('crater_aura_ring', () => {
+      const g = new THREE.RingGeometry(1.15, 1.55, 24);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+
+    const craterGroup = new THREE.Group();
+    craterGroup.name = `MeteorCrater_${spec.id}`;
+    craterGroup.position.set(spec.x, y, spec.z);
+
+    const scorchDisc = new THREE.Mesh(discGeo, scorchMat);
+    scorchDisc.scale.set(radius * 0.92, 1, radius * 0.92);
+    scorchDisc.position.y = 0.04;
+    scorchDisc.receiveShadow = true;
+    craterGroup.add(scorchDisc);
+
+    // Jagged scorched dark basalt crater rim ring
+    const rimCount = 12;
+    for (let i = 0; i < rimCount; i++) {
+      const ang = (i / rimCount) * Math.PI * 2 + (i % 2) * 0.12;
+      const rDist = radius * (0.82 + (i % 3) * 0.05);
+      const rock = new THREE.Mesh(rimRockGeo, basaltMat);
+      rock.position.set(Math.cos(ang) * rDist, 0.38 + (i % 2) * 0.12, Math.sin(ang) * rDist);
+      rock.scale.set(1.25 + (i % 3) * 0.28, 0.65 + (i % 2) * 0.22, 0.95 + (i % 2) * 0.25);
+      rock.rotation.set(0.28 * Math.sin(ang), ang, -0.28 * Math.cos(ang));
+      rock.castShadow = true;
+      rock.receiveShadow = true;
+      craterGroup.add(rock);
+    }
+
+    // Embedded meteor core boulder
+    const meteorCore = new THREE.Mesh(meteorCoreGeo, basaltMat);
+    meteorCore.position.set(0, 0.28, 0);
+    meteorCore.scale.set(1.35, 0.72, 1.25);
+    meteorCore.rotation.set(0.2, 0.6, 0.1);
+    meteorCore.castShadow = true;
+    meteorCore.receiveShadow = true;
+    craterGroup.add(meteorCore);
+
+    // Glowing Violet Hop Crystal Cluster (hidden when consumed)
+    const crystalGroup = new THREE.Group();
+    crystalGroup.name = `HopCrystalCluster_${spec.id}`;
+
+    const auraRing = new THREE.Mesh(auraRingGeo, auraMat);
+    auraRing.position.y = 0.15;
+    crystalGroup.add(auraRing);
+
+    const baseShardsY = 0.62;
+    const shardsGroup = new THREE.Group();
+    shardsGroup.position.y = baseShardsY;
+
+    const mainCrystal = new THREE.Mesh(crystalSpireGeo, crystalCoreMat);
+    mainCrystal.position.set(0, 0.34, 0);
+    mainCrystal.scale.set(0.95, 2.05, 0.95);
+    shardsGroup.add(mainCrystal);
+
+    for (let c = 0; c < 6; c++) {
+      const a = (c / 6) * Math.PI * 2 + 0.3;
+      const shard = new THREE.Mesh(crystalSpireGeo, c % 2 === 0 ? crystalMat : crystalCoreMat);
+      const dist = 0.42 + (c % 2) * 0.18;
+      shard.position.set(Math.cos(a) * dist, 0.12 + (c % 3) * 0.08, Math.sin(a) * dist);
+      shard.scale.set(0.58, 1.25 + (c % 2) * 0.35, 0.58);
+      shard.rotation.set(Math.sin(a) * 0.42, a, -Math.cos(a) * 0.42);
+      shardsGroup.add(shard);
+    }
+
+    crystalGroup.add(shardsGroup);
+    craterGroup.add(crystalGroup);
+    this.group.add(craterGroup);
+
+    const visual: MeteorCraterVisual = {
+      data,
+      group: craterGroup,
+      crystalGroup,
+      shardsGroup,
+      auraRing,
+      baseShardsY,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.meteorCratersMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildMeteorCraters(_terrain: TerrainQuery): void {
+    const specs: Array<{ id: string; poiId: string; x: number; z: number }> = [
+      { id: 'crater_metro_towers', poiId: 'metro_towers', x: -112, z: -26 },
+      { id: 'crater_sunny_suburbs', poiId: 'sunny_suburbs', x: -196, z: -120 },
+      { id: 'crater_whispering_pines', poiId: 'whispering_pines', x: 132, z: -144 },
+      { id: 'crater_market_row', poiId: 'market_row', x: 205, z: -10 },
+      { id: 'crater_crater_depot', poiId: 'crater_depot', x: 34, z: 162 },
+      { id: 'crater_sunken_oasis', poiId: 'sunken_oasis', x: -214, z: 26 },
+    ];
+    for (const spec of specs) {
+      this.createMeteorCraterEntry(spec);
+    }
+  }
+
+  getMeteorCraters(): MeteorCraterEntity[] {
+    return this.meteorCraters;
+  }
+
+  findNearbyHopCrystal(
+    pos: Vec3Like,
+    radius = HOP_CRYSTAL_NEARBY_RADIUS,
+  ): MeteorCraterEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return null;
+    }
+
+    let best: MeteorCraterEntity | null = null;
+    let bestDist = radius;
+    for (let i = 0; i < this.meteorCraters.length; i++) {
+      const c = this.meteorCraters[i];
+      if (!c.crystalAvailable) continue;
+      const d = Math.hypot(c.x - pos.x, c.y - pos.y, c.z - pos.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  consumeHopCrystal(id: string): HopCrystalConsumeResult | null {
+    const entry = this.meteorCratersMap.get(id);
+    if (!entry || !entry.data.crystalAvailable) {
+      return null;
+    }
+
+    entry.data.crystalAvailable = false;
+    entry.data.crystalRespawnSec = METEOR_CRATER_CRYSTAL_RESPAWN_SEC;
+    entry.crystalGroup.visible = false;
+
+    const pos: Vec3Like = {
+      x: entry.data.x,
+      y: entry.data.y + 0.85,
+      z: entry.data.z,
+    };
+    this.eventBus?.emit('vfx:hop_crystal_aura', { position: { ...pos } });
+    this.eventBus?.emit('sound:play', {
+      id: 'hop_crystal_consume',
+      position: { ...pos },
+      volume: 0.9,
+      spatial: true,
+    });
+
+    return {
+      ok: true,
+      position: pos,
+    };
+  }
+
+  triggerMeteorShowerStrike(pos: Vec3Like): void {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z)
+    ) {
+      return;
+    }
+    const strikePos: Vec3Like = { x: pos.x, y: pos.y, z: pos.z };
+    this.eventBus?.emit('vfx:meteor_strike', {
+      position: { ...strikePos },
+      radius: 7.5,
+    });
+    this.eventBus?.emit('sound:play', {
+      id: 'meteor_impact',
+      position: { ...strikePos },
+      volume: 0.95,
+      spatial: true,
+    });
+  }
+
+  private clearTrainTrackVisuals(): void {
+    if (this.trainTrackGroup) {
+      this.trainTrackGroup.clear();
+    }
+    for (const g of this.trainTrackGeos) g.dispose();
+    this.trainTrackGeos = [];
+  }
+
+  private buildTrainTrack(
+    waypointsXZ: ReadonlyArray<[number, number]>,
+    isQaShowcase: boolean,
+  ): void {
+    this.clearTrainTrackVisuals();
+
+    // 1. Subdivide XZ loop densely so rail height hugs hills cleanly & bridges water
+    const rawPts = waypointsXZ.map(([x, z]) => new THREE.Vector3(x, 0, z));
+    const xzCurve = new THREE.CatmullRomCurve3(rawPts, true, 'catmullrom', 0.5);
+    const controlCount = isQaShowcase ? 24 : 56;
+
+    const ctrlPts: THREE.Vector3[] = [];
+    const minSafeYs: number[] = [];
+    for (let i = 0; i < controlCount; i++) {
+      const p = xzCurve.getPointAt(i / controlCount);
+      const gy = this.terrain.getHeightAt(p.x, p.z);
+      const isWet = this.terrain.isWater(p.x, p.z) || gy < WATER_LEVEL + 0.5;
+      const safeY = isWet ? Math.max(WATER_LEVEL + 2.4, gy + 0.35) : gy + 0.22;
+      minSafeYs.push(safeY);
+      ctrlPts.push(new THREE.Vector3(p.x, safeY, p.z));
+    }
+
+    // Gentle upward smoothing so bridge spans and ridges stay level and never dip underground
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < controlCount; i++) {
+        const prevY = ctrlPts[(i - 1 + controlCount) % controlCount].y;
+        const currY = ctrlPts[i].y;
+        const nextY = ctrlPts[(i + 1) % controlCount].y;
+        const smoothed = prevY * 0.25 + currY * 0.5 + nextY * 0.25;
+        ctrlPts[i].y = Math.max(minSafeYs[i], smoothed);
+      }
+    }
+
+    let curve = new THREE.CatmullRomCurve3(ctrlPts, true, 'catmullrom', 0.5);
+    // Guarantee no intermediate spline point clips below terrain or water
+    const verifyCount = controlCount * 4;
+    for (let pass = 0; pass < 4; pass++) {
+      let adjusted = false;
+      for (let s = 0; s < verifyCount; s++) {
+        const u = s / verifyCount;
+        const p = curve.getPointAt(u);
+        const gy = this.terrain.getHeightAt(p.x, p.z);
+        const floorY = this.terrain.isWater(p.x, p.z) ? WATER_LEVEL + 2.2 : gy + 0.16;
+        if (p.y < floorY) {
+          const boost = floorY - p.y + 0.18;
+          const idx0 = Math.floor(u * controlCount) % controlCount;
+          const idx1 = (idx0 + 1) % controlCount;
+          ctrlPts[idx0].y += boost;
+          ctrlPts[idx1].y += boost * 0.65;
+          adjusted = true;
+        }
+      }
+      if (!adjusted) break;
+      curve = new THREE.CatmullRomCurve3(ctrlPts, true, 'catmullrom', 0.5);
+    }
+
+    this.trainCurve = curve;
+    this.trainTrackLength = Math.max(10, curve.getLength());
+
+    const mapSampleCount = isQaShowcase ? 40 : 72;
+    this.trainTrackPoints = [];
+    for (let i = 0; i < mapSampleCount; i++) {
+      const p = curve.getPointAt(i / mapSampleCount);
+      this.trainTrackPoints.push({ x: p.x, y: p.y, z: p.z });
+    }
+    this.trainState.trackPoints = this.trainTrackPoints.map((p) => ({ ...p }));
+
+    // 2. Steel rails & center glowing power rail
+    const railSamples = isQaShowcase ? 64 : 180;
+    const leftPts: THREE.Vector3[] = [];
+    const rightPts: THREE.Vector3[] = [];
+    const railHalfGauge = 0.88;
+
+    for (let i = 0; i < railSamples; i++) {
+      const u = i / railSamples;
+      const pt = curve.getPointAt(u);
+      const tan = curve.getTangentAt(u).normalize();
+      const rxRaw = tan.z;
+      const rzRaw = -tan.x;
+      const rLen = Math.hypot(rxRaw, rzRaw) || 1;
+      const rx = rxRaw / rLen;
+      const rz = rzRaw / rLen;
+      leftPts.push(new THREE.Vector3(pt.x - rx * railHalfGauge, pt.y + 0.16, pt.z - rz * railHalfGauge));
+      rightPts.push(new THREE.Vector3(pt.x + rx * railHalfGauge, pt.y + 0.16, pt.z + rz * railHalfGauge));
+    }
+
+    const leftCurve = new THREE.CatmullRomCurve3(leftPts, true, 'catmullrom', 0.5);
+    const rightCurve = new THREE.CatmullRomCurve3(rightPts, true, 'catmullrom', 0.5);
+    const tubeSegs = isQaShowcase ? 84 : 260;
+
+    const steelRailMat = this.getSharedMat('train_steel_rail', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#94a3b8',
+        roughness: 0.24,
+        metalness: 0.88,
+      }),
+    );
+    const tieSteelMat = this.getSharedMat('train_tie_steel', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#1e293b',
+        roughness: 0.5,
+        metalness: 0.72,
+      }),
+    );
+    const powerRailMat = this.getSharedMat('train_power_rail_cyan', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.35,
+        roughness: 0.18,
+        metalness: 0.35,
+      }),
+    );
+    const tieGoldMat = this.getSharedMat('train_tie_gold', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#eab308',
+        emissiveIntensity: 1.4,
+        roughness: 0.2,
+        metalness: 0.4,
+      }),
+    );
+
+    const leftRailGeo = new THREE.TubeGeometry(leftCurve, tubeSegs, 0.072, 6, true);
+    const rightRailGeo = new THREE.TubeGeometry(rightCurve, tubeSegs, 0.072, 6, true);
+    const centerConduitGeo = new THREE.TubeGeometry(curve, tubeSegs, 0.05, 6, true);
+    this.trainTrackGeos.push(leftRailGeo, rightRailGeo, centerConduitGeo);
+
+    const leftRailMesh = new THREE.Mesh(leftRailGeo, steelRailMat);
+    const rightRailMesh = new THREE.Mesh(rightRailGeo, steelRailMat);
+    const centerConduitMesh = new THREE.Mesh(centerConduitGeo, powerRailMat);
+    centerConduitMesh.position.y = 0.08;
+    leftRailMesh.castShadow = true;
+    rightRailMesh.castShadow = true;
+    this.trainTrackGroup.add(leftRailMesh, rightRailMesh, centerConduitMesh);
+
+    // 3. Instanced railway ties + glowing cyan/gold tie strips + elevated bridge piers
+    const tieCount = Math.max(24, Math.min(320, Math.round(this.trainTrackLength / 3.2)));
+    const tieGeo = new THREE.BoxGeometry(2.3, 0.11, 0.28);
+    const stripGeo = new THREE.BoxGeometry(1.42, 0.06, 0.12);
+    const pierGeo = new THREE.CylinderGeometry(0.24, 0.34, 1.0, 8);
+    this.trainTrackGeos.push(tieGeo, stripGeo, pierGeo);
+
+    const tieMesh = new THREE.InstancedMesh(tieGeo, tieSteelMat, tieCount);
+    tieMesh.receiveShadow = true;
+
+    const cyanCount = Math.ceil(tieCount / 2);
+    const goldCount = Math.floor(tieCount / 2);
+    const cyanTieMesh = new THREE.InstancedMesh(stripGeo, powerRailMat, cyanCount);
+    const goldTieMesh = new THREE.InstancedMesh(stripGeo, tieGoldMat, Math.max(1, goldCount));
+
+    const pierTransforms: Array<{ x: number; y: number; z: number; h: number }> = [];
+    let cyanIdx = 0;
+    let goldIdx = 0;
+
+    for (let i = 0; i < tieCount; i++) {
+      const u = i / tieCount;
+      curve.getPointAt(u, _tmpRailPos);
+      curve.getTangentAt(u, _tmpRailTan).normalize();
+      _tmpLook.copy(_tmpRailPos).add(_tmpRailTan);
+      _tmpMat4.lookAt(_tmpLook, _tmpRailPos, _tmpUpY);
+      _tmpQuat.setFromRotationMatrix(_tmpMat4);
+
+      _tmpPos.set(_tmpRailPos.x, _tmpRailPos.y + 0.04, _tmpRailPos.z);
+      _tmpScale.set(1, 1, 1);
+      _tmpMat4.compose(_tmpPos, _tmpQuat, _tmpScale);
+      tieMesh.setMatrixAt(i, _tmpMat4);
+
+      _tmpPos.set(_tmpRailPos.x, _tmpRailPos.y + 0.105, _tmpRailPos.z);
+      _tmpMat4.compose(_tmpPos, _tmpQuat, _tmpScale);
+      if (i % 2 === 0 && cyanIdx < cyanCount) {
+        cyanTieMesh.setMatrixAt(cyanIdx++, _tmpMat4);
+      } else if (goldIdx < goldCount) {
+        goldTieMesh.setMatrixAt(goldIdx++, _tmpMat4);
+      }
+
+      const groundY = this.terrain.getHeightAt(_tmpRailPos.x, _tmpRailPos.z);
+      if (_tmpRailPos.y > groundY + 0.42) {
+        const pierH = _tmpRailPos.y - groundY + 0.4;
+        pierTransforms.push({
+          x: _tmpRailPos.x,
+          y: groundY - 0.3 + pierH * 0.5,
+          z: _tmpRailPos.z,
+          h: pierH,
+        });
+      }
+    }
+    tieMesh.instanceMatrix.needsUpdate = true;
+    cyanTieMesh.instanceMatrix.needsUpdate = true;
+    goldTieMesh.instanceMatrix.needsUpdate = true;
+    this.trainTrackGroup.add(tieMesh, cyanTieMesh, goldTieMesh);
+
+    if (pierTransforms.length > 0) {
+      const pierMesh = new THREE.InstancedMesh(pierGeo, tieSteelMat, pierTransforms.length);
+      _tmpQuat.identity();
+      for (let i = 0; i < pierTransforms.length; i++) {
+        const pt = pierTransforms[i];
+        _tmpPos.set(pt.x, pt.y, pt.z);
+        _tmpScale.set(1, pt.h, 1);
+        _tmpMat4.compose(_tmpPos, _tmpQuat, _tmpScale);
+        pierMesh.setMatrixAt(i, _tmpMat4);
+      }
+      pierMesh.instanceMatrix.needsUpdate = true;
+      this.trainTrackGroup.add(pierMesh);
+    }
+  }
+
+  private buildTrainConsistVisuals(): void {
+    const armorDarkMat = this.getSharedMat('train_armor_dark', () =>
+      new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.36, metalness: 0.84 }),
+    );
+    const armorNavyMat = this.getSharedMat('train_armor_navy', () =>
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.32, metalness: 0.78 }),
+    );
+    const trimGoldMat = this.getSharedMat('train_trim_gold', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#facc15',
+        emissive: '#b45309',
+        emissiveIntensity: 0.42,
+        roughness: 0.25,
+        metalness: 0.75,
+      }),
+    );
+    const wheelMat = this.getSharedMat('train_wheel_steel', () =>
+      new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.28, metalness: 0.88 }),
+    );
+    const deckMat = this.getSharedMat('train_flatbed_deck', () =>
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.56, metalness: 0.65 }),
+    );
+    const cyanCoreMat = this.getSharedMat('train_plasma_core', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.85,
+        roughness: 0.14,
+        metalness: 0.28,
+      }),
+    );
+    const headlampMat = this.getSharedMat('train_headlamp_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#fef08a',
+        emissive: '#fde047',
+        emissiveIntensity: 2.0,
+        roughness: 0.1,
+        metalness: 0.15,
+      }),
+    );
+    const headBeamMat = this.getSharedMat('train_headbeam_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#fef08a',
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const crateMat = this.getSharedMat('train_cargo_crate', () =>
+      new THREE.MeshStandardMaterial({ color: '#9a3412', roughness: 0.68, metalness: 0.22 }),
+    );
+    this.trainChestReadyMat = this.getSharedMat('train_chest_holo_ready', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.7,
+        roughness: 0.16,
+        metalness: 0.3,
+      }),
+    );
+    this.trainChestCooldownMat = this.getSharedMat('train_chest_holo_cool', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#475569',
+        emissive: '#1e293b',
+        emissiveIntensity: 0.25,
+        roughness: 0.55,
+        metalness: 0.65,
+      }),
+    );
+    const chestAuraMat = this.getSharedMat('train_chest_aura', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.3,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const wheelGeo = this.getSharedGeo('train_wheel_geo', () => {
+      const g = new THREE.CylinderGeometry(0.42, 0.42, 0.24, 14);
+      g.rotateZ(Math.PI * 0.5);
+      return g;
+    });
+    const wheelHubGeo = this.getSharedGeo('train_wheel_hub_geo', () => {
+      const g = new THREE.CylinderGeometry(0.18, 0.18, 0.28, 10);
+      g.rotateZ(Math.PI * 0.5);
+      return g;
+    });
+
+    const addWheelSet = (parent: THREE.Group, zOffsets: number[], wheelSink: THREE.Object3D[]) => {
+      for (const wz of zOffsets) {
+        for (const wx of [-1.08, 1.08]) {
+          const wPivot = new THREE.Group();
+          wPivot.position.set(wx, 0.44, wz);
+          const rim = new THREE.Mesh(wheelGeo, wheelMat);
+          const hub = new THREE.Mesh(wheelHubGeo, trimGoldMat);
+          rim.castShadow = true;
+          wPivot.add(rim, hub);
+          parent.add(wPivot);
+          wheelSink.push(wPivot);
+        }
+      }
+    };
+
+    // 1. Armored Locomotive
+    this.trainLocoGroup = new THREE.Group();
+    this.trainLocoGroup.name = 'ApexTrainLocomotive';
+
+    const locoFrame = new THREE.Mesh(
+      this.getSharedGeo('train_loco_frame', () => new THREE.BoxGeometry(2.75, 0.52, 7.2)),
+      armorDarkMat,
+    );
+    locoFrame.position.set(0, 0.72, 0);
+    locoFrame.castShadow = true;
+    locoFrame.receiveShadow = true;
+    this.trainLocoGroup.add(locoFrame);
+
+    addWheelSet(this.trainLocoGroup, [-2.3, 0, 2.2], this.trainLocoWheels);
+
+    // Slanted Cowcatcher Armor at nose (+Z)
+    const cowcatcherSlope = new THREE.Mesh(
+      this.getSharedGeo('train_cowcatcher_slope', () => new THREE.BoxGeometry(2.55, 1.15, 1.15)),
+      armorNavyMat,
+    );
+    cowcatcherSlope.position.set(0, 0.65, 3.85);
+    cowcatcherSlope.rotation.x = -0.52;
+    cowcatcherSlope.castShadow = true;
+    this.trainLocoGroup.add(cowcatcherSlope);
+
+    const cowcatcherProw = new THREE.Mesh(
+      this.getSharedGeo('train_cowcatcher_prow', () => {
+        const g = new THREE.ConeGeometry(1.38, 1.25, 4);
+        g.rotateY(Math.PI * 0.25);
+        g.rotateX(Math.PI * 0.5);
+        return g;
+      }),
+      trimGoldMat,
+    );
+    cowcatcherProw.position.set(0, 0.54, 4.25);
+    cowcatcherProw.scale.set(1.0, 0.65, 1.0);
+    this.trainLocoGroup.add(cowcatcherProw);
+
+    // Armored Cab (rear)
+    const locoCab = new THREE.Mesh(
+      this.getSharedGeo('train_loco_cab', () => new THREE.BoxGeometry(2.65, 2.05, 2.4)),
+      armorNavyMat,
+    );
+    locoCab.position.set(0, 1.98, -2.1);
+    locoCab.castShadow = true;
+    locoCab.receiveShadow = true;
+    this.trainLocoGroup.add(locoCab);
+
+    const cabVisor = new THREE.Mesh(
+      this.getSharedGeo('train_loco_visor', () => new THREE.BoxGeometry(2.2, 0.56, 0.16)),
+      cyanCoreMat,
+    );
+    cabVisor.position.set(0, 2.45, -0.88);
+    this.trainLocoGroup.add(cabVisor);
+
+    // Boiler Engine Hood + Plasma Boiler Core
+    const boilerBase = new THREE.Mesh(
+      this.getSharedGeo('train_boiler_base', () => new THREE.BoxGeometry(2.1, 1.25, 3.8)),
+      armorDarkMat,
+    );
+    boilerBase.position.set(0, 1.56, 1.05);
+    boilerBase.castShadow = true;
+    this.trainLocoGroup.add(boilerBase);
+
+    const boilerCoreGeo = this.getSharedGeo('train_boiler_core', () => {
+      const g = new THREE.CylinderGeometry(0.66, 0.66, 2.9, 14);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    this.trainLocoBoilerCore = new THREE.Mesh(boilerCoreGeo, cyanCoreMat);
+    this.trainLocoBoilerCore.position.set(0, 1.88, 1.15);
+    this.trainLocoGroup.add(this.trainLocoBoilerCore);
+
+    const boilerRingGeo = this.getSharedGeo('train_boiler_ring', () => new THREE.TorusGeometry(0.74, 0.07, 8, 20));
+    for (const rz of [0.1, 1.15, 2.2]) {
+      const ring = new THREE.Mesh(boilerRingGeo, trimGoldMat);
+      ring.position.set(0, 1.88, rz);
+      this.trainLocoGroup.add(ring);
+    }
+
+    // Armored Smokestack + Horn Beacon
+    const stack = new THREE.Mesh(
+      this.getSharedGeo('train_stack', () => new THREE.CylinderGeometry(0.32, 0.24, 0.85, 10)),
+      armorNavyMat,
+    );
+    stack.position.set(0, 2.75, 2.25);
+    this.trainLocoGroup.add(stack);
+
+    // Glowing Front Headlamp + Light Cone
+    const headlamp = new THREE.Mesh(
+      this.getSharedGeo('train_headlamp_lens', () => {
+        const g = new THREE.CylinderGeometry(0.28, 0.28, 0.16, 12);
+        g.rotateX(Math.PI * 0.5);
+        return g;
+      }),
+      headlampMat,
+    );
+    headlamp.position.set(0, 1.88, 2.98);
+    this.trainLocoGroup.add(headlamp);
+
+    const headBeam = new THREE.Mesh(
+      this.getSharedGeo('train_headlamp_beam', () => {
+        const g = new THREE.ConeGeometry(1.5, 6.2, 14, 1, true);
+        g.rotateX(-Math.PI * 0.5);
+        return g;
+      }),
+      headBeamMat,
+    );
+    headBeam.position.set(0, 1.75, 6.1);
+    this.trainLocoGroup.add(headBeam);
+
+    this.trainGroup.add(this.trainLocoGroup);
+
+    // 2. Two Flatbed Cargo Cars (Car 1 carries the Holographic Train Hack Chest)
+    const carFrameGeo = this.getSharedGeo('train_car_frame', () => new THREE.BoxGeometry(2.85, 0.36, 7.1));
+    const carDeckGeo = this.getSharedGeo('train_car_deck', () => new THREE.BoxGeometry(3.2, 0.22, 7.2));
+    const carTrimGeo = this.getSharedGeo('train_car_trim', () => new THREE.BoxGeometry(0.1, 0.14, 7.25));
+    const gangwayGeo = this.getSharedGeo('train_gangway', () => new THREE.BoxGeometry(2.1, 0.12, 1.15));
+    const stanchionGeo = this.getSharedGeo('train_stanchion', () => new THREE.BoxGeometry(0.14, 0.42, 0.14));
+    const crateGeo = this.getSharedGeo('train_crate_geo', () => new THREE.BoxGeometry(1.05, 0.88, 1.35));
+
+    this.trainCargoCarGroups = [];
+    for (let carIdx = 0; carIdx < 2; carIdx++) {
+      const carGroup = new THREE.Group();
+      carGroup.name = `ApexTrainCargoCar${carIdx + 1}`;
+
+      const underFrame = new THREE.Mesh(carFrameGeo, armorDarkMat);
+      underFrame.position.set(0, 0.68, 0);
+      underFrame.castShadow = true;
+      carGroup.add(underFrame);
+
+      addWheelSet(carGroup, [-2.2, 2.2], this.trainCargoWheels);
+
+      const deck = new THREE.Mesh(carDeckGeo, deckMat);
+      deck.position.set(0, TRAIN_DECK_HEIGHT - 0.11, 0);
+      deck.castShadow = true;
+      deck.receiveShadow = true;
+      carGroup.add(deck);
+
+      for (const sx of [-1.56, 1.56]) {
+        const trim = new THREE.Mesh(carTrimGeo, carIdx === 0 ? cyanCoreMat : trimGoldMat);
+        trim.position.set(sx, TRAIN_DECK_HEIGHT - 0.02, 0);
+        carGroup.add(trim);
+        for (const sz of [-3.3, -1.1, 1.1, 3.3]) {
+          const post = new THREE.Mesh(stanchionGeo, armorNavyMat);
+          post.position.set(sx, TRAIN_DECK_HEIGHT + 0.18, sz);
+          carGroup.add(post);
+        }
+      }
+
+      // Front coupling gangway bridge
+      const gangway = new THREE.Mesh(gangwayGeo, armorNavyMat);
+      gangway.position.set(0, TRAIN_DECK_HEIGHT - 0.06, 3.9);
+      carGroup.add(gangway);
+
+      if (carIdx === 0) {
+        // Cargo Car 1: Glowing Holographic Train Hack Chest
+        this.trainChestGroup = new THREE.Group();
+        this.trainChestGroup.name = 'ApexTrainHackChest';
+        this.trainChestGroup.position.set(0, TRAIN_DECK_HEIGHT, TRAIN_CHEST_LOCAL_Z);
+
+        const chestPlinth = new THREE.Mesh(
+          this.getSharedGeo('train_chest_plinth', () => new THREE.BoxGeometry(1.65, 0.14, 1.2)),
+          armorDarkMat,
+        );
+        chestPlinth.position.y = 0.07;
+        this.trainChestGroup.add(chestPlinth);
+
+        const chestBody = new THREE.Mesh(
+          this.getSharedGeo('train_chest_body', () => new THREE.BoxGeometry(1.32, 0.54, 0.86)),
+          trimGoldMat,
+        );
+        chestBody.position.y = 0.41;
+        chestBody.castShadow = true;
+        this.trainChestGroup.add(chestBody);
+
+        this.trainChestLidPivot = new THREE.Group();
+        this.trainChestLidPivot.position.set(0, 0.68, -0.43);
+        const chestLid = new THREE.Mesh(
+          this.getSharedGeo('train_chest_lid', () => new THREE.BoxGeometry(1.38, 0.22, 0.92)),
+          armorNavyMat,
+        );
+        chestLid.position.set(0, 0.11, 0.43);
+        chestLid.castShadow = true;
+        this.trainChestLidPivot.add(chestLid);
+        this.trainChestGroup.add(this.trainChestLidPivot);
+
+        this.trainChestHoloRing = new THREE.Mesh(
+          this.getSharedGeo('train_chest_holo_ring', () => {
+            const g = new THREE.TorusGeometry(0.76, 0.05, 8, 24);
+            g.rotateX(Math.PI * 0.32);
+            return g;
+          }),
+          this.trainChestReadyMat,
+        );
+        this.trainChestHoloRing.position.y = 1.48;
+        this.trainChestGroup.add(this.trainChestHoloRing);
+
+        this.trainChestAura = new THREE.Mesh(
+          this.getSharedGeo('train_chest_aura_geo', () => new THREE.CylinderGeometry(0.55, 0.82, 2.2, 12, 1, true)),
+          chestAuraMat,
+        );
+        this.trainChestAura.position.y = 1.15;
+        this.trainChestGroup.add(this.trainChestAura);
+
+        carGroup.add(this.trainChestGroup);
+      } else {
+        // Cargo Car 2: Tactical cover crates on sides leaving open center deck
+        const crateA = new THREE.Mesh(crateGeo, crateMat);
+        crateA.position.set(-0.92, TRAIN_DECK_HEIGHT + 0.44, 1.45);
+        crateA.castShadow = true;
+        const crateB = new THREE.Mesh(crateGeo, armorNavyMat);
+        crateB.position.set(0.92, TRAIN_DECK_HEIGHT + 0.44, -1.35);
+        crateB.castShadow = true;
+        const canister = new THREE.Mesh(
+          this.getSharedGeo('train_slurp_canister', () => new THREE.CylinderGeometry(0.32, 0.32, 0.95, 10)),
+          cyanCoreMat,
+        );
+        canister.position.set(-0.95, TRAIN_DECK_HEIGHT + 0.48, -1.6);
+        carGroup.add(crateA, crateB, canister);
+      }
+
+      this.trainCargoCarGroups.push(carGroup);
+      this.trainGroup.add(carGroup);
+    }
+  }
+
+  private syncTrainChestVisual(): void {
+    if (!this.trainChestLidPivot) return;
+    if (this.trainState.chestHacked) {
+      this.trainChestLidPivot.rotation.x = -1.35;
+      this.trainChestAura.visible = false;
+      this.trainChestHoloRing.material = this.trainChestCooldownMat;
+      this.trainChestHoloRing.scale.setScalar(0.75);
+    } else {
+      this.trainChestLidPivot.rotation.x = -this.trainState.chestHackProgress * 0.42;
+      this.trainChestAura.visible = true;
+      this.trainChestHoloRing.material = this.trainChestReadyMat;
+      const scale = 1.0 + this.trainState.chestHackProgress * 0.35;
+      this.trainChestHoloRing.scale.setScalar(scale);
+    }
+  }
+
+  private syncTrainTransforms(recordDelta: boolean, wheelDt: number): void {
+    if (!this.trainCurve) return;
+
+    const uLoco = this.wrapUnitInterval(this.trainState.t);
+    const pLoco = this.trainCurve.getPointAt(uLoco);
+    const tanLoco = this.trainCurve.getTangentAt(uLoco).normalize();
+    const yawLoco = Math.atan2(tanLoco.x, tanLoco.z);
+    const pitchLoco = -Math.asin(Math.max(-0.5, Math.min(0.5, tanLoco.y)));
+
+    this.trainState.x = pLoco.x;
+    this.trainState.y = pLoco.y;
+    this.trainState.z = pLoco.z;
+    this.trainState.yaw = yawLoco;
+
+    this.trainLocoGroup.position.set(pLoco.x, pLoco.y, pLoco.z);
+    this.trainLocoGroup.rotation.order = 'YXZ';
+    this.trainLocoGroup.rotation.set(pitchLoco, yawLoco, 0);
+
+    const distsBehind = [TRAIN_CAR_1_DIST_BEHIND, TRAIN_CAR_2_DIST_BEHIND];
+    for (let i = 0; i < distsBehind.length; i++) {
+      const uCar = this.wrapUnitInterval(this.trainState.t - distsBehind[i] / this.trainTrackLength);
+      const pCar = this.trainCurve.getPointAt(uCar);
+      const tanCar = this.trainCurve.getTangentAt(uCar).normalize();
+      const yawCar = Math.atan2(tanCar.x, tanCar.z);
+      const pitchCar = -Math.asin(Math.max(-0.5, Math.min(0.5, tanCar.y)));
+
+      const prevCar = this.trainState.carPositions[i];
+      if (!this.trainCarMetas[i]) {
+        this.trainCarMetas[i] = {
+          prevX: pCar.x,
+          prevY: pCar.y,
+          prevZ: pCar.z,
+          prevYaw: yawCar,
+          deltaX: 0,
+          deltaZ: 0,
+        };
+      }
+      const meta = this.trainCarMetas[i];
+      if (recordDelta && prevCar) {
+        meta.prevX = prevCar.x;
+        meta.prevY = prevCar.y;
+        meta.prevZ = prevCar.z;
+        meta.prevYaw = prevCar.yaw;
+        meta.deltaX = pCar.x - prevCar.x;
+        meta.deltaZ = pCar.z - prevCar.z;
+      } else {
+        meta.prevX = pCar.x;
+        meta.prevY = pCar.y;
+        meta.prevZ = pCar.z;
+        meta.prevYaw = yawCar;
+        meta.deltaX = 0;
+        meta.deltaZ = 0;
+      }
+
+      this.trainState.carPositions[i] = {
+        x: pCar.x,
+        y: pCar.y,
+        z: pCar.z,
+        yaw: yawCar,
+      };
+
+      const carGroup = this.trainCargoCarGroups[i];
+      if (carGroup) {
+        carGroup.position.set(pCar.x, pCar.y, pCar.z);
+        carGroup.rotation.order = 'YXZ';
+        carGroup.rotation.set(pitchCar, yawCar, 0);
+      }
+    }
+
+    if (wheelDt > 0) {
+      const spinAngle = (wheelDt * this.trainState.speed) / 0.42;
+      for (let i = 0; i < this.trainLocoWheels.length; i++) {
+        this.trainLocoWheels[i].rotation.x += spinAngle;
+      }
+      for (let i = 0; i < this.trainCargoWheels.length; i++) {
+        this.trainCargoWheels[i].rotation.x += spinAngle;
+      }
+    }
+  }
+
+  private buildApexTrain(_terrain: TerrainQuery): void {
+    this.trainGroup = new THREE.Group();
+    this.trainGroup.name = 'ApexExpressTrain';
+    this.trainTrackGroup = new THREE.Group();
+    this.trainTrackGroup.name = 'ApexTrainTrack';
+    this.trainGroup.add(this.trainTrackGroup);
+    this.group.add(this.trainGroup);
+
+    this.buildTrainConsistVisuals();
+    this.buildTrainTrack(TRAIN_MID_RING_WAYPOINTS_XZ, false);
+    this.trainInQaShowcaseMode = false;
+    this.trainState = {
+      active: true,
+      x: 0,
+      y: 0,
+      z: 0,
+      yaw: 0,
+      speed: TRAIN_SPEED_MPS,
+      t: 0,
+      trackPoints: this.trainTrackPoints.map((p) => ({ ...p })),
+      chestHacked: false,
+      chestHackProgress: 0,
+      chestCooldownSec: 0,
+      carPositions: [],
+    };
+    this.syncTrainTransforms(false, 0);
+    this.syncTrainChestVisual();
+  }
+
+  private isPointOnOrientedDeck(
+    px: number,
+    pz: number,
+    cx: number,
+    cz: number,
+    yaw: number,
+    halfW: number,
+    halfL: number,
+  ): boolean {
+    const dx = px - cx;
+    const dz = pz - cz;
+    const cos = Math.cos(yaw);
+    const sin = Math.sin(yaw);
+    const localX = dx * cos - dz * sin;
+    const localZ = dx * sin + dz * cos;
+    return Math.abs(localX) <= halfW && Math.abs(localZ) <= halfL;
+  }
+
+  private getTrainChestWorldPos(): Vec3Like {
+    const car1 = this.trainState.carPositions[0];
+    if (!car1) {
+      return {
+        x: this.trainState.x,
+        y: this.trainState.y + TRAIN_DECK_HEIGHT + 0.55,
+        z: this.trainState.z,
+      };
+    }
+    return {
+      x: car1.x + Math.sin(car1.yaw) * TRAIN_CHEST_LOCAL_Z,
+      y: car1.y + TRAIN_DECK_HEIGHT + 0.55,
+      z: car1.z + Math.cos(car1.yaw) * TRAIN_CHEST_LOCAL_Z,
+    };
+  }
+
+  getTrainState(): ApexTrainState {
+    return {
+      ...this.trainState,
+      trackPoints: this.trainTrackPoints.map((p) => ({ ...p })),
+      carPositions: this.trainState.carPositions.map((c) => ({ ...c })),
+    };
+  }
+
+  getTrainTrackPoints(): Vec3Like[] {
+    return this.trainTrackPoints.map((p) => ({ ...p }));
+  }
+
+  getTrainPlatformSupport(pos: Vec3Like): TrainPlatformSupport | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !this.trainState.active
+    ) {
+      return null;
+    }
+
+    for (let i = 0; i < this.trainState.carPositions.length; i++) {
+      const car = this.trainState.carPositions[i];
+      const meta = this.trainCarMetas[i];
+      const deckY = car.y + TRAIN_DECK_HEIGHT;
+      const prevDeckY = meta ? meta.prevY + TRAIN_DECK_HEIGHT : deckY;
+      const minDeckY = Math.min(deckY, prevDeckY);
+      const maxDeckY = Math.max(deckY, prevDeckY);
+      if (pos.y < minDeckY - 0.55 || pos.y > maxDeckY + 0.95) {
+        continue;
+      }
+
+      const onCurrent = this.isPointOnOrientedDeck(
+        pos.x,
+        pos.z,
+        car.x,
+        car.z,
+        car.yaw,
+        TRAIN_CAR_HALF_W,
+        TRAIN_CAR_HALF_L,
+      );
+      const onPrevious =
+        !onCurrent &&
+        meta !== undefined &&
+        this.isPointOnOrientedDeck(
+          pos.x,
+          pos.z,
+          meta.prevX,
+          meta.prevZ,
+          meta.prevYaw,
+          TRAIN_CAR_HALF_W,
+          TRAIN_CAR_HALF_L,
+        );
+
+      if (onCurrent || onPrevious) {
+        return {
+          deckY,
+          deltaX: meta ? meta.deltaX : 0,
+          deltaZ: meta ? meta.deltaZ : 0,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  isNearTrainChest(
+    pos: Vec3Like,
+    radius = TRAIN_CHEST_NEARBY_RADIUS,
+  ): boolean {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius < 0 ||
+      !this.trainState.active ||
+      this.trainState.chestHacked
+    ) {
+      return false;
+    }
+
+    const chestPos = this.getTrainChestWorldPos();
+    const horizDist = Math.hypot(pos.x - chestPos.x, pos.z - chestPos.z);
+    const vertDist = Math.abs(pos.y - chestPos.y);
+    return horizDist <= radius && vertDist <= Math.max(2.6, radius);
+  }
+
+  advanceTrainChestHack(
+    dt: number,
+    actorId: string,
+  ): TrainChestHackResult | null {
+    if (
+      !this.trainState.active ||
+      this.trainState.chestHacked ||
+      !actorId ||
+      !Number.isFinite(dt) ||
+      dt <= 0
+    ) {
+      return null;
+    }
+
+    this.trainHackTouchedThisFrame = true;
+    this.trainHackIdleSec = 0;
+
+    this.trainState.chestHackProgress = Math.min(
+      1,
+      this.trainState.chestHackProgress + dt / TRAIN_HACK_DURATION_SEC,
+    );
+
+    const lootPos = this.getTrainChestWorldPos();
+    if (this.trainState.chestHackProgress >= 1 - 1e-7) {
+      this.trainState.chestHackProgress = 1;
+      this.trainState.chestHacked = true;
+      this.trainState.chestCooldownSec = TRAIN_CHEST_COOLDOWN_SEC;
+      this.syncTrainChestVisual();
+
+      this.eventBus?.emit('sound:play', {
+        id: 'train_hack_complete',
+        position: { ...lootPos },
+        volume: 0.95,
+        spatial: true,
+      });
+      this.eventBus?.emit('vfx:chest_open', { position: { ...lootPos } });
+
+      return {
+        completed: true,
+        progress: 1,
+        lootPos,
+      };
+    }
+
+    this.syncTrainChestVisual();
+    return {
+      completed: false,
+      progress: this.trainState.chestHackProgress,
+      lootPos,
+    };
+  }
+
+  qaPlaceWave9Showcase(
+    centerPos: Vec3Like,
+    yaw = 0,
+  ): Wave9ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities(false);
+
+    const fwdX = Math.sin(yaw);
+    const fwdZ = Math.cos(yaw);
+    const rightX = -Math.cos(yaw);
+    const rightZ = Math.sin(yaw);
+
+    // 1. Glowing Zero-Point Meteor Crater with Hop Crystals beside the showcase avenue
+    const craterSpot = this.findDryGroundNear(
+      centerPos,
+      -rightX * 5.2 - fwdX * 1.0,
+      -rightZ * 5.2 - fwdZ * 1.0,
+    );
+    const craterVisual = this.createMeteorCraterEntry({
+      id: 'crater_qa_showcase',
+      poiId: 'qa_showcase',
+      x: craterSpot.x,
+      z: craterSpot.z,
+      radius: METEOR_CRATER_RADIUS,
+      isQaShowcase: true,
+    });
+
+    // 2. Closed-loop Showcase Rail passing cleanly across the showcase avenue ahead of centerPos
+    const localOval: ReadonlyArray<[number, number]> = [
+      [-34, 5.5],
+      [-16, 5.5],
+      [0, 5.5],
+      [16, 5.5],
+      [34, 5.5],
+      [46, 16.0],
+      [42, 34.0],
+      [20, 44.0],
+      [0, 46.0],
+      [-20, 44.0],
+      [-42, 34.0],
+      [-46, 16.0],
+    ];
+    const showcaseXZ: Array<[number, number]> = localOval.map(([ro, fo]) => [
+      centerPos.x + rightX * ro + fwdX * fo,
+      centerPos.z + rightZ * ro + fwdZ * fo,
+    ]);
+
+    this.buildTrainTrack(showcaseXZ, true);
+    this.trainInQaShowcaseMode = true;
+
+    // Place Locomotive slightly ahead (+5.5m right) so Cargo Car 1 + Chest frame dead-center!
+    const targetLocoX = centerPos.x + fwdX * 5.5 + rightX * 5.5;
+    const targetLocoZ = centerPos.z + fwdZ * 5.5 + rightZ * 5.5;
+    let bestT = 0;
+    let bestDistSq = Infinity;
+    const searchSteps = 120;
+    for (let i = 0; i < searchSteps; i++) {
+      const u = i / searchSteps;
+      this.trainCurve.getPointAt(u, _tmpRailPos);
+      this.trainCurve.getTangentAt(u, _tmpRailTan).normalize();
+      if (_tmpRailTan.x * rightX + _tmpRailTan.z * rightZ <= 0.4) continue;
+      const dSq = (_tmpRailPos.x - targetLocoX) ** 2 + (_tmpRailPos.z - targetLocoZ) ** 2;
+      if (dSq < bestDistSq) {
+        bestDistSq = dSq;
+        bestT = u;
+      }
+    }
+
+    this.trainState.active = true;
+    this.trainState.t = bestT;
+    this.trainState.chestHacked = false;
+    this.trainState.chestHackProgress = 0;
+    this.trainState.chestCooldownSec = 0;
+    this.trainHackIdleSec = 0;
+    this.trainHackTouchedThisFrame = false;
+    this.trainHornTimer = TRAIN_HORN_INITIAL_SEC;
+    this.syncTrainTransforms(false, 0);
+    this.syncTrainChestVisual();
+
+    return {
+      train: this.getTrainState(),
+      crater: craterVisual.data,
+    };
   }
 
   qaPlaceWave6Showcase(centerPos: Vec3Like): Wave6ShowcaseResult {
@@ -6253,6 +7589,27 @@ export class WorldInteractables {
       sb.foliageGroup.rotation.set(0, 0, 0);
       sb.foliageGroup.scale.set(1, 1, 1);
     }
+
+    for (const mc of this.meteorCratersMap.values()) {
+      mc.data.crystalAvailable = true;
+      mc.data.crystalRespawnSec = 0;
+      mc.crystalGroup.visible = true;
+      mc.shardsGroup.position.y = mc.baseShardsY;
+      mc.shardsGroup.rotation.set(0, 0, 0);
+      mc.auraRing.scale.set(1, 1, 1);
+    }
+
+    this.trainState.active = true;
+    this.trainState.speed = TRAIN_SPEED_MPS;
+    this.trainState.t = 0;
+    this.trainState.chestHacked = false;
+    this.trainState.chestHackProgress = 0;
+    this.trainState.chestCooldownSec = 0;
+    this.trainHackIdleSec = 0;
+    this.trainHackTouchedThisFrame = false;
+    this.trainHornTimer = TRAIN_HORN_INITIAL_SEC;
+    this.syncTrainTransforms(false, 0);
+    this.syncTrainChestVisual();
   }
 
   unlockVault(vaultId: string): UnlockVaultResult {
@@ -6638,10 +7995,92 @@ export class WorldInteractables {
         }
       }
     }
+
+    // Update Apex Express Moving Loot Train, chest cooldown/hack ring, and periodic train horn
+    if (this.trainState.active && this.trainTrackLength > 0) {
+      if (safeDt > 0) {
+        this.trainState.t = this.wrapUnitInterval(
+          this.trainState.t + (safeDt * this.trainState.speed) / this.trainTrackLength,
+        );
+        this.syncTrainTransforms(true, safeDt);
+
+        this.trainHornTimer -= safeDt;
+        if (this.trainHornTimer <= 0) {
+          this.trainHornTimer = TRAIN_HORN_INTERVAL_SEC;
+          this.eventBus?.emit('sound:play', {
+            id: 'train_horn',
+            position: {
+              x: this.trainState.x,
+              y: this.trainState.y + 2.5,
+              z: this.trainState.z,
+            },
+            volume: 0.72,
+            spatial: true,
+          });
+        }
+      }
+
+      if (this.trainState.chestHacked) {
+        this.trainState.chestCooldownSec = Math.max(
+          0,
+          this.trainState.chestCooldownSec - safeDt,
+        );
+        if (this.trainState.chestCooldownSec <= 0) {
+          this.trainState.chestCooldownSec = 0;
+          this.trainState.chestHacked = false;
+          this.trainState.chestHackProgress = 0;
+          this.syncTrainChestVisual();
+        }
+      } else {
+        if (this.trainHackTouchedThisFrame) {
+          this.trainHackTouchedThisFrame = false;
+          this.trainHackIdleSec = 0;
+        } else if (this.trainState.chestHackProgress > 0) {
+          this.trainHackIdleSec += safeDt;
+          if (this.trainHackIdleSec > TRAIN_HACK_DECAY_GRACE_SEC) {
+            this.trainState.chestHackProgress = Math.max(
+              0,
+              this.trainState.chestHackProgress - safeDt / TRAIN_HACK_DECAY_RATE_SEC,
+            );
+            this.syncTrainChestVisual();
+          }
+        }
+      }
+
+      if (this.trainLocoBoilerCore) {
+        const boilerPulse = 1 + Math.sin(elapsed * 5.2) * 0.06;
+        this.trainLocoBoilerCore.scale.set(boilerPulse, 1, boilerPulse);
+      }
+      if (this.trainChestHoloRing) {
+        this.trainChestHoloRing.rotation.y = elapsed * (this.trainState.chestHacked ? 0.5 : 2.1);
+      }
+    }
+
+    // Update 6 Zero-Point Meteor Impact Craters (crystal respawn timers & anti-gravity shimmer)
+    let craterIdx = 0;
+    for (const mc of this.meteorCratersMap.values()) {
+      if (!mc.data.crystalAvailable) {
+        mc.data.crystalRespawnSec = Math.max(0, mc.data.crystalRespawnSec - safeDt);
+        if (mc.data.crystalRespawnSec <= 0) {
+          mc.data.crystalRespawnSec = 0;
+          mc.data.crystalAvailable = true;
+          mc.crystalGroup.visible = true;
+        }
+      }
+      if (mc.data.crystalAvailable) {
+        const t = elapsed + craterIdx * 0.9;
+        mc.shardsGroup.position.y = mc.baseShardsY + Math.sin(t * 2.7) * 0.14;
+        mc.shardsGroup.rotation.y = t * 1.1;
+        const ringPulse = 1.0 + Math.sin(t * 3.2) * 0.08;
+        mc.auraRing.scale.set(ringPulse, ringPulse, ringPulse);
+      }
+      craterIdx++;
+    }
   }
 
   dispose(): void {
     this.group.clear();
+    this.clearTrainTrackVisuals();
     for (const g of this.geometries) g.dispose();
     this.geometries = [];
     for (const g of this.qaShowcaseGeos) g.dispose();
@@ -6694,6 +8133,27 @@ export class WorldInteractables {
     this.forecastTowersMap.clear();
     this.stealthBushes = [];
     this.stealthBushesMap.clear();
+    this.meteorCraters = [];
+    this.meteorCratersMap.clear();
+    this.trainTrackPoints = [];
+    this.trainCarMetas = [];
+    this.trainLocoWheels = [];
+    this.trainCargoCarGroups = [];
+    this.trainCargoWheels = [];
+    this.trainState = {
+      active: false,
+      x: 0,
+      y: 0,
+      z: 0,
+      yaw: 0,
+      speed: TRAIN_SPEED_MPS,
+      t: 0,
+      trackPoints: [],
+      chestHacked: false,
+      chestHackProgress: 0,
+      chestCooldownSec: 0,
+      carPositions: [],
+    };
     this.lootIslandGeyserRings = [];
     this.lootIslandState = {
       active: false,

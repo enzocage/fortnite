@@ -1,6 +1,7 @@
 import './ui.css';
 import { EventBus } from '../core';
 import type {
+  ApexTrainState,
   BannerMessage,
   CampfireEntity,
   CapturePointEntity,
@@ -19,6 +20,7 @@ import type {
   LootIslandState,
   MatchQuest,
   MatchSummary,
+  MeteorCraterEntity,
   ModBenchEntity,
   NpcSpecialistEntity,
   RebootVanEntity,
@@ -42,9 +44,11 @@ import {
   resolveChapterOverlayArgs,
   resolveFrontierOverlayArgs,
   resolveOverdriveOverlayArgs,
+  resolveSkyforgeOverlayArgs,
   type WorldChapterOverlay,
   type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
+  type WorldSkyforgeOverlay,
 } from './UIHelpers';
 
 export interface UIManagerCallbacks {
@@ -274,6 +278,20 @@ export class UIManager {
       resolved.modBenches,
       resolved.forecastTowers,
     );
+  }
+
+  setWorldSkyforgeOverlay(
+    train: ApexTrainState | null,
+    craters: MeteorCraterEntity[],
+  ): void;
+  setWorldSkyforgeOverlay(overlay: WorldSkyforgeOverlay): void;
+  setWorldSkyforgeOverlay(
+    trainOrOverlay: ApexTrainState | null | WorldSkyforgeOverlay,
+    craters?: MeteorCraterEntity[],
+  ): void {
+    const resolved = resolveSkyforgeOverlayArgs(trainOrOverlay, craters);
+    this.fullMap.setWorldSkyforgeOverlay(resolved.train, resolved.craters);
+    this.hud.setWorldSkyforgeOverlay(resolved.train, resolved.craters);
   }
 
   setPhase(phase: GamePhase): void {

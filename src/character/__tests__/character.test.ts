@@ -85,9 +85,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 29 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 31 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(29);
+    expect(allIds).toHaveLength(31);
 
     const seenNames = new Set<string>();
 
@@ -3271,6 +3271,394 @@ describe('Wave-8 Port-A-Bunker, EMP Grenade, Weapon Mods, Team Blue Chevron & VF
     expect(vfx.getEmpBlastEffectCount()).toBe(0);
     expect(vfx.getWeaponModEffectCount()).toBe(0);
     expect(vfx.getForecastPulseEffectCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-9 Skyforge Jetpack, Plasma Flamethrower, Low-G Boot Aura, Burning Embers & VFX Channels', () => {
+  it("builds bespoke Skyforge Jetpack and Dragon's Breath Plasma Flamethrower models with muzzleOffset, wrap targets, and zero casing ejection", () => {
+    const jetpack = createWeaponModel('jetpack');
+    expect(jetpack.name).toBe('weapon_jetpack');
+    expect(jetpack.userData.wrapDisabled).toBe(true);
+    expect(isRangedWeapon('jetpack')).toBe(false);
+    expect(isThrowableWeapon('jetpack')).toBe(false);
+    expect(hasMuzzleOffset('jetpack')).toBe(false);
+    expect(countMeshes(jetpack)).toBeGreaterThanOrEqual(12);
+    assertFiniteBox(jetpack);
+    disposeObject3D(jetpack);
+
+    const flamer = createWeaponModel('plasma_flamethrower');
+    expect(flamer.name).toBe('weapon_plasma_flamethrower');
+    expect(isRangedWeapon('plasma_flamethrower')).toBe(true);
+    expect(hasMuzzleOffset('plasma_flamethrower')).toBe(true);
+    expect(countMeshes(flamer)).toBeGreaterThanOrEqual(18);
+    const flamerMuzzle = flamer.userData.muzzleOffset as THREE.Vector3;
+    expect(flamerMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(flamerMuzzle.z).toBeGreaterThan(0.5);
+
+    const orangeHex = new THREE.Color('#f97316').getHex();
+    const canisterRedHex = new THREE.Color('#dc2626').getHex();
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    let hasPilotFlame = false;
+    let hasCanister = false;
+    let hasCyanPlasma = false;
+    let wrapTargets = 0;
+
+    flamer.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) wrapTargets++;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.color.getHex() === orangeHex) hasPilotFlame = true;
+        if (child.material.color.getHex() === canisterRedHex) hasCanister = true;
+        if (child.material.emissive.getHex() === cyanHex) hasCyanPlasma = true;
+      }
+    });
+    expect(hasPilotFlame).toBe(true);
+    expect(hasCanister).toBe(true);
+    expect(hasCyanPlasma).toBe(true);
+    expect(wrapTargets).toBeGreaterThanOrEqual(3);
+
+    applyWeaponWrap(flamer, 'neon_cyber');
+    const neonMat = getWeaponWrapMaterial('neon_cyber');
+    let wrappedCount = 0;
+    flamer.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) {
+        expect(child.material).toBe(neonMat);
+        wrappedCount++;
+      } else {
+        expect(child.material).not.toBe(neonMat);
+      }
+    });
+    expect(wrappedCount).toBe(wrapTargets);
+    assertFiniteBox(flamer);
+    disposeObject3D(flamer);
+
+    // Muzzle flash for plasma_flamethrower emits fiery orange flash WITHOUT brass casing ejection
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.35, z: 0.65 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'plasma_flamethrower',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(1);
+    vfx.dispose();
+  });
+
+  it('toggles, animates, and disposes Back-Mounted 3D Skyforge Jetpack and thrust flame cones via CharacterRig and CharacterAnimator', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    expect(rig.hasJetpackEquipped()).toBe(false);
+    expect(rig.isJetpackFlameVisible()).toBe(false);
+    expect(rig.getJetpackBackGroup()).toBeNull();
+
+    // Thrust flag without hasJetpack does not activate flames
+    rig.updateFromState(makeRenderState({ hasJetpack: false, isJetpackThrusting: true }));
+    expect(rig.hasJetpackEquipped()).toBe(false);
+    expect(rig.isJetpackFlameVisible()).toBe(false);
+
+    // Equipping jetpack attaches jetpack_back_group to chest torso back and hides flame cones while idle
+    rig.updateFromState(makeRenderState({ hasJetpack: true, isJetpackThrusting: false }));
+    expect(rig.hasJetpackEquipped()).toBe(true);
+    expect(rig.isJetpackFlameVisible()).toBe(false);
+    expect(rig.joints.backblingSocket.visible).toBe(false);
+
+    const jetpackGrp = rig.joints.chest.getObjectByName('jetpack_back_group') as THREE.Group;
+    expect(jetpackGrp).toBeInstanceOf(THREE.Group);
+    expect(jetpackGrp.visible).toBe(true);
+    expect(countMeshes(jetpackGrp)).toBeGreaterThanOrEqual(16);
+
+    const flameGrp = jetpackGrp.getObjectByName('jetpack_flame_group') as THREE.Group;
+    expect(flameGrp).toBeInstanceOf(THREE.Group);
+    expect(flameGrp.visible).toBe(false);
+    assertFiniteBox(rig.getGroup());
+
+    // Activating thrust flares twin flame cones brightly and animates across CharacterAnimator ticks
+    animator.update(
+      rig,
+      makeRenderState({
+        animState: 'jump',
+        grounded: false,
+        velocityY: 6.2,
+        hasJetpack: true,
+        isJetpackThrusting: true,
+        weaponId: 'plasma_flamethrower',
+      }),
+      0.03,
+    );
+    expect(rig.hasJetpackEquipped()).toBe(true);
+    expect(rig.isJetpackFlameVisible()).toBe(true);
+    expect(flameGrp.visible).toBe(true);
+
+    const firstFlameMesh = flameGrp.children[0] as THREE.Mesh;
+    const scaleA = firstFlameMesh.scale.y;
+    animator.update(
+      rig,
+      makeRenderState({
+        animState: 'jump',
+        grounded: false,
+        velocityY: 7.5,
+        hasJetpack: true,
+        isJetpackThrusting: true,
+        weaponId: 'plasma_flamethrower',
+      }),
+      0.04,
+    );
+    const scaleB = firstFlameMesh.scale.y;
+    expect(scaleB).not.toBeCloseTo(scaleA, 4);
+    assertFiniteBox(rig.getGroup());
+
+    // Unequipping jetpack hides pack & flames and restores backbling & standard bounds
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', hasJetpack: false, isJetpackThrusting: false }),
+      0,
+    );
+    expect(rig.hasJetpackEquipped()).toBe(false);
+    expect(rig.isJetpackFlameVisible()).toBe(false);
+    expect(jetpackGrp.visible).toBe(false);
+    expect(flameGrp.visible).toBe(false);
+    expect(rig.joints.backblingSocket.visible).toBe(true);
+    const normalBox = assertFiniteBox(rig.getGroup());
+    expect(normalBox.max.y - normalBox.min.y).toBeLessThan(1.98);
+
+    rig.dispose();
+    expect(rig.joints.chest.getObjectByName('jetpack_back_group')).toBeUndefined();
+  });
+
+  it('renders and animates Violet Low-Gravity Boot Aura and Burning Flame Ember tinting cleanly', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    expect(rig.hasLowGravityBuff()).toBe(false);
+    expect(rig.isBurningActive()).toBe(false);
+
+    // Measure baseline chest emissive intensity
+    const chestVisual = rig.joints.chest.getObjectByName('chest_visual') as THREE.Group;
+    const chestMesh = chestVisual.children[0] as THREE.Mesh;
+    const chestMat = chestMesh.material as THREE.MeshStandardMaterial;
+    const baseEmissiveIntensity = chestMat.emissiveIntensity;
+
+    // Enable Low-Gravity Boot Aura + Burning Ember tinting via CharacterAnimator
+    animator.update(
+      rig,
+      makeRenderState({
+        animState: 'jump',
+        grounded: false,
+        hasLowGravityBuff: true,
+        isBurning: true,
+      }),
+      0.04,
+    );
+    expect(rig.hasLowGravityBuff()).toBe(true);
+    expect(rig.isBurningActive()).toBe(true);
+
+    const bootAuras = rig.getLowGravityBootAuras();
+    expect(bootAuras).toHaveLength(2);
+    expect(bootAuras[0].visible).toBe(true);
+    expect(bootAuras[1].visible).toBe(true);
+    expect(countMeshes(bootAuras[0])).toBeGreaterThanOrEqual(6);
+
+    const emberGrp = rig.getBurningEmberGroup();
+    expect(emberGrp).toBeInstanceOf(THREE.Group);
+    expect(emberGrp!.visible).toBe(true);
+    expect(chestMat.emissiveIntensity).toBeGreaterThan(baseEmissiveIntensity + 0.15);
+
+    const bootBox = assertFiniteBox(rig.getGroup());
+    expect(bootBox.min.y).toBeCloseTo(0, 1);
+
+    // Stepping animation moves low-G boot motes cleanly
+    const moteBeforeY = bootAuras[0].children[2].position.y;
+    animator.update(
+      rig,
+      makeRenderState({
+        animState: 'jump',
+        grounded: false,
+        hasLowGravityBuff: true,
+        isBurning: true,
+      }),
+      0.06,
+    );
+    expect(bootAuras[0].children[2].position.y).not.toBeCloseTo(moteBeforeY, 3);
+
+    // Disabling both restores base emissives and hides boot & ember visuals cleanly
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', hasLowGravityBuff: false, isBurning: false }),
+      0.05,
+    );
+    expect(rig.hasLowGravityBuff()).toBe(false);
+    expect(rig.isBurningActive()).toBe(false);
+    expect(bootAuras[0].visible).toBe(false);
+    expect(bootAuras[1].visible).toBe(false);
+    expect(emberGrp!.visible).toBe(false);
+    expect(chestMat.emissiveIntensity).toBeCloseTo(baseEmissiveIntensity, 4);
+
+    rig.dispose();
+    expect(rig.joints.leftFoot.getObjectByName('low_gravity_boot_aura_0')).toBeUndefined();
+    expect(rig.joints.chest.getObjectByName('burning_ember_aura')).toBeUndefined();
+  });
+
+  it('spawns, updates, expires, guards NaN/range, clears, and disposes all 4 Wave-9 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:jetpack_flame
+    bus.emit('vfx:jetpack_flame', {
+      position: { x: 2, y: 4.5, z: -3 },
+      direction: { x: 0, y: -1, z: 0 },
+      intensity: 1.2,
+    });
+    expect(vfx.getActiveJetpackFlameCount()).toBe(1);
+
+    // 2. vfx:flame_stream
+    bus.emit('vfx:flame_stream', {
+      origin: { x: 0, y: 1.4, z: 0.7 },
+      direction: { x: 0, y: 0, z: 1 },
+      range: 16,
+    });
+    expect(vfx.getActiveFlameStreamCount()).toBe(1);
+
+    // 3. vfx:meteor_strike
+    bus.emit('vfx:meteor_strike', {
+      position: { x: -18, y: 0, z: 22 },
+      radius: 12,
+    });
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(1);
+
+    // 4. vfx:hop_crystal_aura
+    bus.emit('vfx:hop_crystal_aura', {
+      position: { x: 5, y: 0, z: 5 },
+    });
+    expect(vfx.getActiveHopCrystalAuraCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    // Advance 0.20s -> meteor descending with trail, all 4 active and finite
+    for (let i = 0; i < 4; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Advance past 0.30s -> jetpack_flame (0.26s) expires
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveJetpackFlameCount()).toBe(0);
+    expect(vfx.getActiveFlameStreamCount()).toBe(1);
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(1);
+    expect(vfx.getActiveHopCrystalAuraCount()).toBe(1);
+
+    // Advance past 0.40s -> flame_stream (0.36s) expires; meteor_strike shock ring expanding
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveFlameStreamCount()).toBe(0);
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(1);
+    expect(vfx.getActiveHopCrystalAuraCount()).toBe(1);
+
+    // Advance past 1.00s -> hop_crystal_aura (0.95s) expires; meteor_strike still active
+    for (let i = 0; i < 12; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveHopCrystalAuraCount()).toBe(0);
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(1);
+
+    // Advance past 1.50s -> meteor_strike (1.45s) expires cleanly back to pool
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Strict NaN / Infinity position guards
+    bus.emit('vfx:jetpack_flame', {
+      position: { x: Number.NaN, y: 1, z: 1 },
+      direction: { x: 0, y: -1, z: 0 },
+      intensity: 1,
+    });
+    bus.emit('vfx:flame_stream', {
+      origin: { x: 0, y: Number.POSITIVE_INFINITY, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      range: 14,
+    });
+    bus.emit('vfx:meteor_strike', {
+      position: { x: 0, y: 0, z: Number.NEGATIVE_INFINITY },
+      radius: 10,
+    });
+    bus.emit('vfx:hop_crystal_aura', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+    });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Zero-length directions & negative/NaN intensity/range/radius safely clamped without NaN transforms
+    bus.emit('vfx:jetpack_flame', {
+      position: { x: 1, y: 2, z: 3 },
+      direction: { x: 0, y: 0, z: 0 },
+      intensity: Number.NaN,
+    });
+    bus.emit('vfx:flame_stream', {
+      origin: { x: 1, y: 1, z: 1 },
+      direction: { x: 0, y: 0, z: 0 },
+      range: -5,
+    });
+    bus.emit('vfx:meteor_strike', {
+      position: { x: 4, y: 0, z: 4 },
+      radius: -20,
+    });
+    expect(vfx.getActiveJetpackFlameCount()).toBe(1);
+    expect(vfx.getActiveFlameStreamCount()).toBe(1);
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(1);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 4 Wave-9 pools immediately
+    bus.emit('vfx:hop_crystal_aura', { position: { x: 0, y: 0, z: 0 } });
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    vfx.clear();
+    expect(vfx.getActiveJetpackFlameCount()).toBe(0);
+    expect(vfx.getActiveFlameStreamCount()).toBe(0);
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(0);
+    expect(vfx.getActiveHopCrystalAuraCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 4 Wave-9 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:jetpack_flame', {
+      position: { x: 0, y: 2, z: 0 },
+      direction: { x: 0, y: -1, z: 0 },
+      intensity: 1,
+    });
+    bus.emit('vfx:flame_stream', {
+      origin: { x: 0, y: 1, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      range: 14,
+    });
+    bus.emit('vfx:meteor_strike', { position: { x: 0, y: 0, z: 0 }, radius: 10 });
+    bus.emit('vfx:hop_crystal_aura', { position: { x: 0, y: 0, z: 0 } });
+    expect(vfx.getActiveJetpackFlameCount()).toBe(0);
+    expect(vfx.getActiveFlameStreamCount()).toBe(0);
+    expect(vfx.getActiveMeteorStrikeCount()).toBe(0);
+    expect(vfx.getActiveHopCrystalAuraCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

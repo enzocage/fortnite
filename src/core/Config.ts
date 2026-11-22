@@ -1137,6 +1137,79 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     maxStack: 6,
     allowedRarities: ['rare', 'epic'],
   },
+  jetpack: {
+    id: 'jetpack',
+    name: 'Skyforge Jetpack',
+    shortName: 'JETPACK',
+    category: 'throwable',
+    ammoType: null,
+    isConsumable: false,
+    isJetpack: true,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 0,
+    baseDamage: 0,
+    structureDamage: 0,
+    headshotMultiplier: 1,
+    fireRate: 1,
+    pellets: 0,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0,
+    adsSpread: 0,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 0,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0,
+    recoilYaw: 0,
+    maxStack: 1,
+    allowedRarities: ['epic', 'legendary'],
+  },
+  plasma_flamethrower: {
+    id: 'plasma_flamethrower',
+    name: "Dragon's Breath Torch",
+    shortName: 'FLAME TORCH',
+    category: 'smg',
+    ammoType: 'light',
+    isConsumable: false,
+    isFlamethrower: true,
+    burnDps: 8,
+    burnDurationSec: 3.0,
+    woodDamageMult: 3.5,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 2.2,
+    baseDamage: 14,
+    structureDamage: 24,
+    headshotMultiplier: 1.25,
+    fireRate: 12.0,
+    pellets: 1,
+    magSize: 60,
+    reloadTime: 2.6,
+    baseSpread: 0.045,
+    adsSpread: 0.032,
+    crouchSpreadMult: 0.85,
+    moveSpreadAdd: 0.012,
+    bloomPerShot: 0.002,
+    bloomMax: 0.04,
+    bloomRecovery: 0.09,
+    range: 18,
+    falloffStart: 10,
+    falloffEnd: 18,
+    minFalloffMult: 0.55,
+    recoilPitch: 0.005,
+    recoilYaw: 0.004,
+    maxStack: 1,
+    allowedRarities: ['epic', 'legendary', 'mythic'],
+  },
 };
 
 export const POIS: POIDef[] = [
@@ -1830,6 +1903,17 @@ export const BOUNCER_IMPULSE_FWD = 12.0;
 export const TEAM_RUMBLE_TARGET_SCORE = 25;
 export const TEAM_RUMBLE_RESPAWN_SEC = 3.5;
 export const WEAPON_MOD_COST_GOLD = 75;
+
+export const TRAIN_SPEED_MPS = 11.5;
+export const TRAIN_HACK_DURATION_SEC = 3.0;
+export const TRAIN_CHEST_COOLDOWN_SEC = 75;
+export const JETPACK_MAX_FUEL = 100;
+export const JETPACK_BURN_RATE = 34;
+export const JETPACK_RECHARGE_RATE = 22;
+export const JETPACK_THRUST_ACCEL = 26.5;
+export const LOW_GRAVITY_DURATION_SEC = 15;
+export const LOW_GRAVITY_SCALE = 0.52;
+export const METEOR_CRATER_CRYSTAL_RESPAWN_SEC = 45;
 
 export const WEAPON_MODS: readonly WeaponModDef[] = [
   {
