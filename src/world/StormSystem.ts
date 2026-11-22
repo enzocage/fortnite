@@ -7,7 +7,7 @@ import {
   lerp,
   mulberry32,
 } from '../core';
-import type { GameModeId, StormState } from '../types';
+import type { FutureStormRing, GameModeId, StormState } from '../types';
 import type { StormPhaseConfig } from '../core';
 
 export interface StormUpdateResult {
@@ -20,17 +20,37 @@ const BLITZ_INITIAL_RADIUS = 230;
 const BLITZ_TARGET_RADII = [165, 115, 70, 35, 14, 0] as const;
 const BLITZ_LATE_DPS_SCALE = 1.5;
 
+const TEAM_RUMBLE_INITIAL_RADIUS = 260;
+const TEAM_RUMBLE_MIN_RADIUS = 75;
+const TEAM_RUMBLE_PHASES: ReadonlyArray<Omit<StormPhaseConfig, 'phase'>> = [
+  { waitDuration: 15, shrinkDuration: 22, targetRadius: 175, dps: 2 },
+  { waitDuration: 14, shrinkDuration: 20, targetRadius: 130, dps: 3 },
+  { waitDuration: 12, shrinkDuration: 18, targetRadius: 100, dps: 5 },
+  { waitDuration: 12, shrinkDuration: 16, targetRadius: 85, dps: 8 },
+  { waitDuration: 10, shrinkDuration: 14, targetRadius: 80, dps: 10 },
+  { waitDuration: 10, shrinkDuration: 12, targetRadius: TEAM_RUMBLE_MIN_RADIUS, dps: 12 },
+];
+
 function buildStormPhasesForMode(mode: GameModeId): StormPhaseConfig[] {
-  if (mode !== 'blitz') {
-    return STORM_PHASES;
+  if (mode === 'blitz') {
+    return STORM_PHASES.map((cfg, idx) => ({
+      phase: cfg.phase,
+      waitDuration: cfg.waitDuration * BLITZ_DURATION_SCALE,
+      shrinkDuration: cfg.shrinkDuration * BLITZ_DURATION_SCALE,
+      targetRadius: BLITZ_TARGET_RADII[idx] ?? cfg.targetRadius,
+      dps: cfg.phase >= 4 ? cfg.dps * BLITZ_LATE_DPS_SCALE : cfg.dps,
+    }));
   }
-  return STORM_PHASES.map((cfg, idx) => ({
-    phase: cfg.phase,
-    waitDuration: cfg.waitDuration * BLITZ_DURATION_SCALE,
-    shrinkDuration: cfg.shrinkDuration * BLITZ_DURATION_SCALE,
-    targetRadius: BLITZ_TARGET_RADII[idx] ?? cfg.targetRadius,
-    dps: cfg.phase >= 4 ? cfg.dps * BLITZ_LATE_DPS_SCALE : cfg.dps,
-  }));
+  if (mode === 'team_rumble') {
+    return TEAM_RUMBLE_PHASES.map((cfg, idx) => ({
+      phase: idx + 1,
+      waitDuration: cfg.waitDuration,
+      shrinkDuration: cfg.shrinkDuration,
+      targetRadius: Math.max(TEAM_RUMBLE_MIN_RADIUS, cfg.targetRadius),
+      dps: cfg.dps,
+    }));
+  }
+  return STORM_PHASES;
 }
 
 export class StormSystem {
@@ -38,6 +58,7 @@ export class StormSystem {
   private rand: () => number;
   private mode: GameModeId = 'solo';
   private activePhases: StormPhaseConfig[] = STORM_PHASES;
+  private precomputedRings: FutureStormRing[] = [];
 
   private phase = 1;
   private currentCenterX = 0;
@@ -195,7 +216,12 @@ export class StormSystem {
     this.activePhases = buildStormPhasesForMode(mode);
 
     const first = this.activePhases[0];
-    const initialRadius = mode === 'blitz' ? BLITZ_INITIAL_RADIUS : WORLD_HALF;
+    const initialRadius =
+      mode === 'blitz'
+        ? BLITZ_INITIAL_RADIUS
+        : mode === 'team_rumble'
+          ? TEAM_RUMBLE_INITIAL_RADIUS
+          : WORLD_HALF;
     this.phase = 1;
     this.currentCenterX = 0;
     this.currentCenterZ = 0;
@@ -204,10 +230,28 @@ export class StormSystem {
     this.startCenterZ = 0;
     this.startRadius = initialRadius;
 
-    const nextC = this.pickNextCenter(0, 0, initialRadius, first.targetRadius);
-    this.nextCenterX = nextC.x;
-    this.nextCenterZ = nextC.z;
-    this.nextRadius = first.targetRadius;
+    this.precomputedRings = [];
+    let prevX = 0;
+    let prevZ = 0;
+    let prevR = initialRadius;
+    for (let i = 0; i < this.activePhases.length; i++) {
+      const cfg = this.activePhases[i];
+      const nextC = this.pickNextCenter(prevX, prevZ, prevR, cfg.targetRadius);
+      this.precomputedRings.push({
+        phase: cfg.phase,
+        centerX: nextC.x,
+        centerZ: nextC.z,
+        radius: cfg.targetRadius,
+      });
+      prevX = nextC.x;
+      prevZ = nextC.z;
+      prevR = cfg.targetRadius;
+    }
+
+    const firstRing = this.precomputedRings[0];
+    this.nextCenterX = firstRing.centerX;
+    this.nextCenterZ = firstRing.centerZ;
+    this.nextRadius = firstRing.radius;
 
     this.isShrinking = false;
     this.phaseDuration = first.waitDuration;
@@ -225,6 +269,16 @@ export class StormSystem {
 
   getPhaseConfigs(): ReadonlyArray<StormPhaseConfig> {
     return this.activePhases;
+  }
+
+  getFutureStormRings(count = 2): FutureStormRing[] {
+    if (this.finished || !Number.isFinite(count) || count <= 0) {
+      return [];
+    }
+    const safeCount = Math.floor(count);
+    return this.precomputedRings
+      .slice(this.phase, this.phase + safeCount)
+      .map((ring) => ({ ...ring }));
   }
 
   update(dt: number): StormUpdateResult {
@@ -277,15 +331,10 @@ export class StormSystem {
             this.phase += 1;
             phaseChanged = true;
             const nextCfg = this.activePhases[this.phase - 1];
-            const nextC = this.pickNextCenter(
-              this.currentCenterX,
-              this.currentCenterZ,
-              this.currentRadius,
-              nextCfg.targetRadius,
-            );
-            this.nextCenterX = nextC.x;
-            this.nextCenterZ = nextC.z;
-            this.nextRadius = nextCfg.targetRadius;
+            const nextRing = this.precomputedRings[this.phase - 1];
+            this.nextCenterX = nextRing.centerX;
+            this.nextCenterZ = nextRing.centerZ;
+            this.nextRadius = nextRing.radius;
             this.isShrinking = false;
             this.phaseDuration = nextCfg.waitDuration;
             this.phaseTimeRemaining = nextCfg.waitDuration;

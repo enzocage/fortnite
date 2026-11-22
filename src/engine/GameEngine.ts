@@ -10,6 +10,7 @@ import {
   PICKAXES,
   POIS,
   SKINS,
+  TEAM_RUMBLE_RESPAWN_SEC,
   WEAPONS,
   WORLD_SIZE,
   clamp,
@@ -71,6 +72,7 @@ import {
 } from '../gameplay';
 import {
   BotManager,
+  type BotCombatTarget,
   type BotEntity,
   type BotRenderState,
   type BotWorldContext,
@@ -119,6 +121,7 @@ export interface FortdropDebugAPI {
   giveWave5Loadout(): void;
   giveWave6Loadout(): void;
   giveWave7Loadout(): void;
+  giveWave8Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -175,6 +178,7 @@ export class GameEngine {
   private lobbyEmoteTimer = 0;
   private lobbyActiveEmote: EmoteId | null = null;
   private lobbyMusicStarted = false;
+  private teamRumbleRespawnTimer: number | null = null;
 
   private waypointBeam: THREE.Group;
   private waypointRing: THREE.Mesh;
@@ -405,6 +409,10 @@ export class GameEngine {
       this.worldInteractables.getRebootVans(),
       this.worldInteractables.getSupplyDrones(),
     );
+    this.uiManager.setWorldFrontierOverlay(
+      this.worldInteractables.getModBenches(),
+      this.worldInteractables.getForecastTowers(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.gameMode = this.lobbyConfig.gameMode ?? 'solo';
@@ -437,6 +445,8 @@ export class GameEngine {
       ...this.worldInteractables.getWeaponBunkerColliders(),
       ...this.worldInteractables.getSlurpTankerColliders(),
       ...this.worldInteractables.getRebootVanColliders(),
+      ...this.worldInteractables.getModBenchColliders(),
+      ...this.worldInteractables.getForecastTowerColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -480,6 +490,7 @@ export class GameEngine {
     this.playerController.setEconomyBridge(this.worldInteractables);
     this.playerController.setChapterBridge(this.worldInteractables);
     this.playerController.setOverdriveBridge(this.worldInteractables);
+    this.playerController.setFrontierBridge(this.worldInteractables);
     this.playerController.setOnDroneDestroyed((res) => {
       this.handleSupplyDroneDestroyed(res);
     });
@@ -604,11 +615,14 @@ export class GameEngine {
           qaModeParam === 'zero_build' ||
           qaModeParam === 'blitz' ||
           qaModeParam === 'duos' ||
+          qaModeParam === 'team_rumble' ||
           qaModeParam === 'solo'
             ? qaModeParam
-            : search.has('qaWave6') || search.has('qaWave7')
-              ? 'duos'
-              : undefined;
+            : search.has('qaWave8')
+              ? 'team_rumble'
+              : search.has('qaWave6') || search.has('qaWave7')
+                ? 'duos'
+                : undefined;
         const qaWrap = search.get('qaWrap') ?? undefined;
         if (search.get('qaVisualAudio') === '1') {
           this.settings = { ...this.settings, visualAudio: true };
@@ -629,7 +643,50 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (search.has('qaWave7')) {
+        if (search.has('qaWave8')) {
+          window.__GAME__?.giveWave8Loadout();
+          this.playerController.setGoldBars(600);
+          this.playerController.unlockStormForecast(true);
+          this.botManager.setTeamRumbleScores(14, 11);
+
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const fwdX = Math.sin(yaw);
+          const fwdZ = Math.cos(yaw);
+
+          const showcasePos = {
+            x: p.x + fwdX * 12.5,
+            y: p.y,
+            z: p.z + fwdZ * 12.5,
+          };
+          this.worldInteractables.qaPlaceWave8Showcase(showcasePos);
+          this.botManager.qaPlaceTeamRumbleAllies(p, yaw);
+
+          this.collision.setPropColliders([
+            ...this.propsAndLoot.getActivePropColliders(),
+            ...this.propsAndLoot.getActiveLlamaColliders(),
+            ...this.worldInteractables.getColliders(),
+            ...this.vehicleSystem.getActiveVehicleColliders(),
+          ]);
+          this.uiManager.setWorldChapterOverlay(
+            this.worldInteractables.getWeaponBunkers(),
+            this.worldInteractables.getSlurpTankers(),
+            this.worldInteractables.getDroppedMedallions(),
+            this.worldInteractables.getDroppedCrowns(),
+          );
+          this.uiManager.setWorldOverdriveOverlay(
+            this.worldInteractables.getGrindRails(),
+            this.worldInteractables.getRebootVans(),
+            this.worldInteractables.getSupplyDrones(),
+          );
+          this.uiManager.setWorldFrontierOverlay(
+            this.worldInteractables.getModBenches(),
+            this.worldInteractables.getForecastTowers(),
+          );
+          this.syncBotRigs(1 / 60);
+          this.syncPlayerRig(this.playerController.getCharacterRenderState(), 1 / 60);
+          this.pushHUDState(false);
+        } else if (search.has('qaWave7')) {
           window.__GAME__?.giveWave7Loadout();
           this.playerController.setGoldBars(550);
           const p = this.playerController.getPosition();
@@ -987,7 +1044,7 @@ export class GameEngine {
         });
       },
       getCombatTargets: () => {
-        const targets = [];
+        const targets: BotCombatTarget[] = [];
         const pPhase = this.playerController.getPhase();
         if (
           this.playerController.isAlive() &&
@@ -1005,7 +1062,13 @@ export class GameEngine {
             shield: pActor.shield,
             alive: pActor.alive,
             isPlayer: true,
-            squadId: this.gameMode === 'duos' ? 'player_squad' : undefined,
+            squadId:
+              this.gameMode === 'duos'
+                ? 'player_squad'
+                : this.gameMode === 'team_rumble'
+                  ? 'team_blue'
+                  : undefined,
+            teamId: this.gameMode === 'team_rumble' ? 'team_blue' : undefined,
             isKnocked: this.playerController.isPlayerKnocked(),
             medallions: pMeds,
             medallionCount: pMeds.length,
@@ -1033,6 +1096,7 @@ export class GameEngine {
             isAlly: Boolean(bot.isAlly),
             isDuoPartner: Boolean(bot.isDuoPartner),
             squadId: bot.squadId,
+            teamId: bot.teamId,
             isKnocked: Boolean(bot.isKnocked || bot.state === 'knocked'),
             medallions: bMeds,
             medallionCount: bot.medallionCount ?? bMeds.length,
@@ -1078,6 +1142,9 @@ export class GameEngine {
       get playerMedallionCount() {
         return self.playerController.getMedallions().length;
       },
+      get playerStealthed() {
+        return Boolean(self.playerController.getHudSnapshot().isStealthed);
+      },
       getSquadmates: (squadId: string) =>
         this.botManager.getAliveBots().filter((b) => b.squadId === squadId),
       getMedallionHolders: () => this.botManager.getMedallionHolders(),
@@ -1104,6 +1171,7 @@ export class GameEngine {
       height: bot.height,
       alive: bot.alive,
       squadId: bot.squadId,
+      teamId: bot.teamId,
       onDamage: (ev) => {
         this.botManager.onBotDamaged(bot.id, ev, this.matchElapsed);
       },
@@ -1549,6 +1617,7 @@ export class GameEngine {
     this.stormTickAccum = 0;
     this.nextSupplyDropTime = this.gameMode === 'blitz' ? 28 : 45;
     this.playerGliderFactor = 0;
+    this.teamRumbleRespawnTimer = null;
     this.victoryTimer = 0;
     this.victoryPendingSummary = false;
     this.matchSummaryShown = false;
@@ -1603,6 +1672,10 @@ export class GameEngine {
       this.worldInteractables.getRebootVans(),
       this.worldInteractables.getSupplyDrones(),
     );
+    this.uiManager.setWorldFrontierOverlay(
+      this.worldInteractables.getModBenches(),
+      this.worldInteractables.getForecastTowers(),
+    );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
       this.worldBuildResult.floorLootSpots,
@@ -1620,6 +1693,8 @@ export class GameEngine {
       ...this.worldInteractables.getWeaponBunkerColliders(),
       ...this.worldInteractables.getSlurpTankerColliders(),
       ...this.worldInteractables.getRebootVanColliders(),
+      ...this.worldInteractables.getModBenchColliders(),
+      ...this.worldInteractables.getForecastTowerColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -1806,6 +1881,8 @@ export class GameEngine {
       ...this.worldInteractables.getWeaponBunkerColliders(),
       ...this.worldInteractables.getSlurpTankerColliders(),
       ...this.worldInteractables.getRebootVanColliders(),
+      ...this.worldInteractables.getModBenchColliders(),
+      ...this.worldInteractables.getForecastTowerColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
     this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
@@ -1833,6 +1910,10 @@ export class GameEngine {
       this.worldInteractables.getGrindRails(),
       this.worldInteractables.getRebootVans(),
       this.worldInteractables.getSupplyDrones(),
+    );
+    this.uiManager.setWorldFrontierOverlay(
+      this.worldInteractables.getModBenches(),
+      this.worldInteractables.getForecastTowers(),
     );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
@@ -2329,7 +2410,7 @@ export class GameEngine {
     this.playerRig.setVisible(visible);
     if (!visible) return;
 
-    this.playerRig.equipWeapon(state.weaponId, state.isBuilding);
+    this.playerRig.equipWeapon(state.weaponId, state.isBuilding, state.weaponMods ?? []);
     this.playerRig.setWeaponWrap(state.weaponWrapId ?? this.lobbyConfig.weaponWrapId ?? 'factory_matte');
     this.playerRig.setContrail(state.contrailId ?? this.lobbyConfig.contrailId ?? 'wind_stream');
     const targetGlider = state.animState === 'glide' ? 1 : 0;
@@ -2377,7 +2458,13 @@ export class GameEngine {
       visual.rig.equipWeapon(bs.weaponId, bs.isBuilding);
       visual.rig.setGliderOpen(bs.gliderOpen, bs.gliderFactor);
       visual.rig.setDuoPartnerAura(Boolean(bs.isDuoPartner), this.totalElapsed);
-      visual.rig.setAllyAura(Boolean(bs.isAlly) && !bs.isDuoPartner, bs.allyRole, this.totalElapsed);
+      visual.rig.setAllyAura(
+        (Boolean(bs.isAlly) || bs.teamId === 'team_blue') &&
+          bs.teamId !== 'team_red' &&
+          !bs.isDuoPartner,
+        bs.allyRole,
+        this.totalElapsed,
+      );
       visual.rig.setVictoryCrown(Boolean(bs.hasVictoryCrown), this.totalElapsed);
       visual.rig.setMedallionCount(bs.medallionCount ?? 0, this.totalElapsed);
       this.characterAnimator.update(visual.rig, bs, dt);
@@ -2478,6 +2565,84 @@ export class GameEngine {
   private checkMatchOutcome(rawDt: number): void {
     const aliveBots = this.botManager.getAliveCount();
     const playerAlive = this.playerController.isAlive();
+
+    if (this.gameMode === 'team_rumble') {
+      const tr = this.botManager.getTeamRumbleState();
+      if (
+        tr.blueScore >= tr.targetScore &&
+        this.phase !== 'victory' &&
+        this.phase !== 'eliminated'
+      ) {
+        this.triggerVictoryFlow(false);
+      } else if (
+        tr.redScore >= tr.targetScore &&
+        this.phase !== 'victory' &&
+        this.phase !== 'eliminated'
+      ) {
+        this.phase = 'eliminated';
+        this.playerController.setPhase('eliminated');
+        this.uiManager.setPhase('eliminated');
+        this.releasePointerLock();
+        this.presentMatchSummary(false, 2, 'Red Team', true);
+      } else if (
+        !playerAlive &&
+        this.phase !== 'victory' &&
+        this.phase !== 'eliminated'
+      ) {
+        if (this.teamRumbleRespawnTimer === null) {
+          this.botManager.recordTeamRumbleKill('team_red');
+          this.teamRumbleRespawnTimer = TEAM_RUMBLE_RESPAWN_SEC;
+          const lastDmg = this.lastPlayerDamageEvent;
+          const isStormDeath =
+            this.lastStormDamageAt >= this.lastPlayerDamageAt &&
+            this.lastStormDamageAt > 0;
+          const kf: KillFeedEntry = {
+            id: `kf_player_${this.killFeedSeq++}`,
+            killerId: isStormDeath ? 'storm' : (lastDmg?.attackerId ?? 'storm'),
+            killerName: isStormDeath ? 'The Storm' : (lastDmg?.attackerName ?? 'The Storm'),
+            victimId: 'player',
+            victimName: this.lobbyConfig.playerName,
+            weaponId: lastDmg?.weaponId ?? 'pistol',
+            rarity: lastDmg?.rarity ?? 'common',
+            isHeadshot: isStormDeath ? false : (lastDmg?.isHeadshot ?? false),
+            isStorm: isStormDeath,
+            distance: isStormDeath ? 0 : lastDmg ? Math.round(lastDmg.distance) : 0,
+            timestamp: this.matchElapsed,
+            involvesPlayer: true,
+          };
+          this.eventBus.emit('combat:killfeed', kf);
+          this.eventBus.emit('ui:banner', {
+            id: `rumble_respawn_${Date.now()}`,
+            title: 'ELIMINATED · RESPAWNING',
+            subtitle: 'REDEPLOYING OVER SAFE ZONE',
+            tone: 'info',
+            durationMs: 2600,
+          });
+        }
+        this.teamRumbleRespawnTimer = Math.max(0, this.teamRumbleRespawnTimer - rawDt);
+        if (this.teamRumbleRespawnTimer <= 0) {
+          this.teamRumbleRespawnTimer = null;
+          const st = this.stormSystem.getState();
+          const dropX =
+            st.currentCenterX + (Math.random() - 0.5) * Math.min(40, st.currentRadius * 0.35);
+          const dropZ =
+            st.currentCenterZ + (Math.random() - 0.5) * Math.min(40, st.currentRadius * 0.35);
+          const dropY = Math.max(this.terrain.getHeightAt(dropX, dropZ) + 75, 92);
+          this.playerController.respawnInTeamRumble({ x: dropX, y: dropY, z: dropZ });
+          this.phase = this.playerController.getPhase();
+          this.uiManager.setPhase(this.phase);
+        }
+      }
+
+      if (this.phase === 'victory' && this.victoryPendingSummary && !this.matchSummaryShown) {
+        this.victoryTimer -= rawDt;
+        if (this.victoryTimer <= 0) {
+          this.victoryPendingSummary = false;
+          this.presentMatchSummary(true, 1);
+        }
+      }
+      return;
+    }
 
     if (!playerAlive && this.phase !== 'eliminated' && this.phase !== 'victory') {
       this.phase = 'eliminated';
@@ -2613,10 +2778,22 @@ export class GameEngine {
       reboots: stats.reboots ?? 0,
       dronesShotDown: stats.dronesShotDown ?? 0,
       trapsPlaced: stats.trapsPlaced ?? 0,
+      modsInstalled: stats.modsInstalled ?? 0,
+      bunkersDeployed: stats.bunkersDeployed ?? 0,
+      empHits: stats.empHits ?? 0,
+      teamRumbleScore:
+        this.gameMode === 'team_rumble'
+          ? (() => {
+              const tr = this.botManager.getTeamRumbleState();
+              return { blue: tr.blueScore, red: tr.redScore, target: tr.targetScore };
+            })()
+          : undefined,
       highlights: [
         ...(stats.dronesShotDown && stats.dronesShotDown >= 2 ? ['SKY HUNTER'] : []),
         ...(stats.reboots && stats.reboots >= 1 ? ['CLUTCH REBOOT'] : []),
         ...(stats.knocks && stats.knocks >= 3 ? ['DUOS ENFORCER'] : []),
+        ...(stats.modsInstalled && stats.modsInstalled >= 1 ? ['MODDED PRO'] : []),
+        ...(stats.empHits && stats.empHits >= 1 ? ['EMP BREAKER'] : []),
       ],
     };
     this.lastMatchSummary = summary;
@@ -2657,7 +2834,12 @@ export class GameEngine {
   private isQaIsolationSession(): boolean {
     if (typeof window === 'undefined') return false;
     const s = window.location.search;
-    return s.includes('qaWave5') || s.includes('qaWave6') || s.includes('qaWave7');
+    return (
+      s.includes('qaWave5') ||
+      s.includes('qaWave6') ||
+      s.includes('qaWave7') ||
+      s.includes('qaWave8')
+    );
   }
 
   private handleSupplyDroneDestroyed(res: SupplyDroneDamageResult): void {
@@ -3107,6 +3289,18 @@ export class GameEngine {
       traps: snap.traps,
       hasPartnerRebootCard: snap.hasPartnerRebootCard ?? false,
       rebootProgress: snap.rebootProgress ?? null,
+      isStealthed: snap.isStealthed ?? false,
+      hasStormForecast: snap.hasStormForecast ?? false,
+      futureStormRings: snap.hasStormForecast ? this.stormSystem.getFutureStormRings(2) : [],
+      activeWeaponMods: snap.activeWeaponMods ?? [],
+      teamRumble:
+        this.gameMode === 'team_rumble'
+          ? {
+              ...this.botManager.getTeamRumbleState(),
+              respawningInSec: this.teamRumbleRespawnTimer,
+              blueAllies: this.botManager.getBlueAllyPositions(),
+            }
+          : null,
     };
 
     this.uiManager.updateHUD(hudState);
@@ -3663,6 +3857,41 @@ export class GameEngine {
         engine.playerController.addTrap('spike_trap', 2);
         engine.playerController.addTrap('bouncer_pad', 2);
         engine.playerController.setActiveTrapKind('spike_trap');
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
+      giveWave8Loadout() {
+        const inv = engine.playerController.getInventory();
+        inv.reset();
+        inv.addItem({
+          uid: 'qa_w8_mythic_blade_rifle_0',
+          weaponId: 'mythic_blade_rifle',
+          rarity: 'mythic',
+          magAmmo: Math.round(WEAPONS.mythic_blade_rifle.magSize * 1.45),
+          stackCount: 1,
+          mods: ['red_dot', 'suppressor', 'drum_mag', 'foregrip'],
+        });
+        const extras: Array<{ id: WeaponId; rarity: 'legendary' | 'epic' | 'rare'; stack: number }> = [
+          { id: 'railgun', rarity: 'legendary', stack: 1 },
+          { id: 'port_a_bunker', rarity: 'epic', stack: 2 },
+          { id: 'emp_grenade', rarity: 'epic', stack: 3 },
+          { id: 'chug_splash', rarity: 'rare', stack: 4 },
+        ];
+        extras.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w8_${entry.id}_${i + 1}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('medium', 240);
+        inv.addAmmo('heavy', 24);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
         inv.setActiveSlot(1);
         engine.pushHUDState(false);
       },

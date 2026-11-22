@@ -21,7 +21,20 @@ export type GamePhase =
 
 export type Difficulty = 'casual' | 'standard' | 'sweaty';
 
-export type GameModeId = 'solo' | 'zero_build' | 'blitz' | 'duos';
+export type GameModeId = 'solo' | 'zero_build' | 'blitz' | 'duos' | 'team_rumble';
+
+export type WeaponModId = 'red_dot' | 'suppressor' | 'drum_mag' | 'foregrip';
+
+export interface WeaponModDef {
+  id: WeaponModId;
+  name: string;
+  shortCode: string;
+  costGold: number;
+  description: string;
+  accentColor: string;
+}
+
+export type TeamId = 'team_blue' | 'team_red';
 
 export type MedallionId = 'medallion_siphon' | 'medallion_agility' | 'medallion_combat';
 

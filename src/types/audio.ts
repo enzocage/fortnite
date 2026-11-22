@@ -112,7 +112,15 @@ export type SoundEventId =
   | 'bouncer_launch'
   | 'reboot_channel'
   | 'reboot_complete'
-  | 'drone_explode';
+  | 'drone_explode'
+  | 'shot_suppressed'
+  | 'mod_install'
+  | 'bunker_deploy'
+  | 'emp_blast'
+  | 'forecast_scan'
+  | 'bush_rustle'
+  | 'rumble_respawn'
+  | 'rumble_lead_change';
 
 export type MusicTrackId =
   | 'none'

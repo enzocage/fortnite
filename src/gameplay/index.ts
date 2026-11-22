@@ -7,11 +7,19 @@ export {
 } from './CollisionSystem';
 export {
   InventorySystem,
+  getItemMagCapacity,
   type AddItemResult,
   type DroppedLootPayload,
 } from './InventorySystem';
 export { BuildingSystem, classifyEditMask } from './BuildingSystem';
-export { WeaponSystem, WEAPON_SOUND_MAP, computeWeaponDamage } from './WeaponSystem';
+export {
+  WeaponSystem,
+  WEAPON_SOUND_MAP,
+  computeWeaponDamage,
+  resolveWeaponMods,
+  getWeaponModEffects,
+  type WeaponModEffects,
+} from './WeaponSystem';
 export { PlayerController } from './PlayerController';
 export { QuestTracker, type QuestEventKind } from './QuestTracker';
 export {

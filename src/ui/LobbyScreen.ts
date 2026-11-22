@@ -508,6 +508,9 @@ export class LobbyScreen {
     if (mode.id === 'duos') {
       return `${mode.name} • ${players} • AI PARTNER & DBNO`;
     }
+    if (mode.id === 'team_rumble') {
+      return `${mode.name} • ${players} • RESPAWN TO 25`;
+    }
     return `${mode.name} • ${players} • 6 STORM PHASES`;
   }
 
@@ -721,9 +724,10 @@ export class LobbyScreen {
 
     for (const mode of GAME_MODES) {
       const selected = (this.config.gameMode ?? 'solo') === mode.id;
+      const isFullWidth = mode.id === 'team_rumble';
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = `fdr-mode-select-card mode-${mode.id}${selected ? ' active' : ''}`;
+      btn.className = `fdr-mode-select-card mode-${mode.id}${isFullWidth ? ' fdr-mode-card--full' : ''}${selected ? ' active' : ''}`;
       btn.dataset.gameMode = mode.id;
       btn.innerHTML = `
         <div class="fdr-mode-select-top">

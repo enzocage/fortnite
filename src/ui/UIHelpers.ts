@@ -8,6 +8,7 @@ import {
   GAME_MODES,
   MEDALLIONS,
   RARITY_COLORS,
+  WEAPON_MODS,
   WORLD_HALF,
   WORLD_SIZE,
 } from '../core';
@@ -20,6 +21,8 @@ import type {
   CrosshairStyle,
   DroppedCrownEntity,
   DroppedMedallionEntity,
+  ForecastTowerEntity,
+  FutureStormRing,
   GameModeId,
   GameSettings,
   GrindRailEntity,
@@ -29,6 +32,7 @@ import type {
   MatchSummary,
   MedallionDef,
   MedallionId,
+  ModBenchEntity,
   Rarity,
   RebootVanEntity,
   SlurpTankerEntity,
@@ -37,6 +41,8 @@ import type {
   VehicleKind,
   VisualSoundCue,
   WeaponBunkerEntity,
+  WeaponModDef,
+  WeaponModId,
   WeatherKind,
 } from '../types';
 
@@ -596,14 +602,22 @@ export function getGameModeMeta(modeId?: GameModeId): {
 }
 
 /**
- * Returns HUD mode chip text ('ZERO BUILD' | 'BLITZ' | 'DUOS'), or '' for default 'solo'.
+ * Returns HUD mode chip text ('ZERO BUILD' | 'BLITZ' | 'DUOS' | 'TEAM RUMBLE'), or '' for default 'solo'.
  */
 export function formatModeBadgeLabel(modeId?: GameModeId): string {
   if (!modeId || modeId === 'solo') return '';
   if (modeId === 'zero_build') return 'ZERO BUILD';
   if (modeId === 'blitz') return 'BLITZ';
   if (modeId === 'duos') return 'DUOS';
+  if (modeId === 'team_rumble') return 'TEAM RUMBLE';
   return String(modeId).toUpperCase();
+}
+
+/**
+ * Resolves WeaponModDef metadata for a WeaponModId (falls back to first mod).
+ */
+export function getWeaponModMeta(id: WeaponModId | string): WeaponModDef {
+  return WEAPON_MODS.find((m) => m.id === id) ?? WEAPON_MODS[0];
 }
 
 /**
@@ -1227,6 +1241,12 @@ export function deriveMatchHighlightBadges(
   if ((summary.trapsPlaced ?? 0) >= 1) {
     pushBadge('TRAP MASTER', 'emerald');
   }
+  if ((summary.modsInstalled ?? 0) >= 1) {
+    pushBadge('MODDED PRO', 'cyan');
+  }
+  if ((summary.empHits ?? 0) >= 1) {
+    pushBadge('EMP BREAKER', 'cyan');
+  }
   if (
     (summary.headshots ?? 0) >= 3 ||
     (accPct >= 50 && (summary.shotsFired ?? 0) >= 10)
@@ -1247,4 +1267,183 @@ export function deriveMatchHighlightBadges(
   }
 
   return badges;
+}
+
+export interface WorldFrontierOverlay {
+  modBenches: ModBenchEntity[];
+  forecastTowers: ForecastTowerEntity[];
+}
+
+export function resolveFrontierOverlayArgs(
+  modBenchesOrOverlay: ModBenchEntity[] | Partial<WorldFrontierOverlay> = [],
+  forecastTowers: ForecastTowerEntity[] = [],
+): WorldFrontierOverlay {
+  if (Array.isArray(modBenchesOrOverlay)) {
+    return {
+      modBenches: modBenchesOrOverlay,
+      forecastTowers: Array.isArray(forecastTowers) ? forecastTowers : [],
+    };
+  }
+  const ov = modBenchesOrOverlay ?? {};
+  return {
+    modBenches: Array.isArray(ov.modBenches) ? ov.modBenches : [],
+    forecastTowers: Array.isArray(ov.forecastTowers) ? ov.forecastTowers : [],
+  };
+}
+
+/**
+ * Draws Wave-8 Frontier overlay items (dashed golden Future Storm Forecast Rings,
+ * Weapon Mod Benches, Forecast Towers, and Team Rumble Blue Ally chevrons)
+ * without fillText, strokeText, or ellipse.
+ */
+export function drawFrontierMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  overlay: WorldFrontierOverlay,
+  futureStormRings?: FutureStormRing[],
+  blueAllies?: Array<{ x: number; z: number }>,
+  nowMs = performance.now(),
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.006);
+
+  // 1. Dashed golden Future Storm Forecast Rings
+  if (Array.isArray(futureStormRings) && futureStormRings.length > 0) {
+    for (let i = 0; i < futureStormRings.length; i++) {
+      const ring = futureStormRings[i];
+      if (!ring || !Number.isFinite(ring.radius) || ring.radius <= 0) continue;
+      const rp = toPx(ring.centerX, ring.centerZ);
+      const radPx = ring.radius * pxPerMeter;
+      if (
+        rp.x + radPx < -24 ||
+        rp.x - radPx > size + 24 ||
+        rp.y + radPx < -24 ||
+        rp.y - radPx > size + 24
+      ) {
+        continue;
+      }
+      const alpha = Math.max(0.48, 0.9 - i * 0.18);
+      ctx.save();
+      ctx.setLineDash?.([6, 4]);
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, radPx, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 208, 0, 0.04)';
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255, 208, 0, ${alpha.toFixed(2)})`;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+      ctx.setLineDash?.([]);
+      ctx.restore();
+    }
+  }
+
+  // 2. Illuminated Weapon Mod Benches
+  const benches = Array.isArray(overlay?.modBenches) ? overlay.modBenches : [];
+  for (const bench of benches) {
+    const bp = toPx(bench.x, bench.z);
+    if (bp.x < -14 || bp.x > size + 14 || bp.y < -14 || bp.y > size + 14) {
+      continue;
+    }
+    ctx.save();
+    ctx.translate(bp.x, bp.y);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+    ctx.fill();
+    ctx.strokeStyle = '#a855f7';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Workbench slab + legs + cyan weapon silhouette
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(-4.6, 0.4, 9.2, 2.2);
+    ctx.fillRect(-3.6, 2.6, 1.8, 2.0);
+    ctx.fillRect(1.8, 2.6, 1.8, 2.0);
+    ctx.fillStyle = '#22d3ee';
+    ctx.fillRect(-3.8, -2.5, 7.6, 1.9);
+    ctx.beginPath();
+    ctx.arc(0, -3.8, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#c084fc';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 3. Weather Forecast Radar Towers
+  const towers = Array.isArray(overlay?.forecastTowers) ? overlay.forecastTowers : [];
+  for (const tower of towers) {
+    const tp = toPx(tower.x, tower.z);
+    if (tp.x < -16 || tp.x > size + 16 || tp.y < -16 || tp.y > size + 16) {
+      continue;
+    }
+    const scanned = Boolean(tower.scanned);
+    ctx.save();
+    ctx.translate(tp.x, tp.y);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 8.4 + pulse * 1.5, 0, Math.PI * 2);
+    ctx.strokeStyle = scanned
+      ? 'rgba(52, 235, 94, 0.58)'
+      : 'rgba(255, 208, 0, 0.65)';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+    ctx.fillStyle = scanned ? 'rgba(6, 78, 59, 0.92)' : 'rgba(8, 32, 68, 0.94)';
+    ctx.fill();
+    ctx.strokeStyle = scanned ? '#34eb5e' : '#ffd000';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Tripod mast + radar dish
+    ctx.beginPath();
+    ctx.moveTo(0, -3.2);
+    ctx.lineTo(-3.4, 4.4);
+    ctx.moveTo(0, -3.2);
+    ctx.lineTo(3.4, 4.4);
+    ctx.moveTo(0, -3.2);
+    ctx.lineTo(0, 4.4);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, -2.0, 3.0, Math.PI * 0.95, Math.PI * 1.95);
+    ctx.strokeStyle = scanned ? '#34eb5e' : '#22d3ee';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 4. Team Rumble Blue Ally Chevrons
+  if (Array.isArray(blueAllies) && blueAllies.length > 0) {
+    for (const ally of blueAllies) {
+      const ap = toPx(ally.x, ally.z);
+      if (ap.x < -12 || ap.x > size + 12 || ap.y < -12 || ap.y > size + 12) {
+        continue;
+      }
+      ctx.save();
+      ctx.translate(ap.x, ap.y);
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 5.4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(30, 64, 175, 0.78)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(0, -4.4);
+      ctx.lineTo(3.8, 3.4);
+      ctx.lineTo(0, 1.5);
+      ctx.lineTo(-3.8, 3.4);
+      ctx.closePath();
+      ctx.fillStyle = '#38bdf8';
+      ctx.strokeStyle = '#e0f2fe';
+      ctx.lineWidth = 1.2;
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 }

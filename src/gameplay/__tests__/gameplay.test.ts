@@ -11,6 +11,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   ExplosiveBarrelEntity,
+  ForecastTowerEntity,
   GrindRailEntity,
   HarvestableProp,
   ItemInstance,
@@ -20,6 +21,7 @@ import type {
   LootLlamaEntity,
   MatchQuest,
   MedallionId,
+  ModBenchEntity,
   NpcSpecialistEntity,
   POIDef,
   Rarity,
@@ -28,8 +30,10 @@ import type {
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SoundEventId,
+  StealthBushEntity,
   SupplyDroneEntity,
   SupplyDrop,
+  TeamId,
   TerrainQuery,
   TrapKind,
   UpgradeBenchEntity,
@@ -38,6 +42,7 @@ import type {
   VehicleEntity,
   VendingMachineEntity,
   WeaponBunkerEntity,
+  WeaponModId,
   ZiplineEntity,
 } from '../../types';
 import {
@@ -62,8 +67,12 @@ import {
   REVIVE_DURATION_SEC,
   SPIKE_TRAP_DAMAGE,
   STARTING_GOLD_BARS,
+  TEAM_RUMBLE_RESPAWN_SEC,
+  TEAM_RUMBLE_TARGET_SCORE,
   UPGRADE_COSTS,
   WEAPONS,
+  WEAPON_MODS,
+  WEAPON_MOD_COST_GOLD,
   dist3D,
 } from '../../core';
 import { VOLCANO_CENTER_X, VOLCANO_CENTER_Z } from '../../world';
@@ -82,8 +91,11 @@ import {
   WeaponSystem,
   classifyEditMask,
   computeWeaponDamage,
+  getItemMagCapacity,
   getRampHeightAtLocal,
   getRoofHeightAtLocal,
+  getWeaponModEffects,
+  resolveWeaponMods,
   type CombatActor,
   type DuoRebootBridge,
   type DuoReviveBridge,
@@ -93,6 +105,7 @@ import {
   type VehicleBridge,
   type WorldChapterBridge,
   type WorldEconomyBridge,
+  type WorldFrontierBridge,
   type WorldOverdriveBridge,
   type WorldRiftCaptureBridge,
   type WorldStationBridge,
@@ -5697,5 +5710,583 @@ describe('Wave 7 Gameplay Systems (Grind Rails, Tactical Traps, Pulse Railgun, M
     expect(player.getHudSnapshot().hasPartnerRebootCard).toBe(false);
     expect(sounds).toContain('reboot_complete');
     expect(rebootBeams.some((b) => b.progress === 1)).toBe(true);
+  });
+});
+
+describe('Wave 8 Gameplay Systems (Weapon Mods, Port-A-Bunker, EMP Grenade, Forecast Tower, Stealth Bush, Team Rumble)', () => {
+  function setupWave8Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave8Tester');
+    player.setPhase('playing');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createMockFrontierBridge(init?: {
+    modBenches?: ModBenchEntity[];
+    forecastTowers?: ForecastTowerEntity[];
+    stealthBushes?: StealthBushEntity[];
+    bus?: EventBus;
+  }): WorldFrontierBridge {
+    const modBenches = init?.modBenches ?? [];
+    const forecastTowers = init?.forecastTowers ?? [];
+    const stealthBushes = init?.stealthBushes ?? [];
+    return {
+      getModBenches: () => modBenches,
+      getForecastTowers: () => forecastTowers,
+      scanForecastTower: (id, actorId) => {
+        const tower = forecastTowers.find((t) => t.id === id);
+        if (!tower || tower.scanned) return false;
+        tower.scanned = true;
+        tower.scannedBy = actorId;
+        if (init?.bus) {
+          init.bus.emit('sound:play', { id: 'forecast_scan', volume: 0.9 });
+          init.bus.emit('vfx:forecast_pulse', {
+            position: { x: tower.x, y: tower.y, z: tower.z },
+          });
+        }
+        return true;
+      },
+      getStealthBushes: () => stealthBushes,
+      isInsideStealthBush: (pos) => {
+        for (const bush of stealthBushes) {
+          const dx = pos.x - bush.x;
+          const dz = pos.z - bush.z;
+          const dy = Math.abs(pos.y - bush.y);
+          if (dx * dx + dz * dz <= bush.radius * bush.radius && dy <= 2.6) {
+            return bush;
+          }
+        }
+        return null;
+      },
+    };
+  }
+
+  it('installs all 4 Weapon Mods via Mod Bench & API (red_dot, suppressor, drum_mag, foregrip) and applies stat/audio/FOV effects', () => {
+    expect(WEAPON_MOD_COST_GOLD).toBe(75);
+    expect(WEAPON_MODS.map((m) => m.id)).toEqual(['red_dot', 'suppressor', 'drum_mag', 'foregrip']);
+
+    const { bus, weapons, camera, player } = setupWave8Harness();
+    const sounds: SoundEventId[] = [];
+    const modVfx: unknown[] = [];
+    const noiseEvents: Array<{ radius: number; x: number; z: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:weapon_mod', (ev) => modVfx.push(ev));
+    bus.on('audio:noise', (ev) =>
+      noiseEvents.push({ radius: ev.radius, x: ev.position.x, z: ev.position.z }),
+    );
+
+    const bench: ModBenchEntity = {
+      id: 'bench_1',
+      poiId: 'frontier_outpost',
+      x: 0,
+      y: 0,
+      z: -2,
+      rotationY: 0,
+      costGold: WEAPON_MOD_COST_GOLD,
+    };
+    player.setFrontierBridge(createMockFrontierBridge({ modBenches: [bench] }));
+
+    const arItem: ItemInstance = {
+      uid: 'ar_mod_test',
+      weaponId: 'ar',
+      rarity: 'rare',
+      magAmmo: 15,
+      stackCount: 1,
+    };
+    player.getInventory().addItem(arItem);
+    player.getInventory().addAmmo('medium', 200);
+    player.pressKey('Digit2'); // equip Assault Rifle
+
+    // Insufficient gold rejects without installing
+    expect(player.getHudSnapshot().goldBars).toBe(STARTING_GOLD_BARS);
+    player.addGoldBars(-STARTING_GOLD_BARS);
+    expect(player.getHudSnapshot().goldBars).toBe(0);
+    expect(player.installWeaponMod()).toBe(false);
+    expect(player.getStats().modsInstalled).toBe(0);
+
+    // Grant Gold enough for 4 mods (300) + verify base ADS spread before red_dot
+    player.addGoldBars(WEAPON_MOD_COST_GOLD * 4);
+    player.setMouseButton(2, true);
+    player.update(0.3, 0.3);
+    const baseAdsSpread = player.getHudSnapshot().activeWeaponSpread;
+    const baseAdsFov = camera.fov;
+    player.setMouseButton(2, false);
+
+    // 1. [E] near Mod Bench equips 'red_dot' (-35% ADS spread + tighter ADS zoom FOV)
+    player.update(0.05, 0.35);
+    expect(player.getInteractPrompt()?.label).toContain('MOD ');
+    player.pressKey('KeyE');
+    expect(player.getStats().modsInstalled).toBe(1);
+    expect(player.getHudSnapshot().goldBars).toBe(WEAPON_MOD_COST_GOLD * 3);
+    expect(player.getHudSnapshot().activeWeaponMods).toEqual(['red_dot']);
+    expect(player.getCharacterRenderState().weaponMods).toEqual(['red_dot']);
+    expect(modVfx.length).toBe(1);
+    expect(sounds).toContain('mod_install');
+
+    player.setMouseButton(2, true);
+    for (let i = 0; i < 10; i++) player.update(0.05, 0.4 + i * 0.05);
+    const redDotAdsSpread = player.getHudSnapshot().activeWeaponSpread;
+    expect(redDotAdsSpread).toBeCloseTo(baseAdsSpread * 0.65, 4);
+    expect(camera.fov).toBeLessThan(baseAdsFov);
+    player.setMouseButton(2, false);
+
+    // Compare WeaponSystem noise & spread directly with vs without suppressor/red_dot/foregrip
+    const botActor: CombatActor = {
+      id: 'other_bot',
+      name: 'OtherBot',
+      position: { x: 0, y: 0, z: 0 },
+      eyePos: { x: 0, y: 1.5, z: 0 },
+      hp: 100,
+      shield: 0,
+      maxHp: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const plainArItem: ItemInstance = {
+      uid: 'plain_ar',
+      weaponId: 'ar',
+      rarity: 'rare',
+      magAmmo: 30,
+      stackCount: 1,
+    };
+    const unmoddedShot = weapons.fireWeapon({
+      actor: botActor,
+      item: plainArItem,
+      origin: { x: 0, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0.04,
+      isPlayer: false,
+      isAiming: true,
+    });
+    expect(unmoddedShot.bloomScale).toBe(1);
+    expect(unmoddedShot.recoilScale).toBe(1);
+    const loudNoise = noiseEvents[noiseEvents.length - 1];
+    expect(loudNoise.radius).toBeGreaterThan(0);
+    expect(sounds).toContain('shot_ar');
+
+    // 2. Equip 'suppressor' -> 'shot_suppressed' & 0.3x audio:noise radius
+    const slotAr = player.getInventory().getSlot(1)!;
+    expect(player.installWeaponMod('suppressor')).toBe(true);
+    expect(player.getStats().modsInstalled).toBe(2);
+    const suppressedSoundsBefore = sounds.length;
+    const suppressedShot = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: slotAr,
+      origin: { x: 0, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0.04,
+      isPlayer: true,
+      weaponMods: slotAr.mods,
+    });
+    expect(suppressedShot.fired).toBe(true);
+    expect(sounds.slice(suppressedSoundsBefore)).toContain('shot_suppressed');
+    expect(sounds.slice(suppressedSoundsBefore)).not.toContain('shot_ar');
+    const quietNoise = noiseEvents[noiseEvents.length - 1];
+    expect(quietNoise.radius).toBeCloseTo(loudNoise.radius * 0.3, 3);
+
+    // Also fire via PlayerController input to confirm PlayerController passes weapon mods
+    const pcSuppressedBefore = sounds.length;
+    player.setMouseButton(0, true);
+    player.update(0.05, 0.95);
+    player.setMouseButton(0, false);
+    expect(sounds.slice(pcSuppressedBefore)).toContain('shot_suppressed');
+    expect(noiseEvents[noiseEvents.length - 1].radius).toBeCloseTo(loudNoise.radius * 0.3, 3);
+
+    // 3. [E] near Mod Bench equips next unequipped mod ('drum_mag') -> +45% mag cap & fills magAmmo
+    player.pressKey('KeyE');
+    expect(player.getHudSnapshot().activeWeaponMods).toEqual(['red_dot', 'suppressor', 'drum_mag']);
+    const expectedDrumCap = Math.round(WEAPONS.ar.magSize * 1.45);
+    expect(getItemMagCapacity(slotAr)).toBe(expectedDrumCap);
+    expect(slotAr.magAmmo).toBe(expectedDrumCap);
+
+    // Reloading after spending rounds refills to drum_mag capacity
+    slotAr.magAmmo = 5;
+    player.pressKey('KeyR');
+    let t = 1.0;
+    for (let i = 0; i < 60; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(slotAr.magAmmo).toBe(expectedDrumCap);
+
+    // 4. [E] equips 'foregrip' -> -25% bloomScale & -35% recoilScale; 5th install returns false
+    player.pressKey('KeyE');
+    expect(player.getHudSnapshot().activeWeaponMods).toEqual([
+      'red_dot',
+      'suppressor',
+      'drum_mag',
+      'foregrip',
+    ]);
+    expect(player.getStats().modsInstalled).toBe(4);
+    expect(player.getHudSnapshot().goldBars).toBe(0);
+
+    const modEffects = getWeaponModEffects(resolveWeaponMods(slotAr));
+    expect(modEffects.adsSpreadMult).toBeCloseTo(0.65, 4);
+    expect(modEffects.noiseRadiusMult).toBeCloseTo(0.3, 4);
+    expect(modEffects.magMult).toBeCloseTo(1.45, 4);
+    expect(modEffects.bloomMult).toBeCloseTo(0.75, 4);
+    expect(modEffects.recoilMult).toBeCloseTo(0.65, 4);
+
+    const grippedShot = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: slotAr,
+      origin: { x: 0, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 0, z: -1 },
+      spreadRad: 0.04,
+      isPlayer: true,
+      weaponMods: slotAr.mods,
+    });
+    expect(grippedShot.bloomScale).toBeCloseTo(0.75, 4);
+    expect(grippedShot.recoilScale).toBeCloseTo(0.65, 4);
+
+    player.addGoldBars(100);
+    expect(player.installWeaponMod()).toBe(false);
+    expect(player.getHudSnapshot().goldBars).toBe(100);
+  });
+
+  it('deploys Port-A-Bunker fortified 1x1 metal fort on landing without spending materials', () => {
+    expect(WEAPON_SOUND_MAP.port_a_bunker).toBe('bunker_deploy');
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+
+    const { bus, building, weapons, player } = setupWave8Harness();
+    const sounds: SoundEventId[] = [];
+    const bunkerVfx: unknown[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:bunker_deploy', (ev) => bunkerVfx.push(ev));
+
+    player.getInventory().addItem({
+      uid: 'bunker_slot',
+      weaponId: 'port_a_bunker',
+      rarity: 'rare',
+      magAmmo: 0,
+      stackCount: 2,
+    });
+    player.pressKey('Digit2');
+    player.setLook(Math.PI, -0.15); // facing -Z slightly downward
+
+    expect(player.getInventory().getMaterials()).toEqual({ wood: 0, brick: 0, metal: 0 });
+
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+
+    // Advance projectile simulation until bunker lands
+    let t = 0;
+    for (let i = 0; i < 80; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      weapons.update(0.05);
+    }
+
+    const pieces = building.getPieces();
+    expect(pieces.length).toBe(6);
+    expect(pieces.every((p) => p.material === 'metal')).toBe(true);
+    expect(pieces.every((p) => p.buildProgress === 1 && p.hp === p.maxHp)).toBe(true);
+    expect(pieces.filter((p) => p.type === 'wall').length).toBe(4);
+    expect(pieces.filter((p) => p.type === 'floor').length).toBe(1);
+    expect(pieces.filter((p) => p.type === 'ramp').length).toBe(1);
+    expect(player.getInventory().getMaterials()).toEqual({ wood: 0, brick: 0, metal: 0 });
+    expect(bunkerVfx.length).toBe(1);
+    expect(sounds).toContain('bunker_deploy');
+    expect(player.getStats().bunkersDeployed).toBe(1);
+    expect(player.getInventory().getSlot(1)?.stackCount).toBe(1);
+  });
+
+  it('detonates EMP Grenade stripping up to 70 Shield/Overshield (respecting team/squad immunity) and disabling enemy traps', () => {
+    expect(WEAPON_SOUND_MAP.emp_grenade).toBe('emp_blast');
+
+    const { bus, building, weapons, player } = setupWave8Harness();
+    const sounds: SoundEventId[] = [];
+    const empVfx: unknown[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:emp_blast', (ev) => empVfx.push(ev));
+
+    player.setGameMode('team_rumble'); // player becomes team_blue
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, 0); // level throw along -Z lands ~7.8m ahead
+
+    const enemyInRange: CombatActor = {
+      id: 'enemy_emp_1',
+      name: 'EnemyShielded',
+      position: { x: 0, y: 0, z: -8 },
+      eyePos: { x: 0, y: 1.5, z: -8 },
+      hp: 100,
+      shield: 50,
+      overshield: 40,
+      maxHp: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      teamId: 'team_red',
+    };
+    const allyTeammate: CombatActor = {
+      id: 'ally_emp_1',
+      name: 'BlueAlly',
+      position: { x: 1.5, y: 0, z: -8 },
+      eyePos: { x: 1.5, y: 1.5, z: -8 },
+      hp: 100,
+      shield: 100,
+      overshield: 25,
+      maxHp: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      teamId: 'team_blue',
+    };
+    const enemyOutOfRange: CombatActor = {
+      id: 'enemy_emp_far',
+      name: 'FarEnemy',
+      position: { x: 0, y: 0, z: -18 },
+      eyePos: { x: 0, y: 1.5, z: -18 },
+      hp: 100,
+      shield: 100,
+      maxHp: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      teamId: 'team_red',
+    };
+    weapons.registerActorsProvider(() => [
+      player.getCombatActor(),
+      enemyInRange,
+      allyTeammate,
+      enemyOutOfRange,
+    ]);
+
+    const enemyTrap = building.placeTrap('spike_trap', 'enemy_trap_owner', { x: 0.5, y: 0, z: -8 }, 0)!;
+    const friendlyTrap = building.placeTrap('spike_trap', 'player', { x: -0.5, y: 0, z: -8 }, 0)!;
+    expect(enemyTrap).toBeTruthy();
+    expect(friendlyTrap).toBeTruthy();
+
+    player.getInventory().addItem({
+      uid: 'emp_slot',
+      weaponId: 'emp_grenade',
+      rarity: 'rare',
+      magAmmo: 0,
+      stackCount: 3,
+    });
+    player.pressKey('Digit2');
+    player.setMouseButton(0, true);
+    player.setMouseButton(0, false);
+
+    let t = 0;
+    for (let i = 0; i < 80; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      weapons.update(0.05);
+    }
+
+    expect(empVfx.length).toBeGreaterThanOrEqual(1);
+    expect(sounds).toContain('emp_blast');
+    // Stripped 40 overshield + 30 shield = 70 total, zero HP damage
+    expect(enemyInRange.overshield).toBe(0);
+    expect(enemyInRange.shield).toBe(20);
+    expect(enemyInRange.hp).toBe(100);
+    // Team immunity and range check
+    expect(allyTeammate.shield).toBe(100);
+    expect(allyTeammate.overshield).toBe(25);
+    expect(enemyOutOfRange.shield).toBe(100);
+    // Enemy trap disabled, friendly trap untouched
+    expect(enemyTrap.armed).toBe(false);
+    expect(enemyTrap.armTimer).toBeGreaterThanOrEqual(WEAPONS.emp_grenade.empDisableSec ?? 5);
+    expect(friendlyTrap.armed).toBe(true);
+    // 1 shielded actor hit + 1 enemy trap disabled = 2 EMP hits
+    expect(player.getStats().empHits).toBe(2);
+
+    // Direct disableTrapsInRadius helper check
+    const secondTrap = building.placeTrap('bouncer_pad', 'other', { x: 20, y: 0, z: 20 }, 0)!;
+    expect(building.disableTrapsInRadius({ x: 20, y: 0, z: 20 }, 6.5, 7)).toBe(1);
+    expect(secondTrap.armed).toBe(false);
+    expect(secondTrap.armTimer).toBeGreaterThanOrEqual(7);
+  });
+
+  it('scans Forecast Tower via [E] unlocking Storm Forecast + 100 Gold, and supports QA unlock helper', () => {
+    const { bus, player } = setupWave8Harness();
+    const sounds: SoundEventId[] = [];
+    const pulses: unknown[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:forecast_pulse', (ev) => pulses.push(ev));
+
+    const tower: ForecastTowerEntity = {
+      id: 'ft_alpha',
+      poiId: 'weather_station',
+      x: 0,
+      y: 0,
+      z: -2,
+      rotationY: 0,
+      scanned: false,
+      scannedBy: null,
+    };
+    player.setFrontierBridge(createMockFrontierBridge({ forecastTowers: [tower], bus }));
+    player.update(0.05, 0.05);
+
+    expect(player.getHudSnapshot().hasStormForecast).toBe(false);
+    expect(player.getInteractPrompt()?.label).toContain('FORECAST');
+    const goldBefore = player.getHudSnapshot().goldBars;
+
+    player.pressKey('KeyE');
+    expect(tower.scanned).toBe(true);
+    expect(tower.scannedBy).toBe('player');
+    expect(player.getHudSnapshot().hasStormForecast).toBe(true);
+    expect(player.getHudSnapshot().goldBars).toBe(goldBefore + 100);
+    expect(sounds).toContain('forecast_scan');
+    expect(pulses.length).toBe(1);
+
+    // Re-pressing [E] does not re-scan or grant extra Gold
+    player.pressKey('KeyE');
+    expect(player.getHudSnapshot().goldBars).toBe(goldBefore + 100);
+
+    // Reset clears forecast; QA helper re-unlocks
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'QA');
+    player.setPhase('playing');
+    expect(player.getHudSnapshot().hasStormForecast).toBe(false);
+    player.unlockStormForecast();
+    expect(player.getHudSnapshot().hasStormForecast).toBe(true);
+    expect(player.hasStormForecastUnlocked()).toBe(true);
+  });
+
+  it('conceals crouched player in Stealth Bush, emits bush_rustle on entry, and breaks stealth briefly on firing', () => {
+    const { bus, player } = setupWave8Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    const bush: StealthBushEntity = { id: 'bush_1', x: 0, y: 0, z: 0, radius: 2.5 };
+    player.setFrontierBridge(createMockFrontierBridge({ stealthBushes: [bush] }));
+    player.getInventory().addItem({
+      uid: 'ar_bush',
+      weaponId: 'ar',
+      rarity: 'common',
+      magAmmo: 30,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+
+    // Start outside bush
+    player.teleport({ x: 10, y: 0, z: 10 });
+    player.update(0.05, 0.05);
+    expect(player.getHudSnapshot().isStealthed).toBe(false);
+    expect(sounds).not.toContain('bush_rustle');
+
+    // Enter bush standing -> plays bush_rustle, not stealthed until crouched
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.update(0.05, 0.1);
+    expect(sounds).toContain('bush_rustle');
+    expect(player.getHudSnapshot().isStealthed).toBe(false);
+
+    // Crouch inside bush -> stealthed in HUD & render state
+    player.pressKey('KeyC');
+    expect(player.getHudSnapshot().isStealthed).toBe(true);
+    expect(player.getCharacterRenderState().isStealthed).toBe(true);
+
+    // Firing breaks stealth briefly (~1.25s)
+    player.setMouseButton(0, true);
+    player.update(0.05, 0.15);
+    player.setMouseButton(0, false);
+    expect(player.getHudSnapshot().isStealthed).toBe(false);
+
+    let t = 0.15;
+    for (let i = 0; i < 30; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().isStealthed).toBe(true);
+
+    // Uncrouching or leaving bush clears stealth
+    player.pressKey('KeyC');
+    expect(player.getHudSnapshot().isStealthed).toBe(false);
+    player.pressKey('KeyC');
+    expect(player.getHudSnapshot().isStealthed).toBe(true);
+    player.teleport({ x: 8, y: 0, z: 8 });
+    player.update(0.05, t + 0.05);
+    expect(player.getHudSnapshot().isStealthed).toBe(false);
+  });
+
+  it('supports Team Rumble respawn preserving loadout/mods/mats and QuestTracker + AugmentManager team_rumble mode', () => {
+    expect(TEAM_RUMBLE_TARGET_SCORE).toBe(25);
+    expect(TEAM_RUMBLE_RESPAWN_SEC).toBeCloseTo(3.5, 3);
+
+    const { bus, player } = setupWave8Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    player.setGameMode('team_rumble');
+    expect(player.getCharacterRenderState().teamId).toBe('team_blue' satisfies TeamId);
+    expect(player.getCombatActor().teamId).toBe('team_blue' satisfies TeamId);
+
+    const moddedAr: ItemInstance = {
+      uid: 'tr_ar',
+      weaponId: 'ar',
+      rarity: 'epic',
+      magAmmo: 44,
+      stackCount: 1,
+      mods: ['red_dot', 'drum_mag'],
+    };
+    player.getInventory().addItem(moddedAr);
+    player.getInventory().addAmmo('medium', 90);
+    player.getInventory().addMaterial('metal', 120);
+    player.pressKey('Digit2');
+
+    // Lethal damage eliminates player without dropping loadout in team_rumble
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'red_bot_1',
+      attackerName: 'RedBot',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 500,
+      hpDamage: 500,
+      shieldDamage: 0,
+      isHeadshot: true,
+      isElimination: true,
+      hitPoint: { x: 0, y: 1, z: 0 },
+      distance: 10,
+    });
+    expect(player.getPhase()).toBe('eliminated');
+    expect(player.getInventory().getSlot(1)?.weaponId).toBe('ar');
+    expect(player.getInventory().getSlot(1)?.mods).toEqual(['red_dot', 'drum_mag']);
+    expect(player.getInventory().getAmmo('medium')).toBe(90);
+    expect(player.getInventory().getMaterials().metal).toBe(120);
+
+    // Respawn in Team Rumble -> 100 HP, 50 Shield, skydiving at dropPos, keeps inventory
+    player.respawnInTeamRumble({ x: 18, y: 115, z: -24 });
+    expect(player.getPhase()).toBe('skydiving');
+    expect(player.isAlive()).toBe(true);
+    expect(player.getPosition()).toEqual({ x: 18, y: 115, z: -24 });
+    expect(player.getHudSnapshot().health).toBe(100);
+    expect(player.getHudSnapshot().shield).toBe(50);
+    expect(player.getHudSnapshot().isKnocked).toBe(false);
+    expect(player.getInventory().getSlot(1)?.mods).toEqual(['red_dot', 'drum_mag']);
+    expect(player.getInventory().getAmmo('medium')).toBe(90);
+    expect(player.getInventory().getMaterials().metal).toBe(120);
+    expect(sounds).toContain('rumble_respawn');
+
+    // QuestTracker & AugmentManager support 'team_rumble' cleanly
+    const quests = new QuestTracker(bus);
+    quests.reset(777, 'team_rumble');
+    expect(quests.getQuests().length).toBe(3);
+
+    const augments = new AugmentManager(bus);
+    augments.reset(777, 'team_rumble');
+    expect(augments.getIntervalSec()).toBe(AUGMENT_INTERVAL_BLITZ);
+    augments.update(AUGMENT_INTERVAL_BLITZ, AUGMENT_INTERVAL_BLITZ);
+    expect(augments.getPendingChoices()).not.toBeNull();
   });
 });

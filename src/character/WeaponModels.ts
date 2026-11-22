@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PickaxeDef, WeaponId, WeaponWrapDef } from '../types';
+import type { PickaxeDef, WeaponId, WeaponModId, WeaponWrapDef } from '../types';
 import { PICKAXES, WEAPON_WRAPS, mulberry32 } from '../core';
 
 const RANGED_WEAPONS = new Set<WeaponId>([
@@ -26,6 +26,8 @@ const THROWABLE_WEAPONS = new Set<WeaponId>([
   'frag_grenade',
   'chug_splash',
   'shield_bubble',
+  'port_a_bunker',
+  'emp_grenade',
 ]);
 
 export function isRangedWeapon(weaponId: WeaponId): boolean {
@@ -1650,6 +1652,345 @@ function buildMinigun(): THREE.Group {
   return group;
 }
 
+function buildPortABunker(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_port_a_bunker';
+  group.userData.wrapDisabled = true;
+
+  const silverShell = makeStandardMat('#cbd5e1', 0.28, 0.78);
+  const bluePanel = makeStandardMat('#2563eb', 0.34, 0.42);
+  const darkFrame = makeStandardMat('#1e293b', 0.42, 0.65);
+  const cyanStripe = makeStandardMat('#22d3ee', 0.14, 0.18, '#22d3ee', 0.94);
+  const blueprintCore = makeStandardMat('#38bdf8', 0.18, 0.22, '#38bdf8', 0.75);
+
+  const cx = 0;
+  const cy = 0.065;
+  const cz = 0.02;
+
+  // Inner collapsible metallic frame core
+  addBox(group, 0.108, 0.108, 0.108, darkFrame, cx, cy, cz);
+
+  // Blue collapsible upper & lower tactical cube shells
+  addBox(group, 0.118, 0.044, 0.118, bluePanel, cx, cy - 0.027, cz);
+  addBox(group, 0.118, 0.044, 0.118, bluePanel, cx, cy + 0.027, cz);
+
+  // Silver armored corner brackets on all 4 vertical corners
+  for (const sx of [-1, 1] as const) {
+    for (const sz of [-1, 1] as const) {
+      addBox(group, 0.036, 0.122, 0.036, silverShell, cx + sx * 0.044, cy, cz + sz * 0.044);
+    }
+  }
+
+  // Glowing cyan blueprint grid stripes (equator + vertical axes)
+  addBox(group, 0.126, 0.011, 0.126, cyanStripe, cx, cy, cz);
+  addBox(group, 0.012, 0.124, 0.126, cyanStripe, cx, cy, cz);
+  addBox(group, 0.126, 0.124, 0.012, cyanStripe, cx, cy, cz);
+
+  // Top holo-deployment emitter bezel + silver carry bar + bottom base plate
+  addCylinder(group, 0.036, 0.044, 0.018, silverShell, cx, cy + 0.066, cz, 0, 0, 0, 8);
+  addCylinder(group, 0.022, 0.022, 0.012, blueprintCore, cx, cy + 0.078, cz, 0, 0, 0, 8);
+  addBox(group, 0.094, 0.014, 0.094, silverShell, cx, cy - 0.062, cz);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.24);
+  return group;
+}
+
+function buildEmpGrenade(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_emp_grenade';
+  group.userData.wrapDisabled = true;
+
+  const electricCyan = makeStandardMat('#22d3ee', 0.12, 0.18, '#22d3ee', 0.96);
+  const arcGlow = makeStandardMat('#38bdf8', 0.16, 0.24, '#0ea5e9', 0.86);
+  const copperCoil = makeStandardMat('#d97706', 0.26, 0.82, '#b45309', 0.2);
+  const brightCopper = makeStandardMat('#f59e0b', 0.22, 0.86);
+  const darkChassis = makeStandardMat('#1e293b', 0.38, 0.68);
+  const silverTrim = makeStandardMat('#cbd5e1', 0.26, 0.8);
+
+  const cx = 0;
+  const cy = 0.065;
+  const cz = 0.02;
+
+  // Electric cyan magnetic plasma orb core
+  addMesh(group, new THREE.SphereGeometry(0.060, 14, 12), electricCyan, cx, cy, cz);
+  addMesh(group, new THREE.TorusGeometry(0.066, 0.008, 8, 18), arcGlow, cx, cy, cz, Math.PI / 2, 0, 0);
+
+  // Copper induction coil windings (equatorial + dual tilted solenoid rings)
+  addMesh(group, new THREE.TorusGeometry(0.074, 0.011, 8, 18), copperCoil, cx, cy, cz, Math.PI / 2, 0, 0);
+  addMesh(group, new THREE.TorusGeometry(0.074, 0.010, 8, 18), brightCopper, cx, cy, cz, 0.72, 0.55, 0);
+  addMesh(group, new THREE.TorusGeometry(0.074, 0.010, 8, 18), copperCoil, cx, cy, cz, -0.72, -0.55, 0);
+
+  // Polar electromagnetic caps + top trigger pin
+  addCylinder(group, 0.036, 0.048, 0.026, darkChassis, cx, cy + 0.068, cz, 0, 0, 0, 10);
+  addCylinder(group, 0.026, 0.032, 0.014, copperCoil, cx, cy + 0.086, cz, 0, 0, 0, 10);
+  addCylinder(group, 0.016, 0.016, 0.014, electricCyan, cx, cy + 0.098, cz, 0, 0, 0, 8);
+  addCylinder(group, 0.044, 0.032, 0.022, silverTrim, cx, cy - 0.068, cz, 0, 0, 0, 10);
+
+  // 4 vertical stabilizer struts clamping the induction coils
+  for (let i = 0; i < 4; i++) {
+    const ang = (i * Math.PI) / 2 + Math.PI / 4;
+    addBox(
+      group,
+      0.014,
+      0.11,
+      0.014,
+      darkChassis,
+      cx + Math.cos(ang) * 0.068,
+      cy,
+      cz + Math.sin(ang) * 0.068,
+      0,
+      -ang,
+      0,
+    );
+  }
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.22);
+  return group;
+}
+
+const MOD_CHILD_NAMES = new Set([
+  'mod_red_dot',
+  'mod_suppressor',
+  'mod_drum_mag',
+  'mod_foregrip',
+]);
+
+interface WeaponModAnchors {
+  redDot: [number, number, number];
+  drumMag: [number, number, number];
+  foregrip: [number, number, number];
+  suppressor: [number, number, number];
+}
+
+function getWeaponModAnchors(weaponGroup: THREE.Group): WeaponModAnchors {
+  const muzzle = weaponGroup.userData.muzzleOffset;
+  const supPos: [number, number, number] =
+    muzzle instanceof THREE.Vector3
+      ? [muzzle.x, muzzle.y, muzzle.z + 0.05]
+      : [0, 0.085, 0.56];
+
+  switch (weaponGroup.name) {
+    case 'weapon_burst_ar':
+      return {
+        redDot: [0, 0.172, 0.05],
+        drumMag: [0, -0.028, -0.10],
+        foregrip: [0, 0.018, 0.27],
+        suppressor: supPos,
+      };
+    case 'weapon_tactical_dmr':
+      return {
+        redDot: [0, 0.192, 0.11],
+        drumMag: [0, -0.028, 0.13],
+        foregrip: [0, 0.024, 0.34],
+        suppressor: supPos,
+      };
+    case 'weapon_sniper':
+      return {
+        redDot: [0, 0.184, 0.11],
+        drumMag: [0, -0.026, 0.13],
+        foregrip: [0, 0.020, 0.31],
+        suppressor: supPos,
+      };
+    case 'weapon_pistol':
+      return {
+        redDot: [0, 0.100, 0.06],
+        drumMag: [0, -0.060, -0.01],
+        foregrip: [0, 0.016, 0.12],
+        suppressor: supPos,
+      };
+    case 'weapon_smg':
+    case 'weapon_combat_smg':
+      return {
+        redDot: [0, 0.120, 0.07],
+        drumMag: [0, -0.030, 0.12],
+        foregrip: [0, 0.012, 0.21],
+        suppressor: supPos,
+      };
+    case 'weapon_pump_shotgun':
+    case 'weapon_tac_shotgun':
+    case 'weapon_heavy_shotgun':
+      return {
+        redDot: [0, 0.138, 0.09],
+        drumMag: [0, -0.032, 0.13],
+        foregrip: [0, 0.018, 0.31],
+        suppressor: supPos,
+      };
+    case 'weapon_minigun':
+      return {
+        redDot: [0, 0.202, 0.18],
+        drumMag: [0, -0.048, 0.16],
+        foregrip: [0, -0.038, 0.30],
+        suppressor: supPos,
+      };
+    case 'weapon_railgun':
+      return {
+        redDot: [0, 0.150, 0.10],
+        drumMag: [0, -0.045, 0.14],
+        foregrip: [0, 0.002, 0.32],
+        suppressor: supPos,
+      };
+    default:
+      return {
+        redDot: [0, 0.156, 0.09],
+        drumMag: [0, -0.028, 0.12],
+        foregrip: [0, 0.018, 0.27],
+        suppressor: supPos,
+      };
+  }
+}
+
+function finalizeModGroup(modGroup: THREE.Group, modId: WeaponModId): THREE.Group {
+  modGroup.name = `mod_${modId}`;
+  modGroup.userData.isWeaponMod = true;
+  modGroup.userData.weaponModId = modId;
+  modGroup.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.castShadow = true;
+      child.userData.wrapTarget = false;
+    }
+  });
+  return modGroup;
+}
+
+function buildRedDotMod(x: number, y: number, z: number): THREE.Group {
+  const grp = new THREE.Group();
+  grp.position.set(x, y, z);
+
+  const housing = makeStandardMat('#0f172a', 0.42, 0.58);
+  const steel = makeStandardMat('#334155', 0.32, 0.72);
+  const reticleGlow = makeStandardMat('#ef4444', 0.1, 0.1, '#ef4444', 1.15);
+  const opticTint = new THREE.MeshStandardMaterial({
+    color: '#38bdf8',
+    emissive: '#0ea5e9',
+    emissiveIntensity: 0.45,
+    roughness: 0.12,
+    metalness: 0.2,
+    transparent: true,
+    opacity: 0.55,
+  });
+
+  // Rail riser base + side clamps
+  addBox(grp, 0.032, 0.014, 0.056, housing, 0, 0.007, 0);
+  addBox(grp, 0.036, 0.010, 0.026, steel, 0, 0.005, 0);
+  // Open reflex hood pillars + curved arch top
+  addBox(grp, 0.007, 0.034, 0.044, housing, -0.016, 0.031, 0);
+  addBox(grp, 0.007, 0.034, 0.044, housing, 0.016, 0.031, 0);
+  addBox(grp, 0.040, 0.008, 0.044, housing, 0, 0.050, 0);
+  // Tinted glass lens + glowing red dot emitter
+  addBox(grp, 0.024, 0.026, 0.005, opticTint, 0, 0.031, 0.010);
+  addMesh(grp, new THREE.SphereGeometry(0.0055, 8, 8), reticleGlow, 0, 0.031, 0.012);
+
+  return finalizeModGroup(grp, 'red_dot');
+}
+
+function buildSuppressorMod(x: number, y: number, z: number): THREE.Group {
+  const grp = new THREE.Group();
+  grp.position.set(x, y, z);
+
+  const matteDark = makeStandardMat('#0f172a', 0.74, 0.42);
+  const collarMat = makeStandardMat('#334155', 0.52, 0.65);
+  const muzzleCore = makeStandardMat('#020617', 0.82, 0.25);
+
+  // Matte dark cylindrical suppressor tube + mounting collar + bore tip
+  addCylinder(grp, 0.023, 0.023, 0.155, matteDark, 0, 0, 0, Math.PI / 2, 0, 0, 14);
+  addCylinder(grp, 0.026, 0.025, 0.026, collarMat, 0, 0, -0.066, Math.PI / 2, 0, 0, 12);
+  addCylinder(grp, 0.0245, 0.0245, 0.010, collarMat, 0, 0, 0.045, Math.PI / 2, 0, 0, 12);
+  addCylinder(grp, 0.013, 0.013, 0.008, muzzleCore, 0, 0, 0.078, Math.PI / 2, 0, 0, 10);
+
+  return finalizeModGroup(grp, 'suppressor');
+}
+
+function buildDrumMagMod(x: number, y: number, z: number): THREE.Group {
+  const grp = new THREE.Group();
+  grp.position.set(x, y, z);
+
+  const drumBody = makeStandardMat('#1e293b', 0.45, 0.52);
+  const faceplate = makeStandardMat('#475569', 0.34, 0.72);
+  const amberAccent = makeStandardMat('#fbbf24', 0.3, 0.6, '#f59e0b', 0.25);
+
+  // Feed neck tower
+  addBox(grp, 0.038, 0.072, 0.054, drumBody, 0, 0.022, 0);
+  // Twin side-by-side high-capacity C-drum cylinders
+  for (const side of [-1, 1] as const) {
+    addCylinder(grp, 0.050, 0.050, 0.066, drumBody, side * 0.044, -0.028, 0, Math.PI / 2, 0, 0, 14);
+    addCylinder(grp, 0.034, 0.034, 0.072, faceplate, side * 0.044, -0.028, 0, Math.PI / 2, 0, 0, 12);
+    addBox(grp, 0.016, 0.032, 0.008, amberAccent, side * 0.044, -0.028, 0.037);
+  }
+
+  return finalizeModGroup(grp, 'drum_mag');
+}
+
+function buildForegripMod(x: number, y: number, z: number): THREE.Group {
+  const grp = new THREE.Group();
+  grp.position.set(x, y, z);
+
+  const railClamp = makeStandardMat('#334155', 0.4, 0.65);
+  const gripPolymer = makeStandardMat('#0f172a', 0.68, 0.25);
+  const ribAccent = makeStandardMat('#475569', 0.55, 0.35);
+
+  // Underbarrel picatinny clamp + angled vertical foregrip + flared handstop
+  addBox(grp, 0.036, 0.016, 0.058, railClamp, 0, 0.006, 0);
+  addBox(grp, 0.028, 0.095, 0.036, gripPolymer, 0, -0.045, 0.010, 0.22, 0, 0);
+  addBox(grp, 0.032, 0.022, 0.040, ribAccent, 0, -0.042, 0.010, 0.22, 0, 0);
+  addBox(grp, 0.034, 0.014, 0.044, railClamp, 0, -0.092, 0.020, 0.22, 0, 0);
+
+  return finalizeModGroup(grp, 'foregrip');
+}
+
+/**
+ * Attaches distinct 3D weapon mod sub-meshes (`mod_red_dot`, `mod_suppressor`,
+ * `mod_drum_mag`, `mod_foregrip`) onto a weapon model group.
+ * Removes any stale mod children first so repeated calls are strictly idempotent.
+ */
+export function applyWeaponModsToModel(
+  weaponGroup: THREE.Group,
+  mods?: WeaponModId[],
+): void {
+  if (!weaponGroup) return;
+
+  const staleMods: THREE.Object3D[] = [];
+  for (const child of weaponGroup.children) {
+    if (child.userData?.isWeaponMod === true || MOD_CHILD_NAMES.has(child.name)) {
+      staleMods.push(child);
+    }
+  }
+  for (const child of staleMods) {
+    weaponGroup.remove(child);
+    disposeObject3D(child);
+  }
+
+  if (!mods || mods.length === 0) {
+    weaponGroup.userData.appliedWeaponMods = [];
+    return;
+  }
+
+  const anchors = getWeaponModAnchors(weaponGroup);
+  const uniqueMods = new Set<WeaponModId>();
+  for (const modId of mods) {
+    if (uniqueMods.has(modId)) continue;
+    switch (modId) {
+      case 'red_dot':
+        uniqueMods.add(modId);
+        weaponGroup.add(buildRedDotMod(...anchors.redDot));
+        break;
+      case 'suppressor':
+        uniqueMods.add(modId);
+        weaponGroup.add(buildSuppressorMod(...anchors.suppressor));
+        break;
+      case 'drum_mag':
+        uniqueMods.add(modId);
+        weaponGroup.add(buildDrumMagMod(...anchors.drumMag));
+        break;
+      case 'foregrip':
+        uniqueMods.add(modId);
+        weaponGroup.add(buildForegripMod(...anchors.foregrip));
+        break;
+    }
+  }
+
+  weaponGroup.userData.appliedWeaponMods = Array.from(uniqueMods);
+}
+
 /**
  * Creates a stylized procedural 3D weapon, throwable, or consumable mesh for any WeaponId.
  * All ranged weapons and throwables assign `group.userData.muzzleOffset` (THREE.Vector3) in local space.
@@ -1700,6 +2041,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildGrappler();
     case 'shield_bubble':
       return buildShieldBubble();
+    case 'port_a_bunker':
+      return buildPortABunker();
+    case 'emp_grenade':
+      return buildEmpGrenade();
     case 'mini_shield':
       return buildMiniShield();
     case 'shield_potion':

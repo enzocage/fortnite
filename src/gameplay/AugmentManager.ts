@@ -13,6 +13,8 @@ function hashMode(mode: GameModeId): number {
       return 6089;
     case 'duos':
       return 9127;
+    case 'team_rumble':
+      return 12161;
     case 'solo':
     default:
       return 73;
@@ -43,7 +45,9 @@ export class AugmentManager {
     this.rng = mulberry32(combinedSeed);
     this.mode = mode;
     this.intervalSec =
-      mode === 'blitz' ? AUGMENT_INTERVAL_BLITZ : AUGMENT_INTERVAL_DEFAULT;
+      mode === 'blitz' || mode === 'team_rumble'
+        ? AUGMENT_INTERVAL_BLITZ
+        : AUGMENT_INTERVAL_DEFAULT;
 
     this.activeAugments = [];
     this.pendingChoices = null;

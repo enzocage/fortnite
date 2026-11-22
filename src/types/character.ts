@@ -1,4 +1,4 @@
-import type { Rarity, SpecialistRole, Vec3Like } from './common';
+import type { Rarity, SpecialistRole, TeamId, Vec3Like, WeaponModId } from './common';
 import type { MusicTrackId } from './audio';
 import type { WeaponId } from './weapons';
 
@@ -147,4 +147,7 @@ export interface CharacterRenderState {
   isGrinding?: boolean;
   weaponCharge?: number;
   weaponHeat?: number;
+  weaponMods?: WeaponModId[];
+  isStealthed?: boolean;
+  teamId?: TeamId;
 }

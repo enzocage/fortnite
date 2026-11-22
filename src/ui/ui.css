@@ -3297,9 +3297,9 @@
   grid-column: 1 / -1;
 }
 
-/* Lobby Game Mode Selector (PLAY Tab — 2x2 Grid) */
+/* Lobby Game Mode Selector (PLAY Tab — 2x2 Grid + Full-Width 5th Mode) */
 .fdr-mode-selector {
-  width: clamp(356px, 33.5vw, 438px);
+  width: clamp(382px, 34vw, 448px);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -3386,13 +3386,11 @@
 }
 
 .fdr-mode-select-title {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.02em;
   color: #ffffff;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .fdr-mode-select-badge {
@@ -5839,5 +5837,303 @@
 
   .fdr-summary-card .fdr-modal-actions {
     margin-top: 8px;
+  }
+}
+
+/* ============================================================================
+   WAVE 8 UI: TEAM RUMBLE LOBBY & SCOREBOARD, STEALTH BUSH PILL,
+   HOTBAR ATTACHMENT BADGES, FRONTIER MAP LEGEND & 1280x720 TUNING
+   ============================================================================ */
+
+/* Lobby 5th Mode Full-Width Card & Team Rumble Accents */
+.fdr-mode-card--full {
+  grid-column: 1 / -1;
+}
+
+.fdr-mode-select-card.mode-team_rumble.active {
+  border-color: #60a5fa;
+  background: linear-gradient(135deg, rgba(29, 78, 216, 0.72), rgba(153, 27, 27, 0.65));
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.42);
+}
+
+.fdr-mode-select-card.mode-team_rumble .fdr-mode-select-badge {
+  color: #e0f2fe;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.48), rgba(220, 38, 38, 0.48));
+}
+
+.fdr-mode-card.mode-team_rumble {
+  border-color: rgba(96, 165, 250, 0.8);
+}
+
+.fdr-zone-pill.mode.mode-team_rumble {
+  background: linear-gradient(90deg, rgba(29, 78, 216, 0.88), rgba(153, 27, 27, 0.86));
+  border-color: #60a5fa;
+  color: #eff6ff;
+}
+
+.fdr-summary-mode-badge.mode-team_rumble {
+  background: linear-gradient(90deg, rgba(29, 78, 216, 0.65), rgba(153, 27, 27, 0.65));
+  border-color: #60a5fa;
+  color: #eff6ff;
+}
+
+/* HUD Top-Center Team Rumble Scoreboard Bar */
+.fdr-rumble-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: clamp(270px, 24vw, 340px);
+  padding: 5px 10px 6px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(10, 18, 40, 0.92), rgba(7, 13, 30, 0.95));
+  border: 1.5px solid rgba(148, 163, 184, 0.45);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+}
+
+.fdr-rumble-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+
+.fdr-rumble-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fdr-rumble-team.blue {
+  color: #60a5fa;
+}
+
+.fdr-rumble-score-blue {
+  color: #e0f2fe;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.fdr-rumble-team.red {
+  color: #f87171;
+}
+
+.fdr-rumble-score-red {
+  color: #fee2e2;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.fdr-rumble-target {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 208, 0, 0.16);
+  border: 1px solid rgba(255, 208, 0, 0.55);
+  color: #ffd000;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.fdr-rumble-bars {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+
+.fdr-rumble-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  display: flex;
+}
+
+.fdr-rumble-track.blue {
+  justify-content: flex-end;
+}
+
+.fdr-rumble-track.red {
+  justify-content: flex-start;
+}
+
+.fdr-rumble-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  transition: width 0.14s ease-out;
+}
+
+.fdr-rumble-fill.blue {
+  background: linear-gradient(90deg, #2563eb, #38bdf8);
+}
+
+.fdr-rumble-fill.red {
+  background: linear-gradient(90deg, #f87171, #dc2626);
+}
+
+.fdr-rumble-respawn {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(14, 116, 144, 0.45);
+  border: 1px solid #22d3ee;
+  color: #cffafe;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+/* HUD Bottom-Center Emerald Stealth Bush HIDDEN Pill */
+.fdr-stealth-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: fit-content;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(6, 78, 59, 0.9), rgba(20, 83, 45, 0.92));
+  border: 1.5px solid #34eb5e;
+  box-shadow: 0 3px 10px rgba(34, 197, 94, 0.32);
+  color: #dcfce7;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.09em;
+  line-height: 1.1;
+}
+
+.fdr-stealth-icon {
+  width: 13px;
+  height: 13px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-stealth-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Hotbar Weapon Slot Attachment Mod Badges */
+.fdr-slot-mods {
+  position: absolute;
+  bottom: 2px;
+  left: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5px;
+  max-width: 25px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.fdr-mod-pip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 10px;
+  height: 10px;
+  padding: 0 1.5px;
+  border-radius: 2px;
+  background: rgba(6, 14, 32, 0.92);
+  border: 1px solid var(--mod-color, #38bdf8);
+  box-shadow: 0 0 5px var(--mod-color, #38bdf8);
+  color: var(--mod-color, #e0f2fe);
+  font-size: 8.5px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 1px 1px #000000;
+}
+
+/* FullMapOverlay Wave-8 Legend Swatches */
+.fdr-legend-swatch.modbench svg,
+.fdr-legend-swatch.forecasttower svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* MatchOverlay Team Rumble Score Pill */
+.fdr-summary-mode-row {
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.fdr-rumble-score-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: rgba(8, 15, 34, 0.9);
+  border: 1.5px solid #ffd000;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  box-shadow: 0 0 14px rgba(255, 208, 0, 0.25);
+}
+
+.fdr-rumble-score-pill .blue {
+  color: #60a5fa;
+}
+
+.fdr-rumble-score-pill .sep {
+  color: #cbd5e1;
+}
+
+.fdr-rumble-score-pill .red {
+  color: #f87171;
+}
+
+/* Responsive 1280x720 Wave-8 Tuning (5-mode lobby, stealth/kinetic clearance, 24-row legend) */
+@media (max-width: 1360px), (max-height: 760px) {
+  .fdr-mode-selector {
+    padding: 7px 9px;
+    gap: 5px;
+  }
+
+  .fdr-mode-grid {
+    gap: 5px;
+  }
+
+  .fdr-mode-select-card {
+    padding: 5px 8px;
+    gap: 2px;
+  }
+
+  .fdr-mode-card--full {
+    padding: 5px 10px;
+  }
+
+  .fdr-mode-select-sub {
+    font-size: 9.5px;
+    line-height: 1.15;
+  }
+
+  .fdr-bottom-center {
+    width: clamp(240px, 20.5vw, 310px);
+  }
+
+  .fdr-slot-card {
+    width: clamp(46px, 4vw, 56px);
+    height: clamp(54px, 4.8vw, 68px);
+  }
+
+  .fdr-map-legend {
+    gap: 3px 9px;
+    padding: 6px 9px;
+  }
+
+  .fdr-map-legend-row {
+    font-size: 11px;
+    gap: 5px;
+    line-height: 1.15;
   }
 }

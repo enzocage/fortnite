@@ -6,6 +6,7 @@ import {
   POIS,
   RARITY_COLORS,
   REBOOT_VAN_COOLDOWN_SEC,
+  WEAPON_MOD_COST_GOLD,
   WEAPONS,
 } from '../core';
 import type {
@@ -15,11 +16,13 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   ExplosiveBarrelEntity,
+  ForecastTowerEntity,
   GrindRailEntity,
   ItemInstance,
   LaunchPadEntity,
   LootIslandState,
   MedallionId,
+  ModBenchEntity,
   NpcSpecialistEntity,
   Rarity,
   RebootVanEntity,
@@ -27,6 +30,7 @@ import type {
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SpecialistRole,
+  StealthBushEntity,
   SupplyDroneEntity,
   TerrainQuery,
   TrapKind,
@@ -155,6 +159,12 @@ export interface Wave7ShowcaseResult {
   rebootVan: RebootVanEntity;
   grindRail: GrindRailEntity;
   drones: SupplyDroneEntity[];
+}
+
+export interface Wave8ShowcaseResult {
+  modBench: ModBenchEntity;
+  forecastTower: ForecastTowerEntity;
+  stealthBushes: StealthBushEntity[];
 }
 
 interface VendingMachineVisual {
@@ -346,6 +356,41 @@ interface SupplyDroneVisual {
   isQaShowcase?: boolean;
 }
 
+interface ModBenchVisual {
+  data: ModBenchEntity;
+  group: THREE.Group;
+  holoGroup: THREE.Group;
+  holoRing: THREE.Mesh;
+  baseHoloY: number;
+  collider: ColliderBox;
+  isQaShowcase?: boolean;
+}
+
+interface ForecastTowerVisual {
+  data: ForecastTowerEntity;
+  group: THREE.Group;
+  dishPivot: THREE.Group;
+  beaconOrb: THREE.Mesh;
+  beaconRing: THREE.Mesh;
+  beaconBeam: THREE.Mesh;
+  screenMesh: THREE.Mesh;
+  unscannedMat: THREE.MeshStandardMaterial;
+  scannedMat: THREE.MeshStandardMaterial;
+  unscannedBeamMat: THREE.MeshBasicMaterial;
+  scannedBeamMat: THREE.MeshBasicMaterial;
+  collider: ColliderBox;
+  isQaShowcase?: boolean;
+}
+
+interface StealthBushVisual {
+  data: StealthBushEntity;
+  group: THREE.Group;
+  foliageGroup: THREE.Group;
+  rustleTimer: number;
+  rustlePhase: number;
+  isQaShowcase?: boolean;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -368,6 +413,10 @@ const SLURP_TANKER_HEAL_RADIUS = 10;
 const SLURP_TANKER_HEAL_AMOUNT = 60;
 const SUPPLY_DRONE_HP = 75;
 const GRIND_RAIL_SAMPLE_COUNT = 120;
+const STEALTH_BUSH_RADIUS = 1.85;
+const STEALTH_BUSH_RUSTLE_SEC = 0.55;
+const MOD_BENCH_NEARBY_RADIUS = 3.8;
+const FORECAST_TOWER_NEARBY_RADIUS = 4.2;
 const BUNKER_LOOT_WEAPONS: readonly ('combat_smg' | 'boom_bow' | 'tactical_dmr')[] = [
   'combat_smg',
   'boom_bow',
@@ -419,6 +468,12 @@ export class WorldInteractables {
   private rebootVansMap = new Map<string, RebootVanVisual>();
   private supplyDrones: SupplyDroneEntity[] = [];
   private supplyDronesMap = new Map<string, SupplyDroneVisual>();
+  private modBenches: ModBenchEntity[] = [];
+  private modBenchesMap = new Map<string, ModBenchVisual>();
+  private forecastTowers: ForecastTowerEntity[] = [];
+  private forecastTowersMap = new Map<string, ForecastTowerVisual>();
+  private stealthBushes: StealthBushEntity[] = [];
+  private stealthBushesMap = new Map<string, StealthBushVisual>();
   private qaShowcaseGeos: THREE.BufferGeometry[] = [];
   private lootIslandState: LootIslandState = {
     active: false,
@@ -476,6 +531,9 @@ export class WorldInteractables {
     this.buildGrindRails(terrain);
     this.buildRebootVans(terrain);
     this.buildSupplyDrones(terrain);
+    this.buildModBenches(terrain);
+    this.buildForecastTowers(terrain);
+    this.buildStealthBushes(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -4966,6 +5024,796 @@ export class WorldInteractables {
     };
   }
 
+  private createModBenchEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    rotationY: number;
+    isQaShowcase?: boolean;
+  }): ModBenchVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: ModBenchEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      y,
+      z: spec.z,
+      rotationY: spec.rotationY,
+      costGold: WEAPON_MOD_COST_GOLD,
+    };
+    this.modBenches.push(data);
+
+    const chassisMat = this.getSharedMat('mod_bench_chassis', () =>
+      new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.36, metalness: 0.82 }),
+    );
+    const alloyMat = this.getSharedMat('mod_bench_alloy', () =>
+      new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.28, metalness: 0.86 }),
+    );
+    const trimMat = this.getSharedMat('mod_bench_trim', () =>
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.42, metalness: 0.72 }),
+    );
+    const cyanGlowMat = this.getSharedMat('mod_bench_cyan_glow', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#38bdf8',
+        emissive: '#0284c7',
+        emissiveIntensity: 1.65,
+        roughness: 0.16,
+        metalness: 0.25,
+      }),
+    );
+    const blueprintMat = this.getSharedMat('mod_bench_blueprint', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#67e8f9',
+        emissive: '#22d3ee',
+        emissiveIntensity: 1.7,
+        transparent: true,
+        opacity: 0.88,
+        roughness: 0.14,
+        metalness: 0.2,
+      }),
+    );
+    const holoConeMat = this.getSharedMat('mod_bench_holo_cone', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.24,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const basePlinthGeo = this.getSharedGeo('mod_bench_plinth', () => new THREE.BoxGeometry(2.26, 0.14, 1.18));
+    const legGeo = this.getSharedGeo('mod_bench_leg', () => new THREE.BoxGeometry(0.16, 0.86, 0.18));
+    const shelfGeo = this.getSharedGeo('mod_bench_shelf', () => new THREE.BoxGeometry(1.94, 0.12, 0.88));
+    const topGeo = this.getSharedGeo('mod_bench_top', () => new THREE.BoxGeometry(2.3, 0.16, 1.16));
+    const railGlowGeo = this.getSharedGeo('mod_bench_rail_glow', () => new THREE.BoxGeometry(2.32, 0.05, 0.06));
+    const gantryPostGeo = this.getSharedGeo('mod_bench_gantry_post', () => new THREE.BoxGeometry(0.1, 0.68, 0.1));
+    const screenFrameGeo = this.getSharedGeo('mod_bench_screen_frame', () => new THREE.BoxGeometry(1.62, 0.42, 0.08));
+    const screenFaceGeo = this.getSharedGeo('mod_bench_screen_face', () => new THREE.BoxGeometry(1.48, 0.3, 0.03));
+    const emitterPadGeo = this.getSharedGeo('mod_bench_emitter_pad', () => new THREE.CylinderGeometry(0.46, 0.54, 0.06, 16));
+    const emitterCoreGeo = this.getSharedGeo('mod_bench_emitter_core', () => new THREE.CylinderGeometry(0.36, 0.36, 0.07, 16));
+    const holoConeGeo = this.getSharedGeo('mod_bench_holo_cone', () => new THREE.CylinderGeometry(0.56, 0.34, 0.58, 16, 1, true));
+    const holoRingGeo = this.getSharedGeo('mod_bench_holo_ring', () => {
+      const g = new THREE.TorusGeometry(0.46, 0.026, 8, 28);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const bpReceiverGeo = this.getSharedGeo('mod_bp_receiver', () => new THREE.BoxGeometry(0.54, 0.14, 0.11));
+    const bpBarrelGeo = this.getSharedGeo('mod_bp_barrel', () => {
+      const g = new THREE.CylinderGeometry(0.032, 0.032, 0.52, 8);
+      g.rotateZ(Math.PI * 0.5);
+      return g;
+    });
+    const bpSuppressorGeo = this.getSharedGeo('mod_bp_suppressor', () => {
+      const g = new THREE.CylinderGeometry(0.048, 0.048, 0.2, 8);
+      g.rotateZ(Math.PI * 0.5);
+      return g;
+    });
+    const bpOpticGeo = this.getSharedGeo('mod_bp_optic', () => new THREE.BoxGeometry(0.14, 0.085, 0.085));
+    const bpDrumGeo = this.getSharedGeo('mod_bp_drum', () => {
+      const g = new THREE.CylinderGeometry(0.085, 0.085, 0.11, 10);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const bpGripGeo = this.getSharedGeo('mod_bp_grip', () => new THREE.BoxGeometry(0.065, 0.14, 0.07));
+
+    const benchGroup = new THREE.Group();
+    benchGroup.name = `ModBench_${spec.id}`;
+    benchGroup.position.set(spec.x, y, spec.z);
+    benchGroup.rotation.y = spec.rotationY;
+
+    const plinth = new THREE.Mesh(basePlinthGeo, chassisMat);
+    plinth.position.y = 0.07;
+    plinth.receiveShadow = true;
+    benchGroup.add(plinth);
+
+    for (const lx of [-0.94, 0.94]) {
+      for (const lz of [-0.42, 0.42]) {
+        const leg = new THREE.Mesh(legGeo, trimMat);
+        leg.position.set(lx, 0.5, lz);
+        leg.castShadow = true;
+        leg.receiveShadow = true;
+        benchGroup.add(leg);
+      }
+    }
+
+    const shelf = new THREE.Mesh(shelfGeo, alloyMat);
+    shelf.position.set(0, 0.34, 0);
+    shelf.receiveShadow = true;
+    benchGroup.add(shelf);
+
+    const tabletop = new THREE.Mesh(topGeo, chassisMat);
+    tabletop.position.set(0, 0.95, 0);
+    tabletop.castShadow = true;
+    tabletop.receiveShadow = true;
+    benchGroup.add(tabletop);
+
+    for (const rz of [-0.57, 0.57]) {
+      const railGlow = new THREE.Mesh(railGlowGeo, cyanGlowMat);
+      railGlow.position.set(0, 0.96, rz);
+      benchGroup.add(railGlow);
+    }
+
+    for (const gx of [-0.74, 0.74]) {
+      const post = new THREE.Mesh(gantryPostGeo, alloyMat);
+      post.position.set(gx, 1.32, -0.46);
+      post.castShadow = true;
+      benchGroup.add(post);
+    }
+
+    const screenFrame = new THREE.Mesh(screenFrameGeo, trimMat);
+    screenFrame.position.set(0, 1.62, -0.46);
+    screenFrame.rotation.x = 0.18;
+    benchGroup.add(screenFrame);
+
+    const screenFace = new THREE.Mesh(screenFaceGeo, cyanGlowMat);
+    screenFace.position.set(0, 1.62, -0.415);
+    screenFace.rotation.x = 0.18;
+    benchGroup.add(screenFace);
+
+    const emitterPad = new THREE.Mesh(emitterPadGeo, alloyMat);
+    emitterPad.position.set(0, 1.05, 0.04);
+    benchGroup.add(emitterPad);
+
+    const emitterCore = new THREE.Mesh(emitterCoreGeo, cyanGlowMat);
+    emitterCore.position.set(0, 1.06, 0.04);
+    benchGroup.add(emitterCore);
+
+    const holoCone = new THREE.Mesh(holoConeGeo, holoConeMat);
+    holoCone.position.set(0, 1.36, 0.04);
+    benchGroup.add(holoCone);
+
+    const baseHoloY = 1.48;
+    const holoGroup = new THREE.Group();
+    holoGroup.position.set(0, baseHoloY, 0.04);
+
+    const holoRing = new THREE.Mesh(holoRingGeo, cyanGlowMat);
+    holoRing.position.y = -0.14;
+    holoGroup.add(holoRing);
+
+    const receiver = new THREE.Mesh(bpReceiverGeo, blueprintMat);
+    const barrel = new THREE.Mesh(bpBarrelGeo, blueprintMat);
+    barrel.position.set(0.38, 0.02, 0);
+    const suppressor = new THREE.Mesh(bpSuppressorGeo, cyanGlowMat);
+    suppressor.position.set(0.66, 0.02, 0);
+    const optic = new THREE.Mesh(bpOpticGeo, cyanGlowMat);
+    optic.position.set(-0.02, 0.11, 0);
+    const drum = new THREE.Mesh(bpDrumGeo, cyanGlowMat);
+    drum.position.set(0.05, -0.12, 0);
+    const grip = new THREE.Mesh(bpGripGeo, blueprintMat);
+    grip.position.set(0.24, -0.1, 0);
+    grip.rotation.z = 0.25;
+    const stock = new THREE.Mesh(bpGripGeo, blueprintMat);
+    stock.position.set(-0.28, -0.02, 0);
+    stock.rotation.z = -0.35;
+    holoGroup.add(receiver, barrel, suppressor, optic, drum, grip, stock);
+    benchGroup.add(holoGroup);
+
+    this.group.add(benchGroup);
+
+    const collider = this.makeRotatedCollider(
+      `${spec.id}_col`,
+      spec.x,
+      spec.z,
+      0,
+      0,
+      1.15,
+      0.62,
+      y,
+      y + 1.55,
+      spec.rotationY,
+      'metal',
+      `mod_bench:${spec.id}`,
+    );
+
+    const visual: ModBenchVisual = {
+      data,
+      group: benchGroup,
+      holoGroup,
+      holoRing,
+      baseHoloY,
+      collider,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.modBenchesMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildModBenches(_terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      dx: number;
+      dz: number;
+      rotationY: number;
+    }> = [
+      { id: 'mod_metro_towers', poiId: 'metro_towers', dx: -1, dz: -11, rotationY: 0 },
+      { id: 'mod_market_row', poiId: 'market_row', dx: -2, dz: -9, rotationY: 0 },
+      { id: 'mod_crater_depot', poiId: 'crater_depot', dx: 1, dz: -11, rotationY: 0 },
+      { id: 'mod_whispering_pines', poiId: 'whispering_pines', dx: 10, dz: 2, rotationY: -Math.PI * 0.5 },
+      { id: 'mod_scorched_caldera', poiId: 'scorched_caldera', dx: -4, dz: 0, rotationY: Math.PI * 0.5 },
+      { id: 'mod_skyline_spire', poiId: 'skyline_spire', dx: 0, dz: -4, rotationY: 0 },
+    ];
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+      this.createModBenchEntry({
+        id: spec.id,
+        poiId: spec.poiId,
+        x: poi.x + spec.dx,
+        z: poi.z + spec.dz,
+        rotationY: spec.rotationY,
+      });
+    }
+  }
+
+  getModBenches(): ModBenchEntity[] {
+    return this.modBenches;
+  }
+
+  getModBenchColliders(): ColliderBox[] {
+    return Array.from(this.modBenchesMap.values(), (v) => v.collider);
+  }
+
+  findNearbyModBench(
+    pos: Vec3Like,
+    radius = MOD_BENCH_NEARBY_RADIUS,
+  ): ModBenchEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return null;
+    }
+    let best: ModBenchEntity | null = null;
+    let bestDist = radius;
+    for (let i = 0; i < this.modBenches.length; i++) {
+      const b = this.modBenches[i];
+      const d = Math.hypot(b.x - pos.x, b.y - pos.y, b.z - pos.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  private syncForecastTowerVisual(entry: ForecastTowerVisual): void {
+    const scanned = entry.data.scanned;
+    const mat = scanned ? entry.scannedMat : entry.unscannedMat;
+    const beamMat = scanned ? entry.scannedBeamMat : entry.unscannedBeamMat;
+    entry.beaconOrb.material = mat;
+    entry.beaconRing.material = mat;
+    entry.screenMesh.material = mat;
+    entry.beaconBeam.material = beamMat;
+    entry.beaconRing.scale.setScalar(scanned ? 1.18 : 1.0);
+  }
+
+  private createForecastTowerEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    rotationY: number;
+    isQaShowcase?: boolean;
+  }): ForecastTowerVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: ForecastTowerEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      y,
+      z: spec.z,
+      rotationY: spec.rotationY,
+      scanned: false,
+      scannedBy: null,
+    };
+    this.forecastTowers.push(data);
+
+    const concreteMat = this.getSharedMat('forecast_concrete', () =>
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.78, metalness: 0.25 }),
+    );
+    const steelMat = this.getSharedMat('forecast_steel', () =>
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.36, metalness: 0.82 }),
+    );
+    const dishMat = this.getSharedMat('forecast_dish', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#cbd5e1',
+        roughness: 0.28,
+        metalness: 0.65,
+        side: THREE.DoubleSide,
+      }),
+    );
+    const unscannedMat = this.getSharedMat('forecast_cyan', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#22d3ee',
+        emissive: '#06b6d4',
+        emissiveIntensity: 1.55,
+        roughness: 0.16,
+        metalness: 0.28,
+      }),
+    );
+    const scannedMat = this.getSharedMat('forecast_emerald_cyan', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#10b981',
+        emissive: '#34d399',
+        emissiveIntensity: 1.9,
+        roughness: 0.14,
+        metalness: 0.28,
+      }),
+    );
+    const unscannedBeamMat = this.getSharedMat('forecast_beam_cyan', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#22d3ee',
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const scannedBeamMat = this.getSharedMat('forecast_beam_emerald', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#34d399',
+        transparent: true,
+        opacity: 0.36,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const padGeo = this.getSharedGeo('forecast_pad', () => new THREE.CylinderGeometry(1.38, 1.56, 0.22, 8));
+    const tripodLegGeo = this.getSharedGeo('forecast_tripod_leg', () => new THREE.CylinderGeometry(0.08, 0.13, 4.95, 8));
+    const coreColumnGeo = this.getSharedGeo('forecast_core_col', () => new THREE.CylinderGeometry(0.18, 0.24, 5.2, 10));
+    const upperMastGeo = this.getSharedGeo('forecast_upper_mast', () => new THREE.CylinderGeometry(0.09, 0.14, 2.75, 10));
+    const collarGeo = this.getSharedGeo('forecast_collar', () => new THREE.CylinderGeometry(0.38, 0.44, 0.34, 12));
+    const consoleGeo = this.getSharedGeo('forecast_console', () => new THREE.BoxGeometry(0.68, 1.24, 0.44));
+    const screenGeo = this.getSharedGeo('forecast_screen', () => new THREE.BoxGeometry(0.52, 0.38, 0.05));
+    const dishBowlGeo = this.getSharedGeo('forecast_dish_bowl', () =>
+      new THREE.SphereGeometry(0.86, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.42),
+    );
+    const dishRimGeo = this.getSharedGeo('forecast_dish_rim', () => new THREE.TorusGeometry(0.84, 0.045, 8, 24));
+    const feedHornGeo = this.getSharedGeo('forecast_feed_horn', () => new THREE.CylinderGeometry(0.04, 0.09, 0.72, 8));
+    const beaconOrbGeo = this.getSharedGeo('forecast_beacon_orb', () => new THREE.SphereGeometry(0.24, 12, 10));
+    const beaconRingGeo = this.getSharedGeo('forecast_beacon_ring', () => {
+      const g = new THREE.TorusGeometry(0.54, 0.042, 8, 24);
+      g.rotateX(Math.PI * 0.45);
+      return g;
+    });
+    const beaconBeamGeo = this.getSharedGeo('forecast_beacon_beam', () =>
+      new THREE.CylinderGeometry(0.2, 0.48, 8.5, 12, 1, true),
+    );
+
+    const towerGroup = new THREE.Group();
+    towerGroup.name = `ForecastTower_${spec.id}`;
+    towerGroup.position.set(spec.x, y, spec.z);
+    towerGroup.rotation.y = spec.rotationY;
+
+    const pad = new THREE.Mesh(padGeo, concreteMat);
+    pad.position.y = 0.11;
+    pad.receiveShadow = true;
+    pad.castShadow = true;
+    towerGroup.add(pad);
+
+    // Tripod mast: 3 angled steel legs meeting at the central collar
+    for (let i = 0; i < 3; i++) {
+      const ang = (i / 3) * Math.PI * 2 + Math.PI / 6;
+      const legPivot = new THREE.Group();
+      legPivot.rotation.y = ang;
+      const leg = new THREE.Mesh(tripodLegGeo, steelMat);
+      leg.position.set(0, 2.52, 0.56);
+      leg.rotation.x = 0.22;
+      leg.castShadow = true;
+      legPivot.add(leg);
+      towerGroup.add(legPivot);
+    }
+
+    const coreCol = new THREE.Mesh(coreColumnGeo, steelMat);
+    coreCol.position.y = 2.7;
+    coreCol.castShadow = true;
+    towerGroup.add(coreCol);
+
+    const collar = new THREE.Mesh(collarGeo, concreteMat);
+    collar.position.y = 5.05;
+    collar.castShadow = true;
+    towerGroup.add(collar);
+
+    const upperMast = new THREE.Mesh(upperMastGeo, steelMat);
+    upperMast.position.y = 6.5;
+    upperMast.castShadow = true;
+    towerGroup.add(upperMast);
+
+    // Interactive front scanner console
+    const consoleBox = new THREE.Mesh(consoleGeo, steelMat);
+    consoleBox.position.set(0, 0.72, 0.96);
+    consoleBox.castShadow = true;
+    towerGroup.add(consoleBox);
+
+    const screenMesh = new THREE.Mesh(screenGeo, unscannedMat);
+    screenMesh.position.set(0, 1.04, 1.18);
+    screenMesh.rotation.x = -0.32;
+    towerGroup.add(screenMesh);
+
+    // Spinning parabolic radar dish assembly
+    const dishPivot = new THREE.Group();
+    dishPivot.name = `ForecastDish_${spec.id}`;
+    dishPivot.position.set(0, 6.25, 0);
+
+    const dishMount = new THREE.Group();
+    dishMount.position.set(0, 0, 0.35);
+    dishMount.rotation.x = Math.PI * 0.38;
+
+    const dishBowl = new THREE.Mesh(dishBowlGeo, dishMat);
+    dishBowl.position.y = -0.34;
+    dishBowl.castShadow = true;
+    dishMount.add(dishBowl);
+
+    const dishRim = new THREE.Mesh(dishRimGeo, steelMat);
+    dishRim.rotation.x = Math.PI * 0.5;
+    dishRim.position.y = 0.25;
+    dishMount.add(dishRim);
+
+    const feedHorn = new THREE.Mesh(feedHornGeo, steelMat);
+    feedHorn.position.y = 0.38;
+    dishMount.add(feedHorn);
+
+    const feedTip = new THREE.Mesh(beaconOrbGeo, unscannedMat);
+    feedTip.scale.setScalar(0.45);
+    feedTip.position.y = 0.74;
+    dishMount.add(feedTip);
+
+    dishPivot.add(dishMount);
+    towerGroup.add(dishPivot);
+
+    // Top scanner beacon orb + rotating ring + sky beam
+    const beaconOrb = new THREE.Mesh(beaconOrbGeo, unscannedMat);
+    beaconOrb.position.y = 7.95;
+    towerGroup.add(beaconOrb);
+
+    const beaconRing = new THREE.Mesh(beaconRingGeo, unscannedMat);
+    beaconRing.position.y = 7.95;
+    towerGroup.add(beaconRing);
+
+    const beaconBeam = new THREE.Mesh(beaconBeamGeo, unscannedBeamMat);
+    beaconBeam.position.y = 12.1;
+    towerGroup.add(beaconBeam);
+
+    this.group.add(towerGroup);
+
+    const collider = this.makeRotatedCollider(
+      `${spec.id}_col`,
+      spec.x,
+      spec.z,
+      0,
+      0,
+      1.25,
+      1.25,
+      y,
+      y + 5.2,
+      spec.rotationY,
+      'metal',
+      `forecast_tower:${spec.id}`,
+    );
+
+    const visual: ForecastTowerVisual = {
+      data,
+      group: towerGroup,
+      dishPivot,
+      beaconOrb,
+      beaconRing,
+      beaconBeam,
+      screenMesh,
+      unscannedMat,
+      scannedMat,
+      unscannedBeamMat,
+      scannedBeamMat,
+      collider,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.syncForecastTowerVisual(visual);
+    this.forecastTowersMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildForecastTowers(_terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      dx: number;
+      dz: number;
+      rotationY: number;
+    }> = [
+      { id: 'forecast_sunny_suburbs', poiId: 'sunny_suburbs', dx: -32, dz: 0, rotationY: Math.PI * 0.5 },
+      { id: 'forecast_whispering_pines', poiId: 'whispering_pines', dx: 0, dz: -32, rotationY: 0 },
+      { id: 'forecast_sunken_oasis', poiId: 'sunken_oasis', dx: 4, dz: -28, rotationY: 0 },
+      { id: 'forecast_crater_depot', poiId: 'crater_depot', dx: -32, dz: 2, rotationY: Math.PI * 0.5 },
+    ];
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+      this.createForecastTowerEntry({
+        id: spec.id,
+        poiId: spec.poiId,
+        x: poi.x + spec.dx,
+        z: poi.z + spec.dz,
+        rotationY: spec.rotationY,
+      });
+    }
+  }
+
+  getForecastTowers(): ForecastTowerEntity[] {
+    return this.forecastTowers;
+  }
+
+  getForecastTowerColliders(): ColliderBox[] {
+    return Array.from(this.forecastTowersMap.values(), (v) => v.collider);
+  }
+
+  findNearbyForecastTower(
+    pos: Vec3Like,
+    radius = FORECAST_TOWER_NEARBY_RADIUS,
+  ): ForecastTowerEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return null;
+    }
+    let best: ForecastTowerEntity | null = null;
+    let bestDist = radius;
+    for (let i = 0; i < this.forecastTowers.length; i++) {
+      const ft = this.forecastTowers[i];
+      const d = Math.hypot(ft.x - pos.x, ft.y - pos.y, ft.z - pos.z);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = ft;
+      }
+    }
+    return best;
+  }
+
+  scanForecastTower(id: string, actorId: string): boolean {
+    if (!actorId) return false;
+    const entry = this.forecastTowersMap.get(id);
+    if (!entry || entry.data.scanned) {
+      return false;
+    }
+    entry.data.scanned = true;
+    entry.data.scannedBy = actorId;
+    this.syncForecastTowerVisual(entry);
+
+    const pulsePos: Vec3Like = {
+      x: entry.data.x,
+      y: entry.data.y + 1.5,
+      z: entry.data.z,
+    };
+    this.eventBus?.emit('vfx:forecast_pulse', { position: pulsePos });
+    this.eventBus?.emit('sound:play', {
+      id: 'forecast_scan',
+      position: pulsePos,
+      volume: 0.9,
+      spatial: true,
+    });
+    return true;
+  }
+
+  private createStealthBushEntry(spec: {
+    id: string;
+    x: number;
+    z: number;
+    rotY: number;
+    isQaShowcase?: boolean;
+  }): StealthBushVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: StealthBushEntity = {
+      id: spec.id,
+      x: spec.x,
+      y,
+      z: spec.z,
+      radius: STEALTH_BUSH_RADIUS,
+    };
+    this.stealthBushes.push(data);
+
+    const foliageDarkMat = this.getSharedMat('stealth_bush_dark', () =>
+      new THREE.MeshStandardMaterial({ color: '#1b662c', roughness: 0.88, metalness: 0.02 }),
+    );
+    const foliageMidMat = this.getSharedMat('stealth_bush_mid', () =>
+      new THREE.MeshStandardMaterial({ color: '#27873b', roughness: 0.84, metalness: 0.02 }),
+    );
+    const foliageLightMat = this.getSharedMat('stealth_bush_light', () =>
+      new THREE.MeshStandardMaterial({ color: '#38a84a', roughness: 0.8, metalness: 0.02 }),
+    );
+    const stemMat = this.getSharedMat('stealth_bush_stem', () =>
+      new THREE.MeshStandardMaterial({ color: '#5c3c22', roughness: 0.92 }),
+    );
+
+    const stemGeo = this.getSharedGeo('stealth_bush_stem_geo', () => new THREE.CylinderGeometry(0.14, 0.24, 0.52, 7));
+    const lobeGeo = this.getSharedGeo('stealth_bush_lobe_geo', () => new THREE.DodecahedronGeometry(1.0, 1));
+
+    const bushGroup = new THREE.Group();
+    bushGroup.name = `StealthBush_${spec.id}`;
+    bushGroup.position.set(spec.x, y, spec.z);
+    bushGroup.rotation.y = spec.rotY;
+
+    const foliageGroup = new THREE.Group();
+
+    const stem = new THREE.Mesh(stemGeo, stemMat);
+    stem.position.y = 0.24;
+    foliageGroup.add(stem);
+
+    // Central high dome
+    const centerLobe = new THREE.Mesh(lobeGeo, foliageDarkMat);
+    centerLobe.position.set(0, 0.95, 0);
+    centerLobe.scale.set(1.12, 0.96, 1.12);
+    centerLobe.castShadow = true;
+    centerLobe.receiveShadow = true;
+    foliageGroup.add(centerLobe);
+
+    // 6 overlapping perimeter foliage lobes (~1.85m bush radius)
+    const skirtCount = 6;
+    for (let i = 0; i < skirtCount; i++) {
+      const a = (i / skirtCount) * Math.PI * 2 + 0.22;
+      const dist = 0.86 + (i % 2) * 0.14;
+      const lobe = new THREE.Mesh(lobeGeo, i % 2 === 0 ? foliageMidMat : foliageLightMat);
+      lobe.position.set(Math.cos(a) * dist, 0.68 + (i % 3) * 0.08, Math.sin(a) * dist);
+      const s = 0.78 + (i % 2) * 0.12;
+      lobe.scale.set(s * 1.06, s * 0.88, s * 1.06);
+      lobe.rotation.set((i % 3) * 0.2, a, 0.15);
+      lobe.castShadow = true;
+      lobe.receiveShadow = true;
+      foliageGroup.add(lobe);
+    }
+
+    // 3 upper stylized crown tufts
+    for (let c = 0; c < 3; c++) {
+      const a = (c / 3) * Math.PI * 2 + 0.55;
+      const tuft = new THREE.Mesh(lobeGeo, c === 0 ? foliageLightMat : foliageMidMat);
+      tuft.position.set(Math.cos(a) * 0.44, 1.46 + c * 0.05, Math.sin(a) * 0.44);
+      tuft.scale.set(0.68, 0.58, 0.68);
+      tuft.castShadow = true;
+      foliageGroup.add(tuft);
+    }
+
+    bushGroup.add(foliageGroup);
+    this.group.add(bushGroup);
+
+    const visual: StealthBushVisual = {
+      data,
+      group: bushGroup,
+      foliageGroup,
+      rustleTimer: 0,
+      rustlePhase: (this.stealthBushes.length * 1.17) % (Math.PI * 2),
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.stealthBushesMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildStealthBushes(_terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const poiPerimeterOffsets: Array<{ id: string; poiId: string; dx: number; dz: number }> = [
+      { id: 'bush_metro_w', poiId: 'metro_towers', dx: -42, dz: -6 },
+      { id: 'bush_metro_se', poiId: 'metro_towers', dx: 38, dz: 28 },
+      { id: 'bush_suburbs_sw', poiId: 'sunny_suburbs', dx: -38, dz: 24 },
+      { id: 'bush_suburbs_ne', poiId: 'sunny_suburbs', dx: 32, dz: -36 },
+      { id: 'bush_crystal_nw', poiId: 'crystal_basin', dx: -64, dz: -22 },
+      { id: 'bush_crystal_se', poiId: 'crystal_basin', dx: 64, dz: 32 },
+      { id: 'bush_market_nw', poiId: 'market_row', dx: -36, dz: -30 },
+      { id: 'bush_market_se', poiId: 'market_row', dx: 38, dz: 28 },
+      { id: 'bush_crater_sw', poiId: 'crater_depot', dx: -38, dz: 34 },
+      { id: 'bush_crater_e', poiId: 'crater_depot', dx: 38, dz: -12 },
+      { id: 'bush_pines_w', poiId: 'whispering_pines', dx: -42, dz: 18 },
+      { id: 'bush_pines_ne', poiId: 'whispering_pines', dx: 36, dz: -34 },
+      { id: 'bush_frost_sw', poiId: 'frostpeak_citadel', dx: -34, dz: 24 },
+      { id: 'bush_frost_se', poiId: 'frostpeak_citadel', dx: 36, dz: 28 },
+      { id: 'bush_caldera_w', poiId: 'scorched_caldera', dx: -42, dz: -14 },
+      { id: 'bush_caldera_se', poiId: 'scorched_caldera', dx: 34, dz: 32 },
+      { id: 'bush_oasis_ne', poiId: 'sunken_oasis', dx: 28, dz: -34 },
+      { id: 'bush_oasis_nw', poiId: 'sunken_oasis', dx: -34, dz: -24 },
+      { id: 'bush_skyline_sw', poiId: 'skyline_spire', dx: -38, dz: 24 },
+      { id: 'bush_skyline_ne', poiId: 'skyline_spire', dx: 36, dz: -24 },
+    ];
+
+    const hillcrestSpots: Array<{ id: string; x: number; z: number }> = [
+      { id: 'bush_hill_center', x: -15, z: -18 },
+      { id: 'bush_hill_nw_ridge', x: -55, z: -135 },
+      { id: 'bush_hill_ne_ridge', x: 42, z: -205 },
+      { id: 'bush_hill_west', x: -130, z: 25 },
+      { id: 'bush_hill_east', x: 135, z: -35 },
+      { id: 'bush_hill_sw_ridge', x: -75, z: 85 },
+      { id: 'bush_hill_south_meadow', x: 25, z: 45 },
+      { id: 'bush_hill_south_bluff', x: 15, z: 225 },
+    ];
+
+    let idx = 0;
+    for (const spec of poiPerimeterOffsets) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+      this.createStealthBushEntry({
+        id: spec.id,
+        x: poi.x + spec.dx,
+        z: poi.z + spec.dz,
+        rotY: (idx++ * 0.93) % (Math.PI * 2),
+      });
+    }
+
+    for (const spot of hillcrestSpots) {
+      this.createStealthBushEntry({
+        id: spot.id,
+        x: spot.x,
+        z: spot.z,
+        rotY: (idx++ * 0.93) % (Math.PI * 2),
+      });
+    }
+  }
+
+  getStealthBushes(): StealthBushEntity[] {
+    return this.stealthBushes;
+  }
+
+  isInsideStealthBush(pos: Vec3Like): StealthBushEntity | null {
+    if (
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z)
+    ) {
+      return null;
+    }
+
+    let best: StealthBushVisual | null = null;
+    let bestDistSq = Infinity;
+    for (const entry of this.stealthBushesMap.values()) {
+      const b = entry.data;
+      if (pos.y < b.y - 1.0 || pos.y > b.y + 2.8) {
+        continue;
+      }
+      const dx = pos.x - b.x;
+      const dz = pos.z - b.z;
+      const dSq = dx * dx + dz * dz;
+      if (dSq <= b.radius * b.radius && dSq < bestDistSq) {
+        bestDistSq = dSq;
+        best = entry;
+      }
+    }
+
+    if (!best) return null;
+    best.rustleTimer = STEALTH_BUSH_RUSTLE_SEC;
+    return best.data;
+  }
+
   private removeQaShowcaseDynamicEntities(): void {
     const qaBunkerId = 'bunker_qa_showcase';
     const qaBunker = this.weaponBunkersMap.get(qaBunkerId);
@@ -5010,6 +5858,34 @@ export class WorldInteractables {
         this.supplyDronesMap.delete(qaDroneId);
         const idx = this.supplyDrones.findIndex((d) => d.id === qaDroneId);
         if (idx >= 0) this.supplyDrones.splice(idx, 1);
+      }
+    }
+
+    const qaModBenchId = 'mod_bench_qa_showcase';
+    const qaModBench = this.modBenchesMap.get(qaModBenchId);
+    if (qaModBench) {
+      this.group.remove(qaModBench.group);
+      this.modBenchesMap.delete(qaModBenchId);
+      const idx = this.modBenches.findIndex((m) => m.id === qaModBenchId);
+      if (idx >= 0) this.modBenches.splice(idx, 1);
+    }
+
+    const qaForecastId = 'forecast_qa_showcase';
+    const qaForecast = this.forecastTowersMap.get(qaForecastId);
+    if (qaForecast) {
+      this.group.remove(qaForecast.group);
+      this.forecastTowersMap.delete(qaForecastId);
+      const idx = this.forecastTowers.findIndex((f) => f.id === qaForecastId);
+      if (idx >= 0) this.forecastTowers.splice(idx, 1);
+    }
+
+    for (const qaBushId of ['bush_qa_showcase_1', 'bush_qa_showcase_2']) {
+      const qaBush = this.stealthBushesMap.get(qaBushId);
+      if (qaBush) {
+        this.group.remove(qaBush.group);
+        this.stealthBushesMap.delete(qaBushId);
+        const idx = this.stealthBushes.findIndex((b) => b.id === qaBushId);
+        if (idx >= 0) this.stealthBushes.splice(idx, 1);
       }
     }
 
@@ -5134,6 +6010,54 @@ export class WorldInteractables {
     };
   }
 
+  qaPlaceWave8Showcase(centerPos: Vec3Like): Wave8ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities();
+
+    const benchSpot = this.findDryGroundNear(centerPos, -5.0, -3.5);
+    const benchVisual = this.createModBenchEntry({
+      id: 'mod_bench_qa_showcase',
+      poiId: 'qa_showcase',
+      x: benchSpot.x,
+      z: benchSpot.z,
+      rotationY: Math.PI * 0.2,
+      isQaShowcase: true,
+    });
+
+    const towerSpot = this.findDryGroundNear(centerPos, 5.5, -4.5);
+    const towerVisual = this.createForecastTowerEntry({
+      id: 'forecast_qa_showcase',
+      poiId: 'qa_showcase',
+      x: towerSpot.x,
+      z: towerSpot.z,
+      rotationY: -Math.PI * 0.2,
+      isQaShowcase: true,
+    });
+
+    const bushSpot1 = this.findDryGroundNear(centerPos, -3.5, 4.5);
+    const bush1 = this.createStealthBushEntry({
+      id: 'bush_qa_showcase_1',
+      x: bushSpot1.x,
+      z: bushSpot1.z,
+      rotY: 0.4,
+      isQaShowcase: true,
+    });
+
+    const bushSpot2 = this.findDryGroundNear(centerPos, 3.5, 4.5);
+    const bush2 = this.createStealthBushEntry({
+      id: 'bush_qa_showcase_2',
+      x: bushSpot2.x,
+      z: bushSpot2.z,
+      rotY: 1.9,
+      isQaShowcase: true,
+    });
+
+    return {
+      modBench: benchVisual.data,
+      forecastTower: towerVisual.data,
+      stealthBushes: [bush1.data, bush2.data],
+    };
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -5152,6 +6076,8 @@ export class WorldInteractables {
       ...this.getWeaponBunkerColliders(),
       ...this.getSlurpTankerColliders(),
       ...this.getRebootVanColliders(),
+      ...this.getModBenchColliders(),
+      ...this.getForecastTowerColliders(),
     ];
   }
 
@@ -5307,6 +6233,26 @@ export class WorldInteractables {
     this.lootIslandFlagGroup.rotation.set(0, 0, 0);
     this.lootIslandInnerRing.scale.set(1, 1, 1);
     this.syncLootIslandVisual();
+
+    for (const mb of this.modBenchesMap.values()) {
+      mb.holoGroup.position.y = mb.baseHoloY;
+      mb.holoGroup.rotation.set(0, 0, 0);
+      mb.holoRing.rotation.set(0, 0, 0);
+    }
+
+    for (const ft of this.forecastTowersMap.values()) {
+      ft.data.scanned = false;
+      ft.data.scannedBy = null;
+      ft.dishPivot.rotation.set(0, 0, 0);
+      ft.beaconRing.rotation.set(0, 0, 0);
+      this.syncForecastTowerVisual(ft);
+    }
+
+    for (const sb of this.stealthBushesMap.values()) {
+      sb.rustleTimer = 0;
+      sb.foliageGroup.rotation.set(0, 0, 0);
+      sb.foliageGroup.scale.set(1, 1, 1);
+    }
   }
 
   unlockVault(vaultId: string): UnlockVaultResult {
@@ -5653,6 +6599,45 @@ export class WorldInteractables {
       }
       pickupIdx++;
     }
+
+    // Animate 6 Illuminated Weapon Mod Bench holographic blueprint silhouettes
+    let modIdx = 0;
+    for (const mb of this.modBenchesMap.values()) {
+      const t = elapsed + modIdx * 0.7;
+      mb.holoGroup.rotation.y = t * 1.45;
+      mb.holoGroup.position.y = mb.baseHoloY + Math.sin(t * 2.5) * 0.07;
+      mb.holoRing.rotation.z = t * 1.25;
+      modIdx++;
+    }
+
+    // Spin 4 Forecast Tower parabolic radar dishes & scanner rings
+    let towerIdx = 0;
+    for (const ft of this.forecastTowersMap.values()) {
+      const spinRate = ft.data.scanned ? 2.6 : 1.35;
+      ft.dishPivot.rotation.y += safeDt * spinRate;
+      ft.beaconRing.rotation.y = elapsed * (ft.data.scanned ? 2.4 : 1.4) + towerIdx;
+      const pulse = (ft.data.scanned ? 1.18 : 1.0) + Math.sin(elapsed * 3.4 + towerIdx) * 0.08;
+      ft.beaconRing.scale.set(pulse, pulse, pulse);
+      towerIdx++;
+    }
+
+    // Animate touched Interactive Stealth Bush rustle pulses
+    for (const bush of this.stealthBushesMap.values()) {
+      if (bush.rustleTimer > 0) {
+        bush.rustleTimer = Math.max(0, bush.rustleTimer - safeDt);
+        if (bush.rustleTimer <= 0) {
+          bush.foliageGroup.rotation.set(0, 0, 0);
+          bush.foliageGroup.scale.set(1, 1, 1);
+        } else {
+          const env = bush.rustleTimer / STEALTH_BUSH_RUSTLE_SEC;
+          const phase = bush.rustlePhase + (1 - env) * Math.PI * 5;
+          bush.foliageGroup.rotation.z = Math.sin(phase) * env * 0.14;
+          bush.foliageGroup.rotation.x = Math.cos(phase * 0.85) * env * 0.09;
+          const puff = 1 + Math.abs(Math.sin(phase)) * env * 0.08;
+          bush.foliageGroup.scale.set(puff, 1 - env * 0.04, puff);
+        }
+      }
+    }
   }
 
   dispose(): void {
@@ -5703,6 +6688,12 @@ export class WorldInteractables {
     this.rebootVansMap.clear();
     this.supplyDrones = [];
     this.supplyDronesMap.clear();
+    this.modBenches = [];
+    this.modBenchesMap.clear();
+    this.forecastTowers = [];
+    this.forecastTowersMap.clear();
+    this.stealthBushes = [];
+    this.stealthBushesMap.clear();
     this.lootIslandGeyserRings = [];
     this.lootIslandState = {
       active: false,

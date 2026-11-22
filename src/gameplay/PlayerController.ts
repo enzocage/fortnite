@@ -27,6 +27,7 @@ import type {
   Vec3Like,
   VendingMachineEntity,
   WeaponId,
+  WeaponModId,
   ZiplineEntity,
 } from '../types';
 import {
@@ -51,6 +52,8 @@ import {
   UPGRADE_COSTS,
   WATER_LEVEL,
   WEAPONS,
+  WEAPON_MODS,
+  WEAPON_MOD_COST_GOLD,
   clamp,
   damp,
   dist2D,
@@ -79,17 +82,25 @@ import type {
   VehicleBridge,
   WorldChapterBridge,
   WorldEconomyBridge,
+  WorldFrontierBridge,
   WorldOverdriveBridge,
   WorldRiftCaptureBridge,
   WorldStationBridge,
   WorldTraversalBridge,
 } from './GameplayTypes';
-import { InventorySystem } from './InventorySystem';
-import type { WeaponSystem } from './WeaponSystem';
+import { InventorySystem, getItemMagCapacity } from './InventorySystem';
+import { getWeaponModEffects, type WeaponSystem } from './WeaponSystem';
 
 const BUILD_CYCLE: BuildPieceType[] = ['wall', 'floor', 'ramp', 'roof'];
 const MAT_CYCLE: MaterialType[] = ['wood', 'brick', 'metal'];
 const CROWN_GLINT_INTERVAL_SEC = 10.0;
+const WEAPON_MOD_ORDER: readonly WeaponModId[] = [
+  'red_dot',
+  'suppressor',
+  'drum_mag',
+  'foregrip',
+];
+const STEALTH_FIRE_BREAK_SEC = 1.25;
 
 export class PlayerController {
   private camera: THREE.PerspectiveCamera;
@@ -106,6 +117,7 @@ export class PlayerController {
   private economyBridge: WorldEconomyBridge | null = null;
   private chapterBridge: WorldChapterBridge | null = null;
   private overdriveBridge: WorldOverdriveBridge | null = null;
+  private frontierBridge: WorldFrontierBridge | null = null;
   private duoReviveBridge: DuoReviveBridge | null = null;
   private duoRebootBridge: DuoRebootBridge | null = null;
   private augmentManager: AugmentManager;
@@ -162,6 +174,10 @@ export class PlayerController {
   private incomingReviveProgress: number | null = null;
   private incomingReviveLabel: string | null = null;
   private bunkerItemSeq = 0;
+  private isStealthed = false;
+  private currentBushId: string | null = null;
+  private stealthBreakTimer = 0;
+  private hasStormForecast = false;
 
   private gameMode: GameModeId = 'solo';
   private overshield = 0;
@@ -299,6 +315,9 @@ export class PlayerController {
     reboots: 0,
     dronesShotDown: 0,
     trapsPlaced: 0,
+    modsInstalled: 0,
+    bunkersDeployed: 0,
+    empHits: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -348,6 +367,7 @@ export class PlayerController {
       economyBridge?: WorldEconomyBridge | null;
       chapterBridge?: WorldChapterBridge | null;
       overdriveBridge?: WorldOverdriveBridge | null;
+      frontierBridge?: WorldFrontierBridge | null;
       duoReviveBridge?: DuoReviveBridge | null;
       duoRebootBridge?: DuoRebootBridge | null;
       augmentManager?: AugmentManager | null;
@@ -395,6 +415,9 @@ export class PlayerController {
     }
     if (options?.overdriveBridge !== undefined) {
       this.setOverdriveBridge(options.overdriveBridge);
+    }
+    if (options?.frontierBridge !== undefined) {
+      this.setFrontierBridge(options.frontierBridge);
     }
     if (options?.duoReviveBridge !== undefined) {
       this.setDuoReviveBridge(options.duoReviveBridge);
@@ -539,6 +562,199 @@ export class PlayerController {
     return this.overdriveBridge;
   }
 
+  setFrontierBridge(bridge: WorldFrontierBridge | null): void {
+    this.frontierBridge = bridge;
+    if (!bridge) {
+      this.isStealthed = false;
+      this.currentBushId = null;
+    }
+  }
+
+  getFrontierBridge(): WorldFrontierBridge | null {
+    return this.frontierBridge;
+  }
+
+  private isModdableFirearm(
+    item: ItemInstance | null,
+    slotIndex: number,
+  ): item is ItemInstance {
+    if (slotIndex < 1 || slotIndex > 5 || !item) return false;
+    if (item.weaponId === 'pickaxe') return false;
+    const def = WEAPONS[item.weaponId];
+    if (
+      !def ||
+      def.isConsumable ||
+      def.isThrowable ||
+      def.isGrappler ||
+      def.isKineticBlade
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private getNextInstallableMod(item: ItemInstance): WeaponModId | null {
+    const def = WEAPONS[item.weaponId];
+    const installed = item.mods ?? [];
+    for (let i = 0; i < WEAPON_MOD_ORDER.length; i++) {
+      const candidate = WEAPON_MOD_ORDER[i];
+      if (installed.includes(candidate)) continue;
+      if (candidate === 'drum_mag' && (def.isMinigun || def.magSize <= 0)) {
+        continue;
+      }
+      return candidate;
+    }
+    return null;
+  }
+
+  /**
+   * Equips the specified or next unequipped mod (`red_dot`, `suppressor`, `drum_mag`, `foregrip`)
+   * onto the active firearm for `WEAPON_MOD_COST_GOLD` (75 Gold).
+   */
+  installWeaponMod(modId?: WeaponModId, effectPos?: Vec3Like): boolean {
+    if (!this.isAlive() || this.isKnocked) return false;
+    const slotIndex = this.inventory.getActiveSlotIndex();
+    const item = this.inventory.getActiveItem();
+    if (!this.isModdableFirearm(item, slotIndex)) return false;
+
+    const def = WEAPONS[item.weaponId];
+    const installed = item.mods ? [...item.mods] : [];
+    let targetMod: WeaponModId | null = null;
+
+    if (modId !== undefined) {
+      if (!WEAPON_MOD_ORDER.includes(modId)) return false;
+      if (installed.includes(modId)) return false;
+      if (modId === 'drum_mag' && (def.isMinigun || def.magSize <= 0)) {
+        return false;
+      }
+      targetMod = modId;
+    } else {
+      targetMod = this.getNextInstallableMod(item);
+      if (!targetMod) return false;
+    }
+
+    if (this.goldBars < WEAPON_MOD_COST_GOLD) {
+      this.eventBus.emit('sound:play', {
+        id: 'dryfire',
+        position: { ...this.position },
+        spatial: true,
+      });
+      return false;
+    }
+
+    this.goldBars = clamp(this.goldBars - WEAPON_MOD_COST_GOLD, 0, MAX_GOLD_BARS);
+    item.mods = [...installed, targetMod];
+
+    if (targetMod === 'drum_mag' && def.magSize > 0 && !def.isMinigun) {
+      item.magAmmo = getItemMagCapacity(item);
+      if (this.reloadTimer > 0 && this.reloadSlotIndex === slotIndex) {
+        this.reloadTimer = 0;
+        this.reloadDuration = 0;
+        this.reloadSlotIndex = -1;
+      }
+    }
+
+    this.stats.modsInstalled = (this.stats.modsInstalled ?? 0) + 1;
+    const vfxPos = effectPos
+      ? { ...effectPos }
+      : {
+          x: this.position.x,
+          y: this.position.y + 1.0,
+          z: this.position.z,
+        };
+    this.eventBus.emit('vfx:weapon_mod', {
+      position: vfxPos,
+      modId: targetMod,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'mod_install',
+      position: vfxPos,
+      spatial: true,
+    });
+    return true;
+  }
+
+  unlockStormForecast(unlocked = true): void {
+    this.hasStormForecast = Boolean(unlocked);
+  }
+
+  hasStormForecastUnlocked(): boolean {
+    return this.hasStormForecast;
+  }
+
+  /**
+   * Respawns the player in Team Rumble with 100 HP, 50 Shield, skydiving at `dropPos`,
+   * preserving their existing weapons, ammo, and materials.
+   */
+  respawnInTeamRumble(dropPos: Vec3Like): boolean {
+    const safeX = Number.isFinite(dropPos.x) ? clamp(dropPos.x, -390, 390) : 0;
+    const safeZ = Number.isFinite(dropPos.z) ? clamp(dropPos.z, -390, 390) : 0;
+    const terrainY = this.terrain.getHeightAt(safeX, safeZ);
+    const safeY = Number.isFinite(dropPos.y)
+      ? dropPos.y
+      : Math.max(terrainY + 55, 85);
+
+    if (this.activeVehicleId) {
+      this.exitActiveVehicle(false);
+    }
+    this.activeZipline = null;
+    this.activeGrindRail = null;
+    this.isBuildMode = false;
+    this.building.setPreviewVisible(false);
+    this.building.cancelEdit();
+    this.lastBuildPreview = null;
+    this.cancelActionsOnModeChange();
+    this.cancelPartnerRevive();
+    this.cancelPartnerReboot();
+    this.clearHeldInputs();
+
+    this.health = 100;
+    this.maxHealth = 100;
+    this.shield = 50;
+    this.maxShield = 100;
+    this.overshield = 0;
+    this.overshieldRecharging = false;
+    this.isKnocked = false;
+    this.bleedOutHp = 0;
+    this.incomingReviveProgress = null;
+    this.incomingReviveLabel = null;
+    this.isStealthed = false;
+    this.currentBushId = null;
+    this.stealthBreakTimer = 0;
+    this.slurpHotRemaining = 0;
+    this.nearCampfireHealing = false;
+    this.campfireHealVfxTimer = 0;
+    this.killStreak = 0;
+    this.minigunHeat = 0;
+    this.minigunOverheated = false;
+    this.minigunOverheatTimer = 0;
+    this.isSliding = false;
+    this.isCrouching = false;
+    this.isStealthed = false;
+    this.isMantling = false;
+    this.isSwimming = false;
+    this.interactPrompt = null;
+
+    this.phase = 'skydiving';
+    this.position = { x: safeX, y: safeY, z: safeZ };
+    this.velocity = {
+      x: Math.sin(this.yaw) * 10,
+      y: -10,
+      z: Math.cos(this.yaw) * 10,
+    };
+    this.grounded = false;
+    this.wasAirborne = true;
+    this.fallPeakY = safeY;
+    this.fallImmune = false;
+
+    this.eventBus.emit('sound:play', {
+      id: 'rumble_respawn',
+      position: { ...this.position },
+      spatial: false,
+    });
+    return true;
+  }
+
   setDuoReviveBridge(bridge: DuoReviveBridge | null): void {
     this.duoReviveBridge = bridge;
   }
@@ -669,7 +885,12 @@ export class PlayerController {
       }
     }
 
-    const squadId = this.gameMode === 'duos' ? 'player_squad' : undefined;
+    const squadId =
+      this.gameMode === 'duos'
+        ? 'player_squad'
+        : this.gameMode === 'team_rumble'
+          ? 'team_blue'
+          : undefined;
     const placed = this.building.placeTrap(
       this.activeTrapKind,
       'player',
@@ -745,6 +966,7 @@ export class PlayerController {
     this.isSprinting = false;
     this.isSliding = false;
     this.isCrouching = false;
+    this.isStealthed = false;
     this.isMantling = false;
     this.isKnocked = true;
     this.bleedOutHp = DBNO_MAX_HP;
@@ -1158,6 +1380,8 @@ export class PlayerController {
       this.isSliding = false;
       this.isMantling = false;
       this.isSwimming = false;
+      this.isStealthed = false;
+      this.currentBushId = null;
       this.nearCampfireHealing = false;
       this.campfireHealVfxTimer = 0;
       this.overshieldRecharging = false;
@@ -1350,7 +1574,13 @@ export class PlayerController {
       hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
       hasCombatMedallion: this.hasMedallion('medallion_combat'),
       isKnocked: this.isKnocked,
-      squadId: this.gameMode === 'duos' ? 'player_squad' : undefined,
+      squadId:
+        this.gameMode === 'duos'
+          ? 'player_squad'
+          : this.gameMode === 'team_rumble'
+            ? 'team_blue'
+            : undefined,
+      teamId: this.gameMode === 'team_rumble' ? 'team_blue' : undefined,
       onDamage: (ev) => this.applyDamage(ev),
       onHeal: (hpAdded, shieldAdded) => {
         if (!this.isAlive() || this.isKnocked) return;
@@ -1513,6 +1743,10 @@ export class PlayerController {
     this.reviveLabel = null;
     this.incomingReviveProgress = null;
     this.incomingReviveLabel = null;
+    this.isStealthed = false;
+    this.currentBushId = null;
+    this.stealthBreakTimer = 0;
+    this.hasStormForecast = false;
     this.stats = {
       damageDealt: 0,
       shotsFired: 0,
@@ -1527,6 +1761,9 @@ export class PlayerController {
       reboots: 0,
       dronesShotDown: 0,
       trapsPlaced: 0,
+      modsInstalled: 0,
+      bunkersDeployed: 0,
+      empHits: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -1694,13 +1931,16 @@ export class PlayerController {
     this.lastDamageTime = this.elapsedTime;
     this.overshieldRecharging = false;
 
+    const isEmp = ev.weaponId === 'emp_grenade';
     const totalDmg =
       ev.damage > 0
         ? ev.damage
         : Math.max(0, ev.shieldDamage) + Math.max(0, ev.hpDamage);
 
     if (this.isKnocked) {
-      this.bleedOutHp = Math.max(0, this.bleedOutHp - totalDmg);
+      if (!isEmp) {
+        this.bleedOutHp = Math.max(0, this.bleedOutHp - totalDmg);
+      }
       const dx = ev.hitPoint.x - this.position.x;
       const dz = ev.hitPoint.z - this.position.z;
       const worldAngle = Math.atan2(dx, dz);
@@ -1721,19 +1961,19 @@ export class PlayerController {
       if (rem > 0) {
         if (ev.attackerId === 'environment' || ev.attackerId === 'lava') {
           const sDmg = Math.min(this.shield, Math.max(0, ev.shieldDamage));
-          const hDmg = Math.min(this.health, Math.max(0, rem - sDmg));
+          const hDmg = isEmp ? 0 : Math.min(this.health, Math.max(0, rem - sDmg));
           this.shield = Math.max(0, this.shield - sDmg);
           this.health = Math.max(0, this.health - hDmg);
         } else {
           const sDmg = Math.min(this.shield, rem);
-          const hDmg = Math.min(this.health, rem - sDmg);
+          const hDmg = isEmp ? 0 : Math.min(this.health, rem - sDmg);
           this.shield = Math.max(0, this.shield - sDmg);
           this.health = Math.max(0, this.health - hDmg);
         }
       }
     } else {
       let sDmg = ev.shieldDamage;
-      let hDmg = ev.hpDamage;
+      let hDmg = isEmp ? 0 : ev.hpDamage;
       if (
         (sDmg === 0 && hDmg === 0 && ev.damage > 0) ||
         (ev.attackerId !== 'environment' &&
@@ -1743,7 +1983,7 @@ export class PlayerController {
           ev.damage > 0)
       ) {
         sDmg = Math.min(this.shield, ev.damage);
-        hDmg = Math.min(this.health, ev.damage - sDmg);
+        hDmg = isEmp ? 0 : Math.min(this.health, ev.damage - sDmg);
       }
 
       this.shield = Math.max(0, this.shield - sDmg);
@@ -1801,6 +2041,9 @@ export class PlayerController {
     this.isSliding = false;
     this.isMantling = false;
     this.isSwimming = false;
+    this.isStealthed = false;
+    this.currentBushId = null;
+    this.stealthBreakTimer = 0;
     this.isKnocked = false;
     this.bleedOutHp = 0;
     this.isDrawingBow = false;
@@ -1821,46 +2064,48 @@ export class PlayerController {
     this.building.cancelEdit();
     this.clearHeldInputs();
 
-    if (this.chapterBridge) {
-      for (let i = 0; i < this.medallions.length; i++) {
-        this.chapterBridge.spawnDroppedMedallion?.(
-          this.medallions[i],
-          this.position.x + (i - 1) * 0.9,
-          this.position.y + 0.1,
-          this.position.z,
-        );
+    if (this.gameMode !== 'team_rumble') {
+      if (this.chapterBridge) {
+        for (let i = 0; i < this.medallions.length; i++) {
+          this.chapterBridge.spawnDroppedMedallion?.(
+            this.medallions[i],
+            this.position.x + (i - 1) * 0.9,
+            this.position.y + 0.1,
+            this.position.z,
+          );
+        }
+        if (this.victoryCrown) {
+          this.chapterBridge.spawnDroppedCrown?.(
+            this.position.x + 0.8,
+            this.position.y + 0.1,
+            this.position.z + 0.6,
+          );
+        }
       }
-      if (this.victoryCrown) {
-        this.chapterBridge.spawnDroppedCrown?.(
-          this.position.x + 0.8,
-          this.position.y + 0.1,
-          this.position.z + 0.6,
-        );
-      }
-    }
-    this.medallions = [];
-    this.victoryCrown = false;
+      this.medallions = [];
+      this.victoryCrown = false;
 
-    // Drop inventory items
-    const dropped = this.inventory.dropAllLoot();
-    for (let i = 0; i < dropped.items.length; i++) {
-      const ang = (i / Math.max(1, dropped.items.length)) * Math.PI * 2;
-      this.propsBridge.spawnLootDrop(
-        { x: this.position.x, y: this.position.y + 0.8, z: this.position.z },
-        { item: dropped.items[i] },
-        { x: Math.cos(ang) * 2.5, y: 4.5, z: Math.sin(ang) * 2.5 },
-      );
-    }
-    (Object.keys(dropped.materials) as MaterialType[]).forEach((mat) => {
-      const amt = dropped.materials[mat];
-      if (amt && amt > 0) {
+      // Drop inventory items
+      const dropped = this.inventory.dropAllLoot();
+      for (let i = 0; i < dropped.items.length; i++) {
+        const ang = (i / Math.max(1, dropped.items.length)) * Math.PI * 2;
         this.propsBridge.spawnLootDrop(
           { x: this.position.x, y: this.position.y + 0.8, z: this.position.z },
-          { materials: { type: mat, amount: amt } },
-          { x: (Math.random() - 0.5) * 3, y: 4.2, z: (Math.random() - 0.5) * 3 },
+          { item: dropped.items[i] },
+          { x: Math.cos(ang) * 2.5, y: 4.5, z: Math.sin(ang) * 2.5 },
         );
       }
-    });
+      (Object.keys(dropped.materials) as MaterialType[]).forEach((mat) => {
+        const amt = dropped.materials[mat];
+        if (amt && amt > 0) {
+          this.propsBridge.spawnLootDrop(
+            { x: this.position.x, y: this.position.y + 0.8, z: this.position.z },
+            { materials: { type: mat, amount: amt } },
+            { x: (Math.random() - 0.5) * 3, y: 4.2, z: (Math.random() - 0.5) * 3 },
+          );
+        }
+      });
+    }
 
     this.eventBus.emit('vfx:elimination', {
       position: { ...this.position },
@@ -2178,11 +2423,49 @@ export class PlayerController {
     return code.toUpperCase();
   }
 
+  private updateStealthBush(emitRustle: boolean): void {
+    if (
+      !this.frontierBridge ||
+      this.phase !== 'playing' ||
+      !this.isAlive() ||
+      this.isKnocked ||
+      this.activeVehicleId !== null ||
+      this.activeGrindRail !== null ||
+      this.activeZipline !== null
+    ) {
+      this.currentBushId = null;
+      this.isStealthed = false;
+      return;
+    }
+
+    const bush = this.frontierBridge.isInsideStealthBush(this.position);
+    if (!bush) {
+      this.currentBushId = null;
+      this.isStealthed = false;
+      return;
+    }
+
+    if (emitRustle && bush.id !== this.currentBushId) {
+      this.currentBushId = bush.id;
+      this.eventBus.emit('sound:play', {
+        id: 'bush_rustle',
+        position: { ...this.position },
+        spatial: true,
+      });
+    } else if (this.currentBushId === null) {
+      this.currentBushId = bush.id;
+    }
+
+    this.isStealthed =
+      this.isCrouching && !this.isSliding && this.stealthBreakTimer <= 0;
+  }
+
   private handleCrouchSlideKey(): void {
     if (this.isSliding) {
       this.isSliding = false;
       this.slideTimer = 0;
       this.isCrouching = true;
+      this.updateStealthBush(true);
       return;
     }
     const sprintingNow =
@@ -2192,10 +2475,12 @@ export class PlayerController {
         !this.isAiming &&
         this.stamina > 1.5);
     if (sprintingNow && this.startSlide()) {
+      this.updateStealthBush(true);
       return;
     }
     this.isCrouching = !this.isCrouching;
     if (this.isCrouching) this.isSprinting = false;
+    this.updateStealthBush(true);
   }
 
   private handleKeyCodeDown(code: string): void {
@@ -2522,6 +2807,35 @@ export class PlayerController {
     }
   }
 
+  private buildWeaponFireExtras(item: ItemInstance) {
+    return {
+      weaponMods: item.mods ? [...item.mods] : undefined,
+      actorTeamId:
+        this.gameMode === 'team_rumble' ? ('team_blue' as const) : undefined,
+      isAiming: this.isAiming,
+      spreadPreAdjusted: true,
+      actorYaw: this.yaw,
+      onBunkerDeployed: (report: { pieces: BuildPiece[] }) => {
+        if (report.pieces.length > 0) {
+          this.stats.bunkersDeployed = (this.stats.bunkersDeployed ?? 0) + 1;
+        }
+      },
+      onEmpHit: (report: {
+        actorsHit: number;
+        shieldStripped: number;
+        trapsDisabled: number;
+      }) => {
+        const hits = report.actorsHit + report.trapsDisabled;
+        if (hits > 0) {
+          this.stats.empHits = (this.stats.empHits ?? 0) + hits;
+        }
+        if (report.shieldStripped > 0) {
+          this.stats.damageDealt += report.shieldStripped;
+        }
+      },
+    };
+  }
+
   private startReload(): void {
     if (this.reloadTimer > 0 || this.isKnocked) return;
     const slot = this.inventory.getActiveSlotIndex();
@@ -2531,7 +2845,8 @@ export class PlayerController {
     if (!def.ammoType || def.magSize <= 0 || def.reloadTime <= 0 || def.isMinigun) {
       return;
     }
-    if (item.magAmmo >= def.magSize) return;
+    const magCap = getItemMagCapacity(item);
+    if (item.magAmmo >= magCap) return;
     if (this.inventory.getAmmo(def.ammoType) <= 0) return;
 
     const reloadDur = this.weapons.getReloadTime(item, {
@@ -2561,6 +2876,8 @@ export class PlayerController {
     if (!res.fired) return;
 
     this.fireCooldown = 1 / def.fireRate;
+    this.stealthBreakTimer = STEALTH_FIRE_BREAK_SEC;
+    this.isStealthed = false;
     if (
       item.weaponId !== 'pickaxe' &&
       !def.isKineticBlade &&
@@ -2580,10 +2897,13 @@ export class PlayerController {
       }
     }
 
-    this.bloom = Math.min(def.bloomMax, this.bloom + def.bloomPerShot);
-    this.pitch = clamp(this.pitch + def.recoilPitch, -1.28, 1.32);
-    this.yaw += (Math.random() - 0.5) * 2 * def.recoilYaw;
-    this.recoilKick = 1.0;
+    const modFx = getWeaponModEffects(item.mods);
+    const bloomMult = res.bloomScale ?? modFx.bloomMult;
+    const recoilMult = res.recoilScale ?? modFx.recoilMult;
+    this.bloom = Math.min(def.bloomMax, this.bloom + def.bloomPerShot * bloomMult);
+    this.pitch = clamp(this.pitch + def.recoilPitch * recoilMult, -1.28, 1.32);
+    this.yaw += (Math.random() - 0.5) * 2 * def.recoilYaw * recoilMult;
+    this.recoilKick = 1.0 * recoilMult;
 
     if (def.isMinigun || item.weaponId === 'minigun') {
       const heatPerShot = def.heatPerShot ?? 0.022;
@@ -2740,6 +3060,7 @@ export class PlayerController {
       hasDemolisher: this.augmentManager.hasAugment('demolisher'),
       hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
       hasCombatMedallion: this.hasMedallion('medallion_combat'),
+      ...this.buildWeaponFireExtras(item),
       onAmmoConsumed: () => {
         if (def.isMinigun || item.weaponId === 'minigun') {
           this.inventory.useAmmo('light', 1);
@@ -2801,6 +3122,7 @@ export class PlayerController {
       hasDemolisher: this.augmentManager.hasAugment('demolisher'),
       hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
       hasCombatMedallion: this.hasMedallion('medallion_combat'),
+      ...this.buildWeaponFireExtras(item),
       bowCharge: charge,
       onAmmoConsumed: () => {
         if (def.magSize > 0 && item.magAmmo > 0) {
@@ -2868,6 +3190,7 @@ export class PlayerController {
       hasDemolisher: this.augmentManager.hasAugment('demolisher'),
       hasFirstAssault: this.augmentManager.hasAugment('first_assault'),
       hasCombatMedallion: this.hasMedallion('medallion_combat'),
+      ...this.buildWeaponFireExtras(item),
       onAmmoConsumed: () => {
         if (def.magSize > 0 && item.magAmmo > 0) {
           item.magAmmo -= 1;
@@ -2907,6 +3230,8 @@ export class PlayerController {
     }
 
     this.kineticDashCharges -= 1;
+    this.stealthBreakTimer = STEALTH_FIRE_BREAK_SEC;
+    this.isStealthed = false;
     if (this.activeZipline) {
       this.activeZipline = null;
       this.ziplineCooldown = 0.5;
@@ -3037,7 +3362,13 @@ export class PlayerController {
 
   private computeCurrentSpread(weaponId: WeaponId): number {
     const def = WEAPONS[weaponId];
-    let spread = this.isAiming ? def.adsSpread : def.baseSpread;
+    const activeItem = this.inventory.getActiveItem();
+    const mods =
+      activeItem && activeItem.weaponId === weaponId ? activeItem.mods : undefined;
+    const modFx = getWeaponModEffects(mods);
+    let spread = this.isAiming
+      ? def.adsSpread * modFx.adsSpreadMult
+      : def.baseSpread;
     if (this.isCrouching || this.isSliding) spread *= def.crouchSpreadMult;
     if (this.moveSpeed > 0.8) spread += def.moveSpreadAdd;
     spread += this.bloom;
@@ -3271,7 +3602,7 @@ export class PlayerController {
       cost,
       nextRarity,
       shortName: def.shortName,
-      magSize: def.magSize,
+      magSize: getItemMagCapacity(item),
     };
   }
 
@@ -3333,7 +3664,9 @@ export class PlayerController {
       | 'upgrade_bench'
       | 'campfire'
       | 'vending_machine'
-      | 'npc_specialist';
+      | 'npc_specialist'
+      | 'mod_bench'
+      | 'forecast_tower';
     id: string;
     prompt: PlayerInteractPrompt;
   } | null {
@@ -3401,7 +3734,9 @@ export class PlayerController {
         | 'upgrade_bench'
         | 'campfire'
         | 'vending_machine'
-        | 'npc_specialist';
+        | 'npc_specialist'
+        | 'mod_bench'
+        | 'forecast_tower';
       id: string;
       prompt: PlayerInteractPrompt;
     } | null = null;
@@ -3694,6 +4029,57 @@ export class PlayerController {
               prompt: {
                 label: `HIRE ${npc.name} • ${npc.role.toUpperCase()} (${npc.priceGold} GOLD)`,
                 key: interactKey,
+              },
+            };
+          }
+        }
+      }
+
+      if (this.frontierBridge) {
+        const activeItem = this.inventory.getActiveItem();
+        const activeSlot = this.inventory.getActiveSlotIndex();
+        if (this.isModdableFirearm(activeItem, activeSlot)) {
+          const nextMod = this.getNextInstallableMod(activeItem);
+          if (nextMod) {
+            const modDef = WEAPON_MODS.find((m) => m.id === nextMod);
+            const weaponShort =
+              WEAPONS[activeItem.weaponId]?.shortName ??
+              activeItem.weaponId.toUpperCase();
+            const modLabel = modDef?.name.toUpperCase() ?? nextMod.toUpperCase();
+            const modBenches = this.frontierBridge.getModBenches();
+            for (let i = 0; i < modBenches.length; i++) {
+              const mb = modBenches[i];
+              const d = dist3D(this.position, { x: mb.x, y: mb.y, z: mb.z });
+              if (d <= 3.8 && d < bestDist) {
+                bestDist = d;
+                best = {
+                  kind: 'mod_bench',
+                  id: mb.id,
+                  prompt: {
+                    label: `MOD ${weaponShort}: ${modLabel} (${WEAPON_MOD_COST_GOLD} GOLD)`,
+                    key: interactKey,
+                    rarity: 'rare',
+                  },
+                };
+              }
+            }
+          }
+        }
+
+        const towers = this.frontierBridge.getForecastTowers();
+        for (let i = 0; i < towers.length; i++) {
+          const tower = towers[i];
+          if (tower.scanned) continue;
+          const d = dist3D(this.position, { x: tower.x, y: tower.y, z: tower.z });
+          if (d <= 4.2 && d < bestDist) {
+            bestDist = d;
+            best = {
+              kind: 'forecast_tower',
+              id: tower.id,
+              prompt: {
+                label: 'SCAN FORECAST TOWER (+100 GOLD)',
+                key: interactKey,
+                rarity: 'epic',
               },
             };
           }
@@ -4164,6 +4550,61 @@ export class PlayerController {
           amount: hired.priceGold,
         });
         this.onNpcHired?.(hired);
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        return;
+      }
+
+      if (candidate.kind === 'mod_bench' && this.frontierBridge) {
+        const mb = this.frontierBridge
+          .getModBenches()
+          .find((b) => b.id === candidate.id);
+        const benchPos = mb
+          ? { x: mb.x, y: mb.y + 1.0, z: mb.z }
+          : { ...this.position };
+        this.installWeaponMod(undefined, benchPos);
+        this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
+        return;
+      }
+
+      if (candidate.kind === 'forecast_tower' && this.frontierBridge) {
+        const tower = this.frontierBridge
+          .getForecastTowers()
+          .find((t) => t.id === candidate.id);
+        if (!tower || tower.scanned) return;
+        const towerPos = { x: tower.x, y: tower.y + 1.2, z: tower.z };
+        let emittedScanSfx = false;
+        let emittedScanVfx = false;
+        const unsubSfx = this.eventBus.on('sound:play', (ev) => {
+          if (ev.id === 'forecast_scan') emittedScanSfx = true;
+        });
+        const unsubVfx = this.eventBus.on('vfx:forecast_pulse', () => {
+          emittedScanVfx = true;
+        });
+        const scanned = this.frontierBridge.scanForecastTower(tower.id, 'player');
+        unsubSfx();
+        unsubVfx();
+        if (!scanned) {
+          this.eventBus.emit('sound:play', {
+            id: 'dryfire',
+            position: { ...this.position },
+            spatial: true,
+          });
+          return;
+        }
+        if (!emittedScanSfx) {
+          this.eventBus.emit('sound:play', {
+            id: 'forecast_scan',
+            position: towerPos,
+            spatial: true,
+          });
+        }
+        if (!emittedScanVfx) {
+          this.eventBus.emit('vfx:forecast_pulse', {
+            position: towerPos,
+          });
+        }
+        this.hasStormForecast = true;
+        this.addGoldBars(100, towerPos);
         this.interactPrompt = this.findNearestInteractable()?.prompt ?? null;
         return;
       }
@@ -4664,6 +5105,13 @@ export class PlayerController {
     if (this.harvestSwingTimer > 0) {
       this.harvestSwingTimer = Math.max(0, this.harvestSwingTimer - safeDt);
     }
+    if (this.stealthBreakTimer > 0) {
+      this.stealthBreakTimer = Math.max(0, this.stealthBreakTimer - safeDt);
+    }
+    if (this.phase !== 'playing') {
+      this.isStealthed = false;
+      this.currentBushId = null;
+    }
 
     const activeItem = this.inventory.getActiveItem();
     const activeDef = activeItem ? WEAPONS[activeItem.weaponId] : WEAPONS.pickaxe;
@@ -4723,6 +5171,7 @@ export class PlayerController {
         this.updateGroundMovement(safeDt);
       }
       if (this.checkAutoSkyRifts()) {
+        this.updateStealthBush(true);
         this.updateCamera(safeDt);
         return;
       }
@@ -4730,6 +5179,7 @@ export class PlayerController {
       this.updateCapturePoints(safeDt);
       this.updateLootIsland(safeDt);
       this.updateCombatAndTimers(safeDt);
+      this.updateStealthBush(true);
       this.updateAutoPickupAndPrompt();
       this.updateCamera(safeDt);
       return;
@@ -6311,16 +6761,17 @@ export class PlayerController {
         y: this.position.y + eyeH,
         z: this.position.z,
       };
+      const hasRedDot = Boolean(this.inventory.getActiveItem()?.mods?.includes('red_dot'));
       if (this.isScoped) {
         backDist = 0.45;
         rightOffset = 0.15;
         upOffset = 0.08;
-        targetFov = 24;
+        targetFov = hasRedDot ? 20 : 24;
       } else if (this.isAiming) {
-        backDist = 1.95;
+        backDist = hasRedDot ? 1.65 : 1.95;
         rightOffset = 0.62;
         upOffset = 0.28;
-        targetFov = 56;
+        targetFov = hasRedDot ? 44 : 56;
       }
     }
 
@@ -6539,6 +6990,9 @@ export class PlayerController {
       isGrinding: this.activeGrindRail !== null,
       weaponCharge: this.isChargingRailgun ? clamp(this.railgunCharge, 0, 1) : 0,
       weaponHeat: weaponId === 'minigun' ? clamp(this.minigunHeat, 0, 1) : 0,
+      weaponMods: activeItem?.mods ? [...activeItem.mods] : [],
+      isStealthed: this.isStealthed,
+      teamId: this.gameMode === 'team_rumble' ? 'team_blue' : undefined,
     };
   }
 
@@ -6695,6 +7149,9 @@ export class PlayerController {
       rebootProgress: this.isRebootingPartner
         ? clamp(this.rebootTimer / REBOOT_DURATION_SEC, 0, 1)
         : null,
+      isStealthed: this.isStealthed,
+      hasStormForecast: this.hasStormForecast,
+      activeWeaponMods: activeItem?.mods ? [...activeItem.mods] : [],
     };
   }
 }

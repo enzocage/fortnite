@@ -1,4 +1,4 @@
-import { DBNO_MAX_HP, EMOTES, WEAPONS, WORLD_SIZE } from '../core';
+import { DBNO_MAX_HP, EMOTES, WEAPON_MODS, WEAPONS, WORLD_SIZE } from '../core';
 import type {
   AugmentId,
   BuildPieceType,
@@ -6,6 +6,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   EmoteId,
+  ForecastTowerEntity,
   GameSettings,
   GrindRailEntity,
   HUDState,
@@ -14,6 +15,7 @@ import type {
   KillFeedEntry,
   MatchQuest,
   MaterialType,
+  ModBenchEntity,
   RebootVanEntity,
   SlurpTankerEntity,
   SupplyDroneEntity,
@@ -28,6 +30,7 @@ import {
   computeOvershieldPct,
   computeQuestProgressPct,
   drawChapterMapOverlay,
+  drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
@@ -50,10 +53,12 @@ import {
   resolveChapterOverlayArgs,
   resolveCrosshairColor,
   resolveCrosshairStyle,
+  resolveFrontierOverlayArgs,
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
   selectVisibleVisualSoundCues,
   type WorldChapterOverlay,
+  type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
   worldToMapNorm,
 } from './UIHelpers';
@@ -73,6 +78,7 @@ import {
   getRebootVanSvg,
   getReviveCrossSvg,
   getSkullSvg,
+  getStealthLeafSvg,
   getStormEyeSvg,
   getTacticalPingIconSvg,
   getTrapSvg,
@@ -188,6 +194,13 @@ export class HUDManager {
   private phaseHintTextEl: HTMLSpanElement;
   private lootIslandChipEl: HTMLDivElement;
   private lootIslandTextEl: HTMLSpanElement;
+  private rumbleBarEl: HTMLDivElement;
+  private rumbleBlueScoreEl: HTMLSpanElement;
+  private rumbleTargetScoreEl: HTMLSpanElement;
+  private rumbleRedScoreEl: HTMLSpanElement;
+  private rumbleBlueFillEl: HTMLDivElement;
+  private rumbleRedFillEl: HTMLDivElement;
+  private rumbleRespawnEl: HTMLDivElement;
 
   // Minimap & telemetry
   private minimapCanvas: HTMLCanvasElement;
@@ -203,6 +216,10 @@ export class HUDManager {
     rails: [],
     vans: [],
     drones: [],
+  };
+  private frontierOverlay: WorldFrontierOverlay = {
+    modBenches: [],
+    forecastTowers: [],
   };
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
@@ -255,6 +272,7 @@ export class HUDManager {
   private rebootLabelEl: HTMLSpanElement;
   private rebootPctEl: HTMLSpanElement;
   private rebootFillEl: HTMLDivElement;
+  private stealthPillEl: HTMLDivElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -402,6 +420,8 @@ export class HUDManager {
   private lastTrapIconKind: TrapKind | '' = '';
   private lastReticleMeterKey = '';
   private lastRebootKey = '';
+  private lastRumbleKey = '';
+  private lastStealthKey = false;
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -678,9 +698,61 @@ export class HUDManager {
     this.lootIslandTextEl.textContent = 'LOOT ISLAND • 0M';
     this.lootIslandChipEl.append(lootIslandIcon, this.lootIslandTextEl);
 
+    // Team Rumble Scoreboard Bar (compact bar docked cleanly below Compass)
+    this.rumbleBarEl = document.createElement('div');
+    this.rumbleBarEl.className = 'fdr-rumble-bar fdr-hidden';
+    const rumbleTop = document.createElement('div');
+    rumbleTop.className = 'fdr-rumble-top';
+
+    const blueWrap = document.createElement('span');
+    blueWrap.className = 'fdr-rumble-team blue';
+    const blueLbl = document.createElement('span');
+    blueLbl.textContent = 'BLUE ';
+    this.rumbleBlueScoreEl = document.createElement('span');
+    this.rumbleBlueScoreEl.className = 'fdr-rumble-score-blue';
+    this.rumbleBlueScoreEl.textContent = '0';
+    blueWrap.append(blueLbl, this.rumbleBlueScoreEl);
+
+    this.rumbleTargetScoreEl = document.createElement('span');
+    this.rumbleTargetScoreEl.className = 'fdr-rumble-target';
+    this.rumbleTargetScoreEl.textContent = ' · 25 · ';
+
+    const redWrap = document.createElement('span');
+    redWrap.className = 'fdr-rumble-team red';
+    this.rumbleRedScoreEl = document.createElement('span');
+    this.rumbleRedScoreEl.className = 'fdr-rumble-score-red';
+    this.rumbleRedScoreEl.textContent = '0';
+    const redLbl = document.createElement('span');
+    redLbl.textContent = ' RED';
+    redWrap.append(this.rumbleRedScoreEl, redLbl);
+
+    rumbleTop.append(blueWrap, this.rumbleTargetScoreEl, redWrap);
+
+    const rumbleBars = document.createElement('div');
+    rumbleBars.className = 'fdr-rumble-bars';
+    const blueTrack = document.createElement('div');
+    blueTrack.className = 'fdr-rumble-track blue';
+    this.rumbleBlueFillEl = document.createElement('div');
+    this.rumbleBlueFillEl.className = 'fdr-rumble-fill blue';
+    blueTrack.appendChild(this.rumbleBlueFillEl);
+
+    const redTrack = document.createElement('div');
+    redTrack.className = 'fdr-rumble-track red';
+    this.rumbleRedFillEl = document.createElement('div');
+    this.rumbleRedFillEl.className = 'fdr-rumble-fill red';
+    redTrack.appendChild(this.rumbleRedFillEl);
+    rumbleBars.append(blueTrack, redTrack);
+
+    this.rumbleRespawnEl = document.createElement('div');
+    this.rumbleRespawnEl.className = 'fdr-rumble-respawn fdr-hidden';
+    this.rumbleRespawnEl.textContent = 'RESPAWNING IN 3.5S';
+
+    this.rumbleBarEl.append(rumbleTop, rumbleBars, this.rumbleRespawnEl);
+
     const topCenterStack = document.createElement('div');
     topCenterStack.className = 'fdr-top-center-stack';
     topCenterStack.append(
+      this.rumbleBarEl,
       this.phaseHintEl,
       this.lootIslandChipEl,
       this.bossBarEl,
@@ -1004,6 +1076,16 @@ export class HUDManager {
     this.vitalsStackEl = document.createElement('div');
     this.vitalsStackEl.className = 'fdr-vitals-stack';
 
+    this.stealthPillEl = document.createElement('div');
+    this.stealthPillEl.className = 'fdr-stealth-pill fdr-hidden';
+    this.stealthPillEl.dataset.stealthed = 'false';
+    const stealthIcon = document.createElement('span');
+    stealthIcon.className = 'fdr-stealth-icon';
+    stealthIcon.innerHTML = getStealthLeafSvg();
+    const stealthLabel = document.createElement('span');
+    stealthLabel.textContent = 'HIDDEN';
+    this.stealthPillEl.append(stealthIcon, stealthLabel);
+
     this.staminaWrapEl = document.createElement('div');
     this.staminaWrapEl.className = 'fdr-stamina-wrap fdr-hidden';
     this.staminaFillEl = document.createElement('div');
@@ -1072,6 +1154,7 @@ export class HUDManager {
       this.dbnoBarEl,
       this.reviveBarEl,
       this.rebootBarEl,
+      this.stealthPillEl,
       this.vitalsStackEl,
     );
 
@@ -1618,6 +1701,22 @@ export class HUDManager {
     this.lastMinimapDraw = 0;
   }
 
+  setWorldFrontierOverlay(
+    modBenches: ModBenchEntity[],
+    forecastTowers: ForecastTowerEntity[],
+  ): void;
+  setWorldFrontierOverlay(overlay: WorldFrontierOverlay): void;
+  setWorldFrontierOverlay(
+    modBenchesOrOverlay: ModBenchEntity[] | WorldFrontierOverlay,
+    forecastTowers?: ForecastTowerEntity[],
+  ): void {
+    this.frontierOverlay = resolveFrontierOverlayArgs(
+      modBenchesOrOverlay,
+      forecastTowers,
+    );
+    this.lastMinimapDraw = 0;
+  }
+
   setVisible(visible: boolean): void {
     this.visible = visible;
     this.containerEl.classList.toggle('fdr-hidden', !visible);
@@ -1738,6 +1837,12 @@ export class HUDManager {
     this.lastReticleMeterKey = '';
     this.rebootBarEl.classList.add('fdr-hidden');
     this.lastRebootKey = '';
+    this.rumbleBarEl.classList.add('fdr-hidden');
+    this.rumbleRespawnEl.classList.add('fdr-hidden');
+    this.lastRumbleKey = '';
+    this.stealthPillEl.classList.add('fdr-hidden');
+    this.stealthPillEl.dataset.stealthed = 'false';
+    this.lastStealthKey = false;
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
     }
@@ -1953,6 +2058,7 @@ export class HUDManager {
     this.updateWave5HUD(state);
     this.updateWave6HUD(state);
     this.updateWave7HUD(state);
+    this.updateWave8HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2351,8 +2457,9 @@ export class HUDManager {
     for (let i = 0; i < 6; i++) {
       const item = state.slots[i] ?? null;
       const isActive = !state.isBuildMode && state.activeSlot === i;
+      const mods = item && Array.isArray(item.mods) ? item.mods : [];
       const sig = item
-        ? `${item.uid}:${item.weaponId}:${item.rarity}:${item.magAmmo}:${item.stackCount}:${isActive ? 1 : 0}`
+        ? `${item.uid}:${item.weaponId}:${item.rarity}:${item.magAmmo}:${item.stackCount}:${mods.join(',')}:${isActive ? 1 : 0}`
         : `empty:${isActive ? 1 : 0}`;
       if (sig === this.lastSlotKeys[i]) continue;
       this.lastSlotKeys[i] = sig;
@@ -2376,11 +2483,24 @@ export class HUDManager {
         item.rarity === 'mythic'
           ? `<span class="fdr-slot-crown" title="Mythic Boss Gear">${getCrownSvg()}</span>`
           : '';
+      let modsHtml = '';
+      if (mods.length > 0) {
+        const pips = mods
+          .map((modId) => {
+            const modDef = WEAPON_MODS.find((m) => m.id === modId);
+            const code = modDef?.shortCode ?? modId.slice(0, 1).toUpperCase();
+            const color = modDef?.accentColor ?? '#38bdf8';
+            return `<span class="fdr-mod-pip mod-${modId}" data-mod-id="${modId}" style="--mod-color:${color};border-color:${color};color:${color}" title="${modDef?.name ?? modId}">${code}</span>`;
+          })
+          .join('');
+        modsHtml = `<div class="fdr-slot-mods">${pips}</div>`;
+      }
 
       card.innerHTML = `
         <span class="fdr-slot-key">${i + 1}</span>
         ${crownBadge}
         <div class="fdr-slot-svg">${getWeaponSvg(item.weaponId)}</div>
+        ${modsHtml}
         ${countBadge}
       `;
     }
@@ -3175,6 +3295,50 @@ export class HUDManager {
     }
   }
 
+  private updateWave8HUD(state: HUDState): void {
+    // 1. Compact Team Rumble Scoreboard Bar under Compass
+    const tr = state.teamRumble ?? null;
+    const blue = tr ? Math.max(0, Math.round(tr.blueScore)) : -1;
+    const red = tr ? Math.max(0, Math.round(tr.redScore)) : -1;
+    const target = tr ? Math.max(1, Math.round(tr.targetScore || 25)) : 25;
+    const respSec =
+      tr &&
+      typeof tr.respawningInSec === 'number' &&
+      Number.isFinite(tr.respawningInSec) &&
+      tr.respawningInSec > 0
+        ? tr.respawningInSec
+        : null;
+    const respStr = respSec !== null ? respSec.toFixed(1) : '';
+    const rumbleKey = tr ? `${blue}:${red}:${target}:${respStr}` : '';
+    if (rumbleKey !== this.lastRumbleKey) {
+      this.lastRumbleKey = rumbleKey;
+      this.rumbleBarEl.classList.toggle('fdr-hidden', !tr);
+      if (tr) {
+        this.rumbleBlueScoreEl.textContent = String(blue);
+        this.rumbleTargetScoreEl.textContent = ` · ${target} · `;
+        this.rumbleRedScoreEl.textContent = String(red);
+        this.rumbleBlueFillEl.style.width = `${Math.min(100, (blue / target) * 100).toFixed(1)}%`;
+        this.rumbleRedFillEl.style.width = `${Math.min(100, (red / target) * 100).toFixed(1)}%`;
+        this.rumbleRespawnEl.classList.toggle('fdr-hidden', respSec === null);
+        if (respSec !== null) {
+          this.rumbleRespawnEl.textContent = `RESPAWNING IN ${respStr}S`;
+        }
+        this.rumbleBarEl.dataset.blueScore = String(blue);
+        this.rumbleBarEl.dataset.redScore = String(red);
+        this.rumbleBarEl.dataset.targetScore = String(target);
+        this.rumbleBarEl.dataset.respawning = respSec !== null ? 'true' : 'false';
+      }
+    }
+
+    // 2. Emerald HIDDEN Stealth Bush Pill above Vitals
+    const stealthed = !state.spectating && Boolean(state.isStealthed);
+    if (stealthed !== this.lastStealthKey) {
+      this.lastStealthKey = stealthed;
+      this.stealthPillEl.classList.toggle('fdr-hidden', !stealthed);
+      this.stealthPillEl.dataset.stealthed = stealthed ? 'true' : 'false';
+    }
+  }
+
   private updateCenterCombat(state: HUDState, now: number): void {
     if (this.lastScoped !== state.isScoped) {
       this.lastScoped = state.isScoped;
@@ -3452,6 +3616,18 @@ export class HUDManager {
       pxPerMeter,
       worldToMini,
       this.overdriveOverlay,
+      performance.now(),
+    );
+
+    // Wave-8 Frontier Overlay (Future Storm Rings, Mod Benches, Forecast Towers, Team Rumble Blue Allies)
+    drawFrontierMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      this.frontierOverlay,
+      state.futureStormRings,
+      state.teamRumble?.blueAllies,
       performance.now(),
     );
 

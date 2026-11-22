@@ -7,8 +7,9 @@ import type {
   Rarity,
   Vec3Like,
   WeaponId,
+  WeaponModId,
 } from '../types';
-import { EventBus, MATERIAL_STATS, RARITY_COLORS, WEAPONS, clamp } from '../core';
+import { EventBus, MATERIAL_STATS, RARITY_COLORS, WEAPONS, WEAPON_MODS, clamp } from '../core';
 
 type ImpactMaterial =
   | 'wood'
@@ -776,6 +777,111 @@ interface RebootBeamSlot {
   sparks: RebootBeamSpark[];
 }
 
+interface BunkerDeploySpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  baseScale: number;
+}
+
+interface BunkerDeploySlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  baseSquareMesh: THREE.Mesh;
+  baseSquareMat: THREE.MeshBasicMaterial;
+  holoFrameMesh: THREE.Mesh;
+  holoFrameMat: THREE.MeshBasicMaterial;
+  shellMesh: THREE.Mesh;
+  shellMat: THREE.MeshBasicMaterial;
+  sparks: BunkerDeploySpark[];
+}
+
+interface EmpBlastArc {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface EmpBlastSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  tiltRingMesh: THREE.Mesh;
+  tiltRingMat: THREE.MeshBasicMaterial;
+  arcs: EmpBlastArc[];
+}
+
+interface WeaponModSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface WeaponModSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  upperRingMesh: THREE.Mesh;
+  upperRingMat: THREE.MeshBasicMaterial;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  sparks: WeaponModSpark[];
+}
+
+interface ForecastPulseSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  baseScale: number;
+}
+
+interface ForecastPulseSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  beaconMesh: THREE.Mesh;
+  beaconMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  groundRingMesh: THREE.Mesh;
+  groundRingMat: THREE.MeshBasicMaterial;
+  skyRingMesh: THREE.Mesh;
+  skyRingMat: THREE.MeshBasicMaterial;
+  sparks: ForecastPulseSpark[];
+}
+
+function getWeaponModColor(modId: WeaponModId): string {
+  const found = WEAPON_MODS.find((m) => m.id === modId);
+  return found?.accentColor ?? '#38bdf8';
+}
+
 function getTacticalPingColor(kind: 'move' | 'danger' | 'loot'): string {
   switch (kind) {
     case 'danger':
@@ -908,6 +1014,14 @@ const DRONE_EXPLODE_POOL_SIZE = 8;
 const DRONE_EXPLODE_SHARD_COUNT = 12;
 const REBOOT_BEAM_POOL_SIZE = 6;
 const REBOOT_BEAM_SPARK_COUNT = 12;
+const BUNKER_DEPLOY_POOL_SIZE = 6;
+const BUNKER_DEPLOY_SPARK_COUNT = 12;
+const EMP_BLAST_POOL_SIZE = 8;
+const EMP_BLAST_ARC_COUNT = 14;
+const WEAPON_MOD_POOL_SIZE = 8;
+const WEAPON_MOD_SPARK_COUNT = 12;
+const FORECAST_PULSE_POOL_SIZE = 6;
+const FORECAST_PULSE_SPARK_COUNT = 12;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -980,6 +1094,10 @@ export class VFXManager {
   private readonly trapTriggers: TrapTriggerSlot[] = [];
   private readonly droneExplodes: DroneExplodeSlot[] = [];
   private readonly rebootBeams: RebootBeamSlot[] = [];
+  private readonly bunkerDeploys: BunkerDeploySlot[] = [];
+  private readonly empBlasts: EmpBlastSlot[] = [];
+  private readonly weaponMods: WeaponModSlot[] = [];
+  private readonly forecastPulses: ForecastPulseSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -1032,6 +1150,10 @@ export class VFXManager {
   private trapTriggerCursor = 0;
   private droneExplodeCursor = 0;
   private rebootBeamCursor = 0;
+  private bunkerDeployCursor = 0;
+  private empBlastCursor = 0;
+  private weaponModCursor = 0;
+  private forecastPulseCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -3854,6 +3976,390 @@ export class VFXManager {
         sparks,
       });
     }
+
+    // 35. Port-A-Bunker Deploy (collapsible cyan blueprint holo-cube frame + expanding square base + construction motes)
+    for (let i = 0; i < BUNKER_DEPLOY_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_bunker_deploy';
+      group.visible = false;
+
+      const baseSquareMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const baseSquareMesh = new THREE.Mesh(this.diamondRingGeo, baseSquareMat);
+      baseSquareMesh.rotation.set(-Math.PI / 2, 0, Math.PI / 4);
+      baseSquareMesh.position.y = 0.08;
+      group.add(baseSquareMesh);
+
+      const holoFrameMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const holoFrameMesh = new THREE.Mesh(this.unitBoxGeo, holoFrameMat);
+      group.add(holoFrameMesh);
+
+      const shellMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x0ea5e9,
+          transparent: true,
+          opacity: 0.28,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const shellMesh = new THREE.Mesh(this.unitBoxGeo, shellMat);
+      group.add(shellMesh);
+
+      const sparks: BunkerDeploySpark[] = [];
+      for (let s = 0; s < BUNKER_DEPLOY_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xe0f2fe : s % 2 === 0 ? 0x22d3ee : 0x60a5fa,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = s % 2 === 0 ? this.unitBoxGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / BUNKER_DEPLOY_SPARK_COUNT) * Math.PI * 2,
+          radius: 1.8,
+          speedY: 2.2,
+          baseScale: 0.14,
+        });
+      }
+
+      this.root.add(group);
+      this.bunkerDeploys.push({
+        active: false,
+        age: 0,
+        duration: 0.78,
+        group,
+        baseSquareMesh,
+        baseSquareMat,
+        holoFrameMesh,
+        holoFrameMat,
+        shellMesh,
+        shellMat,
+        sparks,
+      });
+    }
+
+    // 36. Shield-Breaker EMP Blast (electric cyan wireframe dome + dual magnetic shock rings + arc streaks)
+    for (let i = 0; i < EMP_BLAST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_emp_blast';
+      group.visible = false;
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMesh = new THREE.Mesh(this.unitSphereGeo, coreMat);
+      group.add(coreMesh);
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.hexDomeGeo, domeMat);
+      group.add(domeMesh);
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+      outerRingMesh.rotation.x = -Math.PI / 2;
+      group.add(outerRingMesh);
+
+      const tiltRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x818cf8,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const tiltRingMesh = new THREE.Mesh(this.unitRingGeo, tiltRingMat);
+      tiltRingMesh.rotation.set(Math.PI / 3, 0, Math.PI / 5);
+      group.add(tiltRingMesh);
+
+      const arcs: EmpBlastArc[] = [];
+      for (let a = 0; a < EMP_BLAST_ARC_COUNT; a++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: a % 3 === 0 ? 0xffffff : a % 2 === 0 ? 0x22d3ee : 0x60a5fa,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = a % 2 === 0 ? this.unitCrystalGeo : this.unitBoxGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        arcs.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.16,
+        });
+      }
+
+      this.root.add(group);
+      this.empBlasts.push({
+        active: false,
+        age: 0,
+        duration: 0.68,
+        radius: 6.5,
+        group,
+        coreMesh,
+        coreMat,
+        domeMesh,
+        domeMat,
+        outerRingMesh,
+        outerRingMat,
+        tiltRingMesh,
+        tiltRingMat,
+        arcs,
+      });
+    }
+
+    // 37. Weapon Mod Install Burst (mod-color-tinted holographic hex scanner rings + calibration sparks)
+    for (let i = 0; i < WEAPON_MOD_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_weapon_mod';
+      group.visible = false;
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.hexRingGeo, outerRingMat);
+      outerRingMesh.rotation.x = -Math.PI / 2;
+      group.add(outerRingMesh);
+
+      const upperRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const upperRingMesh = new THREE.Mesh(this.hexRingGeo, upperRingMat);
+      upperRingMesh.rotation.x = -Math.PI / 2;
+      group.add(upperRingMesh);
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMesh = new THREE.Mesh(this.unitCrystalGeo, coreMat);
+      group.add(coreMesh);
+
+      const sparks: WeaponModSpark[] = [];
+      for (let s = 0; s < WEAPON_MOD_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / WEAPON_MOD_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.45,
+          speedY: 1.7,
+          spin: 4.5,
+          baseScale: 0.085,
+        });
+      }
+
+      this.root.add(group);
+      this.weaponMods.push({
+        active: false,
+        age: 0,
+        duration: 0.75,
+        group,
+        outerRingMesh,
+        outerRingMat,
+        upperRingMesh,
+        upperRingMat,
+        coreMesh,
+        coreMat,
+        sparks,
+      });
+    }
+
+    // 38. Radar Weather Forecast Pulse (tall emerald-cyan skyward radar beam + ascending telemetry scan rings)
+    for (let i = 0; i < FORECAST_PULSE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_forecast_pulse';
+      group.visible = false;
+
+      const beaconMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const beaconMesh = new THREE.Mesh(this.beamCylGeo, beaconMat);
+      beaconMesh.position.y = 12;
+      beaconMesh.scale.set(0.95, 24, 0.95);
+      group.add(beaconMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa7f3d0,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      coreBeamMesh.position.y = 13;
+      coreBeamMesh.scale.set(0.28, 26, 0.28);
+      group.add(coreBeamMesh);
+
+      const groundRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const groundRingMesh = new THREE.Mesh(this.unitRingGeo, groundRingMat);
+      groundRingMesh.rotation.x = -Math.PI / 2;
+      groundRingMesh.position.y = 0.12;
+      group.add(groundRingMesh);
+
+      const skyRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x34d399,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const skyRingMesh = new THREE.Mesh(this.unitRingGeo, skyRingMat);
+      skyRingMesh.rotation.x = -Math.PI / 2;
+      skyRingMesh.position.y = 0.6;
+      group.add(skyRingMesh);
+
+      const sparks: ForecastPulseSpark[] = [];
+      for (let s = 0; s < FORECAST_PULSE_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xffffff : s % 2 === 0 ? 0x34d399 : 0x22d3ee,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / FORECAST_PULSE_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.95,
+          speedY: 4.5,
+          baseScale: 0.13,
+        });
+      }
+
+      this.root.add(group);
+      this.forecastPulses.push({
+        active: false,
+        age: 0,
+        duration: 1.25,
+        group,
+        beaconMesh,
+        beaconMat,
+        coreBeamMesh,
+        coreBeamMat,
+        groundRingMesh,
+        groundRingMat,
+        skyRingMesh,
+        skyRingMat,
+        sparks,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -4030,6 +4536,10 @@ export class VFXManager {
       this.eventBus.on('vfx:trap_trigger', (e) => this.spawnTrapTrigger(e.position, e.kind)),
       this.eventBus.on('vfx:drone_explode', (e) => this.spawnDroneExplode(e.position, e.rarity)),
       this.eventBus.on('vfx:reboot_beam', (e) => this.spawnRebootBeam(e.position, e.progress)),
+      this.eventBus.on('vfx:bunker_deploy', (e) => this.spawnBunkerDeploy(e.position)),
+      this.eventBus.on('vfx:emp_blast', (e) => this.spawnEmpBlast(e.position, e.radius)),
+      this.eventBus.on('vfx:weapon_mod', (e) => this.spawnWeaponMod(e.position, e.modId)),
+      this.eventBus.on('vfx:forecast_pulse', (e) => this.spawnForecastPulse(e.position)),
     );
   }
 
@@ -5932,6 +6442,177 @@ export class VFXManager {
         sp.material.opacity = fade;
       }
     }
+
+    // 36. Port-A-Bunker Deploy
+    for (let i = 0; i < BUNKER_DEPLOY_POOL_SIZE; i++) {
+      const bd = this.bunkerDeploys[i];
+      if (!bd.active) continue;
+      bd.age += safeDt;
+      const t = bd.age / bd.duration;
+      if (t >= 1) {
+        bd.active = false;
+        bd.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      bd.baseSquareMesh.scale.setScalar(0.8 + 4.4 * easeOut);
+      bd.baseSquareMat.opacity = 0.94 * fade;
+
+      const cubeW = 1.2 + 3.1 * easeOut;
+      const cubeH = 0.4 + 2.9 * easeOut;
+      bd.holoFrameMesh.position.y = cubeH * 0.5;
+      bd.holoFrameMesh.scale.set(cubeW, cubeH, cubeW);
+      bd.holoFrameMat.opacity = 0.85 * fade;
+
+      bd.shellMesh.position.y = cubeH * 0.5;
+      bd.shellMesh.scale.set(cubeW * 0.98, cubeH * 0.98, cubeW * 0.98);
+      bd.shellMat.opacity = 0.28 * fade * fade;
+
+      for (let s = 0; s < BUNKER_DEPLOY_SPARK_COUNT; s++) {
+        const sp = bd.sparks[s];
+        const ang = sp.angle + bd.age * 2.4;
+        const rad = sp.radius * (0.45 + 0.75 * easeOut);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 5 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.5 * t));
+        sp.material.opacity = 0.96 * fade;
+      }
+    }
+
+    // 37. Shield-Breaker EMP Blast
+    for (let i = 0; i < EMP_BLAST_POOL_SIZE; i++) {
+      const eb = this.empBlasts[i];
+      if (!eb.active) continue;
+      eb.age += safeDt;
+      const t = eb.age / eb.duration;
+      if (t >= 1) {
+        eb.active = false;
+        eb.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      eb.coreMesh.scale.setScalar(eb.radius * 0.42 * (0.4 + 0.85 * easeOut));
+      eb.coreMat.opacity = Math.max(0, 0.96 * (1 - t * 1.5));
+
+      const domeR = eb.radius * (0.28 + 0.76 * easeOut);
+      eb.domeMesh.scale.setScalar(domeR);
+      eb.domeMesh.rotation.y += 2.6 * safeDt;
+      eb.domeMat.opacity = 0.82 * fade;
+
+      eb.outerRingMesh.scale.setScalar(eb.radius * (0.24 + 0.92 * easeOut));
+      eb.outerRingMat.opacity = 0.95 * fade;
+
+      eb.tiltRingMesh.rotation.y -= 4.8 * safeDt;
+      eb.tiltRingMesh.scale.setScalar(eb.radius * (0.22 + 0.86 * easeOut));
+      eb.tiltRingMat.opacity = 0.88 * fade * fade;
+
+      for (let a = 0; a < EMP_BLAST_ARC_COUNT; a++) {
+        const arc = eb.arcs[a];
+        arc.mesh.position.x += arc.vx * safeDt;
+        arc.mesh.position.y = Math.max(0.05, arc.mesh.position.y + arc.vy * safeDt);
+        arc.mesh.position.z += arc.vz * safeDt;
+        arc.mesh.rotation.x += arc.rx * safeDt;
+        arc.mesh.rotation.y += arc.ry * safeDt;
+        const sc = arc.baseScale * (1 - 0.45 * t);
+        arc.mesh.scale.set(sc * 0.65, sc * 2.2, sc * 0.65);
+        arc.material.opacity = fade;
+      }
+    }
+
+    // 38. Weapon Mod Install Burst
+    for (let i = 0; i < WEAPON_MOD_POOL_SIZE; i++) {
+      const wm = this.weaponMods[i];
+      if (!wm.active) continue;
+      wm.age += safeDt;
+      const t = wm.age / wm.duration;
+      if (t >= 1) {
+        wm.active = false;
+        wm.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      wm.outerRingMesh.scale.setScalar(0.32 + 1.35 * easeOut);
+      wm.outerRingMat.opacity = 0.94 * fade;
+
+      wm.upperRingMesh.position.y = 0.1 + 1.15 * easeOut;
+      wm.upperRingMesh.rotation.z += 4.8 * safeDt;
+      wm.upperRingMesh.scale.setScalar(0.24 + 0.85 * easeOut);
+      wm.upperRingMat.opacity = 0.9 * fade;
+
+      wm.coreMesh.position.y = 0.35 + 0.45 * t;
+      wm.coreMesh.rotation.y += 7 * safeDt;
+      wm.coreMesh.scale.setScalar(0.26 * (1 - 0.5 * t));
+      wm.coreMat.opacity = 0.95 * fade;
+
+      for (let s = 0; s < WEAPON_MOD_SPARK_COUNT; s++) {
+        const sp = wm.sparks[s];
+        const ang = sp.angle + wm.age * sp.spin;
+        const rad = sp.radius * (1 + 0.35 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 6 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.5 * t));
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 39. Radar Weather Forecast Pulse
+    for (let i = 0; i < FORECAST_PULSE_POOL_SIZE; i++) {
+      const fp = this.forecastPulses[i];
+      if (!fp.active) continue;
+      fp.age += safeDt;
+      const t = fp.age / fp.duration;
+      if (t >= 1) {
+        fp.active = false;
+        fp.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const pop = clamp(fp.age / 0.18, 0, 1);
+
+      const colH = 24 * pop;
+      const colW = (1 - 0.55 * t) * (1 + 0.1 * Math.sin(fp.age * 12));
+      fp.beaconMesh.position.y = colH * 0.5;
+      fp.beaconMesh.scale.set(0.95 * colW, Math.max(0.2, colH), 0.95 * colW);
+      fp.beaconMat.opacity = 0.44 * fade;
+
+      fp.coreBeamMesh.position.y = colH * 0.55;
+      fp.coreBeamMesh.scale.set(0.28 * colW, Math.max(0.2, colH * 1.1), 0.28 * colW);
+      fp.coreBeamMat.opacity = 0.78 * fade;
+
+      fp.groundRingMesh.scale.setScalar(0.8 + 8.8 * easeOut);
+      fp.groundRingMat.opacity = 0.94 * fade;
+
+      fp.skyRingMesh.position.y = 0.5 + 14.0 * easeOut;
+      fp.skyRingMesh.scale.setScalar(0.6 + 5.2 * easeOut);
+      fp.skyRingMat.opacity = 0.9 * fade;
+
+      for (let s = 0; s < FORECAST_PULSE_SPARK_COUNT; s++) {
+        const sp = fp.sparks[s];
+        const ang = sp.angle + fp.age * 2.8;
+        const rad = sp.radius * (1 + 1.2 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 5.5 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.45 * t));
+        sp.material.opacity = fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -6962,6 +7643,188 @@ export class VFXManager {
     }
   }
 
+  private spawnBunkerDeploy(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.bunkerDeploys[this.bunkerDeployCursor];
+    this.bunkerDeployCursor = (this.bunkerDeployCursor + 1) % BUNKER_DEPLOY_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.78;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.baseSquareMesh.scale.setScalar(0.8);
+    slot.baseSquareMat.opacity = 0.94;
+
+    slot.holoFrameMesh.position.y = 0.2;
+    slot.holoFrameMesh.scale.set(1.2, 0.4, 1.2);
+    slot.holoFrameMat.opacity = 0.85;
+
+    slot.shellMesh.position.y = 0.2;
+    slot.shellMesh.scale.set(1.18, 0.39, 1.18);
+    slot.shellMat.opacity = 0.28;
+
+    for (let s = 0; s < BUNKER_DEPLOY_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / BUNKER_DEPLOY_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.25;
+      sp.radius = 1.4 + this.nextRand() * 0.7;
+      sp.speedY = 1.8 + this.nextRand() * 2.0;
+      sp.baseScale = 0.11 + this.nextRand() * 0.06;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius * 0.45,
+        0.1 + this.nextRand() * 0.4,
+        Math.sin(sp.angle) * sp.radius * 0.45,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.96;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnEmpBlast(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.empBlasts[this.empBlastCursor];
+    this.empBlastCursor = (this.empBlastCursor + 1) % EMP_BLAST_POOL_SIZE;
+
+    const safeRadius = clamp(Number.isFinite(radius) && radius > 0 ? radius : 6.5, 1.5, 40);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.68;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.1, position.z);
+    slot.group.visible = true;
+
+    slot.coreMesh.scale.setScalar(safeRadius * 0.18);
+    slot.coreMat.opacity = 0.96;
+
+    slot.domeMesh.scale.setScalar(safeRadius * 0.28);
+    slot.domeMat.opacity = 0.82;
+
+    slot.outerRingMesh.scale.setScalar(safeRadius * 0.24);
+    slot.outerRingMat.opacity = 0.95;
+
+    slot.tiltRingMesh.rotation.set(Math.PI / 3, this.nextRand() * Math.PI, Math.PI / 5);
+    slot.tiltRingMesh.scale.setScalar(safeRadius * 0.22);
+    slot.tiltRingMat.opacity = 0.88;
+
+    for (let a = 0; a < EMP_BLAST_ARC_COUNT; a++) {
+      const arc = slot.arcs[a];
+      const ang = (a / EMP_BLAST_ARC_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      const spd = safeRadius * (0.9 + this.nextRand() * 0.9);
+      arc.vx = Math.cos(ang) * spd;
+      arc.vy = safeRadius * (0.25 + this.nextRand() * 0.45);
+      arc.vz = Math.sin(ang) * spd;
+      arc.rx = (this.nextRand() - 0.5) * 18;
+      arc.ry = (this.nextRand() - 0.5) * 18;
+      arc.baseScale = Math.max(0.12, safeRadius * 0.032);
+      arc.mesh.position.set(0, 0.1, 0);
+      arc.mesh.rotation.set(this.nextRand() * Math.PI, this.nextRand() * Math.PI, 0);
+      arc.mesh.scale.setScalar(arc.baseScale);
+      arc.material.opacity = 1;
+      arc.mesh.visible = true;
+    }
+  }
+
+  private spawnWeaponMod(position: Vec3Like, modId: WeaponModId): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.weaponMods[this.weaponModCursor];
+    this.weaponModCursor = (this.weaponModCursor + 1) % WEAPON_MOD_POOL_SIZE;
+
+    const hexColor = getWeaponModColor(modId);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.75;
+
+    slot.group.position.set(position.x, position.y + 0.15, position.z);
+    slot.group.visible = true;
+
+    slot.outerRingMat.color.set(hexColor);
+    slot.outerRingMat.opacity = 0.94;
+    slot.outerRingMesh.scale.setScalar(0.32);
+
+    slot.upperRingMat.color.set(hexColor);
+    slot.upperRingMat.opacity = 0.9;
+    slot.upperRingMesh.position.set(0, 0.1, 0);
+    slot.upperRingMesh.rotation.set(-Math.PI / 2, 0, 0);
+    slot.upperRingMesh.scale.setScalar(0.24);
+
+    slot.coreMat.color.set(hexColor);
+    slot.coreMat.opacity = 0.95;
+    slot.coreMesh.position.set(0, 0.35, 0);
+    slot.coreMesh.scale.setScalar(0.26);
+
+    for (let s = 0; s < WEAPON_MOD_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / WEAPON_MOD_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      sp.radius = 0.24 + this.nextRand() * 0.38;
+      sp.speedY = 1.4 + this.nextRand() * 1.4;
+      sp.spin = (s % 2 === 0 ? 1 : -1) * (3.5 + this.nextRand() * 2.5);
+      sp.baseScale = 0.07 + this.nextRand() * 0.04;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.08 + this.nextRand() * 0.25,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.color.set(s % 4 === 0 ? '#ffffff' : hexColor);
+      sp.material.opacity = 1;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnForecastPulse(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.forecastPulses[this.forecastPulseCursor];
+    this.forecastPulseCursor = (this.forecastPulseCursor + 1) % FORECAST_PULSE_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.25;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.beaconMesh.position.y = 2.0;
+    slot.beaconMesh.scale.set(0.95, 4, 0.95);
+    slot.beaconMat.opacity = 0.44;
+
+    slot.coreBeamMesh.position.y = 2.2;
+    slot.coreBeamMesh.scale.set(0.28, 4.4, 0.28);
+    slot.coreBeamMat.opacity = 0.78;
+
+    slot.groundRingMesh.scale.setScalar(0.8);
+    slot.groundRingMat.opacity = 0.94;
+
+    slot.skyRingMesh.position.y = 0.5;
+    slot.skyRingMesh.scale.setScalar(0.6);
+    slot.skyRingMat.opacity = 0.9;
+
+    for (let s = 0; s < FORECAST_PULSE_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / FORECAST_PULSE_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.25;
+      sp.radius = 0.65 + this.nextRand() * 0.65;
+      sp.speedY = 3.2 + this.nextRand() * 3.4;
+      sp.baseScale = 0.10 + this.nextRand() * 0.06;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.2 + this.nextRand() * 1.2,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.95;
+      sp.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -7098,6 +7961,10 @@ export class VFXManager {
     for (const tt of this.trapTriggers) if (tt.active) count++;
     for (const de of this.droneExplodes) if (de.active) count++;
     for (const rb of this.rebootBeams) if (rb.active) count++;
+    for (const bd of this.bunkerDeploys) if (bd.active) count++;
+    for (const eb of this.empBlasts) if (eb.active) count++;
+    for (const wm of this.weaponMods) if (wm.active) count++;
+    for (const fp of this.forecastPulses) if (fp.active) count++;
     return count;
   }
 
@@ -7273,6 +8140,30 @@ export class VFXManager {
     return count;
   }
 
+  public getBunkerDeployEffectCount(): number {
+    let count = 0;
+    for (const bd of this.bunkerDeploys) if (bd.active) count++;
+    return count;
+  }
+
+  public getEmpBlastEffectCount(): number {
+    let count = 0;
+    for (const eb of this.empBlasts) if (eb.active) count++;
+    return count;
+  }
+
+  public getWeaponModEffectCount(): number {
+    let count = 0;
+    for (const wm of this.weaponMods) if (wm.active) count++;
+    return count;
+  }
+
+  public getForecastPulseEffectCount(): number {
+    let count = 0;
+    for (const fp of this.forecastPulses) if (fp.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -7411,6 +8302,22 @@ export class VFXManager {
     for (const rb of this.rebootBeams) {
       rb.active = false;
       rb.group.visible = false;
+    }
+    for (const bd of this.bunkerDeploys) {
+      bd.active = false;
+      bd.group.visible = false;
+    }
+    for (const eb of this.empBlasts) {
+      eb.active = false;
+      eb.group.visible = false;
+    }
+    for (const wm of this.weaponMods) {
+      wm.active = false;
+      wm.group.visible = false;
+    }
+    for (const fp of this.forecastPulses) {
+      fp.active = false;
+      fp.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

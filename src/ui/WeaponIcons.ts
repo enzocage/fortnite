@@ -277,6 +277,28 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <rect x="53" y="27.5" width="3.5" height="14" rx="1" fill="#ef4444" stroke="#0f172a" stroke-width="1.2"/>
     <circle cx="29" cy="35" r="3" fill="#fb923c" stroke="#0f172a" stroke-width="1.2"/>
   </svg>`,
+
+  port_a_bunker: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M12 46L18 18H46L52 46H12Z" fill="#475569" stroke="#0f172a" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M16 42L21 22H43L48 42H16Z" fill="#64748b"/>
+    <rect x="23" y="27" width="18" height="15" rx="2" fill="#0f172a" stroke="#38bdf8" stroke-width="1.8"/>
+    <path d="M26 34.5H38M32 27V42" stroke="#22d3ee" stroke-width="2" stroke-linecap="round"/>
+    <rect x="20" y="13" width="24" height="5" rx="2" fill="#38bdf8" stroke="#0f172a" stroke-width="1.6"/>
+    <circle cx="32" cy="15.5" r="2.2" fill="#ffd000"/>
+    <rect x="9" y="46" width="46" height="6" rx="2" fill="#334155" stroke="#0f172a" stroke-width="1.8"/>
+    <path d="M14 29L9 34L14 39M50 29L55 34L50 39" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
+
+  emp_grenade: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M12 24C8 30 8 39 12 45M52 24C56 30 56 39 52 45" stroke="#38bdf8" stroke-width="2.4" stroke-linecap="round"/>
+    <rect x="25" y="10" width="14" height="7" rx="2" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.8"/>
+    <circle cx="21" cy="14" r="3.2" stroke="#ffd000" stroke-width="2.2"/>
+    <rect x="17" y="17" width="30" height="35" rx="13" fill="#0369a1" stroke="#0f172a" stroke-width="2.2"/>
+    <circle cx="32" cy="35" r="10.5" fill="#0f172a" stroke="#22d3ee" stroke-width="2"/>
+    <path d="M34 25L27 35.5H32.5L30 45L38 33.5H32.5L34 25Z" fill="#ffd000" stroke="#e0f2fe" stroke-width="1.1" stroke-linejoin="round"/>
+    <rect x="17" y="24" width="30" height="3.2" fill="#38bdf8" opacity="0.85"/>
+    <rect x="17" y="42" width="30" height="3.2" fill="#38bdf8" opacity="0.85"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {
@@ -770,5 +792,36 @@ export function getGrindRailSvg(): string {
     <path d="M4 21C10 21 13 13 20 12C24 11.4 26.5 11.5 28 11" stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round"/>
     <circle cx="16" cy="14" r="2.3" fill="#ffd000"/>
     <path d="M19 6L24 8L20 11" stroke="#fde047" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+export function getModBenchSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <rect x="4" y="16" width="24" height="5" rx="1.5" fill="#334155" stroke="#0f172a" stroke-width="1.6"/>
+    <path d="M7 21V28M25 21V28" stroke="#94a3b8" stroke-width="2.4" stroke-linecap="round"/>
+    <rect x="10" y="21" width="12" height="5" rx="1" fill="#1e293b" stroke="#38bdf8" stroke-width="1.2"/>
+    <path d="M7 12H21L25 10V13L20 14H7V12Z" fill="#22d3ee" stroke="#e0f2fe" stroke-width="1.1" stroke-linejoin="round"/>
+    <circle cx="15" cy="7.5" r="3" stroke="#a855f7" stroke-width="1.6" fill="rgba(168,85,247,0.28)"/>
+    <circle cx="15" cy="7.5" r="1.1" fill="#ffd000"/>
+  </svg>`;
+}
+
+export function getForecastTowerSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M16 11L9 28M16 11L23 28M16 11V28" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M11.5 22H20.5" stroke="#64748b" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M10 10C10 6.5 13 4 17 4.5C20 4.9 22 7.5 21.5 10.5L10 10Z" fill="#0284c7" stroke="#22d3ee" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="17.5" cy="7" r="1.8" fill="#ffd000"/>
+    <path d="M22.5 5.5C25 7 25.5 10 24 12.5M25.5 3.5C28.8 6 29.4 10.8 27 14" stroke="#ffd000" stroke-width="1.7" stroke-linecap="round"/>
+  </svg>`;
+}
+
+export function getStealthLeafSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M16 5C22.5 7 27 12.5 26.5 19.5C26 24.5 21.5 27 16 27C10.5 27 6 24.5 5.5 19.5C5 12.5 9.5 7 16 5Z" fill="#15803d" stroke="#86efac" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M16 8C19.5 10.5 21.5 14.5 21 19.5C20.6 22.8 18.5 24.5 16 24.5C13.5 24.5 11.4 22.8 11 19.5C10.5 14.5 12.5 10.5 16 8Z" fill="#22c55e"/>
+    <path d="M16 10V26M16 15L20 12.5M16 19.5L12 17" stroke="#dcfce7" stroke-width="1.7" stroke-linecap="round"/>
+    <circle cx="11" cy="21" r="1.6" fill="#4ade80"/>
+    <circle cx="21" cy="20" r="1.6" fill="#4ade80"/>
   </svg>`;
 }

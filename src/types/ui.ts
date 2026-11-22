@@ -11,11 +11,12 @@ import type {
   SpecialistRole,
   TrapKind,
   Vec3Like,
+  WeaponModId,
 } from './common';
 import type { BuildPieceType, EditModeState } from './building';
 import type { EmoteId } from './character';
 import type { ItemInstance } from './weapons';
-import type { StormState, VehicleKind, WeatherKind } from './world';
+import type { FutureStormRing, StormState, VehicleKind, WeatherKind } from './world';
 
 export interface MinimapBlip {
   id: string;
@@ -208,6 +209,17 @@ export interface HUDState {
   traps?: Record<TrapKind, number>;
   hasPartnerRebootCard?: boolean;
   rebootProgress?: number | null;
+  isStealthed?: boolean;
+  hasStormForecast?: boolean;
+  futureStormRings?: FutureStormRing[];
+  activeWeaponMods?: WeaponModId[];
+  teamRumble?: {
+    blueScore: number;
+    redScore: number;
+    targetScore: number;
+    respawningInSec: number | null;
+    blueAllies?: Array<{ x: number; z: number }>;
+  } | null;
 }
 
 export interface MatchQuest {
@@ -279,6 +291,14 @@ export interface MatchSummary {
   dronesShotDown?: number;
   trapsPlaced?: number;
   highlights?: string[];
+  modsInstalled?: number;
+  bunkersDeployed?: number;
+  empHits?: number;
+  teamRumbleScore?: {
+    blue: number;
+    red: number;
+    target: number;
+  };
 }
 
 export interface BannerMessage {

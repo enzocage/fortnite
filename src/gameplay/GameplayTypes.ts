@@ -1,6 +1,7 @@
 import type {
   AmmoType,
   AugmentId,
+  BuildPiece,
   BuildPieceType,
   CampfireEntity,
   CapturePointEntity,
@@ -9,6 +10,7 @@ import type {
   DroppedMedallionEntity,
   EditModeState,
   ExplosiveBarrelEntity,
+  ForecastTowerEntity,
   GameModeId,
   GamePhase,
   GrindRailEntity,
@@ -20,15 +22,18 @@ import type {
   LootLlamaEntity,
   MaterialType,
   MedallionId,
+  ModBenchEntity,
   NpcSpecialistEntity,
   Rarity,
   RebootVanEntity,
   RiftEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
+  StealthBushEntity,
   SupplyDroneEntity,
   SupplyDrop,
   ItemInstance,
+  TeamId,
   TrapKind,
   UpgradeBenchEntity,
   VaultEntity,
@@ -38,6 +43,7 @@ import type {
   VendingMachineEntity,
   WeaponBunkerEntity,
   WeaponId,
+  WeaponModId,
   ZiplineEntity,
 } from '../types';
 
@@ -204,6 +210,30 @@ export interface DuoRebootBridge {
   rebootPartnerAt(pos: Vec3Like): unknown;
 }
 
+export interface WorldFrontierBridge {
+  getModBenches(): ModBenchEntity[];
+  getForecastTowers(): ForecastTowerEntity[];
+  scanForecastTower(id: string, actorId: string): boolean;
+  getStealthBushes(): StealthBushEntity[];
+  isInsideStealthBush(pos: Vec3Like): StealthBushEntity | null;
+}
+
+export interface EmpDetonationReport {
+  attackerId: string;
+  isPlayer: boolean;
+  position: Vec3Like;
+  actorsHit: number;
+  shieldStripped: number;
+  trapsDisabled: number;
+}
+
+export interface BunkerDeploymentReport {
+  ownerId: string;
+  isPlayer: boolean;
+  origin: Vec3Like;
+  pieces: BuildPiece[];
+}
+
 export interface ShieldBubbleState {
   id: string;
   position: Vec3Like;
@@ -281,6 +311,7 @@ export interface CombatActor {
   hasCombatMedallion?: boolean;
   isKnocked?: boolean;
   squadId?: string;
+  teamId?: TeamId;
   onDamage?: (ev: DamageEvent) => void;
   onHeal?: (hpAdded: number, shieldAdded: number) => void;
   onImpulse?: (impulse: Vec3Like, grantFallImmunity: boolean) => void;
@@ -328,9 +359,16 @@ export interface FireWeaponParams {
   hasFirstAssault?: boolean;
   hasCombatMedallion?: boolean;
   bowCharge?: number;
+  weaponMods?: WeaponModId[];
+  actorTeamId?: TeamId;
+  isAiming?: boolean;
+  spreadPreAdjusted?: boolean;
+  actorYaw?: number;
   onAmmoConsumed?: () => void;
   onHarvest?: (matType: MaterialType, amount: number, isCrit: boolean) => void;
   onDroneDestroyed?: (res: SupplyDroneDamageResult) => void;
+  onBunkerDeployed?: (report: BunkerDeploymentReport) => void;
+  onEmpHit?: (report: EmpDetonationReport) => void;
 }
 
 export interface FireWeaponResult {
@@ -339,6 +377,8 @@ export interface FireWeaponResult {
   headshots: number;
   damageDealt: number;
   burstRemaining?: number;
+  bloomScale?: number;
+  recoilScale?: number;
   harvested?: {
     matType: MaterialType;
     amount: number;
@@ -362,6 +402,9 @@ export interface PlayerMatchStats {
   reboots?: number;
   dronesShotDown?: number;
   trapsPlaced?: number;
+  modsInstalled?: number;
+  bunkersDeployed?: number;
+  empHits?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -458,4 +501,7 @@ export interface PlayerHudSnapshot {
   traps: Record<TrapKind, number>;
   hasPartnerRebootCard: boolean;
   rebootProgress: number | null;
+  isStealthed?: boolean;
+  hasStormForecast?: boolean;
+  activeWeaponMods?: WeaponModId[];
 }

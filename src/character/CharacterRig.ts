@@ -9,14 +9,17 @@ import type {
   SkinDef,
   SpecialistRole,
   WeaponId,
+  WeaponModId,
 } from '../types';
 import { CONTRAILS, GLIDERS, MEDALLIONS, PICKAXES, SKINS, WEAPON_WRAPS, clamp } from '../core';
 import {
+  applyWeaponModsToModel,
   applyWeaponWrap,
   createBlueprintModel,
   createWeaponModel,
   disposeObject3D,
   getWeaponWrapDef,
+  isRangedWeapon,
 } from './WeaponModels';
 
 export function getAllyRoleColor(role?: SpecialistRole): string {
@@ -50,6 +53,33 @@ export function shouldActivateContrail(
 
 const CONTRAIL_WHITE = new THREE.Color('#ffffff');
 const CONTRAIL_PARTICLES_PER_LIMB = 6;
+
+function normalizeWeaponMods(mods?: WeaponModId[]): WeaponModId[] {
+  if (!mods || mods.length === 0) return [];
+  const out: WeaponModId[] = [];
+  for (const modId of mods) {
+    if (
+      (modId === 'red_dot' ||
+        modId === 'suppressor' ||
+        modId === 'drum_mag' ||
+        modId === 'foregrip') &&
+      !out.includes(modId)
+    ) {
+      out.push(modId);
+    }
+  }
+  return out;
+}
+
+function areWeaponModsEqual(a: WeaponModId[] | undefined, b: WeaponModId[]): boolean {
+  const lenA = a ? a.length : 0;
+  if (lenA !== b.length) return false;
+  if (lenA === 0) return true;
+  for (let i = 0; i < b.length; i++) {
+    if (!a!.includes(b[i])) return false;
+  }
+  return true;
+}
 
 interface ContrailParticle {
   mesh: THREE.Mesh;
@@ -244,6 +274,7 @@ export class CharacterRig {
 
   private equippedWeaponId: WeaponId = 'pickaxe';
   private currentWrapId: string = WEAPON_WRAPS[0]?.id ?? 'factory_matte';
+  private currentWeaponMods: WeaponModId[] = [];
   private currentContrailId: string = CONTRAILS[0]?.id ?? 'wind_stream';
   private buildMode = false;
   private gliderOpen = false;
@@ -1118,14 +1149,29 @@ export class CharacterRig {
     this.gliderVisualGroup = grp;
   }
 
-  public equipWeapon(weaponId: WeaponId, isBuildMode = false): void {
+  private syncActiveWeaponMods(): void {
+    if (!this.activeWeaponGroup) return;
+    const targetMods =
+      !this.buildMode && isRangedWeapon(this.equippedWeaponId) ? this.currentWeaponMods : [];
+    const applied = this.activeWeaponGroup.userData.appliedWeaponMods as WeaponModId[] | undefined;
+    if (!areWeaponModsEqual(applied, targetMods)) {
+      applyWeaponModsToModel(this.activeWeaponGroup, targetMods);
+    }
+  }
+
+  public equipWeapon(weaponId: WeaponId, isBuildMode = false, weaponMods?: WeaponModId[]): void {
     if (this.disposed) return;
+
+    if (weaponMods !== undefined) {
+      this.currentWeaponMods = normalizeWeaponMods(weaponMods);
+    }
 
     const targetKey = isBuildMode ? '__blueprint__' : weaponId;
     if (this.equippedWeaponId === weaponId && this.buildMode === isBuildMode && this.activeWeaponGroup) {
       if (!isBuildMode && this.activeWeaponGroup.userData.appliedWrapId !== this.currentWrapId) {
         applyWeaponWrap(this.activeWeaponGroup, this.currentWrapId);
       }
+      this.syncActiveWeaponMods();
       return;
     }
 
@@ -1151,6 +1197,21 @@ export class CharacterRig {
 
     nextGroup.visible = true;
     this.activeWeaponGroup = nextGroup;
+    this.syncActiveWeaponMods();
+  }
+
+  public setWeaponMods(mods?: WeaponModId[]): void {
+    if (this.disposed) return;
+    this.currentWeaponMods = normalizeWeaponMods(mods);
+    this.syncActiveWeaponMods();
+  }
+
+  public getWeaponMods(): WeaponModId[] {
+    return [...this.currentWeaponMods];
+  }
+
+  public getActiveWeaponGroup(): THREE.Group | null {
+    return this.activeWeaponGroup;
   }
 
   public setWeaponWrap(wrapId?: string): void {
@@ -1221,7 +1282,7 @@ export class CharacterRig {
     this.joints.root.position.set(px, py, pz);
     this.joints.root.rotation.y = Number.isFinite(state.yaw) ? state.yaw : 0;
 
-    this.equipWeapon(state.weaponId, state.isBuilding);
+    this.equipWeapon(state.weaponId, state.isBuilding, state.weaponMods ?? []);
     if (state.weaponWrapId !== undefined) {
       this.setWeaponWrap(state.weaponWrapId);
     }
@@ -1242,8 +1303,12 @@ export class CharacterRig {
     if (state.isDuoPartner !== undefined) {
       this.setDuoPartnerAura(Boolean(state.isDuoPartner));
     }
-    if (state.isAlly !== undefined) {
-      this.setAllyAura(Boolean(state.isAlly) && !this.duoPartnerAuraEnabled, state.allyRole);
+    if (state.isAlly !== undefined || state.teamId !== undefined) {
+      const isFriendlyAlly =
+        (Boolean(state.isAlly) || state.teamId === 'team_blue') &&
+        state.teamId !== 'team_red' &&
+        !this.duoPartnerAuraEnabled;
+      this.setAllyAura(isFriendlyAlly, state.allyRole);
     } else if (state.allyRole !== undefined && this.allyAuraEnabled) {
       this.setAllyAura(true, state.allyRole);
     }
@@ -2328,6 +2393,7 @@ export class CharacterRig {
     }
     this.weaponCache.clear();
     this.activeWeaponGroup = null;
+    this.currentWeaponMods = [];
 
     if (this.gliderVisualGroup) {
       disposeObject3D(this.gliderVisualGroup);

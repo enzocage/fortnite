@@ -18,6 +18,20 @@ export interface DroppedLootPayload {
   materials: Partial<Record<MaterialType, number>>;
 }
 
+/**
+ * Computes effective magazine capacity for an item, applying `+45%` for `'drum_mag'`.
+ */
+export function getItemMagCapacity(item: ItemInstance | null | undefined): number {
+  if (!item) return 0;
+  const def = WEAPONS[item.weaponId];
+  if (!def || def.magSize <= 0) return 0;
+  if (def.isMinigun || def.isGrappler) return def.magSize;
+  if (item.mods?.includes('drum_mag')) {
+    return Math.max(def.magSize + 1, Math.round(def.magSize * 1.45));
+  }
+  return def.magSize;
+}
+
 function createPickaxeItem(): ItemInstance {
   return {
     uid: 'slot_0_pickaxe',
@@ -260,7 +274,8 @@ export class InventorySystem {
     const def = WEAPONS[item.weaponId];
     if (!def.ammoType || def.magSize <= 0) return 0;
 
-    const needed = def.magSize - item.magAmmo;
+    const magCap = getItemMagCapacity(item);
+    const needed = magCap - item.magAmmo;
     if (needed <= 0) return 0;
 
     const loaded = this.useAmmo(def.ammoType, needed);
@@ -273,7 +288,10 @@ export class InventorySystem {
     for (let i = 1; i < this.slots.length; i++) {
       const item = this.slots[i];
       if (item) {
-        items.push({ ...item });
+        items.push({
+          ...item,
+          ...(item.mods ? { mods: [...item.mods] } : {}),
+        });
         this.slots[i] = null;
       }
     }

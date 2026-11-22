@@ -184,7 +184,11 @@ function isHealingItem(weaponId: WeaponId): boolean {
 }
 
 function isOffensiveThrowable(weaponId: WeaponId): boolean {
-  return weaponId === 'frag_grenade' || weaponId === 'shockwave_grenade';
+  return (
+    weaponId === 'frag_grenade' ||
+    weaponId === 'shockwave_grenade' ||
+    weaponId === 'emp_grenade'
+  );
 }
 
 function isWeaponLoadedForScoring(
@@ -238,22 +242,37 @@ function getBotEyePos(bot: BotEntity): Vec3Like {
 }
 
 function isFriendlyTarget(
-  bot: Pick<BotEntity, 'id' | 'isAlly' | 'isDuoPartner' | 'squadId'>,
-  t: Pick<BotCombatTarget, 'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId'>,
+  bot: Pick<BotEntity, 'id' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'>,
+  t: Pick<
+    BotCombatTarget,
+    'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+  >,
   squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+  gameMode?: GameModeId,
 ): boolean {
   if (t.id === bot.id) return true;
+  if (bot.teamId && t.teamId && bot.teamId === t.teamId) {
+    return true;
+  }
+  const botIsBlueTeam =
+    bot.teamId === 'team_blue' ||
+    (gameMode === 'team_rumble' && bot.squadId === 'team_blue');
   const botInPlayerSquad =
     Boolean(bot.isAlly) ||
     Boolean(bot.isDuoPartner) ||
-    bot.squadId === 'player_squad';
+    bot.squadId === 'player_squad' ||
+    botIsBlueTeam;
   if (botInPlayerSquad) {
+    const targetIsRed = t.teamId === 'team_red';
     if (
-      t.isPlayer ||
-      t.id === 'player' ||
-      t.isAlly ||
-      t.isDuoPartner ||
-      t.squadId === 'player_squad'
+      !targetIsRed &&
+      (t.isPlayer ||
+        t.id === 'player' ||
+        t.isAlly ||
+        t.isDuoPartner ||
+        t.squadId === 'player_squad' ||
+        t.teamId === 'team_blue' ||
+        (gameMode === 'team_rumble' && t.squadId === 'team_blue'))
     ) {
       return true;
     }
@@ -311,8 +330,10 @@ function scoreWeaponForDistance(
   if (
     def.isGrappler ||
     def.isShieldBubble ||
+    def.isPortABunker ||
     item.weaponId === 'grappler' ||
-    item.weaponId === 'shield_bubble'
+    item.weaponId === 'shield_bubble' ||
+    item.weaponId === 'port_a_bunker'
   ) {
     return -1;
   }
@@ -328,6 +349,7 @@ function scoreWeaponForDistance(
   if (def.isThrowable) {
     if (item.stackCount <= 0) return -1;
     if (distance < 8 || distance > 52) return -1;
+    if (item.weaponId === 'emp_grenade' || def.isEmpGrenade) return 18;
     return item.weaponId === 'frag_grenade' ? 20 : 14;
   }
 
@@ -488,19 +510,21 @@ export function selectThrowableForCombat(
     isAlly?: boolean;
     isDuoPartner?: boolean;
     squadId?: string;
+    teamId?: BotEntity['teamId'];
   },
   target: BotCombatTarget,
   allTargets: BotCombatTarget[],
   hasLOS: boolean,
   buildPieces?: BuildPiece[],
   squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+  gameMode?: GameModeId,
 ): ThrowableDecision | null {
   if ((bot.throwCooldown ?? 0) > 0) return null;
   if (
     allTargets.some(
       (other) =>
         other.alive &&
-        isFriendlyTarget(bot, other, squadmates) &&
+        isFriendlyTarget(bot, other, squadmates, gameMode) &&
         dist3D(other.position, target.position) <= 9.0,
     )
   ) {
@@ -517,13 +541,15 @@ export function selectThrowableForCombat(
 
   let fragSlot = -1;
   let shockwaveSlot = -1;
+  let empSlot = -1;
   for (let i = 0; i < bot.inventory.items.length; i++) {
     const it = bot.inventory.items[i];
     if (!it || it.stackCount <= 0) continue;
     if (it.weaponId === 'frag_grenade' && fragSlot < 0) fragSlot = i;
     if (it.weaponId === 'shockwave_grenade' && shockwaveSlot < 0) shockwaveSlot = i;
+    if (it.weaponId === 'emp_grenade' && empSlot < 0) empSlot = i;
   }
-  if (fragSlot < 0 && shockwaveSlot < 0) return null;
+  if (fragSlot < 0 && shockwaveSlot < 0 && empSlot < 0) return null;
 
   const isClustered = allTargets.some(
     (other) =>
@@ -549,13 +575,15 @@ export function selectThrowableForCombat(
   if (!isClustered && !isBoxed) return null;
 
   if (isClustered) {
-    const slotIndex = fragSlot >= 0 ? fragSlot : shockwaveSlot;
+    const slotIndex =
+      fragSlot >= 0 ? fragSlot : shockwaveSlot >= 0 ? shockwaveSlot : empSlot;
     const item = bot.inventory.items[slotIndex];
     return item ? { slotIndex, item, reason: 'clustered' } : null;
   }
 
-  // Boxed target: prefer shockwave to shatter builds/displace, or frag grenade to pressure box
-  const slotIndex = shockwaveSlot >= 0 ? shockwaveSlot : fragSlot;
+  // Boxed target: prefer shockwave to shatter builds/displace, or frag/emp grenade to pressure box
+  const slotIndex =
+    shockwaveSlot >= 0 ? shockwaveSlot : fragSlot >= 0 ? fragSlot : empSlot;
   const item = bot.inventory.items[slotIndex];
   return item ? { slotIndex, item, reason: 'boxed' } : null;
 }
@@ -1579,7 +1607,7 @@ function selectEnemyTarget(
 
   for (const t of targets) {
     if (!t.alive || t.id === bot.id) continue;
-    if (isFriendlyTarget(bot, t, squadmates)) continue;
+    if (isFriendlyTarget(bot, t, squadmates, ctx.gameMode)) continue;
 
     const d = dist3D(eye, t.eyePos);
     const wasAttacker =
@@ -1589,11 +1617,30 @@ function selectEnemyTarget(
     const wasCurrent = bot.targetEnemyId === t.id;
     const medCount = getTargetMedallionCount(t, ctx, medallionHolderIds);
 
+    const isPlayerTarget = Boolean(t.isPlayer) || t.id === 'player';
+    const heardGunfireFromTarget =
+      bot.lastHeardGunfireTime !== undefined &&
+      bot.lastHeardGunfireTime >= 0 &&
+      elapsed - bot.lastHeardGunfireTime < 3.0 &&
+      (!bot.lastHeardGunfireSourceId || bot.lastHeardGunfireSourceId === t.id);
+    const heardUnclassifiedNoiseNearTarget =
+      bot.lastHeardNoiseKind === undefined &&
+      bot.lastHeardNoiseTime >= 0 &&
+      elapsed - bot.lastHeardNoiseTime < 3.0 &&
+      bot.lastHeardNoisePos !== null &&
+      dist3D(bot.lastHeardNoisePos, t.position) <= 6.0;
+    const targetJustFired =
+      wasAttacker || heardGunfireFromTarget || heardUnclassifiedNoiseNearTarget;
+    const applyStealthReduction =
+      Boolean(ctx.playerStealthed) && isPlayerTarget && !targetJustFired;
+    const stealthRadiusMult = applyStealthReduction ? 0.35 : 1.0;
+
     if (isPlayerSide) {
-      if (d > ALLY_COMBAT_RANGE) continue;
+      if (d > ALLY_COMBAT_RANGE * stealthRadiusMult) continue;
     } else {
       const effectiveRange =
-        medCount > 0 ? profile.visionRange * 1.25 : profile.visionRange;
+        (medCount > 0 ? profile.visionRange * 1.25 : profile.visionRange) *
+        stealthRadiusMult;
       if (d > effectiveRange && !wasAttacker) {
         continue;
       }
@@ -1601,10 +1648,9 @@ function selectEnemyTarget(
 
     let los = false;
     const effectiveLosLimit = isPlayerSide
-      ? ALLY_COMBAT_RANGE
-      : medCount > 0 && !isFarLOD
-        ? profile.visionRange * 1.25
-        : losLimit;
+      ? ALLY_COMBAT_RANGE * stealthRadiusMult
+      : (medCount > 0 && !isFarLOD ? profile.visionRange * 1.25 : losLimit) *
+        stealthRadiusMult;
     if (d <= effectiveLosLimit) {
       los = ctx.hasLineOfSight(eye, t.eyePos);
     }
@@ -1696,7 +1742,7 @@ function handleFireAndBurst(
   dt: number,
   squadmates?: ReadonlyArray<BotEntity>,
 ): void {
-  if (isFriendlyTarget(bot, target, squadmates)) {
+  if (isFriendlyTarget(bot, target, squadmates, ctx.gameMode)) {
     return;
   }
   const activeItem = bot.inventory.items[bot.inventory.activeSlot];
@@ -1704,6 +1750,7 @@ function handleFireAndBurst(
     !activeItem ||
     isHealingItem(activeItem.weaponId) ||
     activeItem.weaponId === 'shield_bubble' ||
+    activeItem.weaponId === 'port_a_bunker' ||
     activeItem.weaponId === 'grappler'
   ) {
     return;
@@ -2083,6 +2130,7 @@ function stepGlidingPhase(
       bot.isBoss ||
       bot.isAlly ||
       bot.isDuoPartner ||
+      (bot.teamId !== undefined && countWeapons(bot) > 0) ||
       isInStorm(bot, ctx, 4) ||
       distLeft > 25
         ? 'rotating'
@@ -2410,11 +2458,11 @@ function tryShootExplosiveBarrel(
   );
   if (!candidate) return false;
 
-  if (bot.isAlly || bot.isDuoPartner || bot.squadId) {
+  if (bot.isAlly || bot.isDuoPartner || bot.squadId || bot.teamId) {
     const friendlyNearBlast = ctx.getCombatTargets().some(
       (t) =>
         t.alive &&
-        isFriendlyTarget(bot, t, squadmates) &&
+        isFriendlyTarget(bot, t, squadmates, ctx.gameMode) &&
         dist3D(t.position, candidate.barrel) <= candidate.barrel.blastRadius + 2.0,
     );
     if (friendlyNearBlast) return false;
@@ -2635,6 +2683,7 @@ function stepCombatState(
             hasLOS,
             ctx.getBuildPieces?.(),
             squadmates,
+            ctx.gameMode,
           )
         : null;
 
@@ -3999,10 +4048,7 @@ function stepAllySupportAbility(
     const hasHostileNearby = ctx.getCombatTargets().some(
       (t) =>
         t.alive &&
-        t.id !== bot.id &&
-        !t.isPlayer &&
-        t.id !== 'player' &&
-        !t.isAlly &&
+        !isFriendlyTarget(bot, t, undefined, ctx.gameMode) &&
         dist3D(bot.position, t.position) <= ALLY_SCOUT_PING_RANGE,
     );
     if (!hasHostileNearby) return;
@@ -4245,7 +4291,7 @@ function stepKnockedBot(
     if (!threatPos) {
       let bestEnemyDist = 35;
       for (const t of ctx.getCombatTargets()) {
-        if (!t.alive || t.isKnocked || isFriendlyTarget(bot, t, squadmates)) continue;
+        if (!t.alive || t.isKnocked || isFriendlyTarget(bot, t, squadmates, ctx.gameMode)) continue;
         const d = dist2D(bot.position.x, bot.position.z, t.position.x, t.position.z);
         if (d < bestEnemyDist) {
           bestEnemyDist = d;
@@ -4407,7 +4453,7 @@ function isSafeToReviveSquadmate(
     bot.lastDamageTime >= 0 && elapsed - bot.lastDamageTime < 2.0;
 
   for (const t of ctx.getCombatTargets()) {
-    if (!t.alive || t.isKnocked || isFriendlyTarget(bot, t, squadmates)) continue;
+    if (!t.alive || t.isKnocked || isFriendlyTarget(bot, t, squadmates, ctx.gameMode)) continue;
     const d = dist3D(bot.position, t.position);
     if (d <= 10) return false;
     if (d <= SQUAD_UNSAFE_ENEMY_DIST) {
@@ -4657,6 +4703,10 @@ export function updateBot(
       return;
     }
   } else {
+    if (bot.teamId === 'team_blue' && bot.targetEnemyId === 'player') {
+      bot.targetEnemyId = null;
+      bot.lastKnownEnemyPos = null;
+    }
     if (bot.state === 'bus') {
       stepBusPhase(bot, busPos, elapsed);
       return;
@@ -4818,7 +4868,7 @@ export function updateBot(
       (t) =>
         t.id === bot.targetEnemyId &&
         t.alive &&
-        !isFriendlyTarget(bot, t, effectiveSquadmates) &&
+        !isFriendlyTarget(bot, t, effectiveSquadmates, effectiveMode) &&
         (!isPlayerCompanion || dist3D(bot.position, t.position) <= ALLY_COMBAT_RANGE),
     );
     if (existing) {
@@ -4827,6 +4877,9 @@ export function updateBot(
         hasLOS: dist3D(bot.position, existing.position) < 45,
         distance: dist3D(bot.position, existing.position),
       };
+    } else {
+      bot.targetEnemyId = null;
+      bot.lastKnownEnemyPos = null;
     }
   }
 
@@ -5211,12 +5264,14 @@ export class BotBrain {
       isAlly?: boolean;
       isDuoPartner?: boolean;
       squadId?: string;
+      teamId?: BotEntity['teamId'];
     },
     target: BotCombatTarget,
     allTargets: BotCombatTarget[],
     hasLOS: boolean,
     buildPieces?: BuildPiece[],
     squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+    gameMode?: GameModeId,
   ): ThrowableDecision | null {
     return selectThrowableForCombat(
       bot,
@@ -5225,6 +5280,7 @@ export class BotBrain {
       hasLOS,
       buildPieces,
       squadmates,
+      gameMode,
     );
   }
 

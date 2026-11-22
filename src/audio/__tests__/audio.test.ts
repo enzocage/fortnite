@@ -129,6 +129,14 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   reboot_channel: true,
   reboot_complete: true,
   drone_explode: true,
+  shot_suppressed: true,
+  mod_install: true,
+  bunker_deploy: true,
+  emp_blast: true,
+  forecast_scan: true,
+  bush_rustle: true,
+  rumble_respawn: true,
+  rumble_lead_change: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -459,14 +467,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 112 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 120 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(112);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(120);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -1133,6 +1141,146 @@ describe('SoundSynthesizer', () => {
     const sparseDest = sparseFilterCtx.createGain();
     const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
     for (const id of wave7Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 8 SFX with strictly positive ramps >= 0.0001 across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave8Ids: SoundEventId[] = [
+      'shot_suppressed',
+      'mod_install',
+      'bunker_deploy',
+      'emp_blast',
+      'forecast_scan',
+      'bush_rustle',
+      'rumble_respawn',
+      'rumble_lead_change',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave8Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (id === 'emp_blast' || id === 'forecast_scan' || id === 'rumble_lead_change') {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.shot_suppressed).toBeGreaterThan(0.08);
+    expect(durations.shot_suppressed).toBeLessThan(0.2);
+    expect(durations.bush_rustle).toBeGreaterThan(0.18);
+    expect(durations.bush_rustle).toBeLessThan(0.32);
+    expect(durations.mod_install).toBeGreaterThan(0.4);
+    expect(durations.rumble_respawn).toBeGreaterThan(0.45);
+    expect(durations.bunker_deploy).toBeGreaterThan(0.6);
+    expect(durations.emp_blast).toBeGreaterThan(0.68);
+    expect(durations.rumble_lead_change).toBeGreaterThan(0.75);
+    expect(durations.forecast_scan).toBeGreaterThan(0.78);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave8Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave8Ids) {
       expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
     }
     sparseSynth.dispose();
@@ -2655,5 +2803,61 @@ describe('AudioEngine', () => {
     expect(() => fallbackEngine.updateGrindRailLoop(false, 0)).not.toThrow();
     expect(minOscs.every((o) => o.stopped)).toBe(true);
     fallbackEngine.dispose();
+  });
+
+  it('assigns explicit Wave-8 priorities, max hear distances, and spatial culling', async () => {
+    expect(getSoundPriority('bunker_deploy')).toBe(3);
+    expect(getSoundPriority('emp_blast')).toBe(3);
+    expect(getSoundPriority('forecast_scan')).toBe(3);
+    expect(getSoundPriority('rumble_lead_change')).toBe(3);
+    expect(getSoundPriority('shot_suppressed')).toBe(2);
+    expect(getSoundPriority('mod_install')).toBe(2);
+    expect(getSoundPriority('rumble_respawn')).toBe(2);
+    expect(getSoundPriority('bush_rustle')).toBe(1);
+
+    expect(getMaxHearDistance('bush_rustle')).toBe(40);
+    expect(getMaxHearDistance('mod_install')).toBe(85);
+    expect(getMaxHearDistance('shot_suppressed')).toBe(90);
+    expect(getMaxHearDistance('rumble_respawn')).toBe(150);
+    expect(getMaxHearDistance('bunker_deploy')).toBe(180);
+    expect(getMaxHearDistance('forecast_scan')).toBe(220);
+    expect(getMaxHearDistance('emp_blast')).toBe(240);
+    expect(getMaxHearDistance('rumble_lead_change')).toBe(350);
+
+    const bus = new EventBus();
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'bush_rustle', position: { x: 35, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'mod_install', position: { x: 80, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'shot_suppressed', position: { x: 85, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'rumble_respawn', position: { x: 145, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'bunker_deploy', position: { x: 175, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'forecast_scan', position: { x: 215, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'emp_blast', position: { x: 235, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'rumble_lead_change', position: { x: 330, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'bush_rustle', position: { x: 50, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'mod_install', position: { x: 95, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'shot_suppressed', position: { x: 100, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'rumble_respawn', position: { x: 165, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'bunker_deploy', position: { x: 195, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'forecast_scan', position: { x: 235, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'emp_blast', position: { x: 255, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'rumble_lead_change', position: { x: 365, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // Polyphony stays bounded even under rapid Wave-8 SFX bursts
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'emp_blast' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+
+    engine.dispose();
   });
 });

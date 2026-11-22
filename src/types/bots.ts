@@ -49,4 +49,5 @@ export interface BotSummary {
   isKnocked?: boolean;
   hasVictoryCrown?: boolean;
   medallionCount?: number;
+  teamId?: 'team_blue' | 'team_red';
 }

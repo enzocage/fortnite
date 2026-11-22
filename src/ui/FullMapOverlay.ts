@@ -4,11 +4,13 @@ import type {
   CapturePointEntity,
   DroppedCrownEntity,
   DroppedMedallionEntity,
+  ForecastTowerEntity,
   GameSettings,
   GrindRailEntity,
   HUDState,
   LaunchPadEntity,
   LootIslandState,
+  ModBenchEntity,
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
@@ -24,15 +26,18 @@ import type {
 import {
   BOSS_POI_LABELS,
   drawChapterMapOverlay,
+  drawFrontierMapOverlay,
   drawOverdriveMapOverlay,
   formatKeyCodeLabel,
   mapNormToWorld,
   type ResolvedChapterOverlay,
   type ResolvedOverdriveOverlay,
   resolveChapterOverlayArgs,
+  resolveFrontierOverlayArgs,
   resolveKeybinds,
   resolveOverdriveOverlayArgs,
   type WorldChapterOverlay,
+  type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
   worldToMapNorm,
 } from './UIHelpers';
@@ -42,9 +47,11 @@ import {
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getCrownSvg,
+  getForecastTowerSvg,
   getGrindRailSvg,
   getLootIslandIconSvg,
   getMedallionSvg,
+  getModBenchSvg,
   getRebootVanSvg,
   getSkyRiftIconSvg,
   getSupplyDroneSvg,
@@ -93,6 +100,10 @@ export class FullMapOverlay {
     rails: [],
     vans: [],
     drones: [],
+  };
+  private frontierOverlay: WorldFrontierOverlay = {
+    modBenches: [],
+    forecastTowers: [],
   };
 
   private open = false;
@@ -265,6 +276,14 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch drone">${getSupplyDroneSvg()}</span>
         <span>SUPPLY DRONE</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch modbench">${getModBenchSvg()}</span>
+        <span>MOD BENCH</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch forecasttower">${getForecastTowerSvg()}</span>
+        <span>FORECAST TOWER</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -386,6 +405,24 @@ export class FullMapOverlay {
       railsOrOverlay,
       vans,
       drones,
+    );
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldFrontierOverlay(
+    modBenches: ModBenchEntity[],
+    forecastTowers: ForecastTowerEntity[],
+  ): void;
+  setWorldFrontierOverlay(overlay: WorldFrontierOverlay): void;
+  setWorldFrontierOverlay(
+    modBenchesOrOverlay: ModBenchEntity[] | WorldFrontierOverlay,
+    forecastTowers?: ForecastTowerEntity[],
+  ): void {
+    this.frontierOverlay = resolveFrontierOverlayArgs(
+      modBenchesOrOverlay,
+      forecastTowers,
     );
     if (this.open && this.lastState) {
       this.draw(this.lastState);
@@ -1081,6 +1118,18 @@ export class FullMapOverlay {
       pxPerMeter,
       toPx,
       this.overdriveOverlay,
+      performance.now(),
+    );
+
+    // Wave-8 Frontier Overlay (Future Storm Forecast Rings, Mod Benches, Forecast Towers, Team Rumble Blue Allies)
+    drawFrontierMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      this.frontierOverlay,
+      state.futureStormRings,
+      state.teamRumble?.blueAllies,
       performance.now(),
     );
 

@@ -142,6 +142,8 @@ const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = 
   { id: 'frag_grenade', stack: 3, weight: 9 },
   { id: 'shockwave_grenade', stack: 2, weight: 8 },
   { id: 'shield_bubble', stack: 1, weight: 9 },
+  { id: 'port_a_bunker', stack: 1, weight: 10 },
+  { id: 'emp_grenade', stack: 2, weight: 10 },
 ];
 
 const THROWABLE_POOL: Array<{ id: WeaponId; stack: number }> = [
@@ -149,6 +151,8 @@ const THROWABLE_POOL: Array<{ id: WeaponId; stack: number }> = [
   { id: 'frag_grenade', stack: 3 },
   { id: 'shockwave_grenade', stack: 2 },
   { id: 'shield_bubble', stack: 1 },
+  { id: 'port_a_bunker', stack: 1 },
+  { id: 'emp_grenade', stack: 2 },
 ];
 
 const AMMO_CHEST_AMOUNTS: Record<AmmoType, number> = {
@@ -1815,6 +1819,67 @@ export class PropsAndLoot {
         cluster.position.set(0, -0.02, 0.36);
         miniGroup.add(housing, cluster);
         itemMesh = miniGroup;
+      } else if (def.isPortABunker) {
+        const bunkerPodGroup = new THREE.Group();
+        const darkMetalMat = this.getMat('loot_bunker_metal', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#1e293b',
+            roughness: 0.36,
+            metalness: 0.78,
+          }),
+        );
+        const podCore = new THREE.Mesh(
+          this.getGeo('loot_bunker_core', () => new THREE.BoxGeometry(0.32, 0.24, 0.32)),
+          darkMetalMat,
+        );
+        const ribX = new THREE.Mesh(
+          this.getGeo('loot_bunker_rib_x', () => new THREE.BoxGeometry(0.36, 0.08, 0.08)),
+          itemMat,
+        );
+        ribX.position.y = 0.04;
+        const ribZ = new THREE.Mesh(
+          this.getGeo('loot_bunker_rib_z', () => new THREE.BoxGeometry(0.08, 0.08, 0.36)),
+          itemMat,
+        );
+        ribZ.position.y = 0.04;
+        const cap = new THREE.Mesh(
+          this.getGeo('loot_bunker_cap', () => new THREE.CylinderGeometry(0.09, 0.12, 0.07, 8)),
+          itemMat,
+        );
+        cap.position.y = 0.155;
+        bunkerPodGroup.add(podCore, ribX, ribZ, cap);
+        itemMesh = bunkerPodGroup;
+      } else if (def.isEmpGrenade) {
+        const empGroup = new THREE.Group();
+        const empGlowMat = this.getMat('loot_emp_glow', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#22d3ee',
+            emissive: '#06b6d4',
+            emissiveIntensity: 1.45,
+            roughness: 0.18,
+            metalness: 0.35,
+          }),
+        );
+        const canister = new THREE.Mesh(
+          this.getGeo('loot_emp_body', () => new THREE.CylinderGeometry(0.115, 0.115, 0.28, 10)),
+          itemMat,
+        );
+        const coilGeo = this.getGeo('loot_emp_coil', () => {
+          const g = new THREE.TorusGeometry(0.145, 0.024, 6, 14);
+          g.rotateX(Math.PI * 0.5);
+          return g;
+        });
+        const coilTop = new THREE.Mesh(coilGeo, empGlowMat);
+        coilTop.position.y = 0.07;
+        const coilBot = new THREE.Mesh(coilGeo, empGlowMat);
+        coilBot.position.y = -0.07;
+        const cap = new THREE.Mesh(
+          this.getGeo('loot_emp_cap', () => new THREE.OctahedronGeometry(0.085, 0)),
+          empGlowMat,
+        );
+        cap.position.y = 0.19;
+        empGroup.add(canister, coilTop, coilBot, cap);
+        itemMesh = empGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),
@@ -2040,11 +2105,15 @@ export class PropsAndLoot {
 
     const utilityRoll = this.rand();
     const utilWeaponId: WeaponId =
-      utilityRoll < 0.6
+      utilityRoll < 0.36
         ? 'shield_bubble'
-        : utilityRoll < 0.85
-          ? 'shockwave_grenade'
-          : 'chug_splash';
+        : utilityRoll < 0.56
+          ? 'port_a_bunker'
+          : utilityRoll < 0.76
+            ? 'emp_grenade'
+            : utilityRoll < 0.9
+              ? 'shockwave_grenade'
+              : 'chug_splash';
     const utilDef = WEAPONS[utilWeaponId];
     this.spawnLootDrop(
       pos,
@@ -2057,7 +2126,8 @@ export class PropsAndLoot {
               Math.floor(this.rand() * utilDef.allowedRarities.length)
             ],
           magAmmo: utilDef.magSize,
-          stackCount: utilWeaponId === 'shield_bubble' ? 1 : 2,
+          stackCount:
+            utilWeaponId === 'shield_bubble' || utilWeaponId === 'port_a_bunker' ? 1 : 2,
         },
       },
       scatter(3),

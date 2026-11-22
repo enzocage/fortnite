@@ -32,6 +32,9 @@ import {
   POIS,
   REVIVE_DURATION_SEC,
   SKINS,
+  TEAM_RUMBLE_RESPAWN_SEC,
+  TEAM_RUMBLE_TARGET_SCORE,
+  WEAPONS,
   dist2D,
 } from '../../core';
 import {
@@ -64,6 +67,7 @@ import {
   type BotCombatTarget,
   type BotEntity,
   type BotWorldContext,
+  type TeamRumbleScoreState,
 } from '../index';
 
 function makeItem(
@@ -3871,5 +3875,444 @@ describe('Wave 7 Nexus Overdrive: Reboot Vans, Railgun/Minigun Scoring, Grind & 
     expect(b2.position.x).toBeGreaterThan(startX);
 
     manager.dispose();
+  });
+});
+
+describe('Wave 8 Neon Frontier: Team Rumble, Stealth Bush & Tactical Items', () => {
+  it('splits bots evenly into Blue & Red squads, forwards teamId, enforces friendly-fire immunity & targeting isolation', () => {
+    const ctx = makeMockContext({ gameMode: 'team_rumble' });
+    const manager = new BotManager(ctx, 'standard', 8080, 'team_rumble');
+    manager.spawnBots(22, 20, 'team_rumble');
+
+    const bots = manager.getBots();
+    expect(bots).toHaveLength(22);
+
+    const blueBots = bots.filter((b) => b.teamId === 'team_blue');
+    const redBots = bots.filter((b) => b.teamId === 'team_red');
+    expect(blueBots).toHaveLength(11);
+    expect(redBots).toHaveLength(11);
+    expect(blueBots.every((b) => b.squadId === 'team_blue' && !b.isBoss)).toBe(true);
+    expect(redBots.every((b) => b.squadId === 'team_red' && !b.isBoss)).toBe(true);
+
+    // teamId is forwarded onto BotSummary & BotRenderState
+    const summaries = manager.getBotSummaries();
+    const renderStates = manager.getRenderStates();
+    expect(summaries.filter((s) => s.teamId === 'team_blue')).toHaveLength(11);
+    expect(summaries.filter((s) => s.teamId === 'team_red')).toHaveLength(11);
+    expect(renderStates.filter((r) => r.teamId === 'team_blue')).toHaveLength(11);
+    expect(renderStates.filter((r) => r.teamId === 'team_red')).toHaveLength(11);
+
+    // Blue ally positions & QA placement helper
+    expect(manager.getBlueAllyPositions()).toHaveLength(11);
+    const placed = manager.qaPlaceTeamRumbleAllies({ x: 10, y: 10, z: 10 }, 0);
+    expect(placed.length).toBeGreaterThan(0);
+    expect(placed.every((b) => b.teamId === 'team_blue' && b.grounded && b.state === 'rotating')).toBe(true);
+
+    // Friendly-fire immunity: player & Blue allies cannot damage Blue bots; Red bots cannot damage Red bots
+    const blueA = blueBots[0];
+    const blueB = blueBots[1];
+    const redA = redBots[0];
+    const redB = redBots[1];
+    expect(manager.damageBot(blueA.id, 80, 'player', 'Player', 10)).toBe(false);
+    expect(manager.damageBot(blueA.id, 80, blueB.id, blueB.name, 10)).toBe(false);
+    expect(manager.damageBot(redA.id, 80, redB.id, redB.name, 10)).toBe(false);
+    expect(blueA.hp).toBe(100);
+    expect(redA.hp).toBe(100);
+
+    // Cross-team damage succeeds
+    expect(manager.damageBot(redA.id, 40, 'player', 'Player', 10)).toBe(true);
+    expect(redA.hp).toBe(60);
+    expect(manager.damageBot(blueA.id, 30, redB.id, redB.name, 10)).toBe(true);
+    expect(blueA.hp).toBe(70);
+
+    // BotBrain targeting: Blue bot never attacks player or Blue allies, only Red enemies;
+    // Red bot never attacks Red allies, DOES attack Blue player/allies.
+    const playerTarget: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 16 },
+      eyePos: { x: 0, y: 11.55, z: 16 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+      teamId: 'team_blue',
+    };
+    const blueAllyTarget: BotCombatTarget = {
+      id: blueB.id,
+      name: blueB.name,
+      position: { x: 4, y: 10, z: 16 },
+      eyePos: { x: 4, y: 11.55, z: 16 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      teamId: 'team_blue',
+      squadId: 'team_blue',
+    };
+    const redEnemyTarget: BotCombatTarget = {
+      id: redB.id,
+      name: redB.name,
+      position: { x: -4, y: 10, z: 24 },
+      eyePos: { x: -4, y: 11.55, z: 24 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      teamId: 'team_red',
+      squadId: 'team_red',
+    };
+
+    const targetingCtx = makeMockContext({
+      gameMode: 'team_rumble',
+      getCombatTargets: () => [playerTarget, blueAllyTarget, redEnemyTarget],
+    });
+
+    blueA.state = 'rotating';
+    blueA.grounded = true;
+    blueA.position = { x: 0, y: 10, z: 0 };
+    blueA.reactionTimer = 0;
+    blueA.fireCooldown = 0;
+    updateBot(blueA, targetingCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 15, 0.05, false, 'team_rumble');
+    expect(blueA.targetEnemyId).toBe(redB.id);
+
+    // Blue bot alone with player & Blue ally ignores both completely (even if player has no teamId set!)
+    const noTeamPlayerTarget: BotCombatTarget = { ...playerTarget, teamId: undefined };
+    const blueOnlyCtx = makeMockContext({
+      gameMode: 'team_rumble',
+      getCombatTargets: () => [noTeamPlayerTarget, blueAllyTarget],
+    });
+    blueA.targetEnemyId = null;
+    blueA.lastKnownEnemyPos = null;
+    updateBot(blueA, blueOnlyCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 15.1, 0.05, false, 'team_rumble');
+    expect(blueA.targetEnemyId).toBeNull();
+    expect(blueOnlyCtx.firedCalls).toHaveLength(0);
+
+    // Red bot ignores Red ally and targets player
+    redA.state = 'rotating';
+    redA.grounded = true;
+    redA.position = { x: 0, y: 10, z: 0 };
+    redA.reactionTimer = 0;
+    redA.fireCooldown = 0;
+    const redTargetingCtx = makeMockContext({
+      gameMode: 'team_rumble',
+      getCombatTargets: () => [
+        { ...redEnemyTarget, position: { x: 0, y: 10, z: 8 }, eyePos: { x: 0, y: 11.55, z: 8 } },
+        playerTarget,
+      ],
+    });
+    updateBot(redA, redTargetingCtx, 'sweaty', { x: 0, y: 175, z: 0 }, 15.2, 0.05, false, 'team_rumble');
+    expect(redA.targetEnemyId).toBe('player');
+
+    manager.dispose();
+  });
+
+  it('tracks Team Rumble kills to 25, emits rumble_lead_change only on new non-tie leader flips, and prevents premature BR win', () => {
+    const ctx = makeMockContext({ gameMode: 'team_rumble' });
+    const manager = new BotManager(ctx, 'standard', 4411, 'team_rumble');
+    const leadChanges: string[] = [];
+    ctx.eventBus.on('sound:play', (ev) => {
+      if (ev.id === 'rumble_lead_change') leadChanges.push(ev.id);
+    });
+
+    manager.spawnBots(4, 20, 'team_rumble');
+    const initial: TeamRumbleScoreState = manager.getTeamRumbleState();
+    expect(initial).toEqual({
+      blueScore: 0,
+      redScore: 0,
+      targetScore: TEAM_RUMBLE_TARGET_SCORE,
+      leadingTeam: 'tie',
+    });
+    expect(TEAM_RUMBLE_TARGET_SCORE).toBe(25);
+    expect(TEAM_RUMBLE_RESPAWN_SEC).toBe(3.5);
+
+    // 0-0 -> 1-0 (Blue takes first lead -> emit!)
+    expect(manager.recordTeamRumbleKill('team_blue').leadingTeam).toBe('team_blue');
+    expect(leadChanges).toHaveLength(1);
+
+    // 1-0 -> 2-0 (same leader -> no emit)
+    manager.recordTeamRumbleKill('team_blue');
+    expect(leadChanges).toHaveLength(1);
+
+    // 2-0 -> 2-2 (tie -> no emit)
+    manager.recordTeamRumbleKill('team_red');
+    expect(manager.recordTeamRumbleKill('team_red').leadingTeam).toBe('tie');
+    expect(leadChanges).toHaveLength(1);
+
+    // 2-2 -> 3-2 (Blue regains prior lead -> not a new non-tie leader -> no emit)
+    expect(manager.recordTeamRumbleKill('team_blue').leadingTeam).toBe('team_blue');
+    expect(leadChanges).toHaveLength(1);
+
+    // 3-2 -> 3-4 (flips to Red -> new non-tie leader -> emit!)
+    manager.recordTeamRumbleKill('team_red');
+    expect(manager.recordTeamRumbleKill('team_red').leadingTeam).toBe('team_red');
+    expect(leadChanges).toHaveLength(2);
+
+    // setTeamRumbleScores sets scores cleanly toward 25 without emitting lead-change SFX
+    manager.setTeamRumbleScores(24, 23);
+    expect(manager.getTeamRumbleState()).toEqual({
+      blueScore: 24,
+      redScore: 23,
+      targetScore: 25,
+      leadingTeam: 'team_blue',
+    });
+    expect(leadChanges).toHaveLength(2);
+    manager.dispose();
+  });
+
+  it('validates setTeamRumbleScores silent sync, target-score cap at 25, and Team Rumble getAliveCount() safety', () => {
+    const ctx = makeMockContext({ gameMode: 'team_rumble' });
+    const manager = new BotManager(ctx, 'standard', 4412, 'team_rumble');
+    const leadChanges: string[] = [];
+    ctx.eventBus.on('sound:play', (ev) => {
+      if (ev.id === 'rumble_lead_change') leadChanges.push(ev.id);
+    });
+
+    manager.spawnBots(4, 20, 'team_rumble'); // 2 Blue, 2 Red
+    const redBots = manager.getBots().filter((b) => b.teamId === 'team_red');
+    expect(manager.getAliveCount()).toBe(2);
+
+    // Eliminating BOTH Red bots at low score leaves getAliveCount() > 0 while awaiting 3.5s respawn!
+    expect(manager.damageBot(redBots[0].id, 150, 'player', 'Player', 5)).toBe(true);
+    expect(manager.damageBot(redBots[1].id, 150, 'player', 'Player', 6)).toBe(true);
+    expect(manager.getTeamRumbleState().blueScore).toBe(2);
+    expect(manager.getAliveCount()).toBeGreaterThan(0);
+
+    // Set 24-24 silently -> flip to 25-24 emits once and caps at 25
+    leadChanges.length = 0;
+    manager.setTeamRumbleScores(24, 24);
+    expect(leadChanges).toHaveLength(0);
+    const winState = manager.recordTeamRumbleKill('team_blue');
+    expect(winState).toEqual({
+      blueScore: 25,
+      redScore: 24,
+      targetScore: 25,
+      leadingTeam: 'team_blue',
+    });
+    expect(leadChanges).toHaveLength(1);
+    expect(manager.getAliveCount()).toBe(0);
+
+    // Further kills do not exceed 25 or flip winner
+    manager.recordTeamRumbleKill('team_red');
+    manager.recordTeamRumbleKill('team_red');
+    expect(manager.getTeamRumbleState().blueScore).toBe(25);
+    expect(manager.getTeamRumbleState().redScore).toBe(24);
+
+    manager.dispose();
+  });
+
+  it('executes the 3.5s Team Rumble respawn loop skydiving over safe zone with restored starter loadout and SFX', () => {
+    const ctx = makeMockContext({
+      gameMode: 'team_rumble',
+      storm: makeDefaultStorm({
+        currentCenterX: 40,
+        currentCenterZ: -30,
+        currentRadius: 95,
+      }),
+    });
+    const manager = new BotManager(ctx, 'standard', 5151, 'team_rumble');
+    const respawnSounds: Array<{ id: string; position?: Vec3Like }> = [];
+    ctx.eventBus.on('sound:play', (ev) => {
+      if (ev.id === 'rumble_respawn') {
+        respawnSounds.push({ id: ev.id, position: ev.position });
+      }
+    });
+
+    manager.spawnBots(4, 20, 'team_rumble');
+    const redBot = manager.getBots().find((b) => b.teamId === 'team_red')!;
+    const blueBot = manager.getBots().find((b) => b.teamId === 'team_blue')!;
+
+    // Deplete redBot's starter loadout before killing to verify full restoration
+    redBot.state = 'rotating';
+    redBot.position = { x: 20, y: 10, z: 20 };
+    redBot.inventory.items[1] = null;
+    redBot.inventory.ammo.medium = 0;
+    redBot.inventory.materials.wood = 0;
+
+    expect(manager.damageBot(redBot.id, 150, 'player', 'Player', 10)).toBe(true);
+    expect(redBot.alive).toBe(false);
+    expect(redBot.state).toBe('eliminated');
+    expect(redBot.respawnTimer).toBeCloseTo(3.5, 5);
+    expect(manager.getTeamRumbleState().blueScore).toBe(1);
+    expect(manager.getBlueAllyPositions()).toHaveLength(2);
+
+    // Blue bot eliminated -> Red scores 1
+    expect(manager.damageBot(blueBot.id, 150, redBot.id, redBot.name, 10)).toBe(true);
+    expect(manager.getTeamRumbleState().redScore).toBe(1);
+    expect(manager.getBlueAllyPositions()).toHaveLength(1);
+
+    // Step 3.4s (34 * 0.1s) -> bots must NOT respawn early
+    for (let i = 1; i <= 34; i++) {
+      manager.update(0.1, 10 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 40, y: 10, z: -30 });
+    }
+    expect(redBot.alive).toBe(false);
+    expect(redBot.respawnTimer).toBeCloseTo(0.1, 3);
+    expect(respawnSounds).toHaveLength(0);
+
+    // Final 0.1s completes 3.5s -> both bots respawn skydiving over safe zone with HP 100, restored loadout & SFX
+    manager.update(0.1, 13.5, { x: 0, y: 175, z: 0 }, { x: 40, y: 10, z: -30 });
+    expect(redBot.alive).toBe(true);
+    expect(redBot.state).toBe('skydiving');
+    expect(redBot.animState).toBe('skydive');
+    expect(redBot.hp).toBe(100);
+    expect(redBot.respawnTimer).toBe(0);
+    expect(redBot.position.y).toBeGreaterThan(10 + GLIDER_FORCE_HEIGHT);
+    expect(
+      dist2D(
+        redBot.position.x,
+        redBot.position.z,
+        ctx.storm.currentCenterX,
+        ctx.storm.currentCenterZ,
+      ),
+    ).toBeLessThanOrEqual(ctx.storm.currentRadius);
+    expect(redBot.inventory.items[1]).not.toBeNull();
+    expect(redBot.inventory.items[1]!.magAmmo).toBe(
+      WEAPONS[redBot.inventory.items[1]!.weaponId].magSize,
+    );
+    expect(redBot.inventory.ammo.medium).toBeGreaterThan(0);
+    expect(redBot.inventory.materials.wood).toBeGreaterThan(0);
+    expect(respawnSounds).toHaveLength(2);
+    expect(manager.getBlueAllyPositions()).toHaveLength(2);
+
+    manager.dispose();
+  });
+
+  it('reduces bot visual detection radius by 65% (* 0.35) when playerStealthed unless target just fired, and handles port_a_bunker & emp_grenade safely', () => {
+    // 1. Stealth Bush detection radius reduction (standard visionRange = 105 -> 36.75m when stealthed)
+    const makePlayerTarget = (z: number): BotCombatTarget => ({
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z },
+      eyePos: { x: 0, y: 11.55, z },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    });
+
+    // At 50m (< 105m, > 36.75m): detected when NOT stealthed, hidden when stealthed
+    const unstealthedCtx = makeMockContext({
+      playerStealthed: false,
+      getCombatTargets: () => [makePlayerTarget(50)],
+    });
+    const spotter = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+      reactionTimer: 0,
+    });
+    spotter.inventory.items[1] = makeItem('ar', 'rare', 30);
+    spotter.inventory.ammo.medium = 90;
+    updateBot(spotter, unstealthedCtx, 'standard', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(spotter.targetEnemyId).toBe('player');
+
+    // Now player enters Stealth Bush at 50m -> bot cannot visually detect at 50m (> 105 * 0.35 = 36.75m)
+    const stealthedFarCtx = makeMockContext({
+      playerStealthed: true,
+      getCombatTargets: () => [makePlayerTarget(50)],
+    });
+    const stealthBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+      reactionTimer: 0,
+    });
+    stealthBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    stealthBot.inventory.ammo.medium = 90;
+    updateBot(stealthBot, stealthedFarCtx, 'standard', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(stealthBot.targetEnemyId).toBeNull();
+
+    // Footstep noise near stealthed player does NOT override gunfire check
+    const mgr = new BotManager(stealthedFarCtx, 'standard', 9091);
+    mgr.spawnBots(1, 20);
+    const managedBot = mgr.getBots()[0];
+    managedBot.state = 'rotating';
+    managedBot.position = { x: 0, y: 10, z: 0 };
+    managedBot.grounded = true;
+    managedBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    managedBot.inventory.ammo.medium = 90;
+    mgr.update(0.05, 25, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 50 });
+    stealthedFarCtx.eventBus.emit('audio:noise', {
+      position: { x: 0, y: 10, z: 50 },
+      kind: 'footstep',
+      sourceId: 'player',
+      radius: 80,
+    });
+    mgr.update(0.05, 25.05, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 50 });
+    expect(managedBot.targetEnemyId).toBeNull();
+
+    // Player fires weapon ('audio:noise' gunfire) -> full detection radius restored even while stealthed!
+    stealthedFarCtx.eventBus.emit('audio:noise', {
+      position: { x: 0, y: 10, z: 50 },
+      kind: 'gunfire',
+      sourceId: 'player',
+      radius: 100,
+    });
+    mgr.update(0.05, 25.1, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 50 });
+    expect(managedBot.targetEnemyId).toBe('player');
+    mgr.dispose();
+
+    // At 30m (<= 105 * 0.35 = 36.75m): stealthed player IS detected at close range
+    const stealthedCloseCtx = makeMockContext({
+      playerStealthed: true,
+      getCombatTargets: () => [makePlayerTarget(30)],
+    });
+    const closeBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+      reactionTimer: 0,
+    });
+    closeBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    closeBot.inventory.ammo.medium = 90;
+    updateBot(closeBot, stealthedCloseCtx, 'standard', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(closeBot.targetEnemyId).toBe('player');
+
+    // 2. port_a_bunker & emp_grenade safe handling in selectBestWeaponForRange
+    const brain = new BotBrain();
+    const fullAmmo = { light: 90, medium: 90, shells: 16, heavy: 10, rockets: 0 };
+
+    // port_a_bunker is defensive utility and must never be chosen as an offensive weapon
+    const bunkerOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('port_a_bunker', 'epic', 0, 2),
+    ];
+    expect(selectBestWeaponForRange(bunkerOnly, 20, fullAmmo)).toBeNull();
+    expect(brain.selectBestWeaponForRange(bunkerOnly, 20, fullAmmo)).toBeNull();
+
+    // emp_grenade yields to real guns when armed, scores at valid throw range (8..52m), and skips point-blank/empty
+    const empWithAr: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('emp_grenade', 'epic', 0, 3),
+    ];
+    expect(selectBestWeaponForRange(empWithAr, 22, fullAmmo)?.item.weaponId).toBe('ar');
+
+    const empOnly: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('emp_grenade', 'epic', 0, 2),
+    ];
+    expect(selectBestWeaponForRange(empOnly, 22, fullAmmo)?.item.weaponId).toBe('emp_grenade');
+    expect(selectBestWeaponForRange(empOnly, 4, fullAmmo)?.item.weaponId).toBe('pickaxe');
+    expect(selectBestWeaponForRange(empOnly, 6, fullAmmo)).toBeNull();
+    expect(selectBestWeaponForRange(empOnly, 60, fullAmmo)).toBeNull();
+
+    const emptyEmp: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('emp_grenade', 'epic', 0, 0),
+    ];
+    expect(selectBestWeaponForRange(emptyEmp, 22, fullAmmo)).toBeNull();
+
+    // Direct hit on stealth bot (wasAttacker) also overrides stealth reduction at 50m
+    const retaliateBot = makeBotEntity({
+      state: 'rotating',
+      position: { x: 0, y: 10, z: 0 },
+      grounded: true,
+      lastDamagerId: 'player',
+      lastDamageTime: 24.5,
+      reactionTimer: 0,
+    });
+    retaliateBot.inventory.items[1] = makeItem('ar', 'rare', 30);
+    retaliateBot.inventory.ammo.medium = 90;
+    updateBot(retaliateBot, stealthedFarCtx, 'standard', { x: 0, y: 175, z: 0 }, 25, 0.05, false);
+    expect(retaliateBot.targetEnemyId).toBe('player');
   });
 });

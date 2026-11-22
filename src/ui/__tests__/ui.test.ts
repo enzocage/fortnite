@@ -31,6 +31,8 @@ import type {
   CapturePointEntity,
   DroppedCrownEntity,
   DroppedMedallionEntity,
+  ForecastTowerEntity,
+  FutureStormRing,
   GrindRailEntity,
   HUDState,
   LootIslandState,
@@ -38,6 +40,7 @@ import type {
   MatchQuest,
   MatchSummary,
   MedallionId,
+  ModBenchEntity,
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
@@ -52,6 +55,7 @@ import type {
   VisualSoundCue,
   WeaponBunkerEntity,
   WeaponId,
+  WeaponModId,
   WeatherKind,
 } from '../../types';
 import {
@@ -68,6 +72,7 @@ import {
   computeQuestProgressPct,
   DEFAULT_LOBBY_CONFIG,
   deriveMatchHighlightBadges,
+  drawFrontierMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -92,6 +97,7 @@ import {
   getContextualHudHints,
   getContrailMeta,
   getCrownSvg,
+  getForecastTowerSvg,
   getGameModeMeta,
   getGoldBarSvg,
   getGrindRailSvg,
@@ -101,6 +107,7 @@ import {
   getMaterialIconSvg,
   getMedallionMeta,
   getMedallionSvg,
+  getModBenchSvg,
   getOvershieldBoltSvg,
   getRarityMeta,
   getRebootVanSvg,
@@ -108,6 +115,7 @@ import {
   getShortestAngleDiffDeg,
   getSkullSvg,
   getSkyRiftIconSvg,
+  getStealthLeafSvg,
   getStormEyeSvg,
   getSupplyDroneSvg,
   getTacticalPingIconSvg,
@@ -120,6 +128,7 @@ import {
   getVehicleIconSvg,
   getVendingIconSvg,
   getVisualAudioIconSvg,
+  getWeaponModMeta,
   getWeaponSvg,
   getWeatherIconSvg,
   HUDManager,
@@ -134,6 +143,7 @@ import {
   normalizeDegrees,
   recordMatchCareerStats,
   resetCareerStats,
+  resolveFrontierOverlayArgs,
   resolveKeybinds,
   sanitizeGameMode,
   saveStoredLobbyConfig,
@@ -142,6 +152,7 @@ import {
   UIManager,
   updateGoldBars,
   updateVictoryCrown,
+  type WorldFrontierOverlay,
   worldToMapNorm,
   xpForLevelStep,
 } from '../index';
@@ -370,14 +381,17 @@ describe('UIHelpers', () => {
       'zero_build',
       'blitz',
       'duos',
+      'team_rumble',
     ]);
     expect(WEAPON_WRAPS.length).toBe(6);
     expect(DEFAULT_SETTINGS.visualAudio).toBe(true);
     expect(getGameModeMeta('zero_build').name).toBe('ZERO BUILD');
+    expect(getGameModeMeta('team_rumble').name).toBe('TEAM RUMBLE');
     expect(getGameModeMeta(undefined).id).toBe('solo');
     expect(formatModeBadgeLabel('solo')).toBe('');
     expect(formatModeBadgeLabel('zero_build')).toBe('ZERO BUILD');
     expect(formatModeBadgeLabel('blitz')).toBe('BLITZ');
+    expect(formatModeBadgeLabel('team_rumble')).toBe('TEAM RUMBLE');
 
     expect(computeOvershieldPct(50, 50)).toBe(100);
     expect(computeOvershieldPct(25, 50)).toBe(50);
@@ -408,9 +422,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 27 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 29 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(27);
+    expect(weaponIds.length).toBe(29);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -422,7 +436,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7 upgraded icons have rich multi-element custom artwork
+    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8 upgraded icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -437,6 +451,8 @@ describe('WeaponIcons & SVG assets', () => {
       'boom_bow',
       'railgun',
       'minigun',
+      'port_a_bunker',
+      'emp_grenade',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -1606,12 +1622,13 @@ describe('Wave 3 UI: Game Modes, Weapon Wraps, Overshield, Visual Audio, Match Q
 
     // 1. PLAY tab game mode selector cards
     const modeCards = root.findAllByClass('fdr-mode-select-card');
-    expect(modeCards.length).toBe(4);
+    expect(modeCards.length).toBe(5);
     expect(modeCards.map((c) => c.dataset.gameMode)).toEqual([
       'solo',
       'zero_build',
       'blitz',
       'duos',
+      'team_rumble',
     ]);
     modeCards[1].click(); // ZERO BUILD
     expect(ui.getLobbyConfig().gameMode).toBe('zero_build');
@@ -3153,7 +3170,7 @@ describe('Wave 6 UI: Victory Crowns, Medallions, Duos Lobby/HUD, Weapon Bunkers,
     const bus = new EventBus();
     const ui = new UIManager(root as unknown as HTMLElement, bus);
 
-    // 1. 2x2 grid holds all 4 modes & selects duos cleanly
+    // 1. 2x2 grid + full-width 5th mode holds all 5 modes & selects duos cleanly
     const modeGrid = root.findByClass('fdr-mode-grid');
     expect(modeGrid).not.toBeNull();
     const cards = modeGrid?.findAllByClass('fdr-mode-select-card') ?? [];
@@ -3162,6 +3179,7 @@ describe('Wave 6 UI: Victory Crowns, Medallions, Duos Lobby/HUD, Weapon Bunkers,
       'zero_build',
       'blitz',
       'duos',
+      'team_rumble',
     ]);
     cards[3].click();
     expect(ui.getLobbyConfig().gameMode).toBe('duos');
@@ -4128,6 +4146,600 @@ describe('Wave 7 UI: Railgun/Minigun, Trap Slot Chip, Reticle Meters, Reboot HUD
       survivalTimeSec: 45,
     });
     expect(root.findByClass('fdr-highlights-row')).toBeNull();
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, Stealth Bush, Hotbar Mods, Mod Benches & Forecast Towers)', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave-8 SVGs, Team Rumble helpers, WeaponMod metadata, WorldFrontierOverlay & MODDED PRO / EMP BREAKER highlights', () => {
+    for (const id of ['port_a_bunker', 'emp_grenade'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    for (const svg of [
+      getModBenchSvg(),
+      getForecastTowerSvg(),
+      getStealthLeafSvg(),
+    ]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+
+    expect(sanitizeGameMode('team_rumble')).toBe('team_rumble');
+    expect(getGameModeMeta('team_rumble').name).toBe('TEAM RUMBLE');
+    expect(getGameModeMeta('team_rumble').badge).toBe('12V12 RESPAWN');
+    expect(formatModeBadgeLabel('team_rumble')).toBe('TEAM RUMBLE');
+
+    expect(getWeaponModMeta('red_dot').shortCode).toBe('R');
+    expect(getWeaponModMeta('suppressor').shortCode).toBe('S');
+    expect(getWeaponModMeta('drum_mag').shortCode).toBe('M');
+    expect(getWeaponModMeta('foregrip').shortCode).toBe('G');
+
+    const resolvedOverlay: WorldFrontierOverlay = resolveFrontierOverlayArgs(
+      [
+        {
+          id: 'mb-1',
+          poiId: 'metro_towers',
+          x: -50,
+          y: 12,
+          z: -20,
+          rotationY: 0,
+          costGold: 75,
+        },
+      ],
+      [
+        {
+          id: 'ft-1',
+          poiId: 'crystal_basin',
+          x: 20,
+          y: 10,
+          z: -80,
+          rotationY: 0,
+          scanned: false,
+          scannedBy: null,
+        },
+      ],
+    );
+    expect(resolvedOverlay.modBenches.length).toBe(1);
+    expect(resolvedOverlay.forecastTowers.length).toBe(1);
+
+    // Direct drawFrontierMapOverlay check without fillText/strokeText/ellipse
+    const directCalls: string[] = [];
+    const safeCtx = {
+      save: () => directCalls.push('save'),
+      restore: () => directCalls.push('restore'),
+      translate: () => directCalls.push('translate'),
+      beginPath: () => directCalls.push('beginPath'),
+      closePath: () => directCalls.push('closePath'),
+      moveTo: () => directCalls.push('moveTo'),
+      lineTo: () => directCalls.push('lineTo'),
+      arc: () => directCalls.push('arc'),
+      fill: () => directCalls.push('fill'),
+      stroke: () => directCalls.push('stroke'),
+      fillRect: () => directCalls.push('fillRect'),
+      setLineDash: () => directCalls.push('setLineDash'),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+    drawFrontierMapOverlay(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      220,
+      220 / 280,
+      (wx, wz) => ({ x: 110 + wx, y: 110 + wz }),
+      resolvedOverlay,
+      [{ phase: 2, centerX: 0, centerZ: 0, radius: 95 }],
+      [{ x: 10, z: 12 }],
+      1000,
+    );
+    expect(directCalls).toContain('setLineDash');
+    expect(directCalls).toContain('translate');
+    expect(directCalls).toContain('arc');
+
+    const badges = deriveMatchHighlightBadges({
+      victory: true,
+      placement: 1,
+      totalPlayers: 24,
+      kills: 4,
+      damageDealt: 900,
+      shotsFired: 40,
+      shotsHit: 18,
+      accuracy: 45,
+      headshots: 1,
+      structuresBuilt: 5,
+      chestsOpened: 3,
+      survivalTimeSec: 180,
+      modsInstalled: 2,
+      empHits: 1,
+    });
+    const labels = badges.map((b) => b.label);
+    expect(labels).toContain('MODDED PRO');
+    expect(labels).toContain('EMP BREAKER');
+  });
+
+  it('renders 5-mode Lobby layout with full-width TEAM RUMBLE card (.fdr-mode-card--full) and persists selection', () => {
+    const store = new Map<string, string>();
+    (globalThis as Record<string, unknown>).window = {
+      innerWidth: 1280,
+      innerHeight: 720,
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    const modeGrid = root.findByClass('fdr-mode-grid');
+    expect(modeGrid).not.toBeNull();
+    const cards = modeGrid?.findAllByClass('fdr-mode-select-card') ?? [];
+    expect(cards.length).toBe(5);
+    expect(cards.map((c) => c.dataset.gameMode)).toEqual([
+      'solo',
+      'zero_build',
+      'blitz',
+      'duos',
+      'team_rumble',
+    ]);
+
+    const rumbleCard = cards[4];
+    expect(rumbleCard.classList.contains('fdr-mode-card--full')).toBe(true);
+    expect(rumbleCard.textContent).toContain('TEAM RUMBLE');
+    expect(rumbleCard.textContent).toContain('12V12 RESPAWN');
+    expect(cards[0].classList.contains('fdr-mode-card--full')).toBe(false);
+
+    rumbleCard.click();
+    expect(ui.getLobbyConfig().gameMode).toBe('team_rumble');
+    expect(loadStoredLobbyConfig().gameMode).toBe('team_rumble');
+    expect(root.findByClass('fdr-mode-card')?.textContent).toContain('TEAM RUMBLE');
+
+    ui.dispose();
+  });
+
+  it('renders HUD Team Rumble scoreboard bar, Stealth HIDDEN pill above vitals, Hotbar attachment mod badges & Node-safe Minimap frontier overlays', () => {
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    // Minimal 2D canvas context WITHOUT fillText, strokeText, or ellipse!
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => miniMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    // 1. Default: Team Rumble bar & Stealth HIDDEN pill are hidden
+    hud.update(makeBaseHUDState());
+    const rumbleBar = hudRoot.findByClass('fdr-rumble-bar');
+    const bottomCenter = hudRoot.findByClass('fdr-bottom-center');
+    const stealthPill = bottomCenter?.findByClass('fdr-stealth-pill');
+    const vitalsStack = bottomCenter?.findByClass('fdr-vitals-stack');
+    expect(rumbleBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(stealthPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(bottomCenter?.children.indexOf(stealthPill!)).toBeLessThan(
+      bottomCenter?.children.indexOf(vitalsStack!) ?? 999,
+    );
+
+    // 2. Active Team Rumble + Stealth + Hotbar Weapon Mods + Minimap Frontier Overlay
+    const modBenches: ModBenchEntity[] = [
+      {
+        id: 'mb-mini',
+        poiId: 'metro_towers',
+        x: 24,
+        y: 12,
+        z: -18,
+        rotationY: 0,
+        costGold: 75,
+      },
+    ];
+    const forecastTowers: ForecastTowerEntity[] = [
+      {
+        id: 'ft-mini',
+        poiId: 'crystal_basin',
+        x: -28,
+        y: 12,
+        z: 16,
+        rotationY: 0,
+        scanned: true,
+        scannedBy: 'player',
+      },
+    ];
+    hud.setWorldFrontierOverlay(modBenches, forecastTowers);
+
+    const modList: WeaponModId[] = ['red_dot', 'suppressor', 'drum_mag', 'foregrip'];
+    const futureStormRings: FutureStormRing[] = [
+      { phase: 2, centerX: 12, centerZ: -8, radius: 92 },
+    ];
+    hud.update(
+      makeBaseHUDState({
+        gameMode: 'team_rumble',
+        isStealthed: true,
+        futureStormRings,
+        teamRumble: {
+          blueScore: 14,
+          redScore: 11,
+          targetScore: 25,
+          respawningInSec: 3.5,
+          blueAllies: [{ x: 18, z: 22 }],
+        },
+        slots: [
+          { uid: 'pick', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+          {
+            uid: 'ar-modded',
+            weaponId: 'ar',
+            rarity: 'epic',
+            magAmmo: 43,
+            stackCount: 1,
+            mods: modList,
+          },
+          null,
+          null,
+          null,
+          null,
+        ],
+        activeSlot: 1,
+      }),
+    );
+
+    // Team Rumble bar under compass
+    expect(rumbleBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(rumbleBar?.textContent).toContain('BLUE 14 · 25 · 11 RED');
+    expect(rumbleBar?.findByClass('fdr-rumble-fill')?.style.width).toBe('56.0%');
+    const respawnBadge = rumbleBar?.findByClass('fdr-rumble-respawn');
+    expect(respawnBadge?.classList.contains('fdr-hidden')).toBe(false);
+    expect(respawnBadge?.textContent).toContain('RESPAWNING IN 3.5S');
+
+    // Stealth pill
+    expect(stealthPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(stealthPill?.dataset.stealthed).toBe('true');
+    expect(stealthPill?.textContent).toContain('HIDDEN');
+
+    // Hotbar weapon slot attachment badges (R, S, M, G)
+    const slotCards = hudRoot.findAllByClass('fdr-slot-card');
+    expect(slotCards[1]?.innerHTML).toContain('fdr-slot-mods');
+    const pipMatches = Array.from(
+      slotCards[1]?.innerHTML.matchAll(/class="fdr-mod-pip[^"]*"[^>]*>([A-Z])</g) ?? [],
+      (m) => m[1],
+    );
+    expect(pipMatches).toEqual(['R', 'S', 'M', 'G']);
+    expect(slotCards[1]?.textContent).toContain('R S M G');
+    expect(slotCards[0]?.innerHTML).not.toContain('fdr-slot-mods');
+
+    // Minimap rendered future ring + mod bench + forecast tower + blue ally safely
+    const miniSize = 220;
+    const miniPxPerMeter = miniSize / 280;
+    const hasModBenchTranslate = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + 24 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + -18 * miniPxPerMeter)) < 0.5,
+    );
+    const hasAllyTranslate = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + 18 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + 22 * miniPxPerMeter)) < 0.5,
+    );
+    const hasFutureRingArc = miniDrawCalls.some(
+      (c) =>
+        c.op === 'arc' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + 12 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + -8 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[2] as number) - 92 * miniPxPerMeter) < 0.5,
+    );
+    expect(hasModBenchTranslate).toBe(true);
+    expect(hasAllyTranslate).toBe(true);
+    expect(hasFutureRingArc).toBe(true);
+
+    // 3. Clearing respawn timer, stealth, and teamRumble hides cleanly
+    hud.update(
+      makeBaseHUDState({
+        isStealthed: false,
+        teamRumble: null,
+      }),
+    );
+    expect(rumbleBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(stealthPill?.classList.contains('fdr-hidden')).toBe(true);
+
+    hud.dispose();
+  });
+
+  it('forwards setWorldFrontierOverlay to FullMapOverlay (24 legend rows, golden forecast rings, mod benches, forecast towers, blue allies before POI labels) & shows Team Rumble MatchOverlay summary', () => {
+    const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+
+    // FullMap mock WITHOUT ellipse
+    const fullMockCtx = {
+      clearRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => fullDrawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => fullDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => fullDrawCalls.push({ op: 'arc', args }),
+      fill: () => fullDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => fullDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => fullDrawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => fullDrawCalls.push({ op: 'rotate', args }),
+      setLineDash: (...args: unknown[]) => fullDrawCalls.push({ op: 'setLineDash', args }),
+      fillText: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    let canvasCount = 0;
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          const idx = canvasCount++;
+          (el as unknown as { getContext: () => unknown }).getContext = () =>
+            idx === 0 ? miniMockCtx : fullMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. Legend has exactly 24 rows including MOD BENCH & FORECAST TOWER
+    const legend = root.findByClass('fdr-map-legend');
+    const legendRowCount = (
+      legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
+    ).length;
+    expect(legendRowCount).toBe(24);
+    expect(legend?.textContent).toContain('MOD BENCH');
+    expect(legend?.textContent).toContain('FORECAST TOWER');
+
+    // 2. setWorldFrontierOverlay forwards to FullMap & Minimap
+    const modBenches: ModBenchEntity[] = [
+      {
+        id: 'mb-1',
+        poiId: 'metro_towers',
+        x: -70,
+        y: 12,
+        z: -35,
+        rotationY: 0,
+        costGold: 75,
+      },
+    ];
+    const forecastTowers: ForecastTowerEntity[] = [
+      {
+        id: 'ft-1',
+        poiId: 'market_row',
+        x: 165,
+        y: 13,
+        z: 30,
+        rotationY: 0,
+        scanned: false,
+        scannedBy: null,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldFrontierOverlay(modBenches, forecastTowers);
+    ui.toggleFullMap(true);
+    fullDrawCalls.length = 0;
+    miniDrawCalls.length = 0;
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        gameMode: 'team_rumble',
+        playerPos: { x: 0, y: 10, z: 0 },
+        hasStormForecast: true,
+        futureStormRings: [{ phase: 3, centerX: 40, centerZ: -20, radius: 80 }],
+        teamRumble: {
+          blueScore: 18,
+          redScore: 15,
+          targetScore: 25,
+          respawningInSec: null,
+          blueAllies: [{ x: -30, z: 25 }],
+        },
+      }),
+    );
+
+    const findFullTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return fullDrawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const mbIdx = findFullTranslateIdx(-70, -35);
+    const ftIdx = findFullTranslateIdx(165, 30);
+    const allyIdx = findFullTranslateIdx(-30, 25);
+    const firstPoiLabelIdx = fullDrawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+    expect(mbIdx).toBeGreaterThanOrEqual(0);
+    expect(ftIdx).toBeGreaterThanOrEqual(0);
+    expect(allyIdx).toBeGreaterThanOrEqual(0);
+    expect(firstPoiLabelIdx).toBeGreaterThan(mbIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(ftIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(allyIdx);
+
+    const ringNorm = worldToMapNorm(40, -20);
+    const hasFullFutureRing = fullDrawCalls.some(
+      (c) =>
+        c.op === 'arc' &&
+        Math.abs((c.args[0] as number) - ringNorm.nx * 640) < 0.5 &&
+        Math.abs((c.args[1] as number) - ringNorm.nz * 640) < 0.5 &&
+        Math.abs((c.args[2] as number) - 80 * (640 / 800)) < 0.5,
+    );
+    expect(hasFullFutureRing).toBe(true);
+
+    // 3. MatchOverlay Team Rumble Victory summary + score pill + MODDED PRO / EMP BREAKER highlights
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 24,
+      kills: 9,
+      damageDealt: 1850,
+      shotsFired: 80,
+      shotsHit: 42,
+      accuracy: 52,
+      headshots: 3,
+      structuresBuilt: 6,
+      chestsOpened: 4,
+      survivalTimeSec: 195,
+      gameMode: 'team_rumble',
+      modsInstalled: 2,
+      empHits: 3,
+      teamRumbleScore: { blue: 25, red: 19, target: 25 },
+    });
+
+    const summaryCard = root.findByClass('fdr-summary-card');
+    expect(summaryCard?.textContent).toContain('TEAM RUMBLE VICTORY!');
+    const scorePill = summaryCard?.findByClass('fdr-rumble-score-pill');
+    expect(scorePill?.textContent).toBe('BLUE 25 - 19 RED');
+    const highlightsRow = summaryCard?.findByClass('fdr-highlights-row');
+    expect(highlightsRow?.textContent).toContain('MODDED PRO');
+    expect(highlightsRow?.textContent).toContain('EMP BREAKER');
+
+    // Defeat case still renders Team Rumble score pill
+    ui.setPhase('eliminated');
+    ui.showMatchSummary({
+      victory: false,
+      placement: 2,
+      totalPlayers: 24,
+      kills: 5,
+      damageDealt: 1120,
+      shotsFired: 55,
+      shotsHit: 24,
+      accuracy: 44,
+      headshots: 1,
+      structuresBuilt: 4,
+      chestsOpened: 2,
+      survivalTimeSec: 170,
+      gameMode: 'team_rumble',
+      teamRumbleScore: { blue: 21, red: 25, target: 25 },
+    });
+    expect(root.findByClass('fdr-summary-card')?.textContent).toContain('TEAM RUMBLE DEFEAT');
+    expect(root.findByClass('fdr-rumble-score-pill')?.textContent).toBe('BLUE 21 - 25 RED');
 
     ui.dispose();
   });

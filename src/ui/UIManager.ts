@@ -8,6 +8,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   EmoteId,
+  ForecastTowerEntity,
   GamePhase,
   GameSettings,
   GrindRailEntity,
@@ -18,6 +19,7 @@ import type {
   LootIslandState,
   MatchQuest,
   MatchSummary,
+  ModBenchEntity,
   NpcSpecialistEntity,
   RebootVanEntity,
   RiftEntity,
@@ -38,8 +40,10 @@ import { MatchOverlay } from './MatchOverlay';
 import {
   cloneSettings,
   resolveChapterOverlayArgs,
+  resolveFrontierOverlayArgs,
   resolveOverdriveOverlayArgs,
   type WorldChapterOverlay,
+  type WorldFrontierOverlay,
   type WorldOverdriveOverlay,
 } from './UIHelpers';
 
@@ -246,6 +250,29 @@ export class UIManager {
       resolved.rails,
       resolved.vans,
       resolved.drones,
+    );
+  }
+
+  setWorldFrontierOverlay(
+    modBenches: ModBenchEntity[],
+    forecastTowers: ForecastTowerEntity[],
+  ): void;
+  setWorldFrontierOverlay(overlay: WorldFrontierOverlay): void;
+  setWorldFrontierOverlay(
+    modBenchesOrOverlay: ModBenchEntity[] | WorldFrontierOverlay,
+    forecastTowers?: ForecastTowerEntity[],
+  ): void {
+    const resolved = resolveFrontierOverlayArgs(
+      modBenchesOrOverlay,
+      forecastTowers,
+    );
+    this.fullMap.setWorldFrontierOverlay(
+      resolved.modBenches,
+      resolved.forecastTowers,
+    );
+    this.hud.setWorldFrontierOverlay(
+      resolved.modBenches,
+      resolved.forecastTowers,
     );
   }
 

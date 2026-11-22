@@ -11,6 +11,7 @@ import {
   STEP_HEIGHT,
   STORM_PHASES,
   WATER_LEVEL,
+  WEAPON_MOD_COST_GOLD,
   WEAPONS,
   WORLD_HALF,
 } from '../../core';
@@ -32,6 +33,7 @@ import {
   type NearbyGrindRailResult,
   type SupplyDroneDamageResult,
   type Wave7ShowcaseResult,
+  type Wave8ShowcaseResult,
 } from '../index';
 import type { WeatherKind } from '../../types';
 
@@ -1111,7 +1113,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(barrels).toHaveLength(24);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
     expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
 
     for (const sb of barrels) {
       expect(sb.hp).toBe(40);
@@ -1157,7 +1159,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(sb0.destroyed).toBe(true);
     expect(sbGroup.visible).toBe(false);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
     expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
     expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1183,7 +1185,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     ).toBe(true);
     expect(sbGroup.visible).toBe(true);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
 
     interactables.dispose();
     builder.dispose();
@@ -1641,7 +1643,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     const expBarrels = interactables.getExplosiveBarrels();
     expect(expBarrels).toHaveLength(18);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
 
     for (const eb of expBarrels) {
       expect(eb.hp).toBe(35);
@@ -1713,7 +1715,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     expect(eb0.exploded).toBe(true);
     expect(ebGroup.visible).toBe(false);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(17);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6 + 6 + 6 + 4);
     expect(interactables.damageExplosiveBarrel(eb0.id, 10)).toBeNull();
     expect(interactables.damageExplosiveBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1752,7 +1754,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     ).toBe(true);
     expect(ebGroup.visible).toBe(true);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -1979,7 +1981,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandCols[0].maxY).toBeCloseTo(groundY + 24, 4);
     expect(islandCols[0].minZ).toBeCloseTo(cz - 12.5, 4);
     expect(islandCols[0].maxZ).toBeCloseTo(cz + 12.5, 4);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 1);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 1 + 6 + 4);
 
     // 10s capture duration
     const islandFlagGroup = islandMesh.children[islandMesh.children.length - 1] as THREE.Group;
@@ -2023,7 +2025,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandMesh.visible).toBe(false);
     expect(geyserMesh.visible).toBe(false);
     expect(interactables.getLootIslandColliders()).toHaveLength(0);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
 
     vehicles.dispose();
     interactables.dispose();
@@ -2643,7 +2645,7 @@ describe('WorldInteractables Wave-7 Grind Rails, Reboot Vans, Supply Drones & Sh
     const vans = interactables.getRebootVans();
     expect(vans).toHaveLength(6);
     expect(interactables.getRebootVanColliders()).toHaveLength(6);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
 
     for (const van of vans) {
       expect(van.available).toBe(true);
@@ -2822,7 +2824,7 @@ describe('WorldInteractables Wave-7 Grind Rails, Reboot Vans, Supply Drones & Sh
     expect(interactables.getRebootVanColliders()).toHaveLength(6);
     expect(interactables.getGrindRails()).toHaveLength(4);
     expect(interactables.getSupplyDrones()).toHaveLength(12);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
 
     interactables.dispose();
     terrain.dispose();
@@ -2970,6 +2972,476 @@ describe('Wave-7 Loot Pools, EnvironmentDetail Wind Sway & EnvironmentFX Rain Ri
     fx.update(0.2, 5.0, { x: -20, y: 14, z: 8 }, 'urban');
     expect(splashMesh.visible).toBe(false);
     expect(splashMat.uniforms.uRainStrength.value).toBe(0);
+
+    fx.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-8 Mod Benches, Forecast Towers, Stealth Bushes & Showcase', () => {
+  it('constructs 6 Mod Benches, 4 Forecast Towers, and 28 Stealth Bushes clear of water/buildings/props with full lifecycle and reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const soundSpy = vi.fn();
+    const forecastVfxSpy = vi.fn();
+    bus.on('sound:play', soundSpy);
+    bus.on('vfx:forecast_pulse', forecastVfxSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 1.0) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 2.8 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    const isClearOfProps = (x: number, z: number, pad = 1.0) =>
+      !pal.getProps().some((p) => Math.hypot(x - p.x, z - p.z) < p.radius + pad);
+
+    // 1. 6 Illuminated Weapon Mod Benches
+    const modBenches = interactables.getModBenches();
+    expect(modBenches).toHaveLength(6);
+    expect(interactables.getModBenchColliders()).toHaveLength(6);
+
+    for (const mb of modBenches) {
+      expect(mb.costGold).toBe(WEAPON_MOD_COST_GOLD);
+      expect(mb.costGold).toBe(75);
+      expect(terrain.isWater(mb.x, mb.z)).toBe(false);
+      expect(mb.y).toBeCloseTo(terrain.getHeightAt(mb.x, mb.z), 4);
+      expect(terrain.getNormalAt(mb.x, mb.z).y).toBeGreaterThan(0.92);
+      expect(isClearOfBuildings(mb.x, mb.y, mb.z, 1.0)).toBe(true);
+      const blockingProp = pal.getProps().find((p) => Math.hypot(mb.x - p.x, mb.z - p.z) < p.radius + 1.0);
+      expect(blockingProp, `${mb.id} (${mb.x}, ${mb.z}) near prop ${blockingProp?.kind} at (${blockingProp?.x}, ${blockingProp?.z})`).toBeUndefined();
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(mb.x - veh.x, mb.z - veh.z)).toBeGreaterThan(3.0);
+      }
+      for (const bench of interactables.getUpgradeBenches()) {
+        expect(Math.hypot(mb.x - bench.x, mb.z - bench.z)).toBeGreaterThan(3.0);
+      }
+      for (const vm of interactables.getVendingMachines()) {
+        expect(Math.hypot(mb.x - vm.x, mb.z - vm.z)).toBeGreaterThan(3.0);
+      }
+      for (const v of interactables.getVaults()) {
+        expect(Math.hypot(mb.x - v.x, mb.z - v.z)).toBeGreaterThan(3.5);
+      }
+      for (const wb of interactables.getWeaponBunkers()) {
+        expect(Math.hypot(mb.x - wb.x, mb.z - wb.z)).toBeGreaterThan(4.0);
+      }
+      for (const rv of interactables.getRebootVans()) {
+        expect(Math.hypot(mb.x - rv.x, mb.z - rv.z)).toBeGreaterThan(3.5);
+      }
+      for (const cp of interactables.getCapturePoints()) {
+        expect(Math.hypot(mb.x - cp.x, mb.z - cp.z)).toBeGreaterThan(3.5);
+      }
+      const mbGroup = interactables.getGroup().getObjectByName(`ModBench_${mb.id}`) as THREE.Group;
+      expect(mbGroup).toBeDefined();
+      expect(mbGroup.children.length).toBeGreaterThanOrEqual(8);
+    }
+
+    const mb0 = modBenches[0];
+    const mb0Group = interactables.getGroup().getObjectByName(`ModBench_${mb0.id}`) as THREE.Group;
+    const mb0Holo = mb0Group.children[mb0Group.children.length - 1] as THREE.Group;
+    const holoRotBefore = mb0Holo.rotation.y;
+    interactables.update(0.25, 1.0);
+    expect(mb0Holo.rotation.y).not.toBe(holoRotBefore);
+
+    expect(interactables.findNearbyModBench({ x: mb0.x + 2.0, y: mb0.y, z: mb0.z }, 3.8)?.id).toBe(mb0.id);
+    expect(interactables.findNearbyModBench({ x: mb0.x + 12.0, y: mb0.y, z: mb0.z }, 3.8)).toBeNull();
+    expect(interactables.findNearbyModBench({ x: Number.NaN, y: mb0.y, z: mb0.z })).toBeNull();
+
+    // 2. 4 Radar Weather Forecast Towers
+    const towers = interactables.getForecastTowers();
+    expect(towers).toHaveLength(4);
+    expect(interactables.getForecastTowerColliders()).toHaveLength(4);
+
+    for (const ft of towers) {
+      expect(ft.scanned).toBe(false);
+      expect(ft.scannedBy).toBeNull();
+      expect(terrain.isWater(ft.x, ft.z)).toBe(false);
+      expect(ft.y).toBeCloseTo(terrain.getHeightAt(ft.x, ft.z), 4);
+      expect(terrain.getNormalAt(ft.x, ft.z).y).toBeGreaterThan(0.92);
+      expect(isClearOfBuildings(ft.x, ft.y, ft.z, 1.1)).toBe(true);
+      const blockingProp = pal.getProps().find((p) => Math.hypot(ft.x - p.x, ft.z - p.z) < p.radius + 1.1);
+      expect(blockingProp, `${ft.id} (${ft.x}, ${ft.z}) near prop ${blockingProp?.kind} at (${blockingProp?.x}, ${blockingProp?.z})`).toBeUndefined();
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(ft.x - veh.x, ft.z - veh.z)).toBeGreaterThan(3.5);
+      }
+      for (const wb of interactables.getWeaponBunkers()) {
+        expect(Math.hypot(ft.x - wb.x, ft.z - wb.z)).toBeGreaterThan(4.0);
+      }
+      for (const mb of modBenches) {
+        expect(Math.hypot(ft.x - mb.x, ft.z - mb.z)).toBeGreaterThan(4.0);
+      }
+      const ftGroup = interactables.getGroup().getObjectByName(`ForecastTower_${ft.id}`) as THREE.Group;
+      const dishPivot = ftGroup.getObjectByName(`ForecastDish_${ft.id}`) as THREE.Group;
+      expect(ftGroup).toBeDefined();
+      expect(dishPivot).toBeDefined();
+    }
+
+    const ft0 = towers[0];
+    const ft1 = towers[1];
+    const ft0Group = interactables.getGroup().getObjectByName(`ForecastTower_${ft0.id}`) as THREE.Group;
+    const ft1Group = interactables.getGroup().getObjectByName(`ForecastTower_${ft1.id}`) as THREE.Group;
+    const ft0Dish = ft0Group.getObjectByName(`ForecastDish_${ft0.id}`) as THREE.Group;
+    const ft0BeaconOrb = ft0Group.children[ft0Group.children.length - 3] as THREE.Mesh;
+    const ft1BeaconOrb = ft1Group.children[ft1Group.children.length - 3] as THREE.Mesh;
+    const unscannedHex = (ft0BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString();
+
+    const dishRotBefore = ft0Dish.rotation.y;
+    interactables.update(0.3, 1.3);
+    expect(ft0Dish.rotation.y).toBeGreaterThan(dishRotBefore);
+
+    expect(interactables.findNearbyForecastTower({ x: ft0.x + 2.2, y: ft0.y, z: ft0.z }, 4.2)?.id).toBe(ft0.id);
+    expect(interactables.findNearbyForecastTower({ x: ft0.x + 14.0, y: ft0.y, z: ft0.z }, 4.2)).toBeNull();
+    expect(interactables.findNearbyForecastTower({ x: ft0.x, y: Number.NaN, z: ft0.z })).toBeNull();
+
+    expect(interactables.scanForecastTower('nonexistent_tower', 'player')).toBe(false);
+    expect(interactables.scanForecastTower(ft0.id, '')).toBe(false);
+    expect(interactables.scanForecastTower(ft0.id, 'player')).toBe(true);
+    expect(ft0.scanned).toBe(true);
+    expect(ft0.scannedBy).toBe('player');
+    const claimedHex = (ft0BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString();
+    expect(claimedHex).not.toBe(unscannedHex);
+    expect((ft1BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString()).toBe(unscannedHex);
+    expect(forecastVfxSpy).toHaveBeenCalledWith({
+      position: { x: ft0.x, y: ft0.y + 1.5, z: ft0.z },
+    });
+    expect(soundSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'forecast_scan' }),
+    );
+    expect(interactables.scanForecastTower(ft0.id, 'bot_1')).toBe(false);
+
+    // 3. 28 Interactive Stealth Bushes
+    const bushes = interactables.getStealthBushes();
+    expect(bushes).toHaveLength(28);
+
+    for (const bush of bushes) {
+      expect(bush.radius).toBe(1.85);
+      expect(terrain.isWater(bush.x, bush.z)).toBe(false);
+      expect(bush.y).toBeCloseTo(terrain.getHeightAt(bush.x, bush.z), 4);
+      expect(
+        terrain.getNormalAt(bush.x, bush.z).y,
+        `${bush.id} (${bush.x}, ${bush.z})`,
+      ).toBeGreaterThan(0.84);
+      expect(isClearOfBuildings(bush.x, bush.y, bush.z, 0.8)).toBe(true);
+      const blockingProp = pal.getProps().find((p) => Math.hypot(bush.x - p.x, bush.z - p.z) < p.radius + 0.8);
+      expect(blockingProp, `${bush.id} (${bush.x}, ${bush.z}) near prop ${blockingProp?.kind} at (${blockingProp?.x}, ${blockingProp?.z})`).toBeUndefined();
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(bush.x - veh.x, bush.z - veh.z)).toBeGreaterThan(3.0);
+      }
+      for (const mb of modBenches) {
+        expect(Math.hypot(bush.x - mb.x, bush.z - mb.z)).toBeGreaterThan(3.0);
+      }
+      for (const ft of towers) {
+        expect(Math.hypot(bush.x - ft.x, bush.z - ft.z)).toBeGreaterThan(3.0);
+      }
+      const bGroup = interactables.getGroup().getObjectByName(`StealthBush_${bush.id}`) as THREE.Group;
+      expect(bGroup).toBeDefined();
+      const foliageGroup = bGroup.children[0] as THREE.Group;
+      expect(foliageGroup.children.length).toBeGreaterThanOrEqual(10);
+    }
+
+    const bush0 = bushes[0];
+    const bush0Group = interactables.getGroup().getObjectByName(`StealthBush_${bush0.id}`) as THREE.Group;
+    const bush0Foliage = bush0Group.children[0] as THREE.Group;
+    expect(interactables.isInsideStealthBush({ x: bush0.x + 5.0, y: bush0.y, z: bush0.z })).toBeNull();
+    expect(interactables.isInsideStealthBush({ x: bush0.x, y: bush0.y + 12.0, z: bush0.z })).toBeNull();
+    expect(interactables.isInsideStealthBush({ x: Number.NaN, y: bush0.y, z: bush0.z })).toBeNull();
+
+    const inside = interactables.isInsideStealthBush({ x: bush0.x + 0.8, y: bush0.y, z: bush0.z - 0.6 });
+    expect(inside?.id).toBe(bush0.id);
+
+    interactables.update(0.08, 1.5);
+    expect(Math.abs(bush0Foliage.rotation.z) + Math.abs(bush0Foliage.rotation.x)).toBeGreaterThan(0.005);
+
+    interactables.update(1.0, 2.5);
+    expect(bush0Foliage.rotation.z).toBe(0);
+    expect(bush0Foliage.rotation.x).toBe(0);
+    expect(bush0Foliage.scale.x).toBe(1);
+
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+
+    // 4. reset() restores Forecast Towers & Stealth Bushes
+    interactables.reset();
+    expect(interactables.getForecastTowers().every((t) => !t.scanned && t.scannedBy === null)).toBe(true);
+    expect((ft0BeaconOrb.material as THREE.MeshStandardMaterial).color.getHexString()).toBe(unscannedHex);
+    expect(interactables.scanForecastTower(ft0.id, 'player2')).toBe(true);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+
+    vehicles.dispose();
+    interactables.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('supports qaPlaceWave8Showcase and clears Wave-8 QA showcase extras on reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    const center = { x: -75, y: terrain.getHeightAt(-75, -40), z: -40 };
+    const showcase: Wave8ShowcaseResult = interactables.qaPlaceWave8Showcase(center);
+
+    expect(showcase.modBench.costGold).toBe(WEAPON_MOD_COST_GOLD);
+    expect(terrain.isWater(showcase.modBench.x, showcase.modBench.z)).toBe(false);
+    expect(showcase.modBench.y).toBeCloseTo(terrain.getHeightAt(showcase.modBench.x, showcase.modBench.z), 4);
+    expect(Math.hypot(showcase.modBench.x - center.x, showcase.modBench.z - center.z)).toBeLessThan(15);
+
+    expect(showcase.forecastTower.scanned).toBe(false);
+    expect(showcase.forecastTower.scannedBy).toBeNull();
+    expect(terrain.isWater(showcase.forecastTower.x, showcase.forecastTower.z)).toBe(false);
+    expect(showcase.forecastTower.y).toBeCloseTo(
+      terrain.getHeightAt(showcase.forecastTower.x, showcase.forecastTower.z),
+      4,
+    );
+
+    expect(showcase.stealthBushes).toHaveLength(2);
+    for (const sb of showcase.stealthBushes) {
+      expect(sb.radius).toBe(1.85);
+      expect(terrain.isWater(sb.x, sb.z)).toBe(false);
+      expect(sb.y).toBeCloseTo(terrain.getHeightAt(sb.x, sb.z), 4);
+      expect(interactables.isInsideStealthBush({ x: sb.x, y: sb.y, z: sb.z })?.id).toBe(sb.id);
+    }
+
+    expect(interactables.getModBenches()).toHaveLength(7);
+    expect(interactables.getModBenchColliders()).toHaveLength(7);
+    expect(interactables.getForecastTowers()).toHaveLength(5);
+    expect(interactables.getForecastTowerColliders()).toHaveLength(5);
+    expect(interactables.getStealthBushes()).toHaveLength(30);
+
+    // Calling qaPlaceWave8Showcase again replaces cleanly without leaking duplicates
+    interactables.qaPlaceWave8Showcase(center);
+    expect(interactables.getModBenches()).toHaveLength(7);
+    expect(interactables.getForecastTowers()).toHaveLength(5);
+    expect(interactables.getStealthBushes()).toHaveLength(30);
+
+    interactables.reset();
+    expect(interactables.getModBenches()).toHaveLength(6);
+    expect(interactables.getModBenchColliders()).toHaveLength(6);
+    expect(interactables.getForecastTowers()).toHaveLength(4);
+    expect(interactables.getForecastTowerColliders()).toHaveLength(4);
+    expect(interactables.getStealthBushes()).toHaveLength(28);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 6 + 4);
+
+    interactables.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('Wave-8 StormSystem Forecast Rings & Team Rumble, Loot Pools & Sky Shader', () => {
+  it('precomputes deterministic getFutureStormRings() and supports team_rumble fast arena with min radius >= 75', () => {
+    const s1 = new StormSystem(4201, 'solo');
+    const s2 = new StormSystem(4201, 'solo');
+
+    const rings1 = s1.getFutureStormRings();
+    const rings2 = s2.getFutureStormRings(2);
+    expect(rings1).toHaveLength(2);
+    expect(rings1).toEqual(rings2);
+    expect(rings1[0].phase).toBe(2);
+    expect(rings1[0].radius).toBe(STORM_PHASES[1].targetRadius);
+    expect(rings1[1].phase).toBe(3);
+    expect(rings1[1].radius).toBe(STORM_PHASES[2].targetRadius);
+
+    // Containment invariant across all precomputed future rings
+    const allFuture = s1.getFutureStormRings(5);
+    expect(allFuture).toHaveLength(5);
+    const initState = s1.getState();
+    let prevCx = initState.nextCenterX;
+    let prevCz = initState.nextCenterZ;
+    let prevR = initState.nextRadius;
+    for (const ring of allFuture) {
+      expect(Math.hypot(ring.centerX - prevCx, ring.centerZ - prevCz) + ring.radius).toBeLessThanOrEqual(prevR + 1e-4);
+      prevCx = ring.centerX;
+      prevCz = ring.centerZ;
+      prevR = ring.radius;
+    }
+
+    // Mutating returned objects must not corrupt internal storm state
+    rings1[0].centerX = 9999;
+    expect(s1.getFutureStormRings(1)[0].centerX).toBe(rings2[0].centerX);
+    expect(s1.getFutureStormRings(0)).toEqual([]);
+
+    // Advance into Phase 2 -> nextCenter matches precomputed Phase 2 ring, and future rings shift to 3 & 4
+    s1.update(STORM_PHASES[0].waitDuration + STORM_PHASES[0].shrinkDuration);
+    const stPhase2 = s1.getState();
+    expect(stPhase2.phase).toBe(2);
+    expect(stPhase2.nextCenterX).toBeCloseTo(rings2[0].centerX, 5);
+    expect(stPhase2.nextCenterZ).toBeCloseTo(rings2[0].centerZ, 5);
+    expect(stPhase2.nextRadius).toBe(rings2[0].radius);
+    const nextTwo = s1.getFutureStormRings(2);
+    expect(nextTwo.map((r) => r.phase)).toEqual([3, 4]);
+
+    // Team Rumble fast arena mode keeps final radius >= 75
+    const rumble = new StormSystem(4201, 'team_rumble');
+    expect(rumble.getMode()).toBe('team_rumble');
+    const rumbleInit = rumble.getState();
+    expect(rumbleInit.phase).toBe(1);
+    expect(rumbleInit.currentRadius).toBeLessThan(WORLD_HALF);
+    expect(rumbleInit.phaseDuration).toBeLessThan(STORM_PHASES[0].waitDuration);
+
+    const rumbleConfigs = rumble.getPhaseConfigs();
+    expect(rumbleConfigs.length).toBeGreaterThanOrEqual(4);
+    for (const cfg of rumbleConfigs) {
+      expect(cfg.targetRadius).toBeGreaterThanOrEqual(75);
+    }
+
+    const rumbleFuture = rumble.getFutureStormRings(10);
+    expect(rumbleFuture.every((r) => r.radius >= 75)).toBe(true);
+
+    for (const cfg of rumbleConfigs) {
+      rumble.update(cfg.waitDuration + cfg.shrinkDuration);
+    }
+    const rumbleEnd = rumble.getState();
+    expect(rumbleEnd.currentRadius).toBeGreaterThanOrEqual(75);
+    expect(rumble.isInStorm(rumbleEnd.currentCenterX, rumbleEnd.currentCenterZ)).toBe(false);
+    expect(rumble.getFutureStormRings()).toEqual([]);
+
+    s1.dispose();
+    s2.dispose();
+    rumble.dispose();
+  });
+
+  it('spawns port_a_bunker and emp_grenade across floor, chest, and supply-drop pools with crisp 3D pickup meshes', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    // 1. Verify floor loot already contains port_a_bunker & emp_grenade
+    const floorItemIds = new Set(
+      pal
+        .getLootDrops()
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(floorItemIds.has('port_a_bunker')).toBe(true);
+    expect(floorItemIds.has('emp_grenade')).toBe(true);
+
+    // 2. Verify rollConsumable & chest drops
+    const consumableIds = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const c = pal.rollConsumable();
+      expect(WEAPONS[c.weaponId].allowedRarities).toContain(c.rarity);
+      expect(c.magAmmo).toBe(0);
+      consumableIds.add(c.weaponId);
+    }
+    expect(consumableIds.has('port_a_bunker')).toBe(true);
+    expect(consumableIds.has('emp_grenade')).toBe(true);
+
+    const dropsBeforeChests = pal.getLootDrops().length;
+    for (const chest of pal.getChests()) {
+      pal.openChest(chest.id);
+    }
+    const chestItemIds = new Set(
+      pal
+        .getLootDrops()
+        .slice(dropsBeforeChests)
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(chestItemIds.has('port_a_bunker')).toBe(true);
+    expect(chestItemIds.has('emp_grenade')).toBe(true);
+
+    // 3. Verify supply drops spawn port_a_bunker & emp_grenade
+    const dropsBeforeSupply = pal.getLootDrops().length;
+    for (let i = 0; i < 65; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    const supplyItemIds = new Set(
+      pal
+        .getLootDrops()
+        .slice(dropsBeforeSupply)
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(supplyItemIds.has('port_a_bunker')).toBe(true);
+    expect(supplyItemIds.has('emp_grenade')).toBe(true);
+
+    // 4. Verify crisp multi-part 3D pickup meshes for port_a_bunker & emp_grenade
+    const groupBefore = pal.getGroup().children.length;
+    pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'bunker_mesh_test', weaponId: 'port_a_bunker', rarity: 'epic', magAmmo: 0, stackCount: 1 } },
+    );
+    const bunkerDropGroup = pal.getGroup().children[groupBefore] as THREE.Group;
+    const bunkerSilhouette = bunkerDropGroup.children[1] as THREE.Group;
+    expect(bunkerSilhouette).toBeInstanceOf(THREE.Group);
+    expect(bunkerSilhouette.children.length).toBeGreaterThanOrEqual(4);
+
+    pal.spawnLootDrop(
+      { x: 4, y: 12, z: 0 },
+      { item: { uid: 'emp_mesh_test', weaponId: 'emp_grenade', rarity: 'rare', magAmmo: 0, stackCount: 2 } },
+    );
+    const empDropGroup = pal.getGroup().children[groupBefore + 1] as THREE.Group;
+    const empSilhouette = empDropGroup.children[1] as THREE.Group;
+    expect(empSilhouette).toBeInstanceOf(THREE.Group);
+    expect(empSilhouette.children.length).toBeGreaterThanOrEqual(4);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('enhances skyMat with Twilight Starfield / Aurora Borealis shimmer and passes GLSL uniform checks across skyMat/oceanMat/rainSplashMat', () => {
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const group = fx.getGroup();
+
+    const skyMesh = group.getObjectByName('SkyDome') as THREE.Mesh;
+    const oceanMesh = group.getObjectByName('OceanWater') as THREE.Mesh;
+    const splashMesh = group.getObjectByName('RainSplashRipples') as THREE.Mesh;
+
+    const skyMat = skyMesh.material as THREE.ShaderMaterial;
+    const oceanMat = oceanMesh.material as THREE.ShaderMaterial;
+    const splashMat = splashMesh.material as THREE.ShaderMaterial;
+
+    expect(skyMat.fragmentShader).toContain('uniform float uTime;');
+    expect(skyMat.fragmentShader).toContain('aurora');
+    expect(skyMat.fragmentShader).toContain('starPoint');
+
+    for (const mat of [skyMat, oceanMat, splashMat]) {
+      for (const glsl of [mat.vertexShader, mat.fragmentShader]) {
+        const smoothMatches = [
+          ...glsl.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g),
+        ];
+        for (const m of smoothMatches) {
+          expect(Number(m[1])).toBeLessThan(Number(m[2]));
+        }
+        const usedUniforms = new Set(glsl.match(/\bu[A-Z][A-Za-z0-9_]*/g) ?? []);
+        for (const uName of usedUniforms) {
+          expect(glsl).toMatch(
+            new RegExp(`uniform\\s+(?:float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\\s+${uName}\\b`),
+          );
+          expect(mat.uniforms[uName]).toBeDefined();
+        }
+      }
+    }
+
+    fx.setWeather('golden_hour');
+    for (let i = 0; i < 15; i++) fx.update(0.1, 2.0 + i * 0.1);
+    expect(skyMat.uniforms.uTime.value).toBeGreaterThan(2.0);
+    expect(skyMat.uniforms.uDayPhase.value).toBeGreaterThan(0.5);
+
+    fx.setWeather('storm_front');
+    for (let i = 0; i < 15; i++) fx.update(0.1, 5.0 + i * 0.1);
+    expect(skyMat.uniforms.uDayPhase.value).toBeGreaterThan(0.6);
+    expect(skyMat.uniforms.uOvercast.value).toBeGreaterThan(0.7);
 
     fx.dispose();
   });

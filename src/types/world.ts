@@ -337,6 +337,42 @@ export interface SupplyDroneEntity {
   destroyed: boolean;
 }
 
+export interface ModBenchEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  costGold: number;
+}
+
+export interface ForecastTowerEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  scanned: boolean;
+  scannedBy: string | null;
+}
+
+export interface StealthBushEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+}
+
+export interface FutureStormRing {
+  phase: number;
+  centerX: number;
+  centerZ: number;
+  radius: number;
+}
+
 export interface SupplyDrop {
   id: string;
   x: number;

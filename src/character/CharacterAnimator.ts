@@ -164,7 +164,9 @@ function isThrowable(weaponId: WeaponId): boolean {
     weaponId === 'shockwave_grenade' ||
     weaponId === 'frag_grenade' ||
     weaponId === 'chug_splash' ||
-    weaponId === 'shield_bubble'
+    weaponId === 'shield_bubble' ||
+    weaponId === 'port_a_bunker' ||
+    weaponId === 'emp_grenade'
   );
 }
 
@@ -232,7 +234,7 @@ export class CharacterAnimator {
     );
     root.rotation.y = finiteOr(state.yaw);
 
-    rig.equipWeapon(state.weaponId, state.isBuilding);
+    rig.equipWeapon(state.weaponId, state.isBuilding, state.weaponMods ?? []);
     if (state.weaponWrapId !== undefined) {
       rig.setWeaponWrap(state.weaponWrapId);
     }
@@ -443,9 +445,14 @@ export class CharacterAnimator {
       rig.setDuoPartnerAura(true, data.time);
     }
 
-    // 8. Sync Allied Specialist Tactical Aura state & animation if provided or active (suppressed by Duo Partner aura)
-    if (state.isAlly !== undefined) {
-      rig.setAllyAura(Boolean(state.isAlly) && !state.isDuoPartner, state.allyRole, data.time);
+    // 8. Sync Allied Specialist Tactical Aura & Team Rumble Blue Team Chevron (suppressed by Duo Partner aura)
+    if (state.isAlly !== undefined || state.teamId !== undefined) {
+      const isFriendlyAlly =
+        (Boolean(state.isAlly) || state.teamId === 'team_blue') &&
+        state.teamId !== 'team_red' &&
+        !state.isDuoPartner &&
+        !rig.isDuoPartnerAuraEnabled();
+      rig.setAllyAura(isFriendlyAlly, state.allyRole, data.time);
     } else if (rig.isAllyAuraEnabled() && !rig.isDuoPartnerAuraEnabled()) {
       rig.setAllyAura(true, state.allyRole, data.time);
     }

@@ -16,6 +16,7 @@ import type {
   SkinDef,
   WeaponDef,
   WeaponId,
+  WeaponModDef,
   WeaponWrapDef,
 } from '../types';
 
@@ -1062,6 +1063,80 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     maxStack: 2,
     allowedRarities: ['rare', 'epic'],
   },
+  port_a_bunker: {
+    id: 'port_a_bunker',
+    name: 'Port-A-Bunker',
+    shortName: 'PORT BUNKER',
+    category: 'throwable',
+    ammoType: null,
+    isConsumable: false,
+    isThrowable: true,
+    isPortABunker: true,
+    isProjectile: true,
+    projectileSpeed: 22,
+    projectileGravity: 24,
+    splashRadius: 0,
+    baseDamage: 0,
+    structureDamage: 0,
+    headshotMultiplier: 1,
+    fireRate: 1.0,
+    pellets: 0,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0.005,
+    adsSpread: 0.002,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 45,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0.01,
+    recoilYaw: 0,
+    maxStack: 4,
+    allowedRarities: ['rare', 'epic'],
+  },
+  emp_grenade: {
+    id: 'emp_grenade',
+    name: 'Shield-Breaker EMP',
+    shortName: 'EMP BLAST',
+    category: 'throwable',
+    ammoType: null,
+    isConsumable: false,
+    isThrowable: true,
+    isEmpGrenade: true,
+    empShieldDamage: 70,
+    empDisableSec: 5.0,
+    isProjectile: true,
+    projectileSpeed: 26,
+    projectileGravity: 22,
+    splashRadius: 6.5,
+    baseDamage: 0,
+    structureDamage: 25,
+    headshotMultiplier: 1,
+    fireRate: 1.2,
+    pellets: 0,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0.005,
+    adsSpread: 0.002,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 55,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0.01,
+    recoilYaw: 0,
+    maxStack: 6,
+    allowedRarities: ['rare', 'epic'],
+  },
 };
 
 export const POIS: POIDef[] = [
@@ -1514,6 +1589,12 @@ export const GAME_MODES: ReadonlyArray<{
     subtitle: 'AI Wingman, 2-Bot Squads, DBNO & Revives',
     badge: '2V2 SQUADS',
   },
+  {
+    id: 'team_rumble',
+    name: 'TEAM RUMBLE',
+    subtitle: '12v12 Respawn Arena · First Team to 25 Eliminations',
+    badge: '12V12 RESPAWN',
+  },
 ];
 
 export const MEDALLIONS: readonly MedallionDef[] = [
@@ -1745,6 +1826,45 @@ export const GRIND_RAIL_SPEED = 16.5;
 export const SPIKE_TRAP_DAMAGE = 100;
 export const BOUNCER_IMPULSE_Y = 17.5;
 export const BOUNCER_IMPULSE_FWD = 12.0;
+
+export const TEAM_RUMBLE_TARGET_SCORE = 25;
+export const TEAM_RUMBLE_RESPAWN_SEC = 3.5;
+export const WEAPON_MOD_COST_GOLD = 75;
+
+export const WEAPON_MODS: readonly WeaponModDef[] = [
+  {
+    id: 'red_dot',
+    name: 'Red-Dot Holo Optic',
+    shortCode: 'R',
+    costGold: WEAPON_MOD_COST_GOLD,
+    description: '-35% ADS spread & sharper optic zoom',
+    accentColor: '#38bdf8',
+  },
+  {
+    id: 'suppressor',
+    name: 'Whisper Suppressor',
+    shortCode: 'S',
+    costGold: WEAPON_MOD_COST_GOLD,
+    description: '-70% gunfire audio alert range & damped flash',
+    accentColor: '#34d399',
+  },
+  {
+    id: 'drum_mag',
+    name: 'Extended Drum Mag',
+    shortCode: 'M',
+    costGold: WEAPON_MOD_COST_GOLD,
+    description: '+45% magazine capacity & instant mag fill',
+    accentColor: '#fbbf24',
+  },
+  {
+    id: 'foregrip',
+    name: 'Tactical Angled Foregrip',
+    shortCode: 'G',
+    costGold: WEAPON_MOD_COST_GOLD,
+    description: '-25% weapon bloom & -35% recoil kick',
+    accentColor: '#f472b6',
+  },
+];
 
 export const CROSSHAIR_COLORS: ReadonlyArray<{
   id: CrosshairColor;

@@ -8,6 +8,7 @@ import type {
   EditResult,
   EditVariant,
   MaterialType,
+  TeamId,
   TerrainQuery,
   TrapEntity,
   TrapKind,
@@ -23,7 +24,9 @@ import {
   GRID_Y,
   MATERIAL_STATS,
   SPIKE_TRAP_DAMAGE,
+  canonicalizeWall,
   clamp,
+  dist3D,
   getPieceKey,
   worldToGrid,
 } from '../core';
@@ -614,6 +617,74 @@ export class BuildingSystem {
     });
 
     return piece;
+  }
+
+  /**
+   * Instantly spawns a fortified 1x1 metal tactical bunker (4 perimeter walls, central floor, internal ramp)
+   * without consuming player materials.
+   */
+  deployPortABunker(origin: Vec3Like, ownerId: string, yaw: number): BuildPiece[] {
+    if (
+      !Number.isFinite(origin.x) ||
+      !Number.isFinite(origin.y) ||
+      !Number.isFinite(origin.z)
+    ) {
+      return [];
+    }
+
+    const gx = Math.floor(origin.x / GRID_XZ);
+    const gz = Math.floor(origin.z / GRID_XZ);
+    const cx = (gx + 0.5) * GRID_XZ;
+    const cz = (gz + 0.5) * GRID_XZ;
+    const groundY = this.terrain.getHeightAt(cx, cz);
+    const baseTargetY = Math.max(origin.y, groundY);
+    let gy = Math.floor((baseTargetY + 0.15) / GRID_Y);
+    if ((gy + 1) * GRID_Y < groundY + 1.6) {
+      gy += 1;
+    }
+
+    const safeYaw = Number.isFinite(yaw) ? yaw : 0;
+    const fx = Math.sin(safeYaw);
+    const fz = Math.cos(safeYaw);
+    let rampRotation: 0 | 1 | 2 | 3 = 0;
+    if (Math.abs(fz) >= Math.abs(fx)) {
+      rampRotation = fz <= 0 ? 0 : 2;
+    } else {
+      rampRotation = fx >= 0 ? 1 : 3;
+    }
+
+    const spawned: BuildPiece[] = [];
+    const fortify = (piece: BuildPiece | null) => {
+      if (!piece) return;
+      piece.buildProgress = 1;
+      piece.maxHp = piece.targetMaxHp;
+      piece.hp = piece.targetMaxHp;
+      const visual = this.visualsById.get(piece.id);
+      if (visual) {
+        visual.mainMat.opacity = 1;
+        visual.trimMat.opacity = 1;
+      }
+      spawned.push(piece);
+    };
+
+    fortify(this.placePieceForEntity(ownerId, 'floor', 'metal', gx, gy, gz, 'N', 0));
+    fortify(this.placePieceForEntity(ownerId, 'ramp', 'metal', gx, gy, gz, 'N', rampRotation));
+    for (let face = 0 as 0 | 1 | 2 | 3; face < 4; face = (face + 1) as 0 | 1 | 2 | 3) {
+      const w = canonicalizeWall(gx, gy, gz, face);
+      fortify(this.placePieceForEntity(ownerId, 'wall', 'metal', w.gx, w.gy, w.gz, w.dir, 0));
+    }
+
+    if (spawned.length > 0) {
+      const center: Vec3Like = { x: cx, y: gy * GRID_Y, z: cz };
+      this.eventBus.emit('vfx:bunker_deploy', { position: center });
+      this.eventBus.emit('sound:play', {
+        id: 'bunker_deploy',
+        position: center,
+        spatial: true,
+      });
+    }
+
+    return spawned;
   }
 
   private getPieceWorldCenter(piece: BuildPiece): Vec3Like {
@@ -1359,6 +1430,60 @@ export class BuildingSystem {
     return [...this.traps];
   }
 
+  /**
+   * Disables traps within `radius` meters of `pos` for at least `durationSec` seconds.
+   */
+  disableTrapsInRadius(
+    pos: Vec3Like,
+    radius: number,
+    durationSec: number,
+    opts?: {
+      excludeOwnerId?: string;
+      excludeSquadId?: string;
+      excludeTeamId?: TeamId;
+    },
+  ): number {
+    if (
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      !Number.isFinite(radius) ||
+      radius <= 0 ||
+      !Number.isFinite(durationSec) ||
+      durationSec <= 0
+    ) {
+      return 0;
+    }
+
+    let disabled = 0;
+    for (let i = 0; i < this.traps.length; i++) {
+      const trap = this.traps[i];
+      if (trap.hp <= 0) continue;
+      if (opts?.excludeOwnerId && trap.ownerId === opts.excludeOwnerId) continue;
+      if (
+        opts?.excludeSquadId &&
+        trap.squadId &&
+        trap.squadId === opts.excludeSquadId
+      ) {
+        continue;
+      }
+      if (
+        opts?.excludeTeamId &&
+        trap.squadId &&
+        trap.squadId === opts.excludeTeamId
+      ) {
+        continue;
+      }
+      const d = dist3D(pos, { x: trap.x, y: trap.y, z: trap.z });
+      if (d <= radius) {
+        trap.armed = false;
+        trap.armTimer = Math.max(trap.armTimer, durationSec);
+        disabled += 1;
+      }
+    }
+    return disabled;
+  }
+
   updateTraps(dt: number): void {
     const safeDt = Math.max(0, Number.isFinite(dt) ? dt : 0);
     this.trapAnimElapsed += safeDt;
@@ -1393,7 +1518,11 @@ export class BuildingSystem {
       if (trap.kind === 'spike_trap') {
         if (visual.spikesGroup) {
           const targetExtend =
-            !trap.armed && trap.cooldownSec - trap.armTimer < 0.45 ? 1 : 0;
+            !trap.armed &&
+            trap.armTimer <= trap.cooldownSec &&
+            trap.cooldownSec - trap.armTimer < 0.45
+              ? 1
+              : 0;
           const stepRate = targetExtend > visual.spikeExtend ? 18 : 6;
           visual.spikeExtend = clamp(
             visual.spikeExtend + (targetExtend - visual.spikeExtend) * Math.min(1, safeDt * stepRate),
@@ -1407,11 +1536,21 @@ export class BuildingSystem {
           visual.ledMat.emissive.setHex(trap.armed ? 0xdc2626 : 0x1e293b);
           visual.ledMat.emissiveIntensity = trap.armed ? 1.2 : 0.25;
         }
-      } else if (visual.pulseRing) {
-        const phase = (this.trapAnimElapsed * 1.6 + i * 0.37) % 1;
-        visual.pulseRing.position.y = 0.14 + phase * 0.62;
-        const s = 0.85 + phase * 0.35;
-        visual.pulseRing.scale.set(s, 1, s);
+      } else {
+        if (visual.padCoreMat) {
+          visual.padCoreMat.emissiveIntensity = trap.armed ? 1.35 : 0.15;
+        }
+        if (visual.pulseRing) {
+          if (trap.armed) {
+            const phase = (this.trapAnimElapsed * 1.6 + i * 0.37) % 1;
+            visual.pulseRing.position.y = 0.14 + phase * 0.62;
+            const s = 0.85 + phase * 0.35;
+            visual.pulseRing.scale.set(s, 1, s);
+          } else {
+            visual.pulseRing.position.y = 0.14;
+            visual.pulseRing.scale.set(0.85, 1, 0.85);
+          }
+        }
       }
     }
   }
@@ -1536,6 +1675,7 @@ export class BuildingSystem {
           triggerCount += 1;
         }
       } else if (trap.kind === 'bouncer_pad') {
+        if (!trap.armed) continue;
         let actorMap = this.bouncerActorCooldowns.get(trap.id);
         const fwdX = Math.sin(trap.rotationY);
         const fwdZ = Math.cos(trap.rotationY);

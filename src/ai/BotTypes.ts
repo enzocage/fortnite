@@ -23,6 +23,7 @@ import type {
   SlurpBarrelEntity,
   SpecialistRole,
   StormState,
+  TeamId,
   TerrainQuery,
   Vec3Like,
   VehicleEntity,
@@ -51,6 +52,7 @@ export interface BotCombatTarget {
   isAlly?: boolean;
   isDuoPartner?: boolean;
   squadId?: string;
+  teamId?: TeamId;
   isKnocked?: boolean;
   medallions?: MedallionId[];
   medallionCount?: number;
@@ -59,6 +61,13 @@ export interface BotCombatTarget {
   height?: number;
   velocity?: Vec3Like;
   inVehicle?: boolean;
+}
+
+export interface TeamRumbleScoreState {
+  blueScore: number;
+  redScore: number;
+  targetScore: number;
+  leadingTeam: TeamId | 'tie';
 }
 
 export interface DuoPartnerHudState {
@@ -163,6 +172,7 @@ export interface BotRenderState extends CharacterRenderState {
   isAlly?: boolean;
   allyRole?: SpecialistRole;
   squadId?: string;
+  teamId?: TeamId;
   isDuoPartner?: boolean;
   isKnocked?: boolean;
   bleedOutHp?: number;
@@ -304,6 +314,11 @@ export interface BotEntity {
   allyRole?: SpecialistRole;
   allyAbilityCooldown?: number;
   squadId?: string;
+  teamId?: TeamId;
+  respawnTimer?: number;
+  lastHeardGunfireTime?: number;
+  lastHeardGunfireSourceId?: string;
+  lastHeardNoiseKind?: 'gunfire' | 'build' | 'footstep' | 'chest';
   isDuoPartner?: boolean;
   isKnocked?: boolean;
   bleedOutHp?: number;
@@ -403,6 +418,7 @@ export interface BotWorldContext {
   playerAlive?: boolean;
   playerRevivingPartner?: boolean;
   playerMedallionCount?: number;
+  playerStealthed?: boolean;
   onPlayerRevived?: (reviverId: string) => void;
   getSquadmates?: (squadId: string) => BotEntity[];
   getMedallionHolders?: () => MedallionHolderInfo[];

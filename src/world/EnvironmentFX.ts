@@ -194,12 +194,18 @@ export class EnvironmentFX {
         }
       `,
       fragmentShader: `
+        uniform float uTime;
         uniform vec3 uSunDir;
         uniform float uDayPhase;
         uniform float uWarmth;
         uniform float uOvercast;
         uniform float uLightning;
         varying vec3 vWorldDir;
+
+        float skyStarHash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+
         void main() {
           vec3 dir = normalize(vWorldDir);
           float h = clamp(dir.y, -0.2, 1.0);
@@ -237,6 +243,33 @@ export class EnvironmentFX {
           col += vec3(1.0, 0.74, 0.40) * pow(sunDot, 4.0) * horizonBand * (0.26 + warmBoost) * sunVis;
           col += vec3(1.0, 0.86, 0.54) * pow(sunDot, 12.0) * (0.36 + warmBoost * 0.5) * sunVis;
           col += vec3(1.0, 0.98, 0.88) * smoothstep(0.9965, 0.9992, sunDot) * 1.15 * sunVis;
+
+          // Subtle Twilight Starfield & Aurora Borealis Shimmer during dusk/twilight/storm elevations
+          float twilightVis = smoothstep(0.32, 0.66, max(uDayPhase, uWarmth * 0.85));
+          if (twilightVis > 0.01 && h > 0.12) {
+            vec2 skyProj = dir.xz / max(0.35, dir.y + 0.45);
+            vec2 starGrid = floor(skyProj * 68.0);
+            vec2 starUv = fract(skyProj * 68.0) - 0.5;
+            float starSeed = skyStarHash(starGrid);
+            vec2 starOffset = vec2(
+              skyStarHash(starGrid + vec2(19.3, 7.1)),
+              skyStarHash(starGrid + vec2(43.7, 29.5))
+            ) - 0.5;
+            float starDist = length(starUv - starOffset * 0.52);
+            float starPoint = (1.0 - smoothstep(0.0, 0.12, starDist)) * smoothstep(0.955, 0.996, starSeed);
+            float twinkle = 0.65 + 0.35 * sin(uTime * (2.2 + starSeed * 3.5) + starSeed * 62.8);
+            float starVis = twilightVis * smoothstep(0.16, 0.56, h) * (1.0 - smoothstep(0.55, 0.92, sunDot)) * (1.0 - uOvercast * 0.72);
+            col += vec3(0.88, 0.94, 1.0) * starPoint * twinkle * starVis * 0.85;
+
+            float auroraBand = smoothstep(0.14, 0.42, h) * (1.0 - smoothstep(0.58, 0.95, h));
+            float curtainPhase = dir.x * 5.2 + dir.z * 3.1 + sin(dir.z * 4.5 + uTime * 0.22) * 1.4;
+            float auroraWaveA = pow(0.5 + 0.5 * sin(curtainPhase + uTime * 0.48), 3.0);
+            float auroraWaveB = pow(0.5 + 0.5 * cos(dir.x * 7.8 - dir.z * 4.4 - uTime * 0.36 + sin(uTime * 0.25 + dir.x * 3.0)), 4.0);
+            float auroraCurtain = clamp(auroraWaveA * 0.65 + auroraWaveB * 0.55, 0.0, 1.0) * auroraBand;
+            vec3 auroraCol = mix(vec3(0.14, 0.92, 0.68), vec3(0.56, 0.34, 0.96), clamp(0.5 + 0.5 * sin(curtainPhase * 0.7 - uTime * 0.3), 0.0, 1.0));
+            float auroraStrength = twilightVis * (0.28 + 0.22 * (1.0 - uOvercast * 0.45));
+            col += auroraCol * auroraCurtain * auroraStrength;
+          }
 
           // Lightning flash sheet glow across storm clouds & zenith
           col += vec3(0.76, 0.86, 1.0) * uLightning * (0.35 + 0.65 * smoothstep(0.0, 0.65, h));

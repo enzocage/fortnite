@@ -1,4 +1,4 @@
-import type { AmmoType, Rarity, Vec3Like } from './common';
+import type { AmmoType, Rarity, Vec3Like, WeaponModId } from './common';
 
 export type WeaponId =
   | 'pickaxe'
@@ -23,6 +23,8 @@ export type WeaponId =
   | 'chug_splash'
   | 'grappler'
   | 'shield_bubble'
+  | 'port_a_bunker'
+  | 'emp_grenade'
   | 'mini_shield'
   | 'shield_potion'
   | 'bandages'
@@ -103,6 +105,10 @@ export interface WeaponDef {
   spinUpSec?: number;
   heatPerShot?: number;
   coolRatePerSec?: number;
+  isPortABunker?: boolean;
+  isEmpGrenade?: boolean;
+  empShieldDamage?: number;
+  empDisableSec?: number;
   overheatLockSec?: number;
   allowedRarities: Rarity[];
 }
@@ -113,6 +119,7 @@ export interface ItemInstance {
   rarity: Rarity;
   magAmmo: number;
   stackCount: number;
+  mods?: WeaponModId[];
 }
 
 export interface DamageEvent {
@@ -152,4 +159,6 @@ export interface ProjectileState {
   isSplashHeal?: boolean;
   isShieldBubble?: boolean;
   isBoomArrow?: boolean;
+  isPortABunker?: boolean;
+  isEmpGrenade?: boolean;
 }

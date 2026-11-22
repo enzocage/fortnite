@@ -366,6 +366,10 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'bouncer_launch':
     case 'reboot_complete':
     case 'drone_explode':
+    case 'bunker_deploy':
+    case 'emp_blast':
+    case 'forecast_scan':
+    case 'rumble_lead_change':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -395,6 +399,7 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'bow_draw':
     case 'revive_tick':
     case 'railgun_charge':
+    case 'bush_rustle':
       return 1;
     case 'augment_select':
     case 'tactical_ping':
@@ -408,6 +413,9 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'minigun_overheat':
     case 'grind_attach':
     case 'reboot_channel':
+    case 'shot_suppressed':
+    case 'mod_install':
+    case 'rumble_respawn':
     default:
       return 2;
   }
@@ -417,6 +425,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
   switch (id) {
     case 'campfire_heal':
       return 35;
+    case 'bush_rustle':
+      return 40;
     case 'revive_tick':
       return 45;
     case 'footstep':
@@ -456,10 +466,12 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'zipline_attach':
     case 'zipline_loop':
     case 'revive_complete':
+    case 'mod_install':
       return 85;
     case 'upgrade_weapon':
     case 'campfire_ignite':
     case 'vending_buy':
+    case 'shot_suppressed':
       return 90;
     case 'grind_attach':
       return 95;
@@ -482,6 +494,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'shield_bubble_deploy':
       return 140;
     case 'tactical_ping':
+    case 'rumble_respawn':
       return 150;
     case 'bow_release':
       return 155;
@@ -490,6 +503,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'shot_combat_smg':
       return 175;
     case 'vehicle_horn':
+    case 'bunker_deploy':
       return 180;
     case 'slurp_tanker_burst':
     case 'shot_minigun':
@@ -505,6 +519,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'vehicle_crash':
     case 'vault_unlock':
     case 'flag_captured':
+    case 'forecast_scan':
       return 220;
     case 'drone_explode':
       return 230;
@@ -517,6 +532,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'rift_teleport':
     case 'barrel_explode':
     case 'bunker_unlock':
+    case 'emp_blast':
       return 240;
     case 'shot_railgun':
       return 260;
@@ -524,6 +540,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 280;
     case 'weather_thunder':
     case 'loot_island_spawn':
+    case 'rumble_lead_change':
       return 350;
     default:
       return 175;

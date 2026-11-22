@@ -12,6 +12,7 @@ import type {
   SoundEventPayload,
   Vec3Like,
   WeaponId,
+  WeaponModId,
 } from '../types';
 
 export interface GameEventMap {
@@ -181,6 +182,10 @@ export interface GameEventMap {
     position: Vec3Like;
     progress: number;
   };
+  'vfx:bunker_deploy': { position: Vec3Like };
+  'vfx:emp_blast': { position: Vec3Like; radius: number };
+  'vfx:weapon_mod': { position: Vec3Like; modId: WeaponModId };
+  'vfx:forecast_pulse': { position: Vec3Like };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

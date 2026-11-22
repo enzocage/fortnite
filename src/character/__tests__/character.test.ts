@@ -7,6 +7,7 @@ import type {
   EmoteId,
   Rarity,
   WeaponId,
+  WeaponModId,
 } from '../../types';
 import {
   CONTRAILS,
@@ -17,12 +18,14 @@ import {
   RARITY_COLORS,
   SKINS,
   WEAPONS,
+  WEAPON_MODS,
   WEAPON_WRAPS,
 } from '../../core';
 import {
   CharacterAnimator,
   CharacterRig,
   VFXManager,
+  applyWeaponModsToModel,
   applyWeaponWrap,
   createBlueprintModel,
   createWeaponModel,
@@ -82,9 +85,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 27 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 29 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(27);
+    expect(allIds).toHaveLength(29);
 
     const seenNames = new Set<string>();
 
@@ -2889,6 +2892,385 @@ describe('Wave-7 Pulse Railgun, Overheat Minigun, Grind Pose & VFX Channels', ()
     expect(vfx.getActiveTrapTriggerCount()).toBe(0);
     expect(vfx.getActiveDroneExplodeCount()).toBe(0);
     expect(vfx.getActiveRebootBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-8 Port-A-Bunker, EMP Grenade, Weapon Mods, Team Blue Chevron & VFX Channels', () => {
+  it('builds bespoke Port-A-Bunker and EMP Grenade models with throwable poses and zero casing ejection', () => {
+    const bunker = createWeaponModel('port_a_bunker');
+    expect(bunker.name).toBe('weapon_port_a_bunker');
+    expect(bunker.userData.wrapDisabled).toBe(true);
+    expect(isThrowableWeapon('port_a_bunker')).toBe(true);
+    expect(hasMuzzleOffset('port_a_bunker')).toBe(true);
+    expect(countMeshes(bunker)).toBeGreaterThanOrEqual(10);
+    const bunkerMuzzle = bunker.userData.muzzleOffset as THREE.Vector3;
+    expect(bunkerMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(bunkerMuzzle.z).toBeGreaterThan(0.15);
+
+    const blueHex = new THREE.Color('#2563eb').getHex();
+    const silverHex = new THREE.Color('#cbd5e1').getHex();
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    let hasBlue = false;
+    let hasSilver = false;
+    let hasCyanStripe = false;
+    bunker.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.color.getHex() === blueHex) hasBlue = true;
+        if (child.material.color.getHex() === silverHex) hasSilver = true;
+        if (child.material.emissive.getHex() === cyanHex) hasCyanStripe = true;
+      }
+    });
+    expect(hasBlue).toBe(true);
+    expect(hasSilver).toBe(true);
+    expect(hasCyanStripe).toBe(true);
+    assertFiniteBox(bunker);
+    disposeObject3D(bunker);
+
+    const emp = createWeaponModel('emp_grenade');
+    expect(emp.name).toBe('weapon_emp_grenade');
+    expect(emp.userData.wrapDisabled).toBe(true);
+    expect(isThrowableWeapon('emp_grenade')).toBe(true);
+    expect(hasMuzzleOffset('emp_grenade')).toBe(true);
+    expect(countMeshes(emp)).toBeGreaterThanOrEqual(10);
+    const empMuzzle = emp.userData.muzzleOffset as THREE.Vector3;
+    expect(empMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(empMuzzle.z).toBeGreaterThan(0.15);
+
+    const copperHex = new THREE.Color('#d97706').getHex();
+    let hasElectricCyanOrb = false;
+    let hasCopperCoil = false;
+    emp.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.emissive.getHex() === cyanHex) hasElectricCyanOrb = true;
+        if (child.material.color.getHex() === copperHex) hasCopperCoil = true;
+      }
+    });
+    expect(hasElectricCyanOrb).toBe(true);
+    expect(hasCopperCoil).toBe(true);
+    assertFiniteBox(emp);
+    disposeObject3D(emp);
+
+    // CharacterAnimator poses both as throwables and VFXManager skips brass casings
+    const animator = new CharacterAnimator();
+    const rig = new CharacterRig();
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'port_a_bunker', isAiming: true }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('port_a_bunker');
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.5);
+
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'emp_grenade', isAiming: true }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('emp_grenade');
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.5);
+    assertFiniteBox(rig.getGroup());
+    rig.dispose();
+
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.4 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'port_a_bunker',
+    });
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.4 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'emp_grenade',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(0);
+    vfx.dispose();
+  });
+
+  it('attaches mod_red_dot, mod_suppressor, mod_drum_mag, and mod_foregrip idempotently via applyWeaponModsToModel and CharacterRig', () => {
+    expect(WEAPON_MODS).toHaveLength(4);
+    const allMods: WeaponModId[] = ['red_dot', 'suppressor', 'drum_mag', 'foregrip'];
+    const ar = createWeaponModel('ar');
+    const baseMeshCount = countMeshes(ar);
+
+    // Attach all 4 distinct attachment sub-meshes
+    applyWeaponModsToModel(ar, allMods);
+    const moddedMeshCount = countMeshes(ar);
+    expect(moddedMeshCount).toBeGreaterThan(baseMeshCount);
+
+    for (const modId of allMods) {
+      const modNode = ar.getObjectByName(`mod_${modId}`);
+      expect(modNode).toBeDefined();
+      expect(countMeshes(modNode!)).toBeGreaterThanOrEqual(2);
+      assertFiniteBox(modNode!);
+      modNode!.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          expect(child.castShadow).toBe(true);
+          expect(child.userData.wrapTarget).toBe(false);
+        }
+      });
+    }
+
+    // Verify distinctive attachment properties (emissive optic dot, matte dark suppressor cylinder, twin drums, angled foregrip)
+    const redDot = ar.getObjectByName('mod_red_dot')!;
+    let hasRedReticle = false;
+    redDot.traverse((c) => {
+      if (
+        c instanceof THREE.Mesh &&
+        c.material instanceof THREE.MeshStandardMaterial &&
+        c.material.emissive.getHex() === new THREE.Color('#ef4444').getHex()
+      ) {
+        hasRedReticle = true;
+      }
+    });
+    expect(hasRedReticle).toBe(true);
+
+    const suppressor = ar.getObjectByName('mod_suppressor')!;
+    let suppressorCylinders = 0;
+    suppressor.traverse((c) => {
+      if (c instanceof THREE.Mesh && c.geometry instanceof THREE.CylinderGeometry) {
+        suppressorCylinders++;
+      }
+    });
+    expect(suppressorCylinders).toBeGreaterThanOrEqual(2);
+    expect(suppressor.position.z).toBeGreaterThanOrEqual((ar.userData.muzzleOffset as THREE.Vector3).z);
+
+    const drumMag = ar.getObjectByName('mod_drum_mag')!;
+    let drumCylinders = 0;
+    drumMag.traverse((c) => {
+      if (c instanceof THREE.Mesh && c.geometry instanceof THREE.CylinderGeometry) {
+        drumCylinders++;
+      }
+    });
+    expect(drumCylinders).toBeGreaterThanOrEqual(4); // 2 outer drums + 2 faceplates
+
+    const foregrip = ar.getObjectByName('mod_foregrip')!;
+    expect(foregrip.position.z).toBeGreaterThan(0.15);
+
+    // Re-calling with identical (even duplicated) mods is strictly idempotent
+    applyWeaponModsToModel(ar, ['red_dot', 'suppressor', 'drum_mag', 'foregrip', 'red_dot']);
+    expect(countMeshes(ar)).toBe(moddedMeshCount);
+
+    // Wrap application preserves mod sub-mesh materials
+    applyWeaponWrap(ar, 'midas_gold');
+    const goldMat = getWeaponWrapMaterial('midas_gold');
+    for (const modId of allMods) {
+      ar.getObjectByName(`mod_${modId}`)!.traverse((c) => {
+        if (c instanceof THREE.Mesh) expect(c.material).not.toBe(goldMat);
+      });
+    }
+
+    // Changing mods removes stale mod children cleanly
+    applyWeaponModsToModel(ar, ['suppressor']);
+    expect(ar.getObjectByName('mod_suppressor')).toBeDefined();
+    expect(ar.getObjectByName('mod_red_dot')).toBeUndefined();
+    expect(ar.getObjectByName('mod_drum_mag')).toBeUndefined();
+    expect(ar.getObjectByName('mod_foregrip')).toBeUndefined();
+
+    // Clearing mods restores exact base mesh count
+    applyWeaponModsToModel(ar, []);
+    expect(countMeshes(ar)).toBe(baseMeshCount);
+    expect(ar.getObjectByName('mod_suppressor')).toBeUndefined();
+    disposeObject3D(ar);
+
+    // CharacterRig & CharacterAnimator forward state.weaponMods to held firearms & clean up when switching
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    rig.updateFromState(makeRenderState({ weaponId: 'ar', weaponMods: ['red_dot', 'foregrip'] }));
+    const activeAr = rig.getActiveWeaponGroup()!;
+    expect(activeAr.name).toBe('weapon_ar');
+    expect(activeAr.getObjectByName('mod_red_dot')).toBeDefined();
+    expect(activeAr.getObjectByName('mod_foregrip')).toBeDefined();
+    expect(activeAr.getObjectByName('mod_suppressor')).toBeUndefined();
+
+    // Updating mods on same firearm removes stale mods and attaches new ones
+    animator.update(
+      rig,
+      makeRenderState({ weaponId: 'ar', weaponMods: ['suppressor', 'drum_mag'] }),
+      0.05,
+    );
+    expect(activeAr.getObjectByName('mod_red_dot')).toBeUndefined();
+    expect(activeAr.getObjectByName('mod_foregrip')).toBeUndefined();
+    expect(activeAr.getObjectByName('mod_suppressor')).toBeDefined();
+    expect(activeAr.getObjectByName('mod_drum_mag')).toBeDefined();
+
+    // Switching to an unmodded SMG does not inherit previous weapon's mods
+    rig.updateFromState(makeRenderState({ weaponId: 'smg' }));
+    const activeSmg = rig.getActiveWeaponGroup()!;
+    expect(activeSmg.name).toBe('weapon_smg');
+    expect(activeSmg.getObjectByName('mod_suppressor')).toBeUndefined();
+    expect(activeSmg.getObjectByName('mod_drum_mag')).toBeUndefined();
+
+    // Non-firearms (pickaxe / build blueprint) ignore firearm mods cleanly
+    rig.updateFromState(makeRenderState({ weaponId: 'pickaxe', weaponMods: ['red_dot'] }));
+    expect(rig.getActiveWeaponGroup()!.getObjectByName('mod_red_dot')).toBeUndefined();
+
+    rig.dispose();
+  });
+
+  it('renders clean cyan friendly ally chevron for team_blue without cluttering team_red enemies', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+
+    // team_red enemy starts clean with zero ally aura clutter
+    rig.updateFromState(makeRenderState({ teamId: 'team_red' }));
+    expect(rig.isAllyAuraEnabled()).toBe(false);
+    expect(rig.getGroup().getObjectByName('ally_tactical_aura')).toBeUndefined();
+
+    // team_blue ally displays hovering cyan ally chevron
+    rig.updateFromState(makeRenderState({ teamId: 'team_blue' }));
+    expect(rig.isAllyAuraEnabled()).toBe(true);
+    const aura = rig.getGroup().getObjectByName('ally_tactical_aura') as THREE.Group;
+    const chevron = rig.getGroup().getObjectByName('ally_tactical_chevron') as THREE.Group;
+    const roleRing = rig.getGroup().getObjectByName('ally_role_ring') as THREE.Mesh;
+    expect(aura).toBeInstanceOf(THREE.Group);
+    expect(chevron).toBeInstanceOf(THREE.Group);
+    expect(aura.visible).toBe(true);
+    expect(aura.position.y).toBeGreaterThan(1.85);
+    expect((roleRing.material as THREE.MeshStandardMaterial).color.getHex()).toBe(cyanHex);
+
+    let hasCyanChevronMesh = false;
+    chevron.traverse((c) => {
+      if (
+        c instanceof THREE.Mesh &&
+        c.material instanceof THREE.MeshStandardMaterial &&
+        c.material.color.getHex() === cyanHex
+      ) {
+        hasCyanChevronMesh = true;
+      }
+    });
+    expect(hasCyanChevronMesh).toBe(true);
+
+    // CharacterAnimator advances chevron animation for team_blue
+    const rotStart = chevron.rotation.y;
+    for (let i = 0; i < 6; i++) {
+      animator.update(rig, makeRenderState({ animState: 'run', teamId: 'team_blue' }), 0.05);
+    }
+    expect(chevron.rotation.y).toBeGreaterThan(rotStart);
+
+    // Switching to team_red enemy hides chevron cleanly
+    animator.update(rig, makeRenderState({ animState: 'run', teamId: 'team_red' }), 0.05);
+    expect(rig.isAllyAuraEnabled()).toBe(false);
+    expect(aura.visible).toBe(false);
+
+    rig.dispose();
+  });
+
+  it('spawns, updates, expires, guards NaN/range, clears, and disposes all 4 Wave-8 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:bunker_deploy
+    bus.emit('vfx:bunker_deploy', { position: { x: 6, y: 0, z: -8 } });
+    expect(vfx.getBunkerDeployEffectCount()).toBe(1);
+
+    // 2. vfx:emp_blast
+    bus.emit('vfx:emp_blast', { position: { x: -5, y: 0.4, z: 7 }, radius: 6.5 });
+    expect(vfx.getEmpBlastEffectCount()).toBe(1);
+
+    // 3. vfx:weapon_mod (test across mod types)
+    bus.emit('vfx:weapon_mod', { position: { x: 2, y: 1.1, z: 3 }, modId: 'drum_mag' });
+    expect(vfx.getWeaponModEffectCount()).toBe(1);
+
+    // 4. vfx:forecast_pulse
+    bus.emit('vfx:forecast_pulse', { position: { x: -12, y: 2.0, z: -15 } });
+    expect(vfx.getForecastPulseEffectCount()).toBe(1);
+
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    // Advance 0.3s -> all 4 remain active and transforms stay finite
+    for (let i = 0; i < 6; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getBunkerDeployEffectCount()).toBe(1);
+    expect(vfx.getEmpBlastEffectCount()).toBe(1);
+    expect(vfx.getWeaponModEffectCount()).toBe(1);
+    expect(vfx.getForecastPulseEffectCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Advance past 0.85s -> bunker_deploy (0.78s), emp_blast (0.68s), weapon_mod (0.75s) expire while forecast_pulse (1.25s) stays active
+    for (let i = 0; i < 11; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getBunkerDeployEffectCount()).toBe(0);
+    expect(vfx.getEmpBlastEffectCount()).toBe(0);
+    expect(vfx.getWeaponModEffectCount()).toBe(0);
+    expect(vfx.getForecastPulseEffectCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(1);
+
+    // Advance past 1.25s -> forecast_pulse expires cleanly
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getForecastPulseEffectCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Strict NaN / Infinity position guards
+    bus.emit('vfx:bunker_deploy', { position: { x: Number.NaN, y: 0, z: 0 } });
+    bus.emit('vfx:emp_blast', {
+      position: { x: 0, y: Number.POSITIVE_INFINITY, z: 0 },
+      radius: 6.5,
+    });
+    bus.emit('vfx:weapon_mod', {
+      position: { x: 0, y: 0, z: Number.NEGATIVE_INFINITY },
+      modId: 'red_dot',
+    });
+    bus.emit('vfx:forecast_pulse', { position: { x: Number.NaN, y: 1, z: 1 } });
+    expect(vfx.getBunkerDeployEffectCount()).toBe(0);
+    expect(vfx.getEmpBlastEffectCount()).toBe(0);
+    expect(vfx.getWeaponModEffectCount()).toBe(0);
+    expect(vfx.getForecastPulseEffectCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Invalid EMP radius clamped cleanly without NaN transforms
+    bus.emit('vfx:emp_blast', { position: { x: 1, y: 1, z: 1 }, radius: -10 });
+    bus.emit('vfx:emp_blast', { position: { x: 2, y: 1, z: 2 }, radius: Number.NaN });
+    expect(vfx.getEmpBlastEffectCount()).toBe(2);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 4 Wave-8 pools immediately
+    bus.emit('vfx:bunker_deploy', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:weapon_mod', { position: { x: 0, y: 1, z: 0 }, modId: 'suppressor' });
+    bus.emit('vfx:forecast_pulse', { position: { x: 4, y: 0, z: 4 } });
+    expect(vfx.getActiveEffectCount()).toBe(5);
+    vfx.clear();
+    expect(vfx.getBunkerDeployEffectCount()).toBe(0);
+    expect(vfx.getEmpBlastEffectCount()).toBe(0);
+    expect(vfx.getWeaponModEffectCount()).toBe(0);
+    expect(vfx.getForecastPulseEffectCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 4 Wave-8 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:bunker_deploy', { position: { x: 0, y: 0, z: 0 } });
+    bus.emit('vfx:emp_blast', { position: { x: 0, y: 0, z: 0 }, radius: 6.5 });
+    bus.emit('vfx:weapon_mod', { position: { x: 0, y: 1, z: 0 }, modId: 'foregrip' });
+    bus.emit('vfx:forecast_pulse', { position: { x: 0, y: 0, z: 0 } });
+    expect(vfx.getBunkerDeployEffectCount()).toBe(0);
+    expect(vfx.getEmpBlastEffectCount()).toBe(0);
+    expect(vfx.getWeaponModEffectCount()).toBe(0);
+    expect(vfx.getForecastPulseEffectCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

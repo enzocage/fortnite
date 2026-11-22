@@ -427,7 +427,14 @@ export class MatchOverlay {
 
     const title = document.createElement('div');
     title.className = summary.victory ? 'fdr-victory-title' : 'fdr-elim-title';
-    title.textContent = summary.victory ? '#1 VICTORY ROYALE!' : 'ELIMINATED';
+    const rumbleScore = summary.teamRumbleScore;
+    title.textContent = rumbleScore
+      ? summary.victory
+        ? 'TEAM RUMBLE VICTORY!'
+        : 'TEAM RUMBLE DEFEAT'
+      : summary.victory
+        ? '#1 VICTORY ROYALE!'
+        : 'ELIMINATED';
 
     header.append(iconWrap, title);
 
@@ -451,9 +458,25 @@ export class MatchOverlay {
     modeBadge.textContent = `${modeMeta.name} • ${modeMeta.badge}`;
     modeRow.appendChild(modeBadge);
 
+    if (rumbleScore) {
+      const blue = Math.max(0, Math.round(rumbleScore.blue));
+      const red = Math.max(0, Math.round(rumbleScore.red));
+      const rumblePill = document.createElement('span');
+      rumblePill.className = `fdr-rumble-score-pill${summary.victory ? ' victory' : ' defeat'}`;
+      rumblePill.innerHTML = `<span class="blue">BLUE ${blue}</span><span class="sep"> - </span><span class="red">${red} RED</span>`;
+      modeRow.appendChild(rumblePill);
+    }
+
     const sub = document.createElement('div');
     sub.className = 'fdr-summary-sub';
-    if (summary.victory) {
+    if (rumbleScore) {
+      const blue = Math.max(0, Math.round(rumbleScore.blue));
+      const red = Math.max(0, Math.round(rumbleScore.red));
+      const target = Math.max(1, Math.round(rumbleScore.target));
+      sub.textContent = summary.victory
+        ? `BLUE TEAM WON ${blue} - ${red} (FIRST TO ${target})`
+        : `RED TEAM WON ${red} - ${blue} (FIRST TO ${target})`;
+    } else if (summary.victory) {
       sub.textContent = `LAST SURVIVOR OUT OF ${summary.totalPlayers} PLAYERS`;
     } else if (summary.eliminatedBy) {
       sub.textContent = `PLACED #${summary.placement} / ${summary.totalPlayers} • ELIMINATED BY ${summary.eliminatedBy}`;

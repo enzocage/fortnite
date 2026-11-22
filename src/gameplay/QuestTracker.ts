@@ -84,6 +84,8 @@ function hashMode(mode: GameModeId): number {
       return 2029;
     case 'duos':
       return 3049;
+    case 'team_rumble':
+      return 4073;
     case 'solo':
     default:
       return 17;

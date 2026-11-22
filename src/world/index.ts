@@ -34,6 +34,7 @@ export {
   type VendingPurchaseResult,
   type Wave6ShowcaseResult,
   type Wave7ShowcaseResult,
+  type Wave8ShowcaseResult,
   type WeaponBunkerLootResult,
 } from './WorldInteractables';
 export { EnvironmentDetail } from './EnvironmentDetail';

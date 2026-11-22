@@ -10,9 +10,11 @@ import type {
   SlurpTankerEntity,
   SoundEventId,
   SupplyDroneEntity,
+  TeamId,
   Vec3Like,
   VehicleEntity,
   WeaponId,
+  WeaponModId,
 } from '../types';
 import {
   EventBus,
@@ -27,7 +29,9 @@ import {
 import type { BuildingSystem } from './BuildingSystem';
 import type { CollisionSystem } from './CollisionSystem';
 import type {
+  BunkerDeploymentReport,
   CombatActor,
+  EmpDetonationReport,
   FireWeaponParams,
   FireWeaponResult,
   PropsInteractionBridge,
@@ -39,6 +43,7 @@ import type {
   WorldRiftCaptureBridge,
   WorldStationBridge,
 } from './GameplayTypes';
+import { getItemMagCapacity } from './InventorySystem';
 
 export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   pickaxe: 'pickaxe_swing',
@@ -63,6 +68,8 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   chug_splash: 'pickaxe_swing',
   grappler: 'grappler_fire',
   shield_bubble: 'pickaxe_swing',
+  port_a_bunker: 'bunker_deploy',
+  emp_grenade: 'emp_blast',
   mini_shield: 'ui_click',
   shield_potion: 'ui_click',
   bandages: 'ui_click',
@@ -71,6 +78,69 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
 };
 
 const SHOT_SOUND_MAP = WEAPON_SOUND_MAP;
+
+export interface WeaponModEffects {
+  adsSpreadMult: number;
+  noiseRadiusMult: number;
+  bloomMult: number;
+  recoilMult: number;
+  magMult: number;
+  suppressed: boolean;
+}
+
+export function resolveWeaponMods(
+  item?: ItemInstance | null,
+  extraMods?: WeaponModId[],
+): WeaponModId[] {
+  const out: WeaponModId[] = [];
+  const appendUnique = (list?: WeaponModId[]) => {
+    if (!list) return;
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      if (!out.includes(m)) out.push(m);
+    }
+  };
+  appendUnique(item?.mods);
+  appendUnique(extraMods);
+  return out;
+}
+
+export function getWeaponModEffects(mods?: WeaponModId[]): WeaponModEffects {
+  const hasRedDot = Boolean(mods?.includes('red_dot'));
+  const hasSuppressor = Boolean(mods?.includes('suppressor'));
+  const hasDrumMag = Boolean(mods?.includes('drum_mag'));
+  const hasForegrip = Boolean(mods?.includes('foregrip'));
+  return {
+    adsSpreadMult: hasRedDot ? 0.65 : 1.0,
+    noiseRadiusMult: hasSuppressor ? 0.3 : 1.0,
+    bloomMult: hasForegrip ? 0.75 : 1.0,
+    recoilMult: hasForegrip ? 0.65 : 1.0,
+    magMult: hasDrumMag ? 1.45 : 1.0,
+    suppressed: hasSuppressor,
+  };
+}
+
+function isFriendlyCombatActor(
+  attackerId: string,
+  attackerSquadId: string | undefined,
+  attackerTeamId: TeamId | undefined,
+  target: CombatActor,
+): boolean {
+  if (target.id === attackerId) return true;
+  if (
+    attackerSquadId &&
+    (target.squadId === attackerSquadId || target.teamId === attackerSquadId)
+  ) {
+    return true;
+  }
+  if (
+    attackerTeamId &&
+    (target.teamId === attackerTeamId || target.squadId === attackerTeamId)
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export function computeWeaponDamage(
   weaponId: WeaponId,
@@ -174,6 +244,11 @@ interface ActiveProjectile extends ProjectileState {
   demolisherActive?: boolean;
   firstAssaultActive?: boolean;
   combatMedallionActive?: boolean;
+  ownerYaw?: number;
+  actorSquadId?: string;
+  actorTeamId?: TeamId;
+  onBunkerDeployed?: (report: BunkerDeploymentReport) => void;
+  onEmpHit?: (report: EmpDetonationReport) => void;
 }
 
 interface PendingBurst {
@@ -204,6 +279,10 @@ export class WeaponSystem {
   private onDroneDestroyed:
     | ((res: SupplyDroneDamageResult) => void)
     | null = null;
+  private onBunkerDeployed:
+    | ((report: BunkerDeploymentReport) => void)
+    | null = null;
+  private onEmpHit: ((report: EmpDetonationReport) => void) | null = null;
   private projectiles: ActiveProjectile[] = [];
   private pendingBursts: PendingBurst[] = [];
   private shieldBubbles: ShieldBubbleState[] = [];
@@ -277,6 +356,16 @@ export class WeaponSystem {
     this.onDroneDestroyed = cb;
   }
 
+  setOnBunkerDeployed(
+    cb: ((report: BunkerDeploymentReport) => void) | null,
+  ): void {
+    this.onBunkerDeployed = cb;
+  }
+
+  setOnEmpHit(cb: ((report: EmpDetonationReport) => void) | null): void {
+    this.onEmpHit = cb;
+  }
+
   isTwinMagFastReload(item: ItemInstance): boolean {
     const def = WEAPONS[item.weaponId];
     if (!def || def.twinMagFastReloadTime === undefined) return false;
@@ -339,6 +428,8 @@ export class WeaponSystem {
     dir: Vec3Like,
     maxDist: number,
     excludeActorId: string,
+    excludeSquadId?: string,
+    excludeTeamId?: TeamId,
   ): ActorHit | null {
     if (!this.actorsProvider) return null;
     const actors = this.actorsProvider();
@@ -347,7 +438,17 @@ export class WeaponSystem {
 
     for (let i = 0; i < actors.length; i++) {
       const actor = actors[i];
-      if (!actor.alive || actor.id === excludeActorId) continue;
+      if (!actor.alive) continue;
+      if (
+        isFriendlyCombatActor(
+          excludeActorId,
+          excludeSquadId,
+          excludeTeamId,
+          actor,
+        )
+      ) {
+        continue;
+      }
 
       // 1. Head sphere test
       const headR = Math.max(0.24, actor.radius * 0.62);
@@ -1350,6 +1451,8 @@ export class WeaponSystem {
       aimDir,
       def.range,
       params.actor.id,
+      params.actor.squadId,
+      params.actorTeamId ?? params.actor.teamId,
     );
     const llamaHit = this.raycastLlamas(params.origin, aimDir, def.range);
     const vehicleHit = this.raycastVehicles(
@@ -1703,6 +1806,8 @@ export class WeaponSystem {
         rayDir,
         entityMax,
         params.actor.id,
+        params.actor.squadId,
+        params.actorTeamId ?? params.actor.teamId,
       );
       if (actorHit && !hitActorIds.has(actorHit.actor.id)) {
         hitActorIds.add(actorHit.actor.id);
@@ -1896,9 +2001,19 @@ export class WeaponSystem {
 
     // Arc proximity sweep for enemies inside the frontal cleave cone
     const actors = this.actorsProvider ? this.actorsProvider() : [];
+    const cleaveTeamId = params.actorTeamId ?? params.actor.teamId;
     for (let i = 0; i < actors.length; i++) {
       const actor = actors[i];
-      if (!actor.alive || actor.id === params.actor.id || hitActorIds.has(actor.id)) {
+      if (
+        !actor.alive ||
+        hitActorIds.has(actor.id) ||
+        isFriendlyCombatActor(
+          params.actor.id,
+          params.actor.squadId,
+          cleaveTeamId,
+          actor,
+        )
+      ) {
         continue;
       }
       const center = {
@@ -1999,7 +2114,17 @@ export class WeaponSystem {
     const actors = this.actorsProvider ? this.actorsProvider() : [];
     for (let i = 0; i < actors.length; i++) {
       const actor = actors[i];
-      if (!actor.alive || actor.id === params.actor.id) continue;
+      if (
+        !actor.alive ||
+        isFriendlyCombatActor(
+          params.actor.id,
+          params.actor.squadId,
+          params.actor.teamId,
+          actor,
+        )
+      ) {
+        continue;
+      }
       const center = {
         x: actor.position.x,
         y: actor.position.y + actor.height * 0.5,
@@ -2299,6 +2424,9 @@ export class WeaponSystem {
     if (def.isThrowable && params.item.stackCount <= 0) {
       return { fired: false, shotsHit: 0, headshots: 0, damageDealt: 0 };
     }
+    const mods = resolveWeaponMods(params.item, params.weaponMods);
+    const modFx = getWeaponModEffects(mods);
+    const magCap = getItemMagCapacity(params.item);
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const hasFirstAssault = Boolean(params.hasFirstAssault ?? params.actor.hasFirstAssault);
     const hasCombatMedallion = Boolean(
@@ -2306,12 +2434,14 @@ export class WeaponSystem {
     );
     const firstAssaultBoost =
       hasFirstAssault &&
-      def.magSize > 0 &&
+      magCap > 0 &&
       !def.isGrappler &&
-      params.item.magAmmo === def.magSize;
+      params.item.magAmmo === magCap;
     params.onAmmoConsumed?.();
 
-    const spreadDir = applySpreadToDir(aimDir, params.spreadRad);
+    const spreadScale =
+      params.isAiming && !params.spreadPreAdjusted ? modFx.adsSpreadMult : 1.0;
+    const spreadDir = applySpreadToDir(aimDir, params.spreadRad * spreadScale);
     const shotDir =
       def.isThrowable && Math.abs(spreadDir.y) < 0.72
         ? normalizeVec({ x: spreadDir.x, y: spreadDir.y + 0.15, z: spreadDir.z })
@@ -2319,8 +2449,12 @@ export class WeaponSystem {
     const muzzle = params.muzzlePos ?? params.origin;
 
     if (def.isThrowable) {
+      const throwSound: SoundEventId =
+        def.isPortABunker || def.isEmpGrenade
+          ? 'pickaxe_swing'
+          : SHOT_SOUND_MAP[params.item.weaponId];
       this.eventBus.emit('sound:play', {
-        id: SHOT_SOUND_MAP[params.item.weaponId],
+        id: throwSound,
         position: muzzle,
         volume: 0.45,
         pitch: 1.25,
@@ -2328,7 +2462,9 @@ export class WeaponSystem {
       });
     } else {
       this.eventBus.emit('sound:play', {
-        id: SHOT_SOUND_MAP[params.item.weaponId],
+        id: modFx.suppressed
+          ? 'shot_suppressed'
+          : SHOT_SOUND_MAP[params.item.weaponId],
         position: muzzle,
         spatial: true,
       });
@@ -2341,7 +2477,7 @@ export class WeaponSystem {
         position: params.origin,
         kind: 'gunfire',
         sourceId: params.actor.id,
-        radius: 135,
+        radius: 135 * modFx.noiseRadiusMult,
       });
       if (params.isPlayer) {
         this.eventBus.emit('vfx:camera_shake', {
@@ -2358,12 +2494,22 @@ export class WeaponSystem {
     const isShieldBubble = Boolean(
       def.isShieldBubble || params.item.weaponId === 'shield_bubble',
     );
+    const isPortABunker = Boolean(
+      def.isPortABunker || params.item.weaponId === 'port_a_bunker',
+    );
+    const isEmpGrenade = Boolean(
+      def.isEmpGrenade || params.item.weaponId === 'emp_grenade',
+    );
     const isBoomArrow = Boolean(def.isBow || params.item.weaponId === 'boom_bow');
     const bowCharge = isBoomArrow ? clamp(params.bowCharge ?? 1.0, 0, 1) : 1.0;
     const bowSpeedMult = isBoomArrow ? lerp(0.35, 1.0, bowCharge) : 1.0;
     const bowDmgMult = isBoomArrow ? lerp(0.35, 1.0, bowCharge) : 1.0;
     const combatMedallionMult = hasCombatMedallion && !def.isThrowable ? 1.12 : 1.0;
     const projSpeed = def.projectileSpeed * bowSpeedMult;
+    const horizShotLen = Math.hypot(shotDir.x, shotDir.z);
+    const derivedYaw =
+      params.actorYaw ??
+      (horizShotLen > 1e-4 ? Math.atan2(shotDir.x, shotDir.z) : 0);
 
     const proj: ActiveProjectile = {
       id: `proj_${this.nextProjId++}`,
@@ -2411,15 +2557,29 @@ export class WeaponSystem {
       isSplashHeal,
       isShieldBubble,
       isBoomArrow,
+      isPortABunker,
+      isEmpGrenade,
       settled: false,
       bounceSoundCooldown: 0,
       demolisherActive: hasDemolisher,
       firstAssaultActive: firstAssaultBoost,
       combatMedallionActive: hasCombatMedallion,
+      ownerYaw: derivedYaw,
+      actorSquadId: params.actor.squadId,
+      actorTeamId: params.actorTeamId ?? params.actor.teamId,
+      onBunkerDeployed: params.onBunkerDeployed,
+      onEmpHit: params.onEmpHit,
     };
 
     this.projectiles.push(proj);
-    return { fired: true, shotsHit: 0, headshots: 0, damageDealt: 0 };
+    return {
+      fired: true,
+      shotsHit: 0,
+      headshots: 0,
+      damageDealt: 0,
+      bloomScale: modFx.bloomMult,
+      recoilScale: modFx.recoilMult,
+    };
   }
 
   private applyWorldHitDamage(
@@ -2470,6 +2630,9 @@ export class WeaponSystem {
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
     const chBridge = params.chapterBridge ?? this.chapterBridge;
     const odBridge = params.overdriveBridge ?? this.overdriveBridge;
+    const mods = resolveWeaponMods(params.item, params.weaponMods);
+    const modFx = getWeaponModEffects(mods);
+    const magCap = getItemMagCapacity(params.item);
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const hasFirstAssault = Boolean(params.hasFirstAssault ?? params.actor.hasFirstAssault);
     const hasCombatMedallion = Boolean(
@@ -2477,10 +2640,10 @@ export class WeaponSystem {
     );
     const firstAssaultBoost =
       hasFirstAssault &&
-      def.magSize > 0 &&
+      magCap > 0 &&
       !def.isGrappler &&
       !def.isMinigun &&
-      params.item.magAmmo === def.magSize;
+      params.item.magAmmo === magCap;
     const firstAssaultMult = firstAssaultBoost ? 1.25 : 1.0;
     const combatMedallionMult = hasCombatMedallion ? 1.12 : 1.0;
     const demolisherMult = hasDemolisher ? 1.3 : 1.0;
@@ -2490,7 +2653,9 @@ export class WeaponSystem {
 
     const muzzle = params.muzzlePos ?? params.origin;
     this.eventBus.emit('sound:play', {
-      id: SHOT_SOUND_MAP[params.item.weaponId],
+      id: modFx.suppressed
+        ? 'shot_suppressed'
+        : SHOT_SOUND_MAP[params.item.weaponId],
       position: muzzle,
       spatial: true,
     });
@@ -2503,7 +2668,9 @@ export class WeaponSystem {
       position: params.origin,
       kind: 'gunfire',
       sourceId: params.actor.id,
-      radius: def.category === 'shotgun' ? 85 : isRailgun ? 140 : 115,
+      radius:
+        (def.category === 'shotgun' ? 85 : isRailgun ? 140 : 115) *
+        modFx.noiseRadiusMult,
     });
 
     if (params.isPlayer && (def.category === 'shotgun' || isRailgun)) {
@@ -2547,9 +2714,12 @@ export class WeaponSystem {
       ),
     );
 
+    const baseSpread =
+      params.spreadRad *
+      (params.isAiming && !params.spreadPreAdjusted ? modFx.adsSpreadMult : 1.0);
     for (let p = 0; p < pellets; p++) {
       // Keep first pellet closer to center for responsive shotgun aim
-      const effectiveSpread = p === 0 && pellets > 1 ? params.spreadRad * 0.35 : params.spreadRad;
+      const effectiveSpread = p === 0 && pellets > 1 ? baseSpread * 0.35 : baseSpread;
       const rayDir = applySpreadToDir(aimDir, effectiveSpread);
 
       const bubbleHit = this.raycastShieldBubbles(params.origin, rayDir, def.range);
@@ -2589,6 +2759,8 @@ export class WeaponSystem {
           rayDir,
           entityMaxDist,
           params.actor.id,
+          params.actor.squadId,
+          params.actorTeamId ?? params.actor.teamId,
         );
         const droneHit = this.raycastSupplyDrones(
           params.origin,
@@ -2878,6 +3050,8 @@ export class WeaponSystem {
       shotsHit,
       headshots,
       damageDealt: totalDamageDealt,
+      bloomScale: modFx.bloomMult,
+      recoilScale: modFx.recoilMult,
       ...(destroyedDrones.length > 0 ? { destroyedDrones } : {}),
     };
   }
@@ -3261,6 +3435,149 @@ export class WeaponSystem {
     });
   }
 
+  private detonateEmpGrenade(proj: ActiveProjectile, impactPos: Vec3Like): void {
+    const radius =
+      proj.splashRadius > 0
+        ? proj.splashRadius
+        : WEAPONS.emp_grenade.splashRadius || 6.5;
+    const maxShieldDmg = WEAPONS.emp_grenade.empShieldDamage ?? 70;
+    const disableSec = WEAPONS.emp_grenade.empDisableSec ?? 5.0;
+
+    this.eventBus.emit('vfx:emp_blast', {
+      position: { ...impactPos },
+      radius,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'emp_blast',
+      position: { ...impactPos },
+      spatial: true,
+    });
+    this.eventBus.emit('audio:noise', {
+      position: { ...impactPos },
+      kind: 'gunfire',
+      sourceId: proj.ownerId,
+      radius: 95,
+    });
+    this.emitBlastCameraShake(impactPos, 0.35, proj.isPlayer);
+
+    let actorsHit = 0;
+    let totalShieldStripped = 0;
+
+    if (this.actorsProvider) {
+      const actors = this.actorsProvider();
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (!actor.alive) continue;
+        if (
+          isFriendlyCombatActor(
+            proj.ownerId,
+            proj.actorSquadId,
+            proj.actorTeamId,
+            actor,
+          )
+        ) {
+          continue;
+        }
+        const center = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.5,
+          z: actor.position.z,
+        };
+        const d = Math.min(
+          dist3D(impactPos, actor.position),
+          dist3D(impactPos, center),
+        );
+        if (d > radius) continue;
+
+        const overshieldBefore = Math.max(0, actor.overshield ?? 0);
+        const overshieldDmg = Math.min(overshieldBefore, maxShieldDmg);
+        const remainingBudget = maxShieldDmg - overshieldDmg;
+        const shieldBefore = Math.max(0, actor.shield);
+        const shieldDmg = Math.min(shieldBefore, remainingBudget);
+        const stripped = overshieldDmg + shieldDmg;
+
+        if (stripped <= 0) continue;
+
+        if (actor.overshield !== undefined) {
+          actor.overshield = Math.max(0, actor.overshield - overshieldDmg);
+        }
+        actor.shield = Math.max(0, actor.shield - shieldDmg);
+
+        const ev: DamageEvent = {
+          targetId: actor.id,
+          attackerId: proj.ownerId,
+          attackerName: proj.ownerName,
+          weaponId: 'emp_grenade',
+          rarity: proj.rarity,
+          damage: stripped,
+          hpDamage: 0,
+          shieldDamage: shieldDmg,
+          isHeadshot: false,
+          isElimination: false,
+          hitPoint: center,
+          distance: d,
+        };
+        actor.onDamage?.(ev);
+
+        const shieldBroke =
+          (shieldBefore > 0 && actor.shield <= 0) ||
+          (overshieldBefore > 0 && (actor.overshield ?? 0) <= 0 && shieldBefore === 0);
+
+        this.eventBus.emit('vfx:impact', {
+          position: center,
+          normal: { x: 0, y: 1, z: 0 },
+          material: shieldBroke ? 'shield_break' : 'shield',
+        });
+        this.eventBus.emit('combat:damage', ev);
+
+        if (proj.isPlayer) {
+          this.eventBus.emit('combat:hitmarker', {
+            attackerId: proj.ownerId,
+            isHeadshot: false,
+            isShield: true,
+            isElimination: false,
+          });
+          this.eventBus.emit('ui:damage_number', {
+            id: `dmg_${this.dmgNumSeq++}`,
+            worldPos: center,
+            amount: stripped,
+            isShield: true,
+            isHeadshot: false,
+            timestamp: Date.now(),
+          });
+          this.eventBus.emit('sound:play', {
+            id: shieldBroke ? 'shield_break' : 'shield_hit',
+          });
+        }
+
+        actorsHit += 1;
+        totalShieldStripped += stripped;
+      }
+    }
+
+    const trapsDisabled = this.building.disableTrapsInRadius(
+      impactPos,
+      radius,
+      disableSec,
+      {
+        excludeOwnerId: proj.ownerId,
+        excludeSquadId: proj.actorSquadId,
+        excludeTeamId: proj.actorTeamId,
+      },
+    );
+
+    const report: EmpDetonationReport = {
+      attackerId: proj.ownerId,
+      isPlayer: proj.isPlayer,
+      position: { ...impactPos },
+      actorsHit,
+      shieldStripped: totalShieldStripped,
+      trapsDisabled,
+    };
+    proj.onEmpHit?.(report);
+    this.onEmpHit?.(report);
+  }
+
   update(dt: number): void {
     const safeDt = clamp(dt, 0, 0.05);
 
@@ -3370,6 +3687,8 @@ export class WeaponSystem {
           stepDir,
           entityMaxDist,
           proj.ownerId,
+          proj.actorSquadId,
+          proj.actorTeamId,
         );
         const vehicleHit = this.raycastVehicles(
           prevPos,
@@ -3477,15 +3796,17 @@ export class WeaponSystem {
             ? 0xfbbf24
             : proj.weaponId === 'rocket_launcher'
               ? 0xff5a2a
-              : proj.isShieldBubble
+              : proj.isShieldBubble || proj.isPortABunker
                 ? 0x38bdf8
-                : proj.isShockwave
-                  ? 0xa855f7
-                  : proj.isSplashHeal
-                    ? 0x22d3ee
-                    : proj.isThrowable
-                      ? 0xf59e0b
-                      : 0xfff3b0;
+                : proj.isEmpGrenade
+                  ? 0x22d3ee
+                  : proj.isShockwave
+                    ? 0xa855f7
+                    : proj.isSplashHeal
+                      ? 0x22d3ee
+                      : proj.isThrowable
+                        ? 0xf59e0b
+                        : 0xfff3b0;
         const tracerWidth =
           proj.weaponId === 'rocket_launcher'
             ? 0.14
@@ -3543,6 +3864,31 @@ export class WeaponSystem {
               proj.velocity = { x: 0, y: 0, z: 0 };
               proj.settled = true;
             }
+          } else if (proj.isPortABunker) {
+            const yaw =
+              proj.ownerYaw ??
+              (Math.hypot(proj.velocity.x, proj.velocity.z) > 1e-4
+                ? Math.atan2(proj.velocity.x, proj.velocity.z)
+                : 0);
+            const pieces = this.building.deployPortABunker(
+              nextPos,
+              proj.ownerId,
+              yaw,
+            );
+            const report: BunkerDeploymentReport = {
+              ownerId: proj.ownerId,
+              isPlayer: proj.isPlayer,
+              origin: { ...nextPos },
+              pieces,
+            };
+            proj.onBunkerDeployed?.(report);
+            this.onBunkerDeployed?.(report);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
+          } else if (proj.isEmpGrenade) {
+            this.detonateEmpGrenade(proj, nextPos);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
           } else if (proj.isShieldBubble) {
             this.deployShieldBubble(proj, nextPos);
             proj.alive = false;

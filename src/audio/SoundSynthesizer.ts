@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 112 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 120 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -288,6 +288,22 @@ export class SoundSynthesizer {
         return this.playRebootComplete(t, targetNode, vol, pitch);
       case 'drone_explode':
         return this.playDroneExplode(t, targetNode, vol, pitch);
+      case 'shot_suppressed':
+        return this.playShotSuppressed(t, targetNode, vol, pitch);
+      case 'mod_install':
+        return this.playModInstall(t, targetNode, vol, pitch);
+      case 'bunker_deploy':
+        return this.playBunkerDeploy(t, targetNode, vol, pitch);
+      case 'emp_blast':
+        return this.playEmpBlast(t, targetNode, vol, pitch);
+      case 'forecast_scan':
+        return this.playForecastScan(t, targetNode, vol, pitch);
+      case 'bush_rustle':
+        return this.playBushRustle(t, targetNode, vol, pitch);
+      case 'rumble_respawn':
+        return this.playRumbleRespawn(t, targetNode, vol, pitch);
+      case 'rumble_lead_change':
+        return this.playRumbleLeadChange(t, targetNode, vol, pitch);
       case 'shot_heavy_shotgun':
         return this.playShotHeavyShotgun(t, targetNode, vol, pitch);
       case 'shot_mythic_rifle':
@@ -5817,6 +5833,596 @@ export class SoundSynthesizer {
       wet: 0.28,
     });
     return 0.82;
+  }
+
+  // --- Wave 8 Bespoke SFX ---
+
+  private playShotSuppressed(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.03) * pitch;
+    // Tight damped sub-chamber thump
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 145 * jitter,
+      freqEnd: 44 * jitter,
+      duration: 0.055,
+      gain: 0.28 * vol,
+      wet: 0.06,
+    });
+    // Baffled suppressor internal pulse
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 290 * jitter,
+      freqEnd: 78 * jitter,
+      duration: 0.05,
+      gain: 0.22 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 880 * jitter,
+      filterFreqEnd: 240,
+      wet: 0.08,
+    });
+    // Suppressed pneumatic "thwip" whistle transient
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 1120 * jitter,
+      freqEnd: 380 * jitter,
+      duration: 0.035,
+      gain: 0.14 * vol,
+      wet: 0.08,
+    });
+    // Precision muffled bolt-carrier return click
+    this.tone(target, t + 0.038, {
+      type: 'triangle',
+      freqStart: 860 * pitch,
+      freqEnd: 540 * pitch,
+      duration: 0.022,
+      gain: 0.11 * vol,
+    });
+    // Tightly baffled suppressor air-puff
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.075,
+      gain: 0.34 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1350 * jitter,
+      filterFreqEnd: 460 * jitter,
+      filterQ: 2.4,
+      wet: 0.1,
+    });
+    // Crisp suppressed mechanical slide-action tick
+    this.noise(target, t + 0.036, {
+      buffer: 'white',
+      duration: 0.024,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3200 * pitch,
+      filterQ: 3.6,
+    });
+    return 0.13;
+  }
+
+  private playModInstall(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Heavy metallic rail-mount clamp thud
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 160 * pitch,
+      freqEnd: 52 * pitch,
+      duration: 0.09,
+      gain: 0.36 * vol,
+      wet: 0.16,
+    });
+    // Precision micro-servo ratchet zip
+    this.tone(target, t + 0.03, {
+      type: 'sawtooth',
+      freqStart: 260 * pitch,
+      freqEnd: 680 * pitch,
+      duration: 0.14,
+      attack: 0.01,
+      gain: 0.16 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 850 * pitch,
+      filterFreqEnd: 2200 * pitch,
+      filterQ: 2.5,
+      wet: 0.18,
+    });
+    // Hardened tactical detent click
+    this.tone(target, t + 0.11, {
+      type: 'square',
+      freqStart: 1180 * pitch,
+      freqEnd: 540 * pitch,
+      duration: 0.038,
+      gain: 0.15 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * pitch,
+      filterQ: 3.2,
+    });
+    // Crisp 3-note tech attachment confirmation chime (A5 -> C#6 -> E6)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.16, freq: 880.0, dur: 0.14, gain: 0.14 },
+        { offset: 0.22, freq: 1108.73, dur: 0.16, gain: 0.15 },
+        { offset: 0.28, freq: 1318.51, dur: 0.24, gain: 0.18 },
+      ],
+      'sine',
+      'triangle',
+      0.5,
+      0.3,
+    );
+    // Pneumatic bench rail slide hiss
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.11,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * pitch,
+      filterFreqEnd: 1100 * pitch,
+      filterQ: 2.0,
+      wet: 0.16,
+    });
+    // Metallic latch lock snap + shimmer
+    this.noise(target, t + 0.11, {
+      buffer: 'white',
+      duration: 0.16,
+      gain: 0.14 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3600,
+      wet: 0.24,
+    });
+    return 0.48;
+  }
+
+  private playBunkerDeploy(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Capsule burst & heavy steel foundation sub-impact
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 128 * pitch,
+      freqEnd: 28 * pitch,
+      duration: 0.36,
+      gain: 0.62 * vol,
+      wet: 0.28,
+    });
+    // Hydraulic rapid 1x1 frame expansion sweep
+    this.tone(target, t + 0.04, {
+      type: 'sawtooth',
+      freqStart: 92 * pitch,
+      freqEnd: 260 * pitch,
+      duration: 0.24,
+      attack: 0.012,
+      gain: 0.26 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 540,
+      filterFreqEnd: 1950,
+      wet: 0.22,
+    });
+    // Heavy perimeter steel wall lock-in clang
+    this.tone(target, t + 0.14, {
+      type: 'triangle',
+      freqStart: 340 * pitch,
+      freqEnd: 110 * pitch,
+      duration: 0.22,
+      gain: 0.34 * vol,
+      wet: 0.24,
+    });
+    // Resonant armored plate harmonic ring
+    this.tone(target, t + 0.22, {
+      type: 'sine',
+      freqStart: 760 * pitch,
+      freqEnd: 690 * pitch,
+      duration: 0.26,
+      gain: 0.16 * vol,
+      wet: 0.28,
+    });
+    // Fortified ramp & door bolt slam clack
+    this.tone(target, t + 0.3, {
+      type: 'square',
+      freqStart: 580 * pitch,
+      freqEnd: 240 * pitch,
+      duration: 0.07,
+      gain: 0.16 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1450 * pitch,
+      filterQ: 2.6,
+    });
+    // Compressed capsule air detonation
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.12,
+      gain: 0.44 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2200 * pitch,
+      filterFreqEnd: 680 * pitch,
+      filterQ: 1.4,
+      distort: true,
+      wet: 0.22,
+    });
+    // Cascading folding steel & pressurized pneumatic rush
+    this.noise(target, t + 0.06, {
+      buffer: 'pink',
+      duration: 0.48,
+      attack: 0.015,
+      gain: 0.42 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2400 * pitch,
+      filterFreqEnd: 280,
+      distort: true,
+      wet: 0.3,
+    });
+    return 0.68;
+  }
+
+  private playEmpBlast(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Deep magnetic shockwave bass drop
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 155 * pitch,
+      freqEnd: 24 * pitch,
+      duration: 0.56,
+      gain: 0.64 * vol,
+      wet: 0.34,
+    });
+    // Rapid downward sci-fi EMP frequency collapse
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 1640 * pitch,
+      freqEnd: 68 * pitch,
+      duration: 0.38,
+      gain: 0.28 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 4200,
+      filterFreqEnd: 240,
+      wet: 0.32,
+    });
+    // High-voltage capacitor arc zap
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 2200 * pitch,
+      freqEnd: 220 * pitch,
+      duration: 0.14,
+      gain: 0.18 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3200 * pitch,
+      filterFreqEnd: 620 * pitch,
+      filterQ: 2.8,
+      wet: 0.26,
+    });
+    // Electromagnetic interference FM warble
+    this.playFmAura(
+      target,
+      t + 0.02,
+      0.54,
+      780 * pitch,
+      110 * pitch,
+      210 * pitch,
+      42 * pitch,
+      260 * pitch,
+      0.22 * vol,
+      3800,
+      420,
+      0.38,
+    );
+    // Electric arc crackle transient
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.15,
+      gain: 0.48 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 4600 * pitch,
+      filterFreqEnd: 1100 * pitch,
+      filterQ: 1.8,
+      distort: true,
+      wet: 0.28,
+    });
+    // Ionized shockwave air whoosh & static dissipation tail
+    this.noise(target, t + 0.04, {
+      buffer: 'pink',
+      duration: 0.62,
+      attack: 0.01,
+      gain: 0.34 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2800 * pitch,
+      filterFreqEnd: 210,
+      wet: 0.36,
+    });
+    return 0.76;
+  }
+
+  private playForecastScan(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Radar emitter base hum
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 110 * pitch,
+      freqEnd: 220 * pitch,
+      duration: 0.42,
+      attack: 0.03,
+      gain: 0.24 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 560,
+      filterFreqEnd: 1600,
+      wet: 0.24,
+    });
+    // Sweeping parabolic radar pulse beam
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 440 * pitch,
+      freqEnd: 1760 * pitch,
+      duration: 0.28,
+      attack: 0.015,
+      gain: 0.22 * vol,
+      wet: 0.32,
+    });
+    // Atmospheric telemetry uplink FM shimmer
+    this.playFmAura(
+      target,
+      t + 0.08,
+      0.56,
+      659.25 * pitch,
+      1318.51 * pitch,
+      164.81 * pitch,
+      329.63 * pitch,
+      95 * pitch,
+      0.16 * vol,
+      1400,
+      3800,
+      0.38,
+    );
+    // Storm-intel unlocked progression (E5 -> G#5 -> B5 -> E6)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.18, freq: 659.25, dur: 0.22, gain: 0.15 },
+        { offset: 0.26, freq: 830.61, dur: 0.24, gain: 0.16 },
+        { offset: 0.34, freq: 987.77, dur: 0.3, gain: 0.17 },
+        { offset: 0.42, freq: 1318.51, dur: 0.44, gain: 0.2 },
+      ],
+      'sine',
+      'triangle',
+      0.5,
+      0.38,
+    );
+    // Parabolic radar dish spin air sweep
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.36,
+      attack: 0.025,
+      gain: 0.18 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 580 * pitch,
+      filterFreqEnd: 2400 * pitch,
+      filterQ: 2.2,
+      wet: 0.28,
+    });
+    // Atmospheric data-stream sparkle tail
+    this.noise(target, t + 0.24, {
+      buffer: 'white',
+      duration: 0.48,
+      attack: 0.04,
+      gain: 0.12 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3800,
+      wet: 0.36,
+    });
+    return 0.88;
+  }
+
+  private playBushRustle(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.08) * pitch;
+    // Soft organic shrub stem flex
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 145 * jitter,
+      freqEnd: 88 * jitter,
+      duration: 0.075,
+      attack: 0.008,
+      gain: 0.11 * vol,
+    });
+    // Tiny dry twig snap click
+    this.tone(target, t + 0.035, {
+      type: 'sine',
+      freqStart: 480 * jitter,
+      freqEnd: 240 * jitter,
+      duration: 0.032,
+      gain: 0.09 * vol,
+    });
+    // Secondary subtle branch rebound
+    this.tone(target, t + 0.07, {
+      type: 'triangle',
+      freqStart: 210 * jitter,
+      freqEnd: 130 * jitter,
+      duration: 0.055,
+      attack: 0.006,
+      gain: 0.08 * vol,
+    });
+    // Crisp leaf-stem flick
+    this.tone(target, t + 0.11, {
+      type: 'sine',
+      freqStart: 620 * jitter,
+      freqEnd: 340 * jitter,
+      duration: 0.03,
+      gain: 0.06 * vol,
+    });
+    // Warm mid-frequency foliage body brush
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.19,
+      attack: 0.015,
+      gain: 0.26 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1250 * jitter,
+      filterFreqEnd: 780 * jitter,
+      filterQ: 1.2,
+      wet: 0.12,
+    });
+    // Crisp dry upper leaf flutter
+    this.noise(target, t + 0.02, {
+      buffer: 'white',
+      duration: 0.18,
+      attack: 0.018,
+      gain: 0.2 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3400 * jitter,
+      filterFreqEnd: 2100 * jitter,
+      filterQ: 1.5,
+      wet: 0.14,
+    });
+    // Trailing leaf settle whisper
+    this.noise(target, t + 0.08, {
+      buffer: 'white',
+      duration: 0.13,
+      attack: 0.012,
+      gain: 0.12 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 4000,
+    });
+    return 0.24;
+  }
+
+  private playRumbleRespawn(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Rift redeploy sub-swell
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 98 * pitch,
+      freqEnd: 196 * pitch,
+      duration: 0.24,
+      attack: 0.015,
+      gain: 0.34 * vol,
+      wet: 0.24,
+    });
+    // Energetic upward synth glide
+    this.tone(target, t + 0.02, {
+      type: 'sawtooth',
+      freqStart: 261.63 * pitch,
+      freqEnd: 587.33 * pitch,
+      duration: 0.28,
+      attack: 0.02,
+      gain: 0.16 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 880,
+      filterFreqEnd: 2900,
+      wet: 0.26,
+    });
+    // Crisp Team Rumble sky-drop re-entry motif (G4 -> B4 -> D5 -> G5)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.04, freq: 392.0, dur: 0.18, gain: 0.15 },
+        { offset: 0.1, freq: 493.88, dur: 0.2, gain: 0.16 },
+        { offset: 0.16, freq: 587.33, dur: 0.24, gain: 0.17 },
+        { offset: 0.22, freq: 783.99, dur: 0.32, gain: 0.2 },
+      ],
+      'sine',
+      'triangle',
+      0.5,
+      0.34,
+    );
+    // Skydiving air-chute burst
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.42,
+      attack: 0.02,
+      gain: 0.28 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 480 * pitch,
+      filterFreqEnd: 2200 * pitch,
+      filterQ: 1.4,
+      wet: 0.28,
+    });
+    // Crisp altitude wind shimmer tail
+    this.noise(target, t + 0.12, {
+      buffer: 'white',
+      duration: 0.36,
+      attack: 0.03,
+      gain: 0.13 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3600,
+      wet: 0.32,
+    });
+    return 0.56;
+  }
+
+  private playRumbleLeadChange(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Stadium score-flip sub-boom
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 110 * pitch,
+      freqEnd: 36 * pitch,
+      duration: 0.32,
+      gain: 0.52 * vol,
+      wet: 0.28,
+    });
+    // Punchy scoreboard impact transient
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 220 * pitch,
+      freqEnd: 110 * pitch,
+      duration: 0.18,
+      gain: 0.28 * vol,
+      wet: 0.22,
+    });
+    // Bold brassy 4-note lead-change stinger (C5 -> G5 -> A5 -> C6)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.02, freq: 523.25, dur: 0.16, gain: 0.17 },
+        { offset: 0.1, freq: 783.99, dur: 0.18, gain: 0.18 },
+        { offset: 0.18, freq: 880.0, dur: 0.22, gain: 0.18 },
+        { offset: 0.28, freq: 1046.5, dur: 0.52, gain: 0.23 },
+      ],
+      'sawtooth',
+      'triangle',
+      0.5,
+      0.36,
+      3200,
+    );
+    // Bright celebratory anthem FM sheen
+    this.playFmAura(
+      target,
+      t + 0.24,
+      0.52,
+      523.25 * pitch,
+      1046.5 * pitch,
+      261.63 * pitch,
+      523.25 * pitch,
+      115 * pitch,
+      0.15 * vol,
+      1600,
+      4000,
+      0.38,
+    );
+    // Snappy scoreboard percussion crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.07,
+      gain: 0.3 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * pitch,
+      filterFreqEnd: 1000 * pitch,
+      filterQ: 1.7,
+      distort: true,
+      wet: 0.2,
+    });
+    // Stadium air roar & shimmer tail
+    this.noise(target, t + 0.14, {
+      buffer: 'pink',
+      duration: 0.54,
+      attack: 0.03,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2800,
+      wet: 0.38,
+    });
+    return 0.86;
   }
 
   private playHarmonicProgression(
