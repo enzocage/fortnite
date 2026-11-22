@@ -11,6 +11,7 @@ import type {
   ExplosiveBarrelEntity,
   GameModeId,
   GamePhase,
+  GrindRailEntity,
   HarvestableProp,
   ChestEntity,
   LaunchPadEntity,
@@ -21,11 +22,14 @@ import type {
   MedallionId,
   NpcSpecialistEntity,
   Rarity,
+  RebootVanEntity,
   RiftEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
+  SupplyDroneEntity,
   SupplyDrop,
   ItemInstance,
+  TrapKind,
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
@@ -162,6 +166,44 @@ export interface DuoReviveBridge {
   isPartnerAlive?(): boolean;
 }
 
+export interface GrindRailSample {
+  position: Vec3Like;
+  tangent: Vec3Like;
+}
+
+export interface NearbyGrindRailMatch {
+  rail: GrindRailEntity;
+  t: number;
+  position: Vec3Like;
+  tangent: Vec3Like;
+}
+
+export interface SupplyDroneDamageResult {
+  destroyed: boolean;
+  x: number;
+  y: number;
+  z: number;
+  rarity: Rarity;
+  weaponId: WeaponId;
+  gold: number;
+  trapKind: TrapKind;
+}
+
+export interface WorldOverdriveBridge {
+  getGrindRails(): GrindRailEntity[];
+  findNearbyGrindRail(pos: Vec3Like, maxDist?: number): NearbyGrindRailMatch | null;
+  sampleGrindRailAt(id: string, t: number): GrindRailSample | null;
+  getRebootVans(): RebootVanEntity[];
+  triggerRebootVan(id: string): boolean;
+  getSupplyDrones(): SupplyDroneEntity[];
+  damageSupplyDrone(id: string, dmg: number): SupplyDroneDamageResult | null;
+}
+
+export interface DuoRebootBridge {
+  hasPartnerRebootCard(): boolean;
+  rebootPartnerAt(pos: Vec3Like): unknown;
+}
+
 export interface ShieldBubbleState {
   id: string;
   position: Vec3Like;
@@ -238,6 +280,7 @@ export interface CombatActor {
   hasFirstAssault?: boolean;
   hasCombatMedallion?: boolean;
   isKnocked?: boolean;
+  squadId?: string;
   onDamage?: (ev: DamageEvent) => void;
   onHeal?: (hpAdded: number, shieldAdded: number) => void;
   onImpulse?: (impulse: Vec3Like, grantFallImmunity: boolean) => void;
@@ -280,12 +323,14 @@ export interface FireWeaponParams {
   stationBridge?: WorldStationBridge | null;
   riftCaptureBridge?: WorldRiftCaptureBridge | null;
   chapterBridge?: WorldChapterBridge | null;
+  overdriveBridge?: WorldOverdriveBridge | null;
   hasDemolisher?: boolean;
   hasFirstAssault?: boolean;
   hasCombatMedallion?: boolean;
   bowCharge?: number;
   onAmmoConsumed?: () => void;
   onHarvest?: (matType: MaterialType, amount: number, isCrit: boolean) => void;
+  onDroneDestroyed?: (res: SupplyDroneDamageResult) => void;
 }
 
 export interface FireWeaponResult {
@@ -299,6 +344,7 @@ export interface FireWeaponResult {
     amount: number;
     isCrit: boolean;
   };
+  destroyedDrones?: SupplyDroneDamageResult[];
 }
 
 export interface PlayerMatchStats {
@@ -313,6 +359,9 @@ export interface PlayerMatchStats {
   goldEarned?: number;
   knocks?: number;
   revives?: number;
+  reboots?: number;
+  dronesShotDown?: number;
+  trapsPlaced?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -401,4 +450,12 @@ export interface PlayerHudSnapshot {
   bleedOutHp: number;
   reviveProgress: number | null;
   reviveLabel: string | null;
+  isGrinding: boolean;
+  railgunCharge: number | null;
+  minigunHeat: number | null;
+  minigunOverheated: boolean;
+  activeTrapKind: TrapKind;
+  traps: Record<TrapKind, number>;
+  hasPartnerRebootCard: boolean;
+  rebootProgress: number | null;
 }

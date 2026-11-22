@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
   EventBus,
+  GRIND_RAIL_SPEED,
   ISLAND_RADIUS,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   POIS,
+  REBOOT_VAN_COOLDOWN_SEC,
   STEP_HEIGHT,
   STORM_PHASES,
   WATER_LEVEL,
@@ -26,6 +28,10 @@ import {
   WorldBuilder,
   WorldInteractables,
   type BumpTextureKind,
+  type GrindRailSampleResult,
+  type NearbyGrindRailResult,
+  type SupplyDroneDamageResult,
+  type Wave7ShowcaseResult,
 } from '../index';
 import type { WeatherKind } from '../../types';
 
@@ -1105,7 +1111,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(barrels).toHaveLength(24);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
     expect(interactables.getStationColliders()).toHaveLength(30); // 6 benches + 24 barrels
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
 
     for (const sb of barrels) {
       expect(sb.hp).toBe(40);
@@ -1151,7 +1157,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     expect(sb0.destroyed).toBe(true);
     expect(sbGroup.visible).toBe(false);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(23);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 23 + 18 + 6 + 40 + 6 + 6);
     expect(interactables.damageSlurpBarrel(sb0.id, 10)).toBeNull();
     expect(interactables.damageSlurpBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1177,7 +1183,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
     ).toBe(true);
     expect(sbGroup.visible).toBe(true);
     expect(interactables.getSlurpBarrelColliders()).toHaveLength(24);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
 
     interactables.dispose();
     builder.dispose();
@@ -1635,7 +1641,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     const expBarrels = interactables.getExplosiveBarrels();
     expect(expBarrels).toHaveLength(18);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
 
     for (const eb of expBarrels) {
       expect(eb.hp).toBe(35);
@@ -1707,7 +1713,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     expect(eb0.exploded).toBe(true);
     expect(ebGroup.visible).toBe(false);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(17);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 17 + 6 + 40 + 6 + 6);
     expect(interactables.damageExplosiveBarrel(eb0.id, 10)).toBeNull();
     expect(interactables.damageExplosiveBarrel('nonexistent_barrel', 10)).toBeNull();
 
@@ -1746,7 +1752,7 @@ describe('WorldInteractables Wave-4 Rifts, Capture Points & Explosive Barrels', 
     ).toBe(true);
     expect(ebGroup.visible).toBe(true);
     expect(interactables.getExplosiveBarrelColliders()).toHaveLength(18);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
 
     vehicles.dispose();
     interactables.dispose();
@@ -1973,7 +1979,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandCols[0].maxY).toBeCloseTo(groundY + 24, 4);
     expect(islandCols[0].minZ).toBeCloseTo(cz - 12.5, 4);
     expect(islandCols[0].maxZ).toBeCloseTo(cz + 12.5, 4);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 1);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6 + 1);
 
     // 10s capture duration
     const islandFlagGroup = islandMesh.children[islandMesh.children.length - 1] as THREE.Group;
@@ -2017,7 +2023,7 @@ describe('WorldInteractables Wave-5 Vending Machines, NPC Specialists & Floating
     expect(islandMesh.visible).toBe(false);
     expect(geyserMesh.visible).toBe(false);
     expect(interactables.getLootIslandColliders()).toHaveLength(0);
-    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
 
     vehicles.dispose();
     interactables.dispose();
@@ -2513,6 +2519,457 @@ describe('WorldInteractables Wave-6 Weapon Bunkers, Slurp Tankers, Dropped Medal
     expect(oceanMat.fragmentShader).toContain('shoreWarp');
     expect(oceanMat.fragmentShader).toContain('surfCrestA');
     expect(oceanMat.fragmentShader).toContain('foamLace');
+
+    fx.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-7 Grind Rails, Reboot Vans, Supply Drones & Showcase', () => {
+  it('constructs 4 Neon Energy Grind Rails, 6 Glowing Blue Reboot Vans, and 12 Flying Supply Drones with full lifecycle and reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+    const interactables = new WorldInteractables(terrain, bus);
+    const vehicles = new VehicleSystem(terrain, bus, 4201);
+
+    const soundSpy = vi.fn();
+    const droneVfxSpy = vi.fn();
+    bus.on('sound:play', soundSpy);
+    bus.on('vfx:drone_explode', droneVfxSpy);
+
+    const isClearOfBuildings = (x: number, y: number, z: number, pad = 1.0) =>
+      !world.colliders.some(
+        (c) =>
+          c.tag !== 'building_floor' &&
+          c.tag !== 'building_plaza' &&
+          c.tag !== 'building_sky_island' &&
+          c.maxY > y + 0.15 &&
+          c.minY < y + 3.2 &&
+          x >= c.minX - pad &&
+          x <= c.maxX + pad &&
+          z >= c.minZ - pad &&
+          z <= c.maxZ + pad,
+      );
+
+    // 1. 4 Neon Energy Grind Rails
+    const rails = interactables.getGrindRails();
+    expect(rails).toHaveLength(4);
+    expect(new Set(rails.map((r) => r.poiId))).toEqual(
+      new Set(['metro_towers', 'skyline_spire', 'market_row', 'frostpeak_citadel']),
+    );
+
+    expect(interactables.sampleGrindRailAt('nonexistent_rail', 0)).toBeNull();
+    expect(interactables.sampleGrindRailAt(rails[0].id, Number.NaN)).toBeNull();
+    expect(interactables.findNearbyGrindRail({ x: 0, y: 500, z: 0 }, 2.8)).toBeNull();
+
+    for (const rail of rails) {
+      expect(rail.speed).toBe(GRIND_RAIL_SPEED);
+      expect(rail.points.length).toBeGreaterThanOrEqual(6);
+      const railGroup = interactables.getGroup().getObjectByName(`GrindRail_${rail.id}`) as THREE.Group;
+      expect(railGroup).toBeDefined();
+      expect(railGroup.children.length).toBeGreaterThanOrEqual(10);
+
+      // Wrapping [0, 1) cleanly on sampleGrindRailAt
+      const s0: GrindRailSampleResult | null = interactables.sampleGrindRailAt(rail.id, 0);
+      const s1 = interactables.sampleGrindRailAt(rail.id, 1);
+      const s2 = interactables.sampleGrindRailAt(rail.id, 2);
+      const sNeg1 = interactables.sampleGrindRailAt(rail.id, -1);
+      expect(s0).not.toBeNull();
+      expect(s1!.position.x).toBeCloseTo(s0!.position.x, 4);
+      expect(s1!.position.y).toBeCloseTo(s0!.position.y, 4);
+      expect(s1!.position.z).toBeCloseTo(s0!.position.z, 4);
+      expect(s2!.position.x).toBeCloseTo(s0!.position.x, 4);
+      expect(sNeg1!.position.x).toBeCloseTo(s0!.position.x, 4);
+
+      const sNegQuarter = interactables.sampleGrindRailAt(rail.id, -0.25)!;
+      const sThreeQuarters = interactables.sampleGrindRailAt(rail.id, 0.75)!;
+      expect(sNegQuarter.position.x).toBeCloseTo(sThreeQuarters.position.x, 4);
+      expect(sNegQuarter.position.y).toBeCloseTo(sThreeQuarters.position.y, 4);
+      expect(sNegQuarter.position.z).toBeCloseTo(sThreeQuarters.position.z, 4);
+
+      for (let i = 0; i < 20; i++) {
+        const sample = interactables.sampleGrindRailAt(rail.id, i / 20)!;
+        expect(Math.hypot(sample.tangent.x, sample.tangent.y, sample.tangent.z)).toBeCloseTo(1, 4);
+        expect(terrain.isWater(sample.position.x, sample.position.z)).toBe(false);
+        expect(
+          isClearOfBuildings(sample.position.x, sample.position.y, sample.position.z, 0.25),
+        ).toBe(true);
+      }
+
+      const targetSample = interactables.sampleGrindRailAt(rail.id, 0.37)!;
+      const found: NearbyGrindRailResult | null = interactables.findNearbyGrindRail(
+        {
+          x: targetSample.position.x + 1.0,
+          y: targetSample.position.y,
+          z: targetSample.position.z,
+        },
+        2.8,
+      );
+      expect(found).not.toBeNull();
+      expect(found!.rail.id).toBe(rail.id);
+      expect(found!.t).toBeGreaterThanOrEqual(0);
+      expect(found!.t).toBeLessThan(1);
+      expect(
+        Math.hypot(
+          found!.position.x - targetSample.position.x,
+          found!.position.y - targetSample.position.y,
+          found!.position.z - targetSample.position.z,
+        ),
+      ).toBeLessThan(1.05);
+      expect(Math.hypot(found!.tangent.x, found!.tangent.y, found!.tangent.z)).toBeCloseTo(1, 4);
+      expect(
+        interactables.findNearbyGrindRail(
+          {
+            x: targetSample.position.x + 1.0,
+            y: targetSample.position.y,
+            z: targetSample.position.z,
+          },
+          0.4,
+        ),
+      ).toBeNull();
+    }
+
+    // Ring animation advances smoothly
+    const rail0Group = interactables.getGroup().getObjectByName(`GrindRail_${rails[0].id}`) as THREE.Group;
+    const ringMesh = rail0Group.children[rail0Group.children.length - 1] as THREE.Mesh;
+    const ringPosBefore = ringMesh.position.clone();
+    interactables.update(0.25, 0.25);
+    expect(ringMesh.position.distanceTo(ringPosBefore)).toBeGreaterThan(0.5);
+
+    // 2. 6 Glowing Blue Reboot Vans
+    const vans = interactables.getRebootVans();
+    expect(vans).toHaveLength(6);
+    expect(interactables.getRebootVanColliders()).toHaveLength(6);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+
+    for (const van of vans) {
+      expect(van.available).toBe(true);
+      expect(van.cooldownRemainingSec).toBe(0);
+      expect(terrain.isWater(van.x, van.z)).toBe(false);
+      expect(van.y).toBeCloseTo(terrain.getHeightAt(van.x, van.z), 4);
+      expect(terrain.getNormalAt(van.x, van.z).y).toBeGreaterThan(0.92);
+      expect(isClearOfBuildings(van.x, van.y, van.z, 1.1)).toBe(true);
+      const blockingProp = pal.getProps().find((p) => Math.hypot(van.x - p.x, van.z - p.z) < p.radius + 1.2);
+      expect(blockingProp, `${van.id} (${van.x}, ${van.z}) near prop ${blockingProp?.kind} at (${blockingProp?.x}, ${blockingProp?.z})`).toBeUndefined();
+      for (const veh of vehicles.getVehicles()) {
+        expect(Math.hypot(van.x - veh.x, van.z - veh.z)).toBeGreaterThan(3.5);
+      }
+      for (const bench of interactables.getUpgradeBenches()) {
+        expect(Math.hypot(van.x - bench.x, van.z - bench.z)).toBeGreaterThan(3.5);
+      }
+      for (const vm of interactables.getVendingMachines()) {
+        expect(Math.hypot(van.x - vm.x, van.z - vm.z)).toBeGreaterThan(3.5);
+      }
+      const vanGroup = interactables.getGroup().getObjectByName(`RebootVan_${van.id}`) as THREE.Group;
+      const beaconGroup = interactables.getGroup().getObjectByName(`RebootVanBeacon_${van.id}`) as THREE.Group;
+      expect(vanGroup).toBeDefined();
+      expect(beaconGroup).toBeDefined();
+    }
+
+    const van0 = vans[0];
+    const van0Beacon = interactables.getGroup().getObjectByName(`RebootVanBeacon_${van0.id}`) as THREE.Group;
+    const van0Beam = van0Beacon.children[1] as THREE.Mesh;
+    const van0Holo = van0Beacon.children[2] as THREE.Group;
+    expect(van0Beam.visible).toBe(true);
+
+    expect(interactables.triggerRebootVan('nonexistent_van')).toBe(false);
+    expect(interactables.triggerRebootVan(van0.id)).toBe(true);
+    expect(van0.available).toBe(false);
+    expect(van0.cooldownRemainingSec).toBe(REBOOT_VAN_COOLDOWN_SEC);
+    expect(van0Beam.visible).toBe(false);
+    expect(interactables.triggerRebootVan(van0.id)).toBe(false);
+
+    const holoRotBefore = van0Holo.rotation.y;
+    interactables.update(25, 25.25);
+    expect(van0Holo.rotation.y).toBeGreaterThan(holoRotBefore);
+    expect(van0.available).toBe(false);
+    expect(van0.cooldownRemainingSec).toBeCloseTo(REBOOT_VAN_COOLDOWN_SEC - 25, 4);
+
+    interactables.update(36, 61.25);
+    expect(van0.available).toBe(true);
+    expect(van0.cooldownRemainingSec).toBe(0);
+    expect(van0Beam.visible).toBe(true);
+    expect(interactables.triggerRebootVan(van0.id)).toBe(true);
+
+    // 3. 12 Flying Supply Drones
+    const drones = interactables.getSupplyDrones();
+    expect(drones).toHaveLength(12);
+
+    for (const drone of drones) {
+      expect(drone.hp).toBe(drone.maxHp);
+      expect(drone.maxHp).toBeGreaterThan(0);
+      expect(drone.destroyed).toBe(false);
+      expect(drone.orbitRadius).toBeGreaterThan(0);
+      const localGroundY = terrain.getHeightAt(drone.x, drone.z);
+      expect(drone.y - localGroundY).toBeGreaterThanOrEqual(12);
+      expect(drone.y - localGroundY).toBeLessThanOrEqual(17);
+
+      const droneGroup = interactables.getGroup().getObjectByName(`SupplyDrone_${drone.id}`) as THREE.Group;
+      expect(droneGroup).toBeDefined();
+      expect(droneGroup.visible).toBe(true);
+    }
+
+    const d0 = drones[0];
+    const d0Group = interactables.getGroup().getObjectByName(`SupplyDrone_${d0.id}`) as THREE.Group;
+    const d0BeforeX = d0.x;
+    const d0BeforeZ = d0.z;
+    const d0BeforeAngle = d0.orbitAngle;
+    interactables.update(0.5, 61.75);
+    expect(d0.orbitAngle).not.toBeCloseTo(d0BeforeAngle, 4);
+    expect(Math.hypot(d0.x - d0BeforeX, d0.z - d0BeforeZ)).toBeGreaterThan(0.5);
+
+    expect(interactables.damageSupplyDrone('nonexistent_drone', 50)).toBeNull();
+
+    const chipDrone = interactables.damageSupplyDrone(d0.id, 30);
+    expect(chipDrone).not.toBeNull();
+    expect(chipDrone!.destroyed).toBe(false);
+    expect(chipDrone!.gold).toBe(0);
+    expect(d0.hp).toBe(d0.maxHp - 30);
+    expect(d0.destroyed).toBe(false);
+    expect(d0Group.visible).toBe(true);
+    expect(droneVfxSpy).not.toHaveBeenCalled();
+
+    const killDrone: SupplyDroneDamageResult | null = interactables.damageSupplyDrone(d0.id, 100);
+    expect(killDrone).not.toBeNull();
+    expect(killDrone!.destroyed).toBe(true);
+    expect(killDrone!.rarity).toBe(d0.rarity);
+    expect(WEAPONS[killDrone!.weaponId].allowedRarities).toContain(killDrone!.rarity);
+    expect(killDrone!.gold).toBeGreaterThan(0);
+    expect(['spike_trap', 'bouncer_pad']).toContain(killDrone!.trapKind);
+    expect(d0.hp).toBe(0);
+    expect(d0.destroyed).toBe(true);
+    expect(d0Group.visible).toBe(false);
+    expect(droneVfxSpy).toHaveBeenCalledWith({
+      position: { x: d0.x, y: d0.y, z: d0.z },
+      rarity: d0.rarity,
+    });
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'drone_explode' }));
+    expect(interactables.damageSupplyDrone(d0.id, 10)).toBeNull();
+
+    const deadX = d0.x;
+    const deadZ = d0.z;
+    interactables.update(0.5, 62.25);
+    expect(d0.x).toBe(deadX);
+    expect(d0.z).toBe(deadZ);
+
+    // 4. reset() restores vans and drones
+    interactables.reset();
+    expect(
+      interactables.getRebootVans().every((v) => v.available && v.cooldownRemainingSec === 0),
+    ).toBe(true);
+    expect(van0Beam.visible).toBe(true);
+    expect(
+      interactables.getSupplyDrones().every((d) => d.hp === d.maxHp && !d.destroyed),
+    ).toBe(true);
+    expect(d0Group.visible).toBe(true);
+
+    vehicles.dispose();
+    interactables.dispose();
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('supports qaPlaceWave7Showcase and clears Wave-7 QA showcase extras on reset()', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    const center = { x: -75, y: terrain.getHeightAt(-75, -40), z: -40 };
+    const showcase: Wave7ShowcaseResult = interactables.qaPlaceWave7Showcase(center);
+
+    expect(showcase.rebootVan.available).toBe(true);
+    expect(showcase.rebootVan.cooldownRemainingSec).toBe(0);
+    expect(terrain.isWater(showcase.rebootVan.x, showcase.rebootVan.z)).toBe(false);
+    expect(showcase.rebootVan.y).toBeCloseTo(
+      terrain.getHeightAt(showcase.rebootVan.x, showcase.rebootVan.z),
+      4,
+    );
+    expect(Math.hypot(showcase.rebootVan.x - center.x, showcase.rebootVan.z - center.z)).toBeLessThan(15);
+
+    expect(showcase.grindRail.speed).toBe(GRIND_RAIL_SPEED);
+    const railSample = interactables.sampleGrindRailAt(showcase.grindRail.id, 0);
+    expect(railSample).not.toBeNull();
+    expect(
+      interactables.findNearbyGrindRail(railSample!.position, 1.5)?.rail.id,
+    ).toBe(showcase.grindRail.id);
+
+    expect(showcase.drones).toHaveLength(2);
+    for (const sd of showcase.drones) {
+      expect(sd.destroyed).toBe(false);
+      const gY = terrain.getHeightAt(sd.x, sd.z);
+      expect(sd.y - gY).toBeGreaterThanOrEqual(12);
+      expect(sd.y - gY).toBeLessThanOrEqual(17);
+    }
+
+    expect(interactables.getRebootVans()).toHaveLength(7);
+    expect(interactables.getRebootVanColliders()).toHaveLength(7);
+    expect(interactables.getGrindRails()).toHaveLength(5);
+    expect(interactables.getSupplyDrones()).toHaveLength(14);
+
+    // Calling qaPlaceWave7Showcase again replaces showcase extras without leaking duplicates
+    interactables.qaPlaceWave7Showcase(center);
+    expect(interactables.getRebootVans()).toHaveLength(7);
+    expect(interactables.getRebootVanColliders()).toHaveLength(7);
+    expect(interactables.getGrindRails()).toHaveLength(5);
+    expect(interactables.getSupplyDrones()).toHaveLength(14);
+
+    interactables.reset();
+    expect(interactables.getRebootVans()).toHaveLength(6);
+    expect(interactables.getRebootVanColliders()).toHaveLength(6);
+    expect(interactables.getGrindRails()).toHaveLength(4);
+    expect(interactables.getSupplyDrones()).toHaveLength(12);
+    expect(interactables.getColliders()).toHaveLength(15 + 6 + 24 + 18 + 6 + 40 + 6 + 6);
+
+    interactables.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('Wave-7 Loot Pools, EnvironmentDetail Wind Sway & EnvironmentFX Rain Ripples', () => {
+  it('spawns railgun and minigun across PropsAndLoot floor, chest, and supply-drop pools', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 320; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('railgun')).toBe(true);
+    expect(floorIds.has('minigun')).toBe(true);
+    expect(chestIds.has('railgun')).toBe(true);
+    expect(chestIds.has('minigun')).toBe(true);
+
+    const supplyIds = new Set<string>();
+    for (let i = 0; i < 80; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    for (const drop of pal.getLootDrops()) {
+      if (drop.item) {
+        expect(WEAPONS[drop.item.weaponId].allowedRarities).toContain(drop.item.rarity);
+        supplyIds.add(drop.item.weaponId);
+      }
+    }
+    expect(supplyIds.has('railgun')).toBe(true);
+    expect(supplyIds.has('minigun')).toBe(true);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('animates weather-responsive wind sway on EnvironmentDetail instanced foliage and rain splash ripples in EnvironmentFX', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const detail = new EnvironmentDetail(terrain, world.colliders, 'low', 4201);
+
+    const grassMesh = detail.getGroup().getObjectByName('InstancedGrass') as THREE.InstancedMesh;
+    expect(grassMesh).toBeDefined();
+    const grassMat = grassMesh.material as THREE.MeshStandardMaterial;
+    const windUniforms = grassMat.userData.windUniforms as {
+      uWindTime: { value: number };
+      uWindStrength: { value: number };
+    };
+    expect(windUniforms).toBeDefined();
+
+    // Test onBeforeCompile shader injection validity
+    const mockShader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: '#include <common>\nvoid main() {\n#include <begin_vertex>\n}',
+      fragmentShader: '',
+    };
+    grassMat.onBeforeCompile(mockShader as unknown as THREE.WebGLProgramParametersWithUniforms, {} as THREE.WebGLRenderer);
+    expect(mockShader.vertexShader).toContain('uniform float uWindTime;');
+    expect(mockShader.vertexShader).toContain('uniform float uWindStrength;');
+    expect(mockShader.vertexShader).toContain('transformed.x +=');
+    expect(mockShader.vertexShader).toContain('transformed.z +=');
+
+    detail.update(0.1, 2.5, 0.4);
+    expect(detail.getWindState()).toEqual({ time: 2.5, strength: 0.4 });
+    expect(windUniforms.uWindTime.value).toBe(2.5);
+    expect(windUniforms.uWindStrength.value).toBe(0.4);
+
+    detail.update(0.1, 6.0, 3.2);
+    expect(detail.getWindState()).toEqual({ time: 6.0, strength: 3.2 });
+    expect(windUniforms.uWindTime.value).toBe(6.0);
+    expect(windUniforms.uWindStrength.value).toBe(3.2);
+
+    // Optional elapsed & windStrength arguments work seamlessly
+    detail.update(0.25);
+    expect(detail.getWindState().time).toBeCloseTo(6.25, 4);
+    expect(detail.getWindState().strength).toBe(1.0);
+
+    detail.dispose();
+    builder.dispose();
+    terrain.dispose();
+
+    // EnvironmentFX subtle ground rain splash ripples & valid GLSL ES 1.00
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const fxGroup = fx.getGroup();
+    const splashMesh = fxGroup.getObjectByName('RainSplashRipples') as THREE.Mesh;
+    expect(splashMesh).toBeDefined();
+    expect(splashMesh.visible).toBe(false);
+
+    const splashMat = splashMesh.material as THREE.ShaderMaterial;
+    const oceanMesh = fxGroup.getObjectByName('OceanWater') as THREE.Mesh;
+    const oceanMat = oceanMesh.material as THREE.ShaderMaterial;
+    const skyMesh = fxGroup.getObjectByName('SkyDome') as THREE.Mesh | undefined;
+    const shaderMats = [splashMat, oceanMat, ...(skyMesh?.material instanceof THREE.ShaderMaterial ? [skyMesh.material] : [])];
+
+    for (const mat of shaderMats) {
+      for (const glsl of [mat.vertexShader, mat.fragmentShader]) {
+        const smoothMatches = [
+          ...glsl.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g),
+        ];
+        for (const m of smoothMatches) {
+          expect(Number(m[1])).toBeLessThan(Number(m[2]));
+        }
+        const usedUniforms = new Set(glsl.match(/\bu[A-Z][A-Za-z0-9_]*/g) ?? []);
+        for (const uName of usedUniforms) {
+          expect(glsl).toMatch(new RegExp(`uniform\\s+(?:float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\\s+${uName}\\b`));
+          expect(mat.uniforms[uName]).toBeDefined();
+        }
+      }
+    }
+    expect(oceanMat.fragmentShader).toContain('uniform float uRain;');
+
+    fx.setWeather('rain');
+    fx.update(0.1, 3.0, { x: 10, y: 12, z: -5 }, 'grassland');
+    expect(splashMesh.visible).toBe(true);
+    expect(splashMesh.position.x).toBe(10);
+    expect(splashMesh.position.y).toBeCloseTo(12.05, 4);
+    expect(splashMesh.position.z).toBe(-5);
+    expect(splashMat.uniforms.uTime.value).toBe(3.0);
+    expect(splashMat.uniforms.uRainStrength.value).toBeGreaterThan(0.2);
+
+    fx.setWeather('storm_front');
+    fx.update(0.2, 4.0, { x: -20, y: 14, z: 8 }, 'urban');
+    expect(splashMesh.visible).toBe(true);
+    expect(splashMat.uniforms.uRainStrength.value).toBeGreaterThan(0.4);
+
+    fx.setWeather('clear');
+    fx.update(0.2, 5.0, { x: -20, y: 14, z: 8 }, 'urban');
+    expect(splashMesh.visible).toBe(false);
+    expect(splashMat.uniforms.uRainStrength.value).toBe(0);
 
     fx.dispose();
   });

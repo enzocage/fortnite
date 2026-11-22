@@ -6,6 +6,7 @@ import {
 } from './CareerProfile';
 import {
   cloneSettings,
+  deriveMatchHighlightBadges,
   formatSurvivalTime,
   getAugmentMeta,
   getGameModeMeta,
@@ -68,7 +69,7 @@ export class MatchOverlay {
     this.summaryBackdropEl = document.createElement('div');
     this.summaryBackdropEl.className = 'fdr-modal-backdrop fdr-hidden';
     this.summaryCardEl = document.createElement('div');
-    this.summaryCardEl.className = 'fdr-modal-card';
+    this.summaryCardEl.className = 'fdr-modal-card fdr-summary-card';
     this.summaryBackdropEl.appendChild(this.summaryCardEl);
 
     this.root.append(
@@ -531,6 +532,20 @@ export class MatchOverlay {
       statsGrid.appendChild(box);
     }
 
+    const highlightBadges = deriveMatchHighlightBadges(summary);
+    const highlightsRow =
+      highlightBadges.length > 0 ? document.createElement('div') : null;
+    if (highlightsRow) {
+      highlightsRow.className = 'fdr-highlights-row';
+      for (const badge of highlightBadges) {
+        const pill = document.createElement('span');
+        pill.className = `fdr-highlight-badge tone-${badge.tone}`;
+        pill.dataset.highlight = badge.label;
+        pill.textContent = badge.label;
+        highlightsRow.appendChild(pill);
+      }
+    }
+
     const activeAugments = Array.isArray(summary.activeAugments)
       ? summary.activeAugments
       : [];
@@ -671,6 +686,9 @@ export class MatchOverlay {
       this.summaryCardEl.append(crownedBannerEl);
     }
     this.summaryCardEl.append(modeRow, sub, statsGrid);
+    if (highlightsRow) {
+      this.summaryCardEl.append(highlightsRow);
+    }
     if (activeAugments.length > 0) {
       this.summaryCardEl.append(augmentsRow);
     }

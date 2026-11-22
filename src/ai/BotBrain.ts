@@ -187,6 +187,43 @@ function isOffensiveThrowable(weaponId: WeaponId): boolean {
   return weaponId === 'frag_grenade' || weaponId === 'shockwave_grenade';
 }
 
+function isWeaponLoadedForScoring(
+  item: ItemInstance,
+  ammo?: Record<AmmoType, number>,
+): boolean {
+  if (item.magAmmo > 0) return true;
+  const def = WEAPONS[item.weaponId];
+  return Boolean(
+    def?.isMinigun &&
+      def.ammoType !== null &&
+      (ammo === undefined || (ammo[def.ammoType] ?? 0) > 0),
+  );
+}
+
+function isWeaponReadyToFire(
+  bot: Pick<BotEntity, 'inventory'>,
+  item: ItemInstance,
+): boolean {
+  return isWeaponLoadedForScoring(item, bot.inventory.ammo);
+}
+
+function consumeWeaponShotAmmo(
+  bot: Pick<BotEntity, 'inventory'>,
+  item: ItemInstance,
+): void {
+  if (item.magAmmo > 0) {
+    item.magAmmo = Math.max(0, item.magAmmo - 1);
+    return;
+  }
+  const def = WEAPONS[item.weaponId];
+  if (def?.isMinigun && def.ammoType) {
+    bot.inventory.ammo[def.ammoType] = Math.max(
+      0,
+      (bot.inventory.ammo[def.ammoType] ?? 0) - 1,
+    );
+  }
+}
+
 function nextBotRand(bot: BotEntity): number {
   bot.rngState = (Math.imul(bot.rngState, 1664525) + 1013904223) >>> 0;
   return bot.rngState / 4294967296;
@@ -316,6 +353,11 @@ function scoreWeaponForDistance(
       if (distance > def.range) return 0.5;
       base = distance <= 22 ? 102 - distance * 0.65 : Math.max(6, 87.7 - (distance - 22) * 1.1);
       break;
+    case 'minigun':
+      if (distance > def.range) return 0.5;
+      if (distance <= 28) base = 112 - distance * 0.25;
+      else base = Math.max(8, 105 - (distance - 28) * 1.45);
+      break;
     case 'pistol':
       if (distance > def.range) return 0.5;
       base = distance <= 28 ? 64 - distance * 0.45 : Math.max(5, 51 - (distance - 28) * 0.45);
@@ -348,6 +390,13 @@ function scoreWeaponForDistance(
       if (distance < 22) base = 18;
       else if (distance < 60) base = 64 + (distance - 22) * 1.0;
       else base = Math.min(126, 104 + (distance - 60) * 0.25);
+      break;
+    case 'railgun':
+      if (distance > def.range) return 0.5;
+      if (distance < 16) base = 18;
+      else if (distance < 32) base = 70 + (distance - 16) * 2.75;
+      else if (distance <= 130) base = 120;
+      else base = Math.max(42, 120 - (distance - 130) * 0.35);
       break;
     case 'boom_bow':
       if (distance > def.range) return 0.5;
@@ -398,7 +447,7 @@ export function selectBestWeaponForDistance(
     const score = scoreWeaponForDistance(
       item,
       distance,
-      !def.isThrowable && item.magAmmo > 0,
+      !def.isThrowable && isWeaponLoadedForScoring(item, ammo),
     );
     if (score > bestScore) {
       bestScore = score;
@@ -598,11 +647,14 @@ export function selectCloseQuartersWeapon(
           ? 112
           : item.weaponId === 'tac_shotgun'
             ? 104
-            : item.weaponId === 'combat_smg'
-              ? 98
-              : 92;
+            : item.weaponId === 'minigun'
+              ? 103
+              : item.weaponId === 'combat_smg'
+                ? 98
+                : 92;
     const rarityMult = RARITY_MULTIPLIER[item.rarity] ?? 1.0;
-    const score = base * rarityMult + (item.magAmmo > 0 ? 15 : 0);
+    const score =
+      base * rarityMult + (isWeaponLoadedForScoring(item, ammo) ? 15 : 0);
     if (score > bestScore) {
       bestScore = score;
       bestSlot = i;
@@ -829,7 +881,7 @@ export function shouldBotBuildDefense(
     | 'buildCooldown'
     | 'lastDamageTime'
     | 'state'
-  > & { maxHp?: number; reactionTimer?: number },
+  > & { maxHp?: number; reactionTimer?: number; isGrinding?: boolean },
   difficulty: Difficulty,
   nowSec: number,
   threatDistance = 30,
@@ -840,10 +892,12 @@ export function shouldBotBuildDefense(
     return false;
   }
   if (
+    bot.isGrinding ||
     bot.state === 'bus' ||
     bot.state === 'skydiving' ||
     bot.state === 'gliding' ||
-    bot.state === 'eliminated'
+    bot.state === 'eliminated' ||
+    (bot.state as string) === 'grind'
   ) {
     return false;
   }
@@ -1020,7 +1074,9 @@ function getWeaponOverallValue(item: ItemInstance): number {
   const rarityIdx = RARITY_ORDER.indexOf(item.rarity);
   const baseByType: Record<string, number> = {
     mythic_blade_rifle: 62,
+    railgun: 57,
     heavy_shotgun: 56,
+    minigun: 55,
     rocket_launcher: 54,
     tactical_dmr: 53,
     boom_bow: 53,
@@ -1161,9 +1217,10 @@ function applyPickedLoot(
         bot.inventory.items[slotIdx] = { ...item };
         if (def.ammoType) {
           // Ensure a small reserve if weapon had only magAmmo so bots stay active in prolonged fights
+          const autoReserve = def.isMinigun ? 120 : Math.round(def.magSize * 0.5);
           bot.inventory.ammo[def.ammoType] = Math.max(
             bot.inventory.ammo[def.ammoType] ?? 0,
-            Math.round(def.magSize * 0.5),
+            autoReserve,
           );
         }
       }
@@ -1304,6 +1361,7 @@ function tryTriggerLaunchPad(
       bot.launchPadTargetId = null;
       bot.isCrouching = false;
       bot.isSprinting = false;
+      bot.isGrinding = false;
       bot.grounded = false;
       bot.dropTarget = { ...safeDest };
       bot.moveTarget = { ...safeDest };
@@ -1406,25 +1464,34 @@ function applyMovementStep(
   bot.moveSpeed = Math.hypot(bot.velocity.x, bot.velocity.z);
 }
 
-function updateAnimState(bot: BotEntity): void {
+export function updateAnimState(bot: BotEntity): void {
   if (bot.state === 'eliminated' || !bot.alive) {
+    bot.isGrinding = false;
     bot.animState = 'idle';
     return;
   }
   if (bot.state === 'skydiving') {
+    bot.isGrinding = false;
     bot.animState = 'skydive';
     return;
   }
   if (bot.state === 'gliding') {
+    bot.isGrinding = false;
     bot.animState = 'glide';
     return;
   }
   if (bot.state === 'knocked' || bot.isKnocked) {
+    bot.isGrinding = false;
     bot.animState = 'knocked';
     return;
   }
   if (bot.state === 'reviving' || bot.isReviving) {
+    bot.isGrinding = false;
     bot.animState = 'reviving';
+    return;
+  }
+  if (bot.isGrinding || (bot.state as string) === 'grind') {
+    bot.animState = 'grind';
     return;
   }
   if (bot.state === 'healing' && bot.healTimer > 0) {
@@ -1725,8 +1792,8 @@ function handleFireAndBurst(
     return;
   }
 
-  // Handle magazine empty -> start reload
-  if (activeItem.magAmmo <= 0) {
+  // Handle magazine empty -> start reload (or draw directly from reserve for minigun)
+  if (!isWeaponReadyToFire(bot, activeItem)) {
     if (bot.reloadTimer <= 0 && def.ammoType && (bot.inventory.ammo[def.ammoType] ?? 0) > 0) {
       bot.reloadSlot = bot.inventory.activeSlot;
       bot.reloadTimer = def.reloadTime;
@@ -1749,7 +1816,7 @@ function handleFireAndBurst(
       );
       const res = ctx.fireWeapon(bot, activeItem, eye, aimDir, spread);
       if (!res || res.fired !== false) {
-        activeItem.magAmmo = Math.max(0, activeItem.magAmmo - 1);
+        consumeWeaponShotAmmo(bot, activeItem);
         bot.isFiring = true;
         bot.recoilKick = 1.0;
       }
@@ -1775,7 +1842,7 @@ function handleFireAndBurst(
   );
   const res = ctx.fireWeapon(bot, activeItem, eye, aimDir, spread);
   if (!res || res.fired !== false) {
-    activeItem.magAmmo = Math.max(0, activeItem.magAmmo - 1);
+    consumeWeaponShotAmmo(bot, activeItem);
     bot.isFiring = true;
     bot.recoilKick = 1.0;
     bot.fireCooldown = 1 / Math.max(0.2, def.fireRate * profile.fireRateScale);
@@ -2013,7 +2080,11 @@ function stepGlidingPhase(
       bot.dropTarget.z,
     );
     bot.state =
-      bot.isBoss || isInStorm(bot, ctx, 4) || distLeft > 25
+      bot.isBoss ||
+      bot.isAlly ||
+      bot.isDuoPartner ||
+      isInStorm(bot, ctx, 4) ||
+      distLeft > 25
         ? 'rotating'
         : 'looting';
     bot.stateTimer = 0;
@@ -2176,7 +2247,11 @@ function selectBestFirearmForRange(
       if (item.magAmmo <= 0 && reserve <= 0) continue;
     }
 
-    const score = scoreWeaponForDistance(item, distance, item.magAmmo > 0);
+    const score = scoreWeaponForDistance(
+      item,
+      distance,
+      isWeaponLoadedForScoring(item, ammo),
+    );
     if (score > bestScore) {
       bestScore = score;
       bestSlot = i;
@@ -2368,7 +2443,7 @@ function tryShootExplosiveBarrel(
   );
   bot.pitch = clamp(targetPitch, -1.2, 1.2);
 
-  if (item.magAmmo <= 0) {
+  if (!isWeaponReadyToFire(bot, item)) {
     if (
       bot.reloadTimer <= 0 &&
       def.ammoType &&
@@ -2400,7 +2475,7 @@ function tryShootExplosiveBarrel(
     return false;
   }
 
-  item.magAmmo = Math.max(0, item.magAmmo - 1);
+  consumeWeaponShotAmmo(bot, item);
   bot.isFiring = true;
   bot.recoilKick = 1.0;
   bot.fireCooldown = 1 / Math.max(0.2, def.fireRate * profile.fireRateScale);
@@ -2444,11 +2519,20 @@ function getPreferredCombatRange(
   ) {
     return { min: weaponId === 'heavy_shotgun' ? 6 : 5, max: weaponId === 'heavy_shotgun' ? 15 : 13 };
   }
-  if (weaponId === 'smg' || weaponId === 'combat_smg') {
+  if (
+    weaponId === 'smg' ||
+    weaponId === 'combat_smg'
+  ) {
     return { min: 8, max: 22 };
+  }
+  if (weaponId === 'minigun') {
+    return { min: 7, max: 24 };
   }
   if (weaponId === 'boom_bow') {
     return { min: 22, max: 62 };
+  }
+  if (weaponId === 'railgun') {
+    return { min: 28, max: 78 };
   }
   if (weaponId === 'sniper' || personality === 'sniper') {
     return { min: 42, max: 88 };
@@ -2669,7 +2753,8 @@ function stepCombatState(
     // Crouch-peek behind defensive ramp with AR / Sniper
     if (
       bot.reloadTimer > 0 ||
-      (activeWeaponId === 'sniper' && bot.fireCooldown > 0.35)
+      ((activeWeaponId === 'sniper' || activeWeaponId === 'railgun') &&
+        bot.fireCooldown > 0.35)
     ) {
       bot.isCrouching = true;
     } else {
@@ -2947,6 +3032,29 @@ function pickBossPatrolPoint(bot: BotEntity, ctx: BotWorldContext): Vec3Like {
   return { x, y: ctx.terrain.getHeightAt(x, z), z };
 }
 
+function resolveValidNoiseTarget(
+  bot: Pick<BotEntity, 'lastHeardNoisePos' | 'lastHeardNoiseTime' | 'personality'>,
+  ctx: Pick<BotWorldContext, 'terrain'>,
+  elapsed: number,
+  maxAgeSec = 4.0,
+): Vec3Like | null {
+  const pos = bot.lastHeardNoisePos;
+  if (!pos || bot.personality === 'looter') return null;
+  const age = elapsed - bot.lastHeardNoiseTime;
+  if (!Number.isFinite(age) || age < 0 || age >= maxAgeSec) return null;
+  if (!Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return null;
+  if (ctx.terrain.isWater(pos.x, pos.z)) return null;
+  if (isInVolcanoLavaHazard(pos.x, pos.z, VOLCANO_LAVA_SAFE_RADIUS + 1.5)) {
+    const safe = clampOutsideVolcanoLava(pos.x, pos.z, VOLCANO_LAVA_SAFE_RADIUS + 2);
+    return {
+      x: safe.x,
+      y: Number.isFinite(pos.y) ? pos.y : ctx.terrain.getHeightAt(safe.x, safe.z),
+      z: safe.z,
+    };
+  }
+  return pos;
+}
+
 function stepRotatingState(
   bot: BotEntity,
   ctx: BotWorldContext,
@@ -2966,16 +3074,17 @@ function stepRotatingState(
     bot.inventory.activeSlot = bestSlot.slotIndex;
   }
 
+  const validNoisePos = resolveValidNoiseTarget(bot, ctx, elapsed);
+
   // Named POI Bosses patrol their landmark while inside the safe zone
   if (bot.isBoss && bot.bossHomePos && !needRotateStorm) {
     const home = bot.bossHomePos;
     let destination: Vec3Like;
     if (
-      bot.lastHeardNoisePos &&
-      elapsed - bot.lastHeardNoiseTime < 4.0 &&
-      dist2D(bot.lastHeardNoisePos.x, bot.lastHeardNoisePos.z, home.x, home.z) <= 36
+      validNoisePos &&
+      dist2D(validNoisePos.x, validNoisePos.z, home.x, home.z) <= 36
     ) {
-      destination = bot.lastHeardNoisePos;
+      destination = validNoisePos;
     } else {
       const targetFarFromHome =
         !bot.moveTarget ||
@@ -2998,14 +3107,10 @@ function stepRotatingState(
   }
 
   let destination: Vec3Like | null = null;
-  if (
-    !needRotateStorm &&
-    weaponCount > 0 &&
-    bot.lastHeardNoisePos &&
-    elapsed - bot.lastHeardNoiseTime < 4.0 &&
-    bot.personality !== 'looter'
-  ) {
-    destination = bot.lastHeardNoisePos;
+  const investigatingNoise =
+    !needRotateStorm && weaponCount > 0 && validNoisePos !== null;
+  if (investigatingNoise) {
+    destination = validNoisePos;
     bot.launchPadTargetId = null;
   } else if (
     !needRotateStorm &&
@@ -3097,7 +3202,13 @@ function stepRotatingState(
     }
   }
 
-  if (!needRotateStorm && !bot.isBoss && !isFarLOD && bot.scanCooldown <= 0) {
+  if (
+    !needRotateStorm &&
+    !investigatingNoise &&
+    !bot.isBoss &&
+    !isFarLOD &&
+    bot.scanCooldown <= 0
+  ) {
     bot.scanCooldown = 0.35;
     if (weaponCount < 2 || countHealingSlots(bot) === 0) {
       const hasNearbyLoot = ctx
@@ -3318,7 +3429,7 @@ function trySlurpBarrelRecovery(
     const def = WEAPONS[item.weaponId];
     bot.inventory.activeSlot = weaponChoice.slotIndex;
 
-    if (item.magAmmo <= 0) {
+    if (!isWeaponReadyToFire(bot, item)) {
       if (
         bot.reloadTimer <= 0 &&
         def.ammoType &&
@@ -3346,7 +3457,7 @@ function trySlurpBarrelRecovery(
         Math.round(def.baseDamage * (RARITY_MULTIPLIER[item.rarity] ?? 1)),
       );
       const res = ctx.damageSlurpBarrel(bestBarrel.id, dmg);
-      item.magAmmo = Math.max(0, item.magAmmo - 1);
+      consumeWeaponShotAmmo(bot, item);
       bot.isFiring = true;
       bot.recoilKick = 0.85;
       bot.fireCooldown = 1 / Math.max(0.5, def.fireRate * profile.fireRateScale);
@@ -3628,6 +3739,7 @@ function executeRiftWarp(
   bot.isCrouching = false;
   bot.isSprinting = false;
   bot.isBuilding = false;
+  bot.isGrinding = false;
   bot.isAiming = false;
   bot.isFiring = false;
   bot.healTimer = 0;
@@ -4068,6 +4180,7 @@ function stepKnockedBot(
   bot.isBuilding = false;
   bot.isSprinting = false;
   bot.isCrouching = false;
+  bot.isGrinding = false;
   bot.isReviving = false;
   bot.reviveProgress = 0;
   bot.reviveTargetId = null;
@@ -4204,6 +4317,7 @@ function stepDuoPartnerRevive(
     bot.state = 'reviving';
     bot.isReviving = true;
     bot.reviveTargetId = 'player';
+    bot.isGrinding = false;
     bot.isSprinting = false;
     bot.isCrouching = false;
     bot.isFiring = false;
@@ -4359,6 +4473,7 @@ function stepSquadmateRevive(
     bot.state = 'reviving';
     bot.isReviving = true;
     bot.reviveTargetId = knockedMate.id;
+    bot.isGrinding = false;
     bot.isSprinting = false;
     bot.isCrouching = false;
     bot.isFiring = false;
@@ -4474,6 +4589,7 @@ export function updateBot(
     bot.isFiring = false;
     bot.isAiming = false;
     bot.isBuilding = false;
+    bot.isGrinding = false;
     bot.gliderOpen = false;
     return;
   }
@@ -4518,11 +4634,14 @@ export function updateBot(
     bot.isBuilding = false;
   }
 
+  if ((bot.state as string) === 'grind' && bot.isGrinding === false) {
+    bot.state = 'rotating';
+  }
+
   if (isPlayerCompanion) {
     if (
       bot.state === 'bus' ||
       bot.state === 'skydiving' ||
-      bot.state === 'gliding' ||
       bot.state === 'looting' ||
       bot.state === 'harvesting'
     ) {
@@ -4531,6 +4650,11 @@ export function updateBot(
     if (bot.targetEnemyId === 'player') {
       bot.targetEnemyId = null;
       bot.lastKnownEnemyPos = null;
+    }
+    if (bot.state === 'gliding') {
+      bot.isGrinding = false;
+      stepGlidingPhase(bot, ctx, safeDt, isFarLOD);
+      return;
     }
   } else {
     if (bot.state === 'bus') {
@@ -4542,6 +4666,7 @@ export function updateBot(
       return;
     }
     if (bot.state === 'gliding') {
+      bot.isGrinding = false;
       stepGlidingPhase(bot, ctx, safeDt, isFarLOD);
       return;
     }
@@ -4856,6 +4981,18 @@ export function updateBot(
     } else if (bot.state === 'combat' && !bot.lastKnownEnemyPos) {
       bot.state = weaponCount > 0 ? 'rotating' : 'looting';
       bot.stateTimer = 0;
+    } else if (
+      !isPlayerCompanion &&
+      !bot.isBoss &&
+      (bot.state === 'looting' || bot.state === 'harvesting') &&
+      weaponCount > 0 &&
+      resolveValidNoiseTarget(bot, ctx, elapsed) !== null
+    ) {
+      bot.lootTargetId = null;
+      bot.chestTargetId = null;
+      bot.harvestTargetId = null;
+      bot.state = 'rotating';
+      bot.stateTimer = 0;
     }
   }
 
@@ -5013,7 +5150,9 @@ export function updateBot(
     }
   }
 
-  recoverIfStuck(bot, ctx, intent, elapsed, safeDt, isFarLOD);
+  if (!bot.isGrinding) {
+    recoverIfStuck(bot, ctx, intent, elapsed, safeDt, isFarLOD);
+  }
   intent = applyVolcanoLavaAvoidance(bot, intent);
   applyMovementStep(
     bot,
@@ -5238,6 +5377,10 @@ export class BotBrain {
     isCrouching = false,
   ): number {
     return computeBotSpread(weaponId, difficulty, isMoving, isCrouching);
+  }
+
+  updateAnimState(bot: BotEntity): void {
+    updateAnimState(bot);
   }
 
   update(

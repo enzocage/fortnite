@@ -5,6 +5,7 @@ import {
   EMOTES,
   EventBus,
   GLIDERS,
+  GRIND_RAIL_SPEED,
   MEDALLION_CIRCLE_RADII,
   PICKAXES,
   POIS,
@@ -64,6 +65,7 @@ import {
   CollisionSystem,
   PlayerController,
   QuestTracker,
+  type SupplyDroneDamageResult,
   WeaponSystem,
   type CombatActor,
 } from '../gameplay';
@@ -116,6 +118,7 @@ export interface FortdropDebugAPI {
   giveWave2Loadout(): void;
   giveWave5Loadout(): void;
   giveWave6Loadout(): void;
+  giveWave7Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -397,6 +400,11 @@ export class GameEngine {
       this.worldInteractables.getDroppedMedallions(),
       this.worldInteractables.getDroppedCrowns(),
     );
+    this.uiManager.setWorldOverdriveOverlay(
+      this.worldInteractables.getGrindRails(),
+      this.worldInteractables.getRebootVans(),
+      this.worldInteractables.getSupplyDrones(),
+    );
 
     this.lobbyConfig = this.uiManager.getLobbyConfig();
     this.gameMode = this.lobbyConfig.gameMode ?? 'solo';
@@ -428,6 +436,7 @@ export class GameEngine {
       ...this.worldInteractables.getLootIslandColliders(),
       ...this.worldInteractables.getWeaponBunkerColliders(),
       ...this.worldInteractables.getSlurpTankerColliders(),
+      ...this.worldInteractables.getRebootVanColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -444,6 +453,7 @@ export class GameEngine {
     this.weaponSystem.setStationBridge(this.worldInteractables);
     this.weaponSystem.setRiftCaptureBridge(this.worldInteractables);
     this.weaponSystem.setChapterBridge(this.worldInteractables);
+    this.weaponSystem.setOverdriveBridge(this.worldInteractables);
     this.weaponSystem.setOnSlurpBarrelBroken((actorId) => {
       if (actorId === 'player') {
         this.questTracker.record('slurp_break', 1);
@@ -469,6 +479,10 @@ export class GameEngine {
     this.playerController.setRiftCaptureBridge(this.worldInteractables);
     this.playerController.setEconomyBridge(this.worldInteractables);
     this.playerController.setChapterBridge(this.worldInteractables);
+    this.playerController.setOverdriveBridge(this.worldInteractables);
+    this.playerController.setOnDroneDestroyed((res) => {
+      this.handleSupplyDroneDestroyed(res);
+    });
     this.playerController.setAugmentManager(this.augmentManager);
     this.playerController.setOnWeaponUpgraded(() => {
       this.questTracker.record('weapon_upgrade', 1);
@@ -528,6 +542,27 @@ export class GameEngine {
       },
       completePartnerRevive: () => this.botManager.reviveDuoPartner(),
     });
+    this.playerController.setDuoRebootBridge({
+      hasPartnerRebootCard: () => this.botManager.hasPartnerRebootCard(),
+      rebootPartnerAt: (vanPos) => {
+        const respawned = this.botManager.rebootDuoPartner(vanPos);
+        if (respawned) {
+          const visual = this.botVisuals.get(respawned.id);
+          if (visual) {
+            visual.rig.setVisible(true);
+            visual.rig.setDuoPartnerAura(true, this.totalElapsed);
+          }
+          this.eventBus.emit('ui:banner', {
+            id: `reboot_${Date.now()}`,
+            title: `${respawned.name} REBOOTED!`,
+            subtitle: 'PARACHUTING BACK INTO THE BATTLE',
+            tone: 'victory',
+            durationMs: 3200,
+          });
+        }
+        return respawned;
+      },
+    });
     this.botManager.setOnPlayerRevived(() => {
       this.playerController.completeRevive();
       this.eventBus.emit('ui:banner', {
@@ -571,7 +606,7 @@ export class GameEngine {
           qaModeParam === 'duos' ||
           qaModeParam === 'solo'
             ? qaModeParam
-            : search.has('qaWave6')
+            : search.has('qaWave6') || search.has('qaWave7')
               ? 'duos'
               : undefined;
         const qaWrap = search.get('qaWrap') ?? undefined;
@@ -594,7 +629,78 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (search.has('qaWave6')) {
+        if (search.has('qaWave7')) {
+          window.__GAME__?.giveWave7Loadout();
+          this.playerController.setGoldBars(550);
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const fwdX = Math.sin(yaw);
+          const fwdZ = Math.cos(yaw);
+          const rightX = -Math.cos(yaw);
+          const rightZ = Math.sin(yaw);
+
+          const showcasePos = {
+            x: p.x + fwdX * 12.5,
+            y: p.y,
+            z: p.z + fwdZ * 12.5,
+          };
+          this.worldInteractables.qaPlaceWave7Showcase(showcasePos);
+
+          const trapLeftX = p.x + fwdX * 6.0 - rightX * 2.4;
+          const trapLeftZ = p.z + fwdZ * 6.0 - rightZ * 2.4;
+          this.buildingSystem.placeTrap(
+            'spike_trap',
+            'player',
+            { x: trapLeftX, y: this.terrain.getHeightAt(trapLeftX, trapLeftZ) + 0.05, z: trapLeftZ },
+            yaw,
+            'player_squad',
+          );
+          const trapRightX = p.x + fwdX * 6.0 + rightX * 2.4;
+          const trapRightZ = p.z + fwdZ * 6.0 + rightZ * 2.4;
+          this.buildingSystem.placeTrap(
+            'bouncer_pad',
+            'player',
+            { x: trapRightX, y: this.terrain.getHeightAt(trapRightX, trapRightZ) + 0.05, z: trapRightZ },
+            yaw,
+            'player_squad',
+          );
+
+          const partner = this.botManager.getDuoPartner();
+          if (partner) {
+            const px = p.x + fwdX * 8.0 + rightX * 2.8;
+            const pz = p.z + fwdZ * 8.0 + rightZ * 2.8;
+            const py = this.terrain.getHeightAt(px, pz) + 0.2;
+            partner.position.x = px;
+            partner.position.y = py;
+            partner.position.z = pz;
+            partner.velocity.x = 0;
+            partner.velocity.y = 0;
+            partner.velocity.z = 0;
+            partner.yaw = yaw + Math.PI;
+            partner.state = 'rotating';
+            partner.gliderOpen = false;
+            partner.gliderFactor = 0;
+            partner.grounded = true;
+          }
+          this.collision.setPropColliders([
+            ...this.propsAndLoot.getActivePropColliders(),
+            ...this.propsAndLoot.getActiveLlamaColliders(),
+            ...this.worldInteractables.getColliders(),
+            ...this.vehicleSystem.getActiveVehicleColliders(),
+          ]);
+          this.uiManager.setWorldChapterOverlay(
+            this.worldInteractables.getWeaponBunkers(),
+            this.worldInteractables.getSlurpTankers(),
+            this.worldInteractables.getDroppedMedallions(),
+            this.worldInteractables.getDroppedCrowns(),
+          );
+          this.uiManager.setWorldOverdriveOverlay(
+            this.worldInteractables.getGrindRails(),
+            this.worldInteractables.getRebootVans(),
+            this.worldInteractables.getSupplyDrones(),
+          );
+          this.syncBotRigs(1 / 60);
+        } else if (search.has('qaWave6')) {
           window.__GAME__?.giveWave6Loadout();
           this.playerController.setVictoryCrown(true);
           this.playerController.addMedallion('medallion_siphon');
@@ -997,6 +1103,7 @@ export class GameEngine {
       radius: bot.radius,
       height: bot.height,
       alive: bot.alive,
+      squadId: bot.squadId,
       onDamage: (ev) => {
         this.botManager.onBotDamaged(bot.id, ev, this.matchElapsed);
       },
@@ -1258,6 +1365,7 @@ export class GameEngine {
     if (paused) {
       this.audioEngine.updateVehicleEngine(false, 0, false);
       this.audioEngine.updateWindRush(false, 0);
+    this.audioEngine.updateGrindRailLoop(false, 0);
     }
   }
 
@@ -1377,6 +1485,7 @@ export class GameEngine {
     this.audioEngine.setPaused(false);
     this.audioEngine.updateVehicleEngine(false, 0, false);
     this.audioEngine.updateWindRush(false, 0);
+    this.audioEngine.updateGrindRailLoop(false, 0);
     this.phase = 'lobby';
     this.victoryPendingSummary = false;
     this.matchSummaryShown = false;
@@ -1429,6 +1538,7 @@ export class GameEngine {
     this.audioEngine.setPaused(false);
     this.audioEngine.updateVehicleEngine(false, 0, false);
     this.audioEngine.updateWindRush(false, 0);
+    this.audioEngine.updateGrindRailLoop(false, 0);
     this.lobbyActiveEmote = null;
     this.lobbyEmoteTimer = 0;
     this.activeEmoteMusic = null;
@@ -1488,6 +1598,11 @@ export class GameEngine {
       this.worldInteractables.getDroppedMedallions(),
       this.worldInteractables.getDroppedCrowns(),
     );
+    this.uiManager.setWorldOverdriveOverlay(
+      this.worldInteractables.getGrindRails(),
+      this.worldInteractables.getRebootVans(),
+      this.worldInteractables.getSupplyDrones(),
+    );
     this.propsAndLoot.reset(
       this.worldBuildResult.chestSpots,
       this.worldBuildResult.floorLootSpots,
@@ -1504,6 +1619,7 @@ export class GameEngine {
       ...this.worldInteractables.getLootIslandColliders(),
       ...this.worldInteractables.getWeaponBunkerColliders(),
       ...this.worldInteractables.getSlurpTankerColliders(),
+      ...this.worldInteractables.getRebootVanColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
 
@@ -1671,10 +1787,12 @@ export class GameEngine {
     }
 
     // 2. Animated World, Vehicles, Interactables, Flora Detail, Props/Loot, Supply Drops
+    const wxState = this.environmentFX.getWeatherState();
+    const windStrength = clamp(Math.hypot(wxState.windX, wxState.windZ) / 6.0, 0.35, 2.5);
     this.worldBuilder.update(dt, this.totalElapsed);
     this.worldInteractables.update(dt, this.totalElapsed);
     this.vehicleSystem.update(dt, this.totalElapsed);
-    this.environmentDetail.update(dt, this.totalElapsed);
+    this.environmentDetail.update(dt, this.totalElapsed, windStrength);
     this.propsAndLoot.update(dt, this.totalElapsed);
     this.collision.setPropColliders([
       ...this.propsAndLoot.getActivePropColliders(),
@@ -1687,6 +1805,7 @@ export class GameEngine {
       ...this.worldInteractables.getLootIslandColliders(),
       ...this.worldInteractables.getWeaponBunkerColliders(),
       ...this.worldInteractables.getSlurpTankerColliders(),
+      ...this.worldInteractables.getRebootVanColliders(),
       ...this.vehicleSystem.getActiveVehicleColliders(),
     ]);
     this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
@@ -1710,11 +1829,10 @@ export class GameEngine {
       this.worldInteractables.getDroppedMedallions(),
       this.worldInteractables.getDroppedCrowns(),
     );
-    this.uiManager.setWorldChapterOverlay(
-      this.worldInteractables.getWeaponBunkers(),
-      this.worldInteractables.getSlurpTankers(),
-      this.worldInteractables.getDroppedMedallions(),
-      this.worldInteractables.getDroppedCrowns(),
+    this.uiManager.setWorldOverdriveOverlay(
+      this.worldInteractables.getGrindRails(),
+      this.worldInteractables.getRebootVans(),
+      this.worldInteractables.getSupplyDrones(),
     );
 
     if (this.matchElapsed >= this.nextSupplyDropTime) {
@@ -1875,6 +1993,10 @@ export class GameEngine {
       activeVeh?.speedKmh ?? 0,
       Boolean(activeVeh?.isBoosting),
       activeVeh?.kind,
+    );
+    this.audioEngine.updateGrindRailLoop(
+      Boolean(pHudSnap.isGrinding) && currPlayerPhase === 'playing' && !this.paused,
+      GRIND_RAIL_SPEED,
     );
     if (activeVeh && currPlayerPhase === 'playing') {
       if (this.prevVehicleDistPos) {
@@ -2077,9 +2199,10 @@ export class GameEngine {
       this.botManager.assignBounty(pRender.position, this.matchElapsed);
     }
 
-    // 6. Weapons, Building, VFX + Throwable Trajectory Arc
+    // 6. Weapons, Building, Traps, VFX + Throwable Trajectory Arc
     this.weaponSystem.update(dt);
     this.buildingSystem.update(dt, this.totalElapsed);
+    this.buildingSystem.checkTrapTriggers(this.gatherCombatActors());
     this.vfxManager.updateThrowArc(
       currPlayerPhase === 'playing' ? this.playerController.getThrowableArc() : null,
     );
@@ -2127,7 +2250,9 @@ export class GameEngine {
   private stepLobby(dt: number): void {
     this.worldBuilder.update(dt, this.totalElapsed);
     this.worldInteractables.update(dt, this.totalElapsed);
-    this.environmentDetail.update(dt, this.totalElapsed);
+    const lobbyWx = this.environmentFX.getWeatherState();
+    const lobbyWind = clamp(Math.hypot(lobbyWx.windX, lobbyWx.windZ) / 6.0, 0.35, 2.0);
+    this.environmentDetail.update(dt, this.totalElapsed, lobbyWind);
     const lobbyBiome = this.terrain.getBiomeAt(this.lobbyPos.x, this.lobbyPos.z);
     this.environmentFX.update(
       dt,
@@ -2485,6 +2610,14 @@ export class GameEngine {
       medallionsHeld,
       revives: stats.revives ?? 0,
       knocks: stats.knocks ?? 0,
+      reboots: stats.reboots ?? 0,
+      dronesShotDown: stats.dronesShotDown ?? 0,
+      trapsPlaced: stats.trapsPlaced ?? 0,
+      highlights: [
+        ...(stats.dronesShotDown && stats.dronesShotDown >= 2 ? ['SKY HUNTER'] : []),
+        ...(stats.reboots && stats.reboots >= 1 ? ['CLUTCH REBOOT'] : []),
+        ...(stats.knocks && stats.knocks >= 3 ? ['DUOS ENFORCER'] : []),
+      ],
     };
     this.lastMatchSummary = summary;
     if (!this.isQaIsolationSession()) {
@@ -2524,7 +2657,48 @@ export class GameEngine {
   private isQaIsolationSession(): boolean {
     if (typeof window === 'undefined') return false;
     const s = window.location.search;
-    return s.includes('qaWave5') || s.includes('qaWave6');
+    return s.includes('qaWave5') || s.includes('qaWave6') || s.includes('qaWave7');
+  }
+
+  private handleSupplyDroneDestroyed(res: SupplyDroneDamageResult): void {
+    if (!res.destroyed) return;
+    const pos: Vec3Like = { x: res.x, y: res.y, z: res.z };
+    const def = WEAPONS[res.weaponId];
+    this.propsAndLoot.spawnLootDrop(
+      pos,
+      {
+        item: {
+          uid: `drone_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+          weaponId: res.weaponId,
+          rarity: res.rarity,
+          magAmmo: def.magSize,
+          stackCount: 1,
+        },
+      },
+      { x: 1.5, y: 1.2, z: 0 },
+    );
+    this.propsAndLoot.spawnLootDrop(
+      pos,
+      {
+        item: {
+          uid: `drone_heal_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+          weaponId: 'chug_splash',
+          rarity: 'rare',
+          magAmmo: 0,
+          stackCount: 2,
+        },
+      },
+      { x: -1.5, y: 1.2, z: 0.5 },
+    );
+    this.grantPlayerGold(res.gold, pos);
+    this.playerController.addTrap(res.trapKind, 1);
+    this.eventBus.emit('ui:banner', {
+      id: `drone_down_${Date.now()}`,
+      title: 'SUPPLY DRONE SHOT DOWN!',
+      subtitle: `${res.rarity.toUpperCase()} ${def.shortName} • +${res.gold} GOLD • +1 ${res.trapKind === 'bouncer_pad' ? 'BOUNCER PAD' : 'SPIKE TRAP'}`,
+      tone: 'victory',
+      durationMs: 3200,
+    });
   }
 
   private grantPlayerGold(amount: number, worldPos?: Vec3Like): void {
@@ -2925,6 +3099,14 @@ export class GameEngine {
         }
         return circles;
       })(),
+      isGrinding: snap.isGrinding ?? false,
+      railgunCharge: snap.railgunCharge ?? null,
+      minigunHeat: snap.minigunHeat ?? null,
+      minigunOverheated: snap.minigunOverheated ?? false,
+      activeTrapKind: snap.activeTrapKind,
+      traps: snap.traps,
+      hasPartnerRebootCard: snap.hasPartnerRebootCard ?? false,
+      rebootProgress: snap.rebootProgress ?? null,
     };
 
     this.uiManager.updateHUD(hudState);
@@ -3300,6 +3482,9 @@ export class GameEngine {
           lootIslandActive: engine.worldInteractables.getLootIslandState().active,
           weaponBunkers: engine.worldInteractables.getWeaponBunkers().length,
           slurpTankers: engine.worldInteractables.getSlurpTankers().length,
+          grindRails: engine.worldInteractables.getGrindRails().length,
+          rebootVans: engine.worldInteractables.getRebootVans().length,
+          supplyDrones: engine.worldInteractables.getSupplyDrones().length,
           vehicles: engine.vehicleSystem.getVehicles().length,
           vaults: engine.worldInteractables.getVaults().length,
           fps: Math.round(engine.fps),
@@ -3450,6 +3635,37 @@ export class GameEngine {
         inv.setActiveSlot(1);
         engine.pushHUDState(false);
       },
+      giveWave7Loadout() {
+        const inv = engine.playerController.getInventory();
+        const items: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic' | 'rare'; stack: number }> = [
+          { id: 'railgun', rarity: 'mythic', stack: 1 },
+          { id: 'minigun', rarity: 'legendary', stack: 1 },
+          { id: 'kinetic_blade', rarity: 'mythic', stack: 1 },
+          { id: 'boom_bow', rarity: 'epic', stack: 1 },
+          { id: 'chug_splash', rarity: 'rare', stack: 4 },
+        ];
+        inv.reset();
+        items.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w7_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('light', 420);
+        inv.addAmmo('heavy', 28);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        engine.playerController.addTrap('spike_trap', 2);
+        engine.playerController.addTrap('bouncer_pad', 2);
+        engine.playerController.setActiveTrapKind('spike_trap');
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
       forceAugmentOffer() {
         const offer = engine.augmentManager.forceOffer();
         engine.pushHUDState(false);
@@ -3494,6 +3710,7 @@ export class GameEngine {
     this.terrain.dispose();
     this.audioEngine.updateVehicleEngine(false, 0, false);
     this.audioEngine.updateWindRush(false, 0);
+    this.audioEngine.updateGrindRailLoop(false, 0);
     this.audioEngine.dispose();
     this.uiManager.dispose();
 

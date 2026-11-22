@@ -160,6 +160,27 @@ export interface GameEventMap {
     position: Vec3Like;
     progress: number;
   };
+  'vfx:railgun_beam': {
+    from: Vec3Like;
+    to: Vec3Like;
+    pierced?: boolean;
+  };
+  'vfx:rail_sparks': {
+    position: Vec3Like;
+    velocity?: Vec3Like;
+  };
+  'vfx:trap_trigger': {
+    position: Vec3Like;
+    kind: 'spike_trap' | 'bouncer_pad';
+  };
+  'vfx:drone_explode': {
+    position: Vec3Like;
+    rarity: Rarity;
+  };
+  'vfx:reboot_beam': {
+    position: Vec3Like;
+    progress: number;
+  };
   'combat:damage': DamageEvent;
   'combat:hitmarker': {
     attackerId: string;

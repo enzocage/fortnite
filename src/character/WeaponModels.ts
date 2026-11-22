@@ -11,8 +11,10 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'heavy_shotgun',
   'smg',
   'combat_smg',
+  'minigun',
   'sniper',
   'boom_bow',
+  'railgun',
   'pistol',
   'rocket_launcher',
   'mythic_blade_rifle',
@@ -1517,6 +1519,137 @@ function buildSlurpJuice(): THREE.Group {
   return group;
 }
 
+function buildRailgun(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_railgun';
+
+  const chassis = makeStandardMat('#0f172a', 0.4, 0.56);
+  const shroudMat = makeStandardMat('#334155', 0.34, 0.48);
+  const railSteel = makeStandardMat('#94a3b8', 0.2, 0.88);
+  const cyanPlasma = makeStandardMat('#22d3ee', 0.12, 0.18, '#22d3ee', 0.96);
+  const violetPlasma = makeStandardMat('#a855f7', 0.14, 0.2, '#a855f7', 0.9);
+  const coreGlow = makeStandardMat('#e0f2fe', 0.1, 0.15, '#38bdf8', 1.0);
+
+  // Pistol grip, trigger guard & rear tech stock
+  addBox(group, 0.042, 0.12, 0.05, chassis, 0, -0.022, -0.015, 0.24, 0, 0);
+  addBox(group, 0.016, 0.032, 0.056, chassis, 0, 0.018, 0.048);
+  tagWrapTarget(addBox(group, 0.05, 0.082, 0.24, shroudMat, 0, 0.068, -0.17, 0.05, 0, 0));
+  addBox(group, 0.052, 0.118, 0.03, chassis, 0, 0.058, -0.285);
+  addBox(group, 0.056, 0.02, 0.14, violetPlasma, 0, 0.072, -0.17);
+
+  // Main sci-fi receiver & wrapTarget shroud panels
+  tagWrapTarget(addBox(group, 0.074, 0.096, 0.34, shroudMat, 0, 0.078, 0.11));
+  tagWrapTarget(addBox(group, 0.068, 0.062, 0.22, shroudMat, 0, 0.082, 0.37));
+  tagWrapTarget(addBox(group, 0.062, 0.044, 0.26, shroudMat, 0, 0.036, 0.29));
+
+  // Underside plasma capacitor battery cell + glowing charge indicator
+  addBox(group, 0.052, 0.082, 0.13, chassis, 0, -0.008, 0.14, -0.08, 0, 0);
+  addBox(group, 0.058, 0.026, 0.09, cyanPlasma, 0, -0.015, 0.14, -0.08, 0, 0);
+  addBox(group, 0.058, 0.016, 0.07, violetPlasma, 0, -0.042, 0.14, -0.08, 0, 0);
+
+  // Long twin electromagnetic rails extending forward + central plasma conduit core
+  addBox(group, 0.024, 0.024, 0.56, railSteel, 0, 0.114, 0.56);
+  addBox(group, 0.024, 0.024, 0.56, railSteel, 0, 0.062, 0.56);
+  addBox(group, 0.032, 0.018, 0.045, chassis, 0, 0.114, 0.83);
+  addBox(group, 0.032, 0.018, 0.045, chassis, 0, 0.062, 0.83);
+  addCylinder(group, 0.011, 0.011, 0.54, coreGlow, 0, 0.088, 0.55, Math.PI / 2, 0, 0, 10);
+
+  // Glowing cyan-violet plasma capacitor coils wrapped along twin rails & receiver sides
+  const coilZs = [0.34, 0.47, 0.60, 0.73];
+  for (let i = 0; i < coilZs.length; i++) {
+    const coilMat = i % 2 === 0 ? cyanPlasma : violetPlasma;
+    addMesh(
+      group,
+      new THREE.TorusGeometry(0.038, 0.009, 8, 16),
+      coilMat,
+      0,
+      0.088,
+      coilZs[i],
+      0,
+      0,
+      0,
+    );
+    addBox(group, 0.056, 0.014, 0.016, chassis, 0, 0.088, coilZs[i]);
+  }
+  for (const side of [-1, 1]) {
+    addBox(group, 0.014, 0.022, 0.22, cyanPlasma, side * 0.041, 0.088, 0.13);
+    addBox(group, 0.012, 0.016, 0.16, violetPlasma, side * 0.041, 0.060, 0.15);
+  }
+
+  // Top reflex optic rail + open reflex sight hood + glowing reticle lens
+  addBox(group, 0.032, 0.016, 0.36, chassis, 0, 0.134, 0.13);
+  addBox(group, 0.032, 0.018, 0.072, chassis, 0, 0.150, 0.10);
+  addBox(group, 0.008, 0.038, 0.058, railSteel, -0.018, 0.174, 0.10);
+  addBox(group, 0.008, 0.038, 0.058, railSteel, 0.018, 0.174, 0.10);
+  addBox(group, 0.044, 0.009, 0.058, railSteel, 0, 0.194, 0.10);
+  addBox(group, 0.026, 0.028, 0.006, cyanPlasma, 0, 0.174, 0.115);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.088, 0.86);
+  return group;
+}
+
+function buildMinigun(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_minigun';
+
+  const darkAlloy = makeStandardMat('#0f172a', 0.42, 0.62);
+  const shroudMat = makeStandardMat('#334155', 0.36, 0.5);
+  const barrelSteel = makeStandardMat('#94a3b8', 0.24, 0.86);
+  const drumMat = makeStandardMat('#365314', 0.5, 0.28);
+  const brassMat = makeStandardMat('#fbbf24', 0.26, 0.82);
+  const heatGlow = makeStandardMat('#f97316', 0.16, 0.18, '#f97316', 0.92);
+
+  // Rear motor housing, grip & heavy underside receiver
+  addBox(group, 0.044, 0.118, 0.052, darkAlloy, 0, -0.024, -0.015, 0.2, 0, 0);
+  addCylinder(group, 0.068, 0.072, 0.16, darkAlloy, 0, 0.065, -0.04, Math.PI / 2, 0, 0, 12);
+  tagWrapTarget(addBox(group, 0.105, 0.118, 0.32, shroudMat, 0, 0.048, 0.14));
+  tagWrapTarget(addBox(group, 0.096, 0.055, 0.26, shroudMat, 0, -0.022, 0.16));
+  tagWrapTarget(addBox(group, 0.118, 0.064, 0.18, shroudMat, 0, 0.072, 0.22));
+
+  // Heavy side ammo drum box + feed chute + visible brass belt
+  addCylinder(group, 0.086, 0.086, 0.135, drumMat, 0.118, -0.015, 0.14, 0, 0, Math.PI / 2, 14);
+  addBox(group, 0.078, 0.125, 0.15, darkAlloy, 0.105, -0.018, 0.14);
+  addBox(group, 0.058, 0.044, 0.088, barrelSteel, 0.068, 0.032, 0.14, 0, 0, -0.35);
+  addBox(group, 0.048, 0.026, 0.072, brassMat, 0.068, 0.042, 0.14, 0, 0, -0.35);
+
+  // Glowing orange heat vents along receiver & forward cooling jacket
+  for (const side of [-1, 1]) {
+    addBox(group, 0.014, 0.028, 0.18, heatGlow, side * 0.062, 0.072, 0.22);
+    for (let v = 0; v < 4; v++) {
+      addBox(group, 0.018, 0.042, 0.016, darkAlloy, side * 0.063, 0.072, 0.15 + v * 0.045);
+    }
+  }
+  addBox(group, 0.052, 0.014, 0.14, heatGlow, 0, 0.112, 0.20);
+
+  // Top/forward tubular fore-handle for left-hand low-slung grip
+  addBox(group, 0.022, 0.085, 0.024, darkAlloy, 0, 0.145, 0.11);
+  addBox(group, 0.022, 0.085, 0.024, darkAlloy, 0, 0.145, 0.29);
+  addCylinder(group, 0.016, 0.016, 0.21, barrelSteel, 0, 0.188, 0.20, Math.PI / 2, 0, 0, 10);
+  addCylinder(group, 0.021, 0.021, 0.11, darkAlloy, 0, 0.188, 0.20, Math.PI / 2, 0, 0, 10);
+
+  // 6-barrel rotary gatling barrel cluster
+  const barrelRadius = 0.044;
+  const barrelCenterY = 0.065;
+  for (let i = 0; i < 6; i++) {
+    const ang = (i / 6) * Math.PI * 2;
+    const bx = Math.cos(ang) * barrelRadius;
+    const by = barrelCenterY + Math.sin(ang) * barrelRadius;
+    addCylinder(group, 0.011, 0.012, 0.56, barrelSteel, bx, by, 0.50, Math.PI / 2, 0, 0, 8);
+  }
+  // Central rotor spindle + glowing inner thermal core
+  addCylinder(group, 0.014, 0.014, 0.52, darkAlloy, 0, barrelCenterY, 0.48, Math.PI / 2, 0, 0, 8);
+  addCylinder(group, 0.024, 0.024, 0.22, heatGlow, 0, barrelCenterY, 0.36, Math.PI / 2, 0, 0, 10);
+
+  // Rotary clamp rings along the 6-barrel cluster
+  for (const cz of [0.34, 0.54, 0.74]) {
+    addCylinder(group, 0.062, 0.062, 0.028, darkAlloy, 0, barrelCenterY, cz, Math.PI / 2, 0, 0, 12);
+    addCylinder(group, 0.064, 0.064, 0.01, barrelSteel, 0, barrelCenterY, cz, Math.PI / 2, 0, 0, 12);
+  }
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, barrelCenterY, 0.80);
+  return group;
+}
+
 /**
  * Creates a stylized procedural 3D weapon, throwable, or consumable mesh for any WeaponId.
  * All ranged weapons and throwables assign `group.userData.muzzleOffset` (THREE.Vector3) in local space.
@@ -1543,10 +1676,14 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildSMG();
     case 'combat_smg':
       return buildCombatSMG();
+    case 'minigun':
+      return buildMinigun();
     case 'sniper':
       return buildSniper();
     case 'boom_bow':
       return buildBoomBow();
+    case 'railgun':
+      return buildRailgun();
     case 'pistol':
       return buildPistol();
     case 'rocket_launcher':

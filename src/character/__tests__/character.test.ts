@@ -34,6 +34,7 @@ import {
   hasMuzzleOffset,
   isRangedWeapon,
   isThrowableWeapon,
+  resolveAnimState,
 } from '../index';
 
 function makeRenderState(overrides: Partial<CharacterRenderState> = {}): CharacterRenderState {
@@ -81,9 +82,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 25 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 27 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(25);
+    expect(allIds).toHaveLength(27);
 
     const seenNames = new Set<string>();
 
@@ -369,7 +370,7 @@ describe('CharacterRig', () => {
 });
 
 describe('CharacterAnimator', () => {
-  it('animates all 22 AnimStates (including drive, knocked, and reviving) and all 6 EmoteIds without NaN transforms or invalid bounding boxes', () => {
+  it('animates all 23 AnimStates (including drive, knocked, reviving, and grind) and all 6 EmoteIds without NaN transforms or invalid bounding boxes', () => {
     const animator = new CharacterAnimator();
     const rig = new CharacterRig();
 
@@ -396,8 +397,9 @@ describe('CharacterAnimator', () => {
       'emote',
       'knocked',
       'reviving',
+      'grind',
     ];
-    expect(states).toHaveLength(22);
+    expect(states).toHaveLength(23);
     expect(EMOTES).toHaveLength(6);
 
     for (const animState of states) {
@@ -420,7 +422,8 @@ describe('CharacterAnimator', () => {
             animState === 'sprint' ||
             animState === 'slide' ||
             animState === 'swim' ||
-            animState === 'drive'
+            animState === 'drive' ||
+            animState === 'grind'
               ? 6.5
               : 0,
           grounded:
@@ -428,10 +431,16 @@ describe('CharacterAnimator', () => {
             animState !== 'fall' &&
             animState !== 'skydive' &&
             animState !== 'glide' &&
-            animState !== 'zipline',
+            animState !== 'zipline' &&
+            animState !== 'grind',
           harvestSwingTimer: animState === 'harvest' ? 0.25 : 0,
           leanAngle:
-            animState === 'sprint' || animState === 'slide' || animState === 'drive' ? 0.25 : 0,
+            animState === 'sprint' ||
+            animState === 'slide' ||
+            animState === 'drive' ||
+            animState === 'grind'
+              ? 0.25
+              : 0,
           velocityY: animState === 'jump' ? 6.5 : animState === 'fall' ? -9.0 : 0,
         });
 
@@ -1220,8 +1229,10 @@ describe('Wave-3 Weapon Wraps, Ground Contact Shadow & Armor Rim Polish', () => 
       'heavy_shotgun',
       'smg',
       'combat_smg',
+      'minigun',
       'sniper',
       'boom_bow',
+      'railgun',
       'pistol',
       'rocket_launcher',
       'mythic_blade_rifle',
@@ -2512,6 +2523,372 @@ describe('Wave-6 Combat SMG, Boom Bow, Victory Crown, Medallions, Duo Aura, DBNO
     expect(vfx.getActiveSlurpTankerBurstCount()).toBe(0);
     expect(vfx.getActiveCrownGlintCount()).toBe(0);
     expect(vfx.getActiveReviveBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-7 Pulse Railgun, Overheat Minigun, Grind Pose & VFX Channels', () => {
+  it('builds bespoke Pulse Railgun and Overheat Minigun models with wrapTarget panels and muzzleOffsets', () => {
+    const railgun = createWeaponModel('railgun');
+    expect(railgun.name).toBe('weapon_railgun');
+    expect(isRangedWeapon('railgun')).toBe(true);
+    expect(hasMuzzleOffset('railgun')).toBe(true);
+    expect(countMeshes(railgun)).toBeGreaterThanOrEqual(20);
+    const railMuzzle = railgun.userData.muzzleOffset as THREE.Vector3;
+    expect(railMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(railMuzzle.z).toBeGreaterThan(0.75);
+
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    const violetHex = new THREE.Color('#a855f7').getHex();
+    let hasCyanCoil = false;
+    let hasVioletCoil = false;
+    let railWrapTargets = 0;
+    railgun.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) railWrapTargets++;
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (child.material.emissive.getHex() === cyanHex) hasCyanCoil = true;
+        if (child.material.emissive.getHex() === violetHex) hasVioletCoil = true;
+      }
+    });
+    expect(hasCyanCoil).toBe(true);
+    expect(hasVioletCoil).toBe(true);
+    expect(railWrapTargets).toBeGreaterThanOrEqual(3);
+
+    applyWeaponWrap(railgun, 'neon_cyber');
+    const neonMat = getWeaponWrapMaterial('neon_cyber');
+    let railWrappedCount = 0;
+    railgun.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) {
+        expect(child.material).toBe(neonMat);
+        railWrappedCount++;
+      } else {
+        expect(child.material).not.toBe(neonMat);
+      }
+    });
+    expect(railWrappedCount).toBe(railWrapTargets);
+    disposeObject3D(railgun);
+
+    const minigun = createWeaponModel('minigun');
+    expect(minigun.name).toBe('weapon_minigun');
+    expect(isRangedWeapon('minigun')).toBe(true);
+    expect(hasMuzzleOffset('minigun')).toBe(true);
+    expect(countMeshes(minigun)).toBeGreaterThanOrEqual(24);
+    const minigunMuzzle = minigun.userData.muzzleOffset as THREE.Vector3;
+    expect(minigunMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(minigunMuzzle.z).toBeGreaterThan(0.7);
+
+    const heatOrangeHex = new THREE.Color('#f97316').getHex();
+    let hasHeatVent = false;
+    let minigunWrapTargets = 0;
+    minigun.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) minigunWrapTargets++;
+      if (
+        child.material instanceof THREE.MeshStandardMaterial &&
+        child.material.emissive.getHex() === heatOrangeHex
+      ) {
+        hasHeatVent = true;
+      }
+    });
+    expect(hasHeatVent).toBe(true);
+    expect(minigunWrapTargets).toBeGreaterThanOrEqual(3);
+    disposeObject3D(minigun);
+  });
+
+  it('animates grind snowboard balance stance via animState & isGrinding and holds minigun low-slung vs railgun shoulder brace', () => {
+    const animator = new CharacterAnimator();
+    const rig = new CharacterRig();
+
+    expect(resolveAnimState(makeRenderState({ animState: 'fall', isGrinding: true }))).toBe('grind');
+    expect(resolveAnimState(makeRenderState({ animState: 'idle', isGrinding: false }))).toBe('idle');
+
+    // Grind balance pose: crouched hips, sideways surf stance, arms out wide, staggered knees
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'fall', isGrinding: true, moveSpeed: 16.5, grounded: false }),
+      0,
+    );
+    expect(rig.joints.hips.position.y).toBeLessThan(0.75);
+    expect(rig.joints.hips.rotation.y).toBeGreaterThan(0.3);
+    expect(rig.joints.spine.rotation.x).toBeGreaterThan(0.15);
+    expect(rig.joints.leftShoulder.rotation.z).toBeGreaterThan(0.7);
+    expect(rig.joints.rightShoulder.rotation.z).toBeLessThan(-0.7);
+    expect(rig.joints.leftKnee.rotation.x).toBeGreaterThan(0.7);
+    expect(rig.joints.rightKnee.rotation.x).toBeGreaterThan(0.6);
+    expect(Math.abs(rig.joints.leftHip.rotation.x - rig.joints.rightHip.rotation.x)).toBeGreaterThan(0.3);
+    expect(rig.isContrailActive()).toBe(false);
+
+    // Aiming while grinding still keeps crouched staggered-knee rail stance while aiming weapon
+    animator.update(
+      rig,
+      makeRenderState({
+        animState: 'grind',
+        isGrinding: true,
+        weaponId: 'railgun',
+        isAiming: true,
+        grounded: false,
+      }),
+      0,
+    );
+    expect(rig.joints.hips.position.y).toBeLessThan(0.75);
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.7);
+    expect(rig.getEquippedWeaponId()).toBe('railgun');
+
+    // Compare standard AR / Railgun shoulder hold vs Minigun heavy low-slung hip-hold
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'railgun', isAiming: true, weaponCharge: 0.8 }),
+      0,
+    );
+    const railgunShoulderRx = rig.joints.rightShoulder.rotation.x;
+    const railgunHandWorldY = rig.joints.rightHand.getWorldPosition(new THREE.Vector3()).y;
+
+    animator.update(
+      rig,
+      makeRenderState({ animState: 'idle', weaponId: 'minigun', isFiring: true }),
+      0,
+    );
+    const minigunShoulderRx = rig.joints.rightShoulder.rotation.x;
+    const minigunElbowRx = rig.joints.rightElbow.rotation.x;
+    const minigunHandWorldY = rig.joints.rightHand.getWorldPosition(new THREE.Vector3()).y;
+    const minigunMuzzle = rig.getMuzzleWorldPosition(new THREE.Vector3());
+
+    expect(minigunShoulderRx).toBeGreaterThan(-0.5);
+    expect(minigunShoulderRx).toBeGreaterThan(railgunShoulderRx + 0.4);
+    expect(minigunElbowRx).toBeLessThan(-0.9);
+    expect(minigunHandWorldY).toBeLessThan(railgunHandWorldY - 0.08);
+    expect(Number.isFinite(minigunMuzzle.x)).toBe(true);
+    expect(minigunMuzzle.z).toBeGreaterThan(0.4);
+    assertFiniteBox(rig.getGroup());
+
+    rig.dispose();
+  });
+
+  it('excludes railgun from brass casings while keeping rapid minigun casings + distinct muzzle flash colors', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // Railgun emits plasma muzzle flash WITHOUT ejecting brass casing
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.6 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'railgun',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(1);
+
+    const vfxRoot = scene.getObjectByName('vfx_root') as THREE.Group;
+    const activeMuzzleColors: number[] = [];
+    for (const child of vfxRoot.children) {
+      if (child instanceof THREE.Group && child.visible) {
+        child.traverse((m) => {
+          if (m instanceof THREE.Mesh && m.material instanceof THREE.MeshBasicMaterial) {
+            activeMuzzleColors.push(m.material.color.getHex());
+          }
+        });
+      }
+    }
+    expect(activeMuzzleColors).toContain(0xa855f7);
+
+    // Clear and fire rapid minigun burst -> ejects rapid brass casings + orange gatling flash
+    vfx.clear();
+    for (let i = 0; i < 6; i++) {
+      bus.emit('vfx:muzzle', {
+        position: { x: 0, y: 1.1, z: 0.6 },
+        direction: { x: 0, y: 0, z: 1 },
+        weaponId: 'minigun',
+      });
+    }
+    expect(vfx.getActiveCasingCount()).toBe(6);
+
+    const minigunMuzzleColors: number[] = [];
+    for (const child of vfxRoot.children) {
+      if (child instanceof THREE.Group && child.visible) {
+        child.traverse((m) => {
+          if (m instanceof THREE.Mesh && m.material instanceof THREE.MeshBasicMaterial) {
+            minigunMuzzleColors.push(m.material.color.getHex());
+          }
+        });
+      }
+    }
+    expect(minigunMuzzleColors).toContain(0xfb923c);
+
+    vfx.dispose();
+  });
+
+  it('spawns, updates, expires, guards NaN/range, clears, and disposes all 5 Wave-7 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:railgun_beam (including pierced flag)
+    bus.emit('vfx:railgun_beam', {
+      from: { x: 0, y: 1.5, z: 0 },
+      to: { x: 0, y: 1.5, z: 45 },
+      pierced: true,
+    });
+    expect(vfx.getActiveRailgunBeamCount()).toBe(1);
+
+    // 2. vfx:rail_sparks (with velocity and without velocity)
+    bus.emit('vfx:rail_sparks', {
+      position: { x: 4, y: 3.2, z: -2 },
+      velocity: { x: 16.5, y: 0, z: 0 },
+    });
+    bus.emit('vfx:rail_sparks', {
+      position: { x: 6, y: 3.2, z: -2 },
+    });
+    expect(vfx.getActiveRailSparksCount()).toBe(2);
+
+    // 3. vfx:trap_trigger (spike_trap & bouncer_pad)
+    bus.emit('vfx:trap_trigger', {
+      position: { x: -4, y: 0.1, z: 4 },
+      kind: 'spike_trap',
+    });
+    bus.emit('vfx:trap_trigger', {
+      position: { x: -8, y: 0.1, z: 4 },
+      kind: 'bouncer_pad',
+    });
+    expect(vfx.getActiveTrapTriggerCount()).toBe(2);
+
+    // 4. vfx:drone_explode
+    bus.emit('vfx:drone_explode', {
+      position: { x: 12, y: 14, z: -10 },
+      rarity: 'legendary',
+    });
+    expect(vfx.getActiveDroneExplodeCount()).toBe(1);
+
+    // 5. vfx:reboot_beam (re-emitting near same van updates progress without duplicating)
+    bus.emit('vfx:reboot_beam', {
+      position: { x: -15, y: 0, z: -15 },
+      progress: 0.3,
+    });
+    bus.emit('vfx:reboot_beam', {
+      position: { x: -15, y: 0, z: -15 },
+      progress: 0.85,
+    });
+    expect(vfx.getActiveRebootBeamCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(7);
+
+    // Emitting a second reboot beam at a distinct van allocates another slot
+    bus.emit('vfx:reboot_beam', {
+      position: { x: 25, y: 0, z: 25 },
+      progress: 0.5,
+    });
+    expect(vfx.getActiveRebootBeamCount()).toBe(2);
+    expect(vfx.getActiveEffectCount()).toBe(8);
+
+    // Advance 0.2s -> all 8 remain active and transforms stay finite
+    for (let i = 0; i < 4; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveEffectCount()).toBe(8);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Advance past 0.4s -> rail_sparks (0.34s) expired, others still active
+    for (let i = 0; i < 4; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveRailSparksCount()).toBe(0);
+    expect(vfx.getActiveRailgunBeamCount()).toBe(1);
+    expect(vfx.getActiveTrapTriggerCount()).toBe(2);
+    expect(vfx.getActiveDroneExplodeCount()).toBe(1);
+    expect(vfx.getActiveRebootBeamCount()).toBe(2);
+
+    // Advance past 0.85s -> all Wave-7 channels expired cleanly back to pool
+    for (let i = 0; i < 10; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveRailgunBeamCount()).toBe(0);
+    expect(vfx.getActiveRailSparksCount()).toBe(0);
+    expect(vfx.getActiveTrapTriggerCount()).toBe(0);
+    expect(vfx.getActiveDroneExplodeCount()).toBe(0);
+    expect(vfx.getActiveRebootBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // NaN / Infinity / zero-length / out-of-range guards
+    bus.emit('vfx:railgun_beam', {
+      from: { x: Number.NaN, y: 0, z: 0 },
+      to: { x: 0, y: 0, z: 10 },
+    });
+    bus.emit('vfx:railgun_beam', {
+      from: { x: 2, y: 2, z: 2 },
+      to: { x: 2, y: 2, z: 2 },
+    });
+    bus.emit('vfx:rail_sparks', {
+      position: { x: Number.POSITIVE_INFINITY, y: 0, z: 0 },
+    });
+    bus.emit('vfx:trap_trigger', {
+      position: { x: 0, y: Number.NaN, z: 0 },
+      kind: 'spike_trap',
+    });
+    bus.emit('vfx:drone_explode', {
+      position: { x: 0, y: 0, z: Number.NEGATIVE_INFINITY },
+      rarity: 'epic',
+    });
+    bus.emit('vfx:reboot_beam', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+      progress: 0.5,
+    });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Huge beam range & NaN velocity/progress clamped safely without NaN transforms
+    bus.emit('vfx:railgun_beam', {
+      from: { x: 0, y: 1, z: 0 },
+      to: { x: 0, y: 1, z: 5000 },
+    });
+    bus.emit('vfx:rail_sparks', {
+      position: { x: 1, y: 1, z: 1 },
+      velocity: { x: Number.NaN, y: Number.POSITIVE_INFINITY, z: 0 },
+    });
+    bus.emit('vfx:reboot_beam', {
+      position: { x: 3, y: 0, z: 3 },
+      progress: Number.NaN,
+    });
+    expect(vfx.getActiveRailgunBeamCount()).toBe(1);
+    expect(vfx.getActiveRailSparksCount()).toBe(1);
+    expect(vfx.getActiveRebootBeamCount()).toBe(1);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 5 Wave-7 pools immediately
+    bus.emit('vfx:trap_trigger', { position: { x: 0, y: 0, z: 0 }, kind: 'bouncer_pad' });
+    bus.emit('vfx:drone_explode', { position: { x: 2, y: 8, z: 2 }, rarity: 'mythic' });
+    expect(vfx.getActiveEffectCount()).toBe(5);
+    vfx.clear();
+    expect(vfx.getActiveRailgunBeamCount()).toBe(0);
+    expect(vfx.getActiveRailSparksCount()).toBe(0);
+    expect(vfx.getActiveTrapTriggerCount()).toBe(0);
+    expect(vfx.getActiveDroneExplodeCount()).toBe(0);
+    expect(vfx.getActiveRebootBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 5 Wave-7 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:railgun_beam', { from: { x: 0, y: 1, z: 0 }, to: { x: 0, y: 1, z: 25 } });
+    bus.emit('vfx:rail_sparks', { position: { x: 0, y: 1, z: 0 } });
+    bus.emit('vfx:trap_trigger', { position: { x: 0, y: 0, z: 0 }, kind: 'spike_trap' });
+    bus.emit('vfx:drone_explode', { position: { x: 0, y: 10, z: 0 }, rarity: 'rare' });
+    bus.emit('vfx:reboot_beam', { position: { x: 0, y: 0, z: 0 }, progress: 0.9 });
+    expect(vfx.getActiveRailgunBeamCount()).toBe(0);
+    expect(vfx.getActiveRailSparksCount()).toBe(0);
+    expect(vfx.getActiveTrapTriggerCount()).toBe(0);
+    expect(vfx.getActiveDroneExplodeCount()).toBe(0);
+    expect(vfx.getActiveRebootBeamCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

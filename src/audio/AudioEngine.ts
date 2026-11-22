@@ -62,6 +62,13 @@ export interface WindRushState {
   gain: number;
 }
 
+export interface GrindRailLoopState {
+  active: boolean;
+  speed: number;
+  freqHz: number;
+  gain: number;
+}
+
 export const BIOME_AMBIENCE_PROFILES: Record<
   BiomeType,
   Omit<BiomeAmbienceProfile, 'stormOverlayGain' | 'stormFilterFreq' | 'stormFilterQ'>
@@ -292,6 +299,17 @@ interface WindRushRig {
   noiseSource: AudioBufferSourceNode;
 }
 
+interface GrindRailRig {
+  masterGain: GainNode;
+  bandpassFilter: BiquadFilterNode | null;
+  humGain: GainNode;
+  plasmaGain: GainNode;
+  noiseGain: GainNode | null;
+  oscA: OscillatorNode;
+  oscB: OscillatorNode;
+  noiseSource: AudioBufferSourceNode | null;
+}
+
 /**
  * Pure gain calculation for the Master, SFX, and Music buses.
  * Clamps all inputs safely to [0, 1] and treats non-finite values as 0.
@@ -343,6 +361,11 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'medallion_pickup':
     case 'bunker_unlock':
     case 'slurp_tanker_burst':
+    case 'shot_railgun':
+    case 'trap_snap':
+    case 'bouncer_launch':
+    case 'reboot_complete':
+    case 'drone_explode':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -371,6 +394,7 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'gold_pickup':
     case 'bow_draw':
     case 'revive_tick':
+    case 'railgun_charge':
       return 1;
     case 'augment_select':
     case 'tactical_ping':
@@ -380,6 +404,10 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'shot_combat_smg':
     case 'bow_release':
     case 'crown_glint':
+    case 'shot_minigun':
+    case 'minigun_overheat':
+    case 'grind_attach':
+    case 'reboot_channel':
     default:
       return 2;
   }
@@ -408,6 +436,8 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'overshield_recharge':
     case 'bow_draw':
       return 65;
+    case 'railgun_charge':
+      return 70;
     case 'gold_pickup':
     case 'crown_glint':
       return 75;
@@ -431,12 +461,17 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'campfire_ignite':
     case 'vending_buy':
       return 90;
+    case 'grind_attach':
+      return 95;
     case 'slurp_barrel_break':
     case 'kinetic_slash':
       return 100;
+    case 'minigun_overheat':
+      return 105;
     case 'grappler_reel':
       return 110;
     case 'medallion_pickup':
+    case 'trap_snap':
       return 115;
     case 'ally_hired':
       return 120;
@@ -457,15 +492,22 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'vehicle_horn':
       return 180;
     case 'slurp_tanker_burst':
+    case 'shot_minigun':
       return 185;
     case 'vehicle_boost':
       return 190;
+    case 'reboot_channel':
+      return 195;
     case 'shot_dmr':
       return 200;
+    case 'bouncer_launch':
+      return 210;
     case 'vehicle_crash':
     case 'vault_unlock':
     case 'flag_captured':
       return 220;
+    case 'drone_explode':
+      return 230;
     case 'shot_sniper':
     case 'shot_rocket':
     case 'explosion':
@@ -476,6 +518,10 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'barrel_explode':
     case 'bunker_unlock':
       return 240;
+    case 'shot_railgun':
+      return 260;
+    case 'reboot_complete':
+      return 280;
     case 'weather_thunder':
     case 'loot_island_spawn':
       return 350;
@@ -532,6 +578,12 @@ export class AudioEngine {
   private windRushSpeedMs = 0;
   private windRushFilterHz = 0;
   private windRushGain = 0;
+
+  private grindRailRig: GrindRailRig | null = null;
+  private grindRailActive = false;
+  private grindRailSpeed = 0;
+  private grindRailFreqHz = 0;
+  private grindRailGain = 0;
 
   constructor(
     eventBus: EventBus,
@@ -598,6 +650,7 @@ export class AudioEngine {
     if (this.isSfxMuted()) {
       this.teardownVehicleEngine();
       this.teardownWindRush();
+      this.teardownGrindRailLoop();
     }
   }
 
@@ -607,6 +660,7 @@ export class AudioEngine {
     if (this.paused) {
       this.teardownVehicleEngine();
       this.teardownWindRush();
+      this.teardownGrindRailLoop();
     }
   }
 
@@ -1044,6 +1098,69 @@ export class AudioEngine {
     };
   }
 
+  /**
+   * Maintains a continuous metallic plasma hum synthesizer loop while grinding on rails.
+   * Safe in headless/Node environments without throwing when Web Audio nodes are mocked.
+   */
+  updateGrindRailLoop(active: boolean, speed: number): void {
+    if (this.disposed) return;
+
+    const cleanSpeed = Number.isFinite(speed) ? clamp(speed, 0, 36) : 0;
+
+    if (!active || this.paused || this.isSfxMuted()) {
+      this.teardownGrindRailLoop();
+      return;
+    }
+
+    if (!this.ctx && (this.unlocked || typeof window === 'undefined')) {
+      this.ensureContext();
+    }
+
+    if (
+      !this.ctx ||
+      !this.sfxGain ||
+      this.ctx.state === 'closed' ||
+      (!this.unlocked && this.ctx.state === 'suspended')
+    ) {
+      this.teardownGrindRailLoop();
+      return;
+    }
+
+    if (
+      this.grindRailActive &&
+      this.grindRailRig &&
+      Math.abs(this.grindRailSpeed - cleanSpeed) < 0.05
+    ) {
+      return;
+    }
+
+    this.pruneVoices(this.ctx.currentTime);
+
+    if (!this.grindRailActive && !this.ensurePolyphonyRoom(2)) {
+      return;
+    }
+
+    if (!this.grindRailRig) {
+      this.grindRailRig = this.createGrindRailRig(this.ctx, this.sfxGain);
+      if (!this.grindRailRig) {
+        return;
+      }
+    }
+
+    this.grindRailActive = true;
+    this.grindRailSpeed = cleanSpeed;
+    this.applyGrindRailParams(this.ctx, this.grindRailRig, cleanSpeed);
+  }
+
+  getGrindRailLoopState(): GrindRailLoopState {
+    return {
+      active: this.grindRailActive,
+      speed: this.grindRailSpeed,
+      freqHz: this.grindRailFreqHz,
+      gain: this.grindRailGain,
+    };
+  }
+
   getActiveVoiceCount(): number {
     if (this.ctx) {
       this.pruneVoices(this.ctx.currentTime);
@@ -1070,6 +1187,7 @@ export class AudioEngine {
     }
     this.unsubscribers.length = 0;
 
+    this.teardownGrindRailLoop();
     this.teardownWindRush();
     this.teardownVehicleEngine();
     this.teardownBiomeAmbience();
@@ -1248,7 +1366,8 @@ export class AudioEngine {
       this.chestLoops.size +
       (this.ambienceActive ? 1 : 0) +
       (this.vehicleEngineActive ? 1 : 0) +
-      (this.windRushActive ? 1 : 0)
+      (this.windRushActive ? 1 : 0) +
+      (this.grindRailActive ? 1 : 0)
     );
   }
 
@@ -1754,14 +1873,197 @@ export class AudioEngine {
     this.safeDisconnect(rig.masterGain);
   }
 
+  private createGrindRailRig(
+    ctx: AudioContext,
+    destination: AudioNode,
+  ): GrindRailRig | null {
+    if (typeof ctx.createGain !== 'function' || typeof ctx.createOscillator !== 'function') {
+      return null;
+    }
+
+    let masterGain: GainNode | null = null;
+    let bandpassFilter: BiquadFilterNode | null = null;
+    let humGain: GainNode | null = null;
+    let plasmaGain: GainNode | null = null;
+    let noiseGain: GainNode | null = null;
+    let oscA: OscillatorNode | null = null;
+    let oscB: OscillatorNode | null = null;
+    let noiseSource: AudioBufferSourceNode | null = null;
+
+    try {
+      const now = ctx.currentTime;
+      masterGain = ctx.createGain();
+      this.setParam(masterGain.gain, 0.0001, now);
+      masterGain.connect(destination);
+
+      bandpassFilter = this.safeCreateFilter(ctx);
+      if (bandpassFilter) {
+        bandpassFilter.type = 'bandpass';
+        this.setParam(bandpassFilter.frequency, 480, now);
+        this.setParam(bandpassFilter.Q, 2.2, now);
+        bandpassFilter.connect(masterGain);
+      }
+      const target: AudioNode = bandpassFilter ?? masterGain;
+
+      humGain = ctx.createGain();
+      this.setParam(humGain.gain, 0.0001, now);
+      humGain.connect(target);
+
+      plasmaGain = ctx.createGain();
+      this.setParam(plasmaGain.gain, 0.0001, now);
+      plasmaGain.connect(target);
+
+      oscA = ctx.createOscillator();
+      oscA.type = 'sawtooth';
+      this.setParam(oscA.frequency, 128, now);
+      oscA.connect(humGain);
+
+      oscB = ctx.createOscillator();
+      oscB.type = 'triangle';
+      this.setParam(oscB.frequency, 192, now);
+      oscB.detune?.setValueAtTime?.(7, now);
+      oscB.connect(plasmaGain);
+
+      try {
+        const noiseBuf = this.buildLoopNoiseBuffer(ctx, 0x91e4b7, 0.34, 0.24, true);
+        if (noiseBuf && typeof ctx.createBufferSource === 'function') {
+          noiseSource = ctx.createBufferSource();
+          noiseSource.buffer = noiseBuf;
+          noiseSource.loop = true;
+          noiseGain = ctx.createGain();
+          this.setParam(noiseGain.gain, 0.0001, now);
+          noiseSource.connect(noiseGain);
+          noiseGain.connect(target);
+          noiseSource.start(now);
+        }
+      } catch {
+        this.safeDisconnect(noiseSource);
+        this.safeDisconnect(noiseGain);
+        noiseSource = null;
+        noiseGain = null;
+      }
+
+      oscA.start(now);
+      oscB.start(now);
+
+      return {
+        masterGain,
+        bandpassFilter,
+        humGain,
+        plasmaGain,
+        noiseGain,
+        oscA,
+        oscB,
+        noiseSource,
+      };
+    } catch {
+      this.safeDisconnect(noiseSource);
+      this.safeDisconnect(noiseGain);
+      this.safeDisconnect(oscA);
+      this.safeDisconnect(oscB);
+      this.safeDisconnect(humGain);
+      this.safeDisconnect(plasmaGain);
+      this.safeDisconnect(bandpassFilter);
+      this.safeDisconnect(masterGain);
+      return null;
+    }
+  }
+
+  private applyGrindRailParams(
+    ctx: AudioContext,
+    rig: GrindRailRig,
+    speed: number,
+  ): void {
+    const now = ctx.currentTime;
+    const speedNorm = clamp(speed / 30, 0, 1);
+    const freqHz = clamp(128 + speedNorm * 132, 128, 260);
+    const harmonicHz = freqHz * 1.5;
+    const filterHz = clamp(480 + speedNorm * 1420, 480, 1900);
+    const filterQ = 2.2 + speedNorm * 1.2;
+    const humLevel = Math.max(0.0001, 0.045 + speedNorm * 0.045);
+    const plasmaLevel = Math.max(0.0001, 0.032 + speedNorm * 0.038);
+    const noiseLevel = Math.max(0.0001, 0.02 + speedNorm * 0.036);
+    const masterLevel = clamp(0.04 + speedNorm * 0.095, 0.0001, 0.14);
+
+    this.grindRailFreqHz = freqHz;
+    this.grindRailGain = masterLevel;
+
+    try {
+      this.smoothParam(rig.oscA.frequency, freqHz, now, 0.05, 0.075);
+      this.smoothParam(rig.oscB.frequency, harmonicHz, now, 0.05, 0.075);
+      if (rig.bandpassFilter) {
+        this.smoothParam(rig.bandpassFilter.frequency, filterHz, now, 0.055, 0.08);
+        this.smoothParam(rig.bandpassFilter.Q, filterQ, now, 0.055, 0.08);
+      }
+      this.smoothParam(rig.humGain.gain, humLevel, now, 0.055, 0.08);
+      this.smoothParam(rig.plasmaGain.gain, plasmaLevel, now, 0.055, 0.08);
+      if (rig.noiseGain) {
+        this.smoothParam(rig.noiseGain.gain, noiseLevel, now, 0.055, 0.08);
+      }
+      this.smoothParam(rig.masterGain.gain, masterLevel, now, 0.055, 0.08);
+    } catch {
+      // Gracefully tolerate incomplete AudioNode mocks
+    }
+  }
+
+  private teardownGrindRailLoop(): void {
+    const rig = this.grindRailRig;
+    this.grindRailRig = null;
+    this.grindRailActive = false;
+    this.grindRailSpeed = 0;
+    this.grindRailFreqHz = 0;
+    this.grindRailGain = 0;
+
+    if (!rig) return;
+
+    const now = this.ctx ? this.ctx.currentTime : 0;
+    const stopAt = now + 0.05;
+    try {
+      this.rampParam(rig.masterGain.gain, 0.0001, now, 0.04);
+      this.rampParam(rig.humGain.gain, 0.0001, now, 0.04);
+      this.rampParam(rig.plasmaGain.gain, 0.0001, now, 0.04);
+      if (rig.noiseGain) {
+        this.rampParam(rig.noiseGain.gain, 0.0001, now, 0.04);
+      }
+    } catch {
+      // Ignore ramp errors during teardown
+    }
+
+    for (const src of [rig.oscA, rig.oscB, rig.noiseSource]) {
+      if (!src) continue;
+      try {
+        src.stop(stopAt);
+      } catch {
+        // Ignore stop errors during teardown
+      }
+      this.safeDisconnect(src);
+    }
+
+    this.safeDisconnect(rig.noiseGain);
+    this.safeDisconnect(rig.humGain);
+    this.safeDisconnect(rig.plasmaGain);
+    this.safeDisconnect(rig.bandpassFilter);
+    this.safeDisconnect(rig.masterGain);
+  }
+
   private buildWindNoiseBuffer(ctx: AudioContext): AudioBuffer | null {
+    return this.buildLoopNoiseBuffer(ctx, 0xc7f193, 0.24, 0.28, true);
+  }
+
+  private buildLoopNoiseBuffer(
+    ctx: AudioContext,
+    seed: number,
+    whiteWeight: number,
+    gainScale: number,
+    crossfade: boolean,
+  ): AudioBuffer | null {
     if (typeof ctx.createBuffer !== 'function') return null;
     try {
       const rate = ctx.sampleRate || 44100;
       const len = Math.max(256, Math.floor(rate * 1.5));
       const buf = ctx.createBuffer(1, len, rate);
       const data = buf.getChannelData(0);
-      const rand = mulberry32(0xc7f193);
+      const rand = mulberry32(seed);
       let b0 = 0;
       let b1 = 0;
       let b2 = 0;
@@ -1770,14 +2072,14 @@ export class AudioEngine {
         b0 = 0.997 * b0 + w * 0.029;
         b1 = 0.985 * b1 + w * 0.032;
         b2 = 0.95 * b2 + w * 0.048;
-        // Blend warm pink rush with crisp white air hiss
-        data[i] = clamp((b0 + b1 + b2 + w * 0.24) * 0.28, -1, 1);
+        data[i] = clamp((b0 + b1 + b2 + w * whiteWeight) * gainScale, -1, 1);
       }
-      // Crossfade loop seam to eliminate wrap clicks
-      const fadeLen = Math.min(256, Math.floor(len / 8));
-      for (let i = 0; i < fadeLen; i++) {
-        const alpha = i / fadeLen;
-        data[i] = data[i] * alpha + data[len - fadeLen + i] * (1 - alpha);
+      if (crossfade) {
+        const fadeLen = Math.min(256, Math.floor(len / 8));
+        for (let i = 0; i < fadeLen; i++) {
+          const alpha = i / fadeLen;
+          data[i] = data[i] * alpha + data[len - fadeLen + i] * (1 - alpha);
+        }
       }
       return buf;
     } catch {
@@ -1795,27 +2097,7 @@ export class AudioEngine {
   }
 
   private buildAmbienceNoiseBuffer(ctx: AudioContext): AudioBuffer | null {
-    if (typeof ctx.createBuffer !== 'function') return null;
-    try {
-      const rate = ctx.sampleRate || 44100;
-      const len = Math.max(256, Math.floor(rate * 1.5));
-      const buf = ctx.createBuffer(1, len, rate);
-      const data = buf.getChannelData(0);
-      const rand = mulberry32(0xa4b1e2);
-      let b0 = 0;
-      let b1 = 0;
-      let b2 = 0;
-      for (let i = 0; i < len; i++) {
-        const w = rand() * 2 - 1;
-        b0 = 0.997 * b0 + w * 0.029;
-        b1 = 0.985 * b1 + w * 0.032;
-        b2 = 0.95 * b2 + w * 0.048;
-        data[i] = clamp((b0 + b1 + b2 + w * 0.12) * 0.25, -1, 1);
-      }
-      return buf;
-    } catch {
-      return null;
-    }
+    return this.buildLoopNoiseBuffer(ctx, 0xa4b1e2, 0.12, 0.25, false);
   }
 
   private createSpatialPanner(

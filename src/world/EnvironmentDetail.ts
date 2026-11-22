@@ -21,6 +21,9 @@ export class EnvironmentDetail {
   private geometries: THREE.BufferGeometry[] = [];
   private materials: THREE.Material[] = [];
   private windShaders: THREE.ShaderMaterial[] = [];
+  private windTimeUniform = { value: 0 };
+  private windStrengthUniform = { value: 1.0 };
+  private accumulatedTime = 0;
   private birds: BirdEntry[] = [];
   private birdGeo: THREE.BufferGeometry | null = null;
   private instancedMeshes: THREE.InstancedMesh[] = [];
@@ -180,31 +183,11 @@ export class EnvironmentDetail {
         roughness: 0.85,
         metalness: 0.02,
       });
-      // Inject subtle GPU vertex wind sway
-      grassMat.onBeforeCompile = (shader) => {
-        shader.uniforms.uWindTime = { value: 0 };
-        this.windShaders.push({ uniforms: shader.uniforms } as unknown as THREE.ShaderMaterial);
-        shader.vertexShader = shader.vertexShader
-          .replace(
-            '#include <common>',
-            '#include <common>\nuniform float uWindTime;',
-          )
-          .replace(
-            '#include <begin_vertex>',
-            `#include <begin_vertex>
-             #ifdef USE_INSTANCING
-             float swayPhase = instanceMatrix[3].x * 0.55 + instanceMatrix[3].z * 0.35;
-             #else
-             float swayPhase = 0.0;
-             #endif
-             float sway = sin(uWindTime * 2.4 + swayPhase) * 0.08 * max(0.0, position.y);
-             transformed.x += sway;
-             transformed.z += sway * 0.5;`,
-          );
-      };
+      this.applyWindSway(grassMat, 1.0);
       this.materials.push(grassMat);
 
       const mesh = this.createInstanced(bladeGeo, grassMat, grassCoords);
+      mesh.name = 'InstancedGrass';
       this.group.add(mesh);
     }
 
@@ -218,9 +201,11 @@ export class EnvironmentDetail {
         color: '#ffffff',
         roughness: 0.65,
       });
+      this.applyWindSway(flowerMat, 0.72);
       this.materials.push(flowerMat);
 
       const mesh = this.createInstanced(flowerGeo, flowerMat, flowerCoords);
+      mesh.name = 'InstancedWildflowers';
       this.group.add(mesh);
     }
 
@@ -363,6 +348,39 @@ export class EnvironmentDetail {
     }
   }
 
+  private applyWindSway(mat: THREE.MeshStandardMaterial, amplitudeScale = 1.0): void {
+    mat.userData.windUniforms = {
+      uWindTime: this.windTimeUniform,
+      uWindStrength: this.windStrengthUniform,
+    };
+    mat.customProgramCacheKey = () => `env_wind_${amplitudeScale}`;
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uWindTime = this.windTimeUniform;
+      shader.uniforms.uWindStrength = this.windStrengthUniform;
+      this.windShaders.push({ uniforms: shader.uniforms } as unknown as THREE.ShaderMaterial);
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nuniform float uWindTime;\nuniform float uWindStrength;',
+        )
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           #ifdef USE_INSTANCING
+           float swayPhase = instanceMatrix[3].x * 0.55 + instanceMatrix[3].z * 0.35;
+           #else
+           float swayPhase = 0.0;
+           #endif
+           float wAmp = (0.06 + clamp(uWindStrength, 0.0, 4.0) * 0.075) * ${amplitudeScale.toFixed(2)};
+           float swayPrimary = sin(uWindTime * 2.4 + swayPhase) * wAmp;
+           float swayGust = cos(uWindTime * 4.1 + swayPhase * 1.7) * (wAmp * 0.35);
+           float hFactor = max(0.0, position.y);
+           transformed.x += (swayPrimary + swayGust) * hFactor;
+           transformed.z += (swayPrimary * 0.5 - swayGust * 0.6) * hFactor;`,
+        );
+    };
+  }
+
   getInstancedMeshCount(): number {
     return this.instancedMeshes.length;
   }
@@ -371,26 +389,51 @@ export class EnvironmentDetail {
     return this.birds.length;
   }
 
+  getWindState(): { time: number; strength: number } {
+    return {
+      time: this.windTimeUniform.value,
+      strength: this.windStrengthUniform.value,
+    };
+  }
+
   getGroup(): THREE.Group {
     return this.group;
   }
 
-  update(_dt: number, elapsed: number): void {
+  update(dt: number, elapsed?: number, windStrength = 1.0): void {
+    const safeDt = Math.max(0, dt);
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.accumulatedTime = elapsed;
+    } else {
+      this.accumulatedTime += safeDt;
+    }
+    const safeElapsed = this.accumulatedTime;
+    const clampedWind = Number.isFinite(windStrength)
+      ? Math.max(0, Math.min(5, windStrength))
+      : 1.0;
+
+    this.windTimeUniform.value = safeElapsed;
+    this.windStrengthUniform.value = clampedWind;
+
     for (let i = 0; i < this.windShaders.length; i++) {
-      if (this.windShaders[i].uniforms?.uWindTime) {
-        this.windShaders[i].uniforms.uWindTime.value = elapsed;
+      const uniforms = this.windShaders[i].uniforms;
+      if (uniforms?.uWindTime) {
+        uniforms.uWindTime.value = safeElapsed;
+      }
+      if (uniforms?.uWindStrength) {
+        uniforms.uWindStrength.value = clampedWind;
       }
     }
 
     for (let i = 0; i < this.birds.length; i++) {
       const b = this.birds[i];
-      const ang = b.phase + elapsed * b.speed;
+      const ang = b.phase + safeElapsed * b.speed;
       const x = b.centerX + Math.cos(ang) * b.radius;
       const z = b.centerZ + Math.sin(ang) * b.radius;
-      const y = b.baseY + Math.sin(elapsed * 1.4 + b.phase) * 1.6;
+      const y = b.baseY + Math.sin(safeElapsed * 1.4 + b.phase) * 1.6;
       b.mesh.position.set(x, y, z);
       b.mesh.rotation.y = b.speed > 0 ? -ang : -ang + Math.PI;
-      b.mesh.rotation.z = Math.sin(elapsed * 8.0 + b.phase) * 0.16;
+      b.mesh.rotation.z = Math.sin(safeElapsed * 8.0 + b.phase) * 0.16;
     }
   }
 
@@ -403,6 +446,9 @@ export class EnvironmentDetail {
     for (const m of this.materials) m.dispose();
     this.materials = [];
     this.windShaders = [];
+    this.windTimeUniform.value = 0;
+    this.windStrengthUniform.value = 1.0;
+    this.accumulatedTime = 0;
     this.birds = [];
     this.birdGeo = null;
   }

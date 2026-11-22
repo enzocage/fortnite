@@ -146,8 +146,10 @@ function isTwoHandedGun(weaponId: WeaponId): boolean {
     weaponId === 'heavy_shotgun' ||
     weaponId === 'smg' ||
     weaponId === 'combat_smg' ||
+    weaponId === 'minigun' ||
     weaponId === 'sniper' ||
     weaponId === 'boom_bow' ||
+    weaponId === 'railgun' ||
     weaponId === 'rocket_launcher' ||
     weaponId === 'mythic_blade_rifle'
   );
@@ -176,7 +178,7 @@ function isConsumable(weaponId: WeaponId): boolean {
   );
 }
 
-function resolveAnimState(state: CharacterRenderState): AnimState {
+export function resolveAnimState(state: CharacterRenderState): AnimState {
   if (state.isKnocked) return 'knocked';
   if (state.isReviving) return 'reviving';
   const anim = state.animState;
@@ -191,6 +193,7 @@ function resolveAnimState(state: CharacterRenderState): AnimState {
     anim === 'fall';
 
   if (isBaseLocomotion) {
+    if (state.isGrinding) return 'grind';
     if (state.isZiplining) return 'zipline';
     if (state.isSliding) return 'slide';
     if (state.isSwimming) return 'swim';
@@ -200,7 +203,7 @@ function resolveAnimState(state: CharacterRenderState): AnimState {
 
 /**
  * Procedural skeletal animator for CharacterRig.
- * Supports all 20 AnimStates, all 6 EmoteId dances, banking lean, aiming pitch, and recoil kick.
+ * Supports all 23 AnimStates, all 6 EmoteId dances, banking lean, aiming pitch, and recoil kick.
  */
 export class CharacterAnimator {
   private readonly rigStates = new WeakMap<CharacterRig, RigAnimData>();
@@ -353,6 +356,9 @@ export class CharacterAnimator {
       case 'reviving':
         this.applyRevivingPose(p, t);
         break;
+      case 'grind':
+        this.applyGrindPose(p, t, speed, lean);
+        break;
     }
 
     // 2. Banking lean roll (carving turns during sprint, slide, glide, drive, swim, etc.)
@@ -372,6 +378,7 @@ export class CharacterAnimator {
     // 3. Upper-body weapon readiness, aiming pitch & recoil kick
     const isSlideWithTrailingArm = anim === 'slide' && !state.isAiming && !state.isFiring;
     const isZiplineUnfocused = anim === 'zipline' && !state.isAiming && !state.isFiring;
+    const isGrindUnfocused = anim === 'grind' && !state.isAiming && !state.isFiring;
     const suppressWeaponAim =
       anim === 'skydive' ||
       anim === 'glide' ||
@@ -386,7 +393,8 @@ export class CharacterAnimator {
       anim === 'knocked' ||
       anim === 'reviving' ||
       isSlideWithTrailingArm ||
-      isZiplineUnfocused;
+      isZiplineUnfocused ||
+      isGrindUnfocused;
 
     if (!suppressWeaponAim) {
       if (state.isBuilding) {
@@ -403,7 +411,8 @@ export class CharacterAnimator {
       anim === 'fall' ||
       anim === 'skydive' ||
       anim === 'glide' ||
-      anim === 'zipline';
+      anim === 'zipline' ||
+      anim === 'grind';
     rig.animateBackbling(speed, t, isAirborne, anim === 'slide');
 
     // 5. Smoothly damp joints toward target pose (instant snap on dt === 0 for deterministic single-step tests)
@@ -414,7 +423,8 @@ export class CharacterAnimator {
       anim === 'mantle' ||
       anim === 'drive' ||
       anim === 'knocked' ||
-      anim === 'reviving'
+      anim === 'reviving' ||
+      anim === 'grind'
         ? 22
         : 16;
     this.applyPoseToJoints(rig, p, blendLambda, safeDt);
@@ -995,6 +1005,49 @@ export class CharacterAnimator {
     p.rHaRx = 0.15;
   }
 
+  private applyGrindPose(p: PoseTarget, t: number, speed: number, lean: number): void {
+    const pace = speed > 0.5 ? 7.5 : 4.2;
+    const sway = Math.sin(t * pace);
+    const bounce = Math.abs(Math.sin(t * (pace * 0.8))) * 0.025;
+
+    // Crouched dynamic snowboard/rail-surf balance stance
+    p.hipsY = 0.66 + bounce;
+    p.hipsRx = 0.08;
+    p.hipsRy = 0.52;
+    p.hipsRz = lean * 0.22 + sway * 0.05;
+
+    // Subtle athletic forward torso lean facing down-rail
+    p.spineRx = 0.26;
+    p.chestRx = 0.14;
+    p.chestRy = -0.28 + sway * 0.06;
+    p.headRx = -0.14;
+    p.headRy = -0.24;
+
+    // Staggered knees gripping rail edge
+    p.lHiRx = -0.82;
+    p.lHiRy = 0.16;
+    p.lHiRz = 0.18;
+    p.lKnRx = 1.12;
+    p.lFoRx = -0.28;
+
+    p.rHiRx = -0.34;
+    p.rHiRy = -0.18;
+    p.rHiRz = -0.22;
+    p.rKnRx = 0.86;
+    p.rFoRx = -0.32;
+
+    // Arms spread wide for dynamic rail-surf balance
+    p.lShRx = -0.32 + sway * 0.10;
+    p.lShRy = -0.24;
+    p.lShRz = 0.95 + sway * 0.08;
+    p.lElRx = -0.35;
+
+    p.rShRx = -0.22 - sway * 0.10;
+    p.rShRy = 0.24;
+    p.rShRz = -0.92 - sway * 0.08;
+    p.rElRx = -0.38;
+  }
+
   private applyUpperBodyWeaponAim(
     p: PoseTarget,
     state: CharacterRenderState,
@@ -1009,7 +1062,17 @@ export class CharacterAnimator {
     const weapon = state.weaponId;
 
     if (isSprintingUnfocused) {
-      if (isTwoHandedGun(weapon)) {
+      if (weapon === 'minigun') {
+        // Heavy low-slung hip carry while sprinting
+        p.rShRx = -0.24;
+        p.rShRy = -0.05;
+        p.rShRz = -0.18;
+        p.rElRx = -1.18;
+        p.lShRx = -0.68;
+        p.lShRy = -0.52;
+        p.lShRz = 0.08;
+        p.lElRx = -0.82;
+      } else if (isTwoHandedGun(weapon)) {
         p.rShRx = -0.78;
         p.rShRy = 0.58;
         p.rShRz = -0.15;
@@ -1130,6 +1193,52 @@ export class CharacterAnimator {
         p.lShRy = -0.56;
         p.lShRz = 0.06;
         p.lElRx = -0.48;
+      }
+      return;
+    }
+
+    if (weapon === 'minigun') {
+      // Heavy low-slung hip-hold with torso counterbalance and deep right elbow flexion
+      const spinJitter = state.isFiring ? Math.sin(t * 52) * 0.014 : 0;
+      p.spineRx -= 0.06;
+      p.chestRy += 0.16;
+      const minigunTorsoPitch = p.hipsRx + p.spineRx + p.chestRx;
+      p.rShRx = -0.20 - aimPitch * 0.35 + spinJitter;
+      p.rShRy = -0.06;
+      p.rShRz = -0.18;
+      p.rElRx = clamp(
+        -Math.PI / 2 - minigunTorsoPitch - aimPitch - recoilTilt - p.rShRx,
+        -1.95,
+        -0.65,
+      );
+      p.rHaRx = 0;
+
+      if (!keepLeftGripOnZipline) {
+        p.lShRx = -0.78 - aimPitch * 0.42 - recoilTilt * 0.4 + spinJitter;
+        p.lShRy = -0.54;
+        p.lShRz = 0.08;
+        p.lElRx = -0.76;
+      }
+      return;
+    }
+
+    if (weapon === 'railgun') {
+      // Braced two-handed precision electromagnetic railgun hold (reactive to weaponCharge)
+      const charge = clamp(finiteOr(state.weaponCharge), 0, 1);
+      p.chestRx += charge * 0.04;
+      p.chestRy += 0.06 + charge * 0.08;
+      const railTorsoPitch = p.hipsRx + p.spineRx + p.chestRx;
+      p.rElRx = state.isAiming ? -0.36 : -0.46;
+      p.rHaRx = 0;
+      p.rShRx = -Math.PI / 2 - railTorsoPitch - aimPitch - recoilTilt - p.rElRx;
+      p.rShRy = 0.14;
+      p.rShRz = -0.04;
+
+      if (!keepLeftGripOnZipline) {
+        p.lElRx = state.isAiming ? -0.48 : -0.58;
+        p.lShRx = -Math.PI / 2 - railTorsoPitch - aimPitch - recoilTilt * 0.8 - p.lElRx + 0.05;
+        p.lShRy = -0.52;
+        p.lShRz = 0.10;
       }
       return;
     }

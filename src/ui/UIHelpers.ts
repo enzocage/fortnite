@@ -22,14 +22,18 @@ import type {
   DroppedMedallionEntity,
   GameModeId,
   GameSettings,
+  GrindRailEntity,
   HUDState,
   KeybindMap,
   MatchQuest,
+  MatchSummary,
   MedallionDef,
   MedallionId,
   Rarity,
+  RebootVanEntity,
   SlurpTankerEntity,
   StormState,
+  SupplyDroneEntity,
   VehicleKind,
   VisualSoundCue,
   WeaponBunkerEntity,
@@ -973,4 +977,274 @@ export function drawChapterMapOverlay(
     ctx.stroke();
     ctx.restore();
   }
+}
+
+export interface WorldOverdriveOverlay {
+  rails?: GrindRailEntity[];
+  vans?: RebootVanEntity[];
+  drones?: SupplyDroneEntity[];
+}
+
+export interface ResolvedOverdriveOverlay {
+  rails: GrindRailEntity[];
+  vans: RebootVanEntity[];
+  drones: SupplyDroneEntity[];
+}
+
+export function resolveOverdriveOverlayArgs(
+  railsOrOverlay: GrindRailEntity[] | WorldOverdriveOverlay = [],
+  vans: RebootVanEntity[] = [],
+  drones: SupplyDroneEntity[] = [],
+): ResolvedOverdriveOverlay {
+  if (Array.isArray(railsOrOverlay)) {
+    return {
+      rails: railsOrOverlay,
+      vans: Array.isArray(vans) ? vans : [],
+      drones: Array.isArray(drones) ? drones : [],
+    };
+  }
+  const ov = railsOrOverlay ?? {};
+  return {
+    rails: Array.isArray(ov.rails) ? ov.rails : [],
+    vans: Array.isArray(ov.vans) ? ov.vans : [],
+    drones: Array.isArray(ov.drones) ? ov.drones : [],
+  };
+}
+
+/**
+ * Draws Wave-7 Overdrive overlay items (Neon Grind Rails, Glowing Reboot Vans,
+ * and Active Flying Supply Drones) without fillText, strokeText, or ellipse.
+ */
+export function drawOverdriveMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  _pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  overlay: ResolvedOverdriveOverlay,
+  nowMs: number,
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.006);
+
+  // 1. Neon Energy Grind Rail splines
+  for (const rail of overlay.rails) {
+    if (!Array.isArray(rail.points) || rail.points.length < 2) continue;
+    const pxPts = rail.points.map((pt) => toPx(pt.x, pt.z));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of pxPts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    if (maxX < -24 || minX > size + 24 || maxY < -24 || minY > size + 24) {
+      continue;
+    }
+
+    ctx.save();
+    // Outer neon halo
+    ctx.beginPath();
+    ctx.moveTo(pxPts[0].x, pxPts[0].y);
+    for (let i = 1; i < pxPts.length; i++) {
+      ctx.lineTo(pxPts[i].x, pxPts[i].y);
+    }
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.36)';
+    ctx.lineWidth = 4.6;
+    ctx.stroke();
+
+    // Inner glowing rail core
+    ctx.beginPath();
+    ctx.moveTo(pxPts[0].x, pxPts[0].y);
+    for (let i = 1; i < pxPts.length; i++) {
+      ctx.lineTo(pxPts[i].x, pxPts[i].y);
+    }
+    ctx.strokeStyle = rail.color || '#22d3ee';
+    ctx.lineWidth = 2.0;
+    ctx.stroke();
+
+    // Endpoint pylons
+    ctx.fillStyle = '#e0f2fe';
+    for (const ep of [pxPts[0], pxPts[pxPts.length - 1]]) {
+      ctx.beginPath();
+      ctx.arc(ep.x, ep.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 2. Glowing Blue Reboot Vans
+  for (const van of overlay.vans) {
+    const vp = toPx(van.x, van.z);
+    if (vp.x < -16 || vp.x > size + 16 || vp.y < -16 || vp.y > size + 16) {
+      continue;
+    }
+    const ready = Boolean(van.available && (van.cooldownRemainingSec ?? 0) <= 0);
+    ctx.save();
+    ctx.translate(vp.x, vp.y);
+
+    if (ready) {
+      ctx.beginPath();
+      ctx.arc(0, 0, 8.6 + pulse * 1.4, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.72)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+    ctx.fillStyle = ready ? 'rgba(8, 38, 76, 0.94)' : 'rgba(15, 23, 42, 0.82)';
+    ctx.fill();
+    ctx.strokeStyle = ready ? '#38bdf8' : '#64748b';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Van body & beacon
+    ctx.fillStyle = ready ? '#38bdf8' : '#64748b';
+    ctx.fillRect(-4.6, -1.8, 9.2, 4.6);
+    ctx.fillStyle = ready ? '#e0f2fe' : '#94a3b8';
+    ctx.fillRect(-2.0, -4.2, 4.0, 2.1);
+    ctx.fillStyle = ready ? '#ffd000' : '#f59e0b';
+    ctx.fillRect(-2.2, -0.3, 4.4, 1.5);
+    ctx.restore();
+  }
+
+  // 3. Active Flying Supply Drones (skip destroyed)
+  for (const drone of overlay.drones) {
+    if (drone.destroyed) continue;
+    const dp = toPx(drone.x, drone.z);
+    if (dp.x < -16 || dp.x > size + 16 || dp.y < -16 || dp.y > size + 16) {
+      continue;
+    }
+    const rMeta = getRarityMeta(drone.rarity);
+    ctx.save();
+    ctx.translate(dp.x, dp.y);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.8 + pulse * 1.5, 0, Math.PI * 2);
+    ctx.strokeStyle = rMeta.border;
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 6.4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(8, 20, 44, 0.9)';
+    ctx.fill();
+    ctx.strokeStyle = rMeta.accent;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Crossed rotor arms
+    ctx.beginPath();
+    ctx.moveTo(-4.4, -4.4);
+    ctx.lineTo(4.4, 4.4);
+    ctx.moveTo(4.4, -4.4);
+    ctx.lineTo(-4.4, 4.4);
+    ctx.strokeStyle = '#e0f2fe';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    // Central loot crate
+    ctx.fillStyle = rMeta.accent;
+    ctx.fillRect(-2.3, -2.3, 4.6, 4.6);
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 1.0;
+    ctx.strokeRect(-2.3, -2.3, 4.6, 4.6);
+    ctx.restore();
+  }
+}
+
+export interface MatchHighlightBadge {
+  label: string;
+  tone: 'gold' | 'cyan' | 'emerald' | 'crimson';
+}
+
+function classifyHighlightTone(
+  label: string,
+): MatchHighlightBadge['tone'] {
+  if (
+    label.includes('CROWN') ||
+    label.includes('VICTORY') ||
+    label.includes('MEDALLION')
+  ) {
+    return 'gold';
+  }
+  if (label.includes('TRAP') || label.includes('MEDIC') || label.includes('SURVIVOR')) {
+    return 'emerald';
+  }
+  if (label.includes('SHARP') || label.includes('ELIM') || label.includes('SLAYER')) {
+    return 'crimson';
+  }
+  return 'cyan';
+}
+
+/**
+ * Combines explicit `summary.highlights` with auto-derived Match Highlight badges
+ * (e.g. CROWNED, REBOOT HERO, DRONE HUNTER, TRAP MASTER, SHARPSHOOTER, BUILDER PRO).
+ */
+export function deriveMatchHighlightBadges(
+  summary: MatchSummary,
+  maxBadges = 8,
+): MatchHighlightBadge[] {
+  const badges: MatchHighlightBadge[] = [];
+  const seen = new Set<string>();
+
+  const pushBadge = (rawLabel: string, tone?: MatchHighlightBadge['tone']) => {
+    const clean = rawLabel.trim().toUpperCase();
+    if (!clean || seen.has(clean) || badges.length >= maxBadges) return;
+    seen.add(clean);
+    badges.push({
+      label: clean,
+      tone: tone ?? classifyHighlightTone(clean),
+    });
+  };
+
+  if (Array.isArray(summary.highlights)) {
+    for (const h of summary.highlights) {
+      if (typeof h === 'string') {
+        pushBadge(h);
+      }
+    }
+  }
+
+  const accPct =
+    summary.accuracy > 1
+      ? Math.round(summary.accuracy)
+      : summary.shotsFired > 0
+        ? Math.round((summary.shotsHit / summary.shotsFired) * 100)
+        : Math.round(summary.accuracy * 100);
+
+  if (summary.crownedVictory) {
+    pushBadge('CROWNED', 'gold');
+  }
+  if ((summary.reboots ?? 0) >= 1) {
+    pushBadge('REBOOT HERO', 'cyan');
+  }
+  if ((summary.dronesShotDown ?? 0) >= 1) {
+    pushBadge('DRONE HUNTER', 'cyan');
+  }
+  if ((summary.trapsPlaced ?? 0) >= 1) {
+    pushBadge('TRAP MASTER', 'emerald');
+  }
+  if (
+    (summary.headshots ?? 0) >= 3 ||
+    (accPct >= 50 && (summary.shotsFired ?? 0) >= 10)
+  ) {
+    pushBadge('SHARPSHOOTER', 'crimson');
+  }
+  if ((summary.structuresBuilt ?? 0) >= 10) {
+    pushBadge('BUILDER PRO', 'cyan');
+  }
+  if ((summary.revives ?? 0) >= 1) {
+    pushBadge('SQUAD MEDIC', 'emerald');
+  }
+  if ((summary.medallionsHeld?.length ?? 0) >= 1) {
+    pushBadge('MEDALLION BEARER', 'gold');
+  }
+  if ((summary.kills ?? 0) >= 5) {
+    pushBadge('ELIM LEADER', 'gold');
+  }
+
+  return badges;
 }

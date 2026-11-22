@@ -24,7 +24,8 @@ export type AnimState =
   | 'build'
   | 'emote'
   | 'knocked'
-  | 'reviving';
+  | 'reviving'
+  | 'grind';
 
 export type EmoteId =
   | 'victory_groove'
@@ -143,4 +144,7 @@ export interface CharacterRenderState {
   isReviving?: boolean;
   bowCharge?: number;
   isDuoPartner?: boolean;
+  isGrinding?: boolean;
+  weaponCharge?: number;
+  weaponHeat?: number;
 }

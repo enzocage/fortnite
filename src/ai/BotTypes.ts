@@ -313,6 +313,7 @@ export interface BotEntity {
   medallions?: MedallionId[];
   medallionCount?: number;
   isReviving?: boolean;
+  isGrinding?: boolean;
   bowCharge?: number;
 }
 

@@ -10,6 +10,7 @@ import type {
   EmoteId,
   GamePhase,
   GameSettings,
+  GrindRailEntity,
   HUDState,
   KillFeedEntry,
   LaunchPadEntity,
@@ -18,8 +19,10 @@ import type {
   MatchQuest,
   MatchSummary,
   NpcSpecialistEntity,
+  RebootVanEntity,
   RiftEntity,
   SlurpTankerEntity,
+  SupplyDroneEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
@@ -35,7 +38,9 @@ import { MatchOverlay } from './MatchOverlay';
 import {
   cloneSettings,
   resolveChapterOverlayArgs,
+  resolveOverdriveOverlayArgs,
   type WorldChapterOverlay,
+  type WorldOverdriveOverlay,
 } from './UIHelpers';
 
 export interface UIManagerCallbacks {
@@ -217,6 +222,30 @@ export class UIManager {
       resolved.tankers,
       resolved.droppedMedallions,
       resolved.droppedCrowns,
+    );
+  }
+
+  setWorldOverdriveOverlay(
+    rails: GrindRailEntity[],
+    vans: RebootVanEntity[],
+    drones: SupplyDroneEntity[],
+  ): void;
+  setWorldOverdriveOverlay(overlay: WorldOverdriveOverlay): void;
+  setWorldOverdriveOverlay(
+    railsOrOverlay: GrindRailEntity[] | WorldOverdriveOverlay,
+    vans?: RebootVanEntity[],
+    drones?: SupplyDroneEntity[],
+  ): void {
+    const resolved = resolveOverdriveOverlayArgs(railsOrOverlay, vans, drones);
+    this.fullMap.setWorldOverdriveOverlay(
+      resolved.rails,
+      resolved.vans,
+      resolved.drones,
+    );
+    this.hud.setWorldOverdriveOverlay(
+      resolved.rails,
+      resolved.vans,
+      resolved.drones,
     );
   }
 

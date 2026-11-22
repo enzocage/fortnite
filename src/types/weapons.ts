@@ -10,8 +10,10 @@ export type WeaponId =
   | 'heavy_shotgun'
   | 'smg'
   | 'combat_smg'
+  | 'minigun'
   | 'sniper'
   | 'boom_bow'
+  | 'railgun'
   | 'pistol'
   | 'rocket_launcher'
   | 'mythic_blade_rifle'
@@ -33,8 +35,10 @@ export type WeaponCategory =
   | 'shotgun'
   | 'smg'
   | 'combat_smg'
+  | 'minigun'
   | 'sniper'
   | 'boom_bow'
+  | 'railgun'
   | 'pistol'
   | 'launcher'
   | 'throwable'
@@ -92,6 +96,14 @@ export interface WeaponDef {
   bowMinChargeSec?: number;
   bowMaxChargeSec?: number;
   twinMagFastReloadTime?: number;
+  isRailgun?: boolean;
+  chargeTimeSec?: number;
+  pierceBuildCount?: number;
+  isMinigun?: boolean;
+  spinUpSec?: number;
+  heatPerShot?: number;
+  coolRatePerSec?: number;
+  overheatLockSec?: number;
   allowedRarities: Rarity[];
 }
 

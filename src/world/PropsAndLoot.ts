@@ -88,9 +88,11 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'heavy_shotgun',
   'smg',
   'combat_smg',
+  'minigun',
   'pistol',
   'sniper',
   'boom_bow',
+  'railgun',
   'grappler',
   'kinetic_blade',
 ];
@@ -104,8 +106,10 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'heavy_shotgun',
   'smg',
   'combat_smg',
+  'minigun',
   'sniper',
   'boom_bow',
+  'railgun',
   'rocket_launcher',
   'pistol',
   'grappler',
@@ -118,8 +122,10 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'pump_shotgun',
   'heavy_shotgun',
   'combat_smg',
+  'minigun',
   'sniper',
   'boom_bow',
+  'railgun',
   'rocket_launcher',
   'burst_ar',
   'grappler',
@@ -1769,6 +1775,46 @@ export class PropsAndLoot {
         arrowShaft.position.z = 0.14;
         bowGroup.add(riser, limbTop, limbBot, arrowShaft);
         itemMesh = bowGroup;
+      } else if (def.isRailgun) {
+        const railGroup = new THREE.Group();
+        const receiver = new THREE.Mesh(
+          this.getGeo('loot_rail_body', () => new THREE.BoxGeometry(0.16, 0.2, 0.46)),
+          itemMat,
+        );
+        const topRail = new THREE.Mesh(
+          this.getGeo('loot_rail_prong', () => new THREE.BoxGeometry(0.09, 0.055, 0.64)),
+          itemMat,
+        );
+        topRail.position.set(0, 0.075, 0.26);
+        const botRail = new THREE.Mesh(
+          this.getGeo('loot_rail_prong', () => new THREE.BoxGeometry(0.09, 0.055, 0.64)),
+          itemMat,
+        );
+        botRail.position.set(0, -0.04, 0.26);
+        const grip = new THREE.Mesh(
+          this.getGeo('loot_gun_grip', () => new THREE.BoxGeometry(0.12, 0.22, 0.14)),
+          itemMat,
+        );
+        grip.position.set(0, -0.16, -0.06);
+        railGroup.add(receiver, topRail, botRail, grip);
+        itemMesh = railGroup;
+      } else if (def.isMinigun) {
+        const miniGroup = new THREE.Group();
+        const housing = new THREE.Mesh(
+          this.getGeo('loot_mini_housing', () => new THREE.BoxGeometry(0.24, 0.24, 0.36)),
+          itemMat,
+        );
+        const cluster = new THREE.Mesh(
+          this.getGeo('loot_mini_barrels', () => {
+            const g = new THREE.CylinderGeometry(0.11, 0.11, 0.54, 6);
+            g.rotateX(Math.PI * 0.5);
+            return g;
+          }),
+          itemMat,
+        );
+        cluster.position.set(0, -0.02, 0.36);
+        miniGroup.add(housing, cluster);
+        itemMesh = miniGroup;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),

@@ -5,12 +5,15 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   GameSettings,
+  GrindRailEntity,
   HUDState,
   LaunchPadEntity,
   LootIslandState,
   NpcSpecialistEntity,
+  RebootVanEntity,
   RiftEntity,
   SlurpTankerEntity,
+  SupplyDroneEntity,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
@@ -21,12 +24,16 @@ import type {
 import {
   BOSS_POI_LABELS,
   drawChapterMapOverlay,
+  drawOverdriveMapOverlay,
   formatKeyCodeLabel,
   mapNormToWorld,
   type ResolvedChapterOverlay,
+  type ResolvedOverdriveOverlay,
   resolveChapterOverlayArgs,
   resolveKeybinds,
+  resolveOverdriveOverlayArgs,
   type WorldChapterOverlay,
+  type WorldOverdriveOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
@@ -35,9 +42,12 @@ import {
   getCampfireIconSvg,
   getCaptureFlagIconSvg,
   getCrownSvg,
+  getGrindRailSvg,
   getLootIslandIconSvg,
   getMedallionSvg,
+  getRebootVanSvg,
   getSkyRiftIconSvg,
+  getSupplyDroneSvg,
   getTankerSvg,
   getUpgradeBenchIconSvg,
   getVaultLockSvg,
@@ -78,6 +88,11 @@ export class FullMapOverlay {
     tankers: [],
     droppedMedallions: [],
     droppedCrowns: [],
+  };
+  private overdriveOverlay: ResolvedOverdriveOverlay = {
+    rails: [],
+    vans: [],
+    drones: [],
   };
 
   private open = false;
@@ -238,6 +253,18 @@ export class FullMapOverlay {
         <span class="fdr-legend-swatch crown">${getCrownSvg()}</span>
         <span>DROPPED CROWN</span>
       </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch grindrail">${getGrindRailSvg()}</span>
+        <span>GRIND RAIL</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch rebootvan">${getRebootVanSvg()}</span>
+        <span>REBOOT VAN</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch drone">${getSupplyDroneSvg()}</span>
+        <span>SUPPLY DRONE</span>
+      </div>
     `;
 
     stage.append(this.canvas, legend);
@@ -338,6 +365,27 @@ export class FullMapOverlay {
       tankers,
       droppedMedallions,
       droppedCrowns,
+    );
+    if (this.open && this.lastState) {
+      this.draw(this.lastState);
+    }
+  }
+
+  setWorldOverdriveOverlay(
+    rails: GrindRailEntity[],
+    vans: RebootVanEntity[],
+    drones: SupplyDroneEntity[],
+  ): void;
+  setWorldOverdriveOverlay(overlay: WorldOverdriveOverlay): void;
+  setWorldOverdriveOverlay(
+    railsOrOverlay: GrindRailEntity[] | WorldOverdriveOverlay,
+    vans?: RebootVanEntity[],
+    drones?: SupplyDroneEntity[],
+  ): void {
+    this.overdriveOverlay = resolveOverdriveOverlayArgs(
+      railsOrOverlay,
+      vans,
+      drones,
     );
     if (this.open && this.lastState) {
       this.draw(this.lastState);
@@ -1023,6 +1071,16 @@ export class FullMapOverlay {
       toPx,
       this.chapterOverlay,
       state.medallionCircles,
+      performance.now(),
+    );
+
+    // Wave-7 Overdrive Overlay (Grind Rails, Reboot Vans, Active Supply Drones)
+    drawOverdriveMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      this.overdriveOverlay,
       performance.now(),
     );
 

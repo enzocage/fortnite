@@ -1,5 +1,13 @@
 import * as THREE from 'three';
-import { EventBus, MEDALLIONS, POIS, WEAPONS } from '../core';
+import {
+  EventBus,
+  GRIND_RAIL_SPEED,
+  MEDALLIONS,
+  POIS,
+  RARITY_COLORS,
+  REBOOT_VAN_COOLDOWN_SEC,
+  WEAPONS,
+} from '../core';
 import type {
   CampfireEntity,
   CapturePointEntity,
@@ -7,17 +15,21 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   ExplosiveBarrelEntity,
+  GrindRailEntity,
   ItemInstance,
   LaunchPadEntity,
   LootIslandState,
   MedallionId,
   NpcSpecialistEntity,
   Rarity,
+  RebootVanEntity,
   RiftEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SpecialistRole,
+  SupplyDroneEntity,
   TerrainQuery,
+  TrapKind,
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
@@ -114,6 +126,35 @@ export interface Wave6ShowcaseResult {
   tanker: SlurpTankerEntity;
   medallion: DroppedMedallionEntity;
   crown: DroppedCrownEntity;
+}
+
+export interface GrindRailSampleResult {
+  position: Vec3Like;
+  tangent: Vec3Like;
+}
+
+export interface NearbyGrindRailResult {
+  rail: GrindRailEntity;
+  t: number;
+  position: Vec3Like;
+  tangent: Vec3Like;
+}
+
+export interface SupplyDroneDamageResult {
+  destroyed: boolean;
+  x: number;
+  y: number;
+  z: number;
+  rarity: Rarity;
+  weaponId: WeaponId;
+  gold: number;
+  trapKind: TrapKind;
+}
+
+export interface Wave7ShowcaseResult {
+  rebootVan: RebootVanEntity;
+  grindRail: GrindRailEntity;
+  drones: SupplyDroneEntity[];
 }
 
 interface VendingMachineVisual {
@@ -249,6 +290,62 @@ interface DroppedPickupVisual<T> {
   baseSpinY: number;
 }
 
+interface GrindRailSamplePoint {
+  t: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface GrindRailRingEntry {
+  mesh: THREE.Mesh;
+  curve: THREE.CatmullRomCurve3;
+  length: number;
+  speed: number;
+  t: number;
+}
+
+interface GrindRailVisual {
+  data: GrindRailEntity;
+  group: THREE.Group;
+  curve: THREE.CatmullRomCurve3;
+  length: number;
+  samples: GrindRailSamplePoint[];
+  rings: GrindRailRingEntry[];
+  isQaShowcase?: boolean;
+}
+
+interface RebootVanVisual {
+  data: RebootVanEntity;
+  group: THREE.Group;
+  beaconGroup: THREE.Group;
+  beamMesh: THREE.Mesh;
+  holoGroup: THREE.Group;
+  holoRing: THREE.Mesh;
+  activeMat: THREE.MeshStandardMaterial;
+  cooldownMat: THREE.MeshStandardMaterial;
+  stripeMeshes: THREE.Mesh[];
+  holoMeshes: THREE.Mesh[];
+  baseHoloY: number;
+  collider: ColliderBox;
+  isQaShowcase?: boolean;
+}
+
+interface SupplyDroneVisual {
+  data: SupplyDroneEntity;
+  initialAngle: number;
+  group: THREE.Group;
+  bodyGroup: THREE.Group;
+  rotors: THREE.Object3D[];
+  coreGroup: THREE.Group;
+  coreMat: THREE.MeshStandardMaterial;
+  rewardWeaponId: WeaponId;
+  rewardGold: number;
+  rewardTrapKind: TrapKind;
+  hitAnim: number;
+  isQaShowcase?: boolean;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -269,11 +366,17 @@ const WEAPON_BUNKER_UNLOCK_PHASE = 2;
 const SLURP_TANKER_HP = 220;
 const SLURP_TANKER_HEAL_RADIUS = 10;
 const SLURP_TANKER_HEAL_AMOUNT = 60;
+const SUPPLY_DRONE_HP = 75;
+const GRIND_RAIL_SAMPLE_COUNT = 120;
 const BUNKER_LOOT_WEAPONS: readonly ('combat_smg' | 'boom_bow' | 'tactical_dmr')[] = [
   'combat_smg',
   'boom_bow',
   'tactical_dmr',
 ];
+
+const _tmpRailPos = new THREE.Vector3();
+const _tmpRailTan = new THREE.Vector3();
+const _tmpForwardZ = new THREE.Vector3(0, 0, 1);
 
 export class WorldInteractables {
   private group = new THREE.Group();
@@ -310,6 +413,13 @@ export class WorldInteractables {
   private droppedCrowns: DroppedCrownEntity[] = [];
   private droppedCrownsMap = new Map<string, DroppedPickupVisual<DroppedCrownEntity>>();
   private droppedCrownCounter = 0;
+  private grindRails: GrindRailEntity[] = [];
+  private grindRailsMap = new Map<string, GrindRailVisual>();
+  private rebootVans: RebootVanEntity[] = [];
+  private rebootVansMap = new Map<string, RebootVanVisual>();
+  private supplyDrones: SupplyDroneEntity[] = [];
+  private supplyDronesMap = new Map<string, SupplyDroneVisual>();
+  private qaShowcaseGeos: THREE.BufferGeometry[] = [];
   private lootIslandState: LootIslandState = {
     active: false,
     spawnedAtSec: 0,
@@ -363,6 +473,9 @@ export class WorldInteractables {
     this.buildWeaponBunkers(terrain);
     this.buildSlurpTankers(terrain);
     this.buildLootIsland();
+    this.buildGrindRails(terrain);
+    this.buildRebootVans(terrain);
+    this.buildSupplyDrones(terrain);
   }
 
   private addGeo<T extends THREE.BufferGeometry>(g: T): T {
@@ -3987,6 +4100,872 @@ export class WorldInteractables {
     return { x: baseX, y: this.terrain.getHeightAt(baseX, baseZ), z: baseZ };
   }
 
+  private wrapUnitInterval(t: number): number {
+    let u = t % 1;
+    if (u < 0) u += 1;
+    if (u >= 1 || u === 0) u = 0;
+    return u;
+  }
+
+  private createGrindRailEntry(spec: {
+    id: string;
+    poiId: string;
+    points: Vec3Like[];
+    color: string;
+    speed: number;
+    isQaShowcase?: boolean;
+  }): GrindRailVisual {
+    const curvePoints = spec.points.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+    const curve = new THREE.CatmullRomCurve3(curvePoints, true, 'catmullrom', 0.5);
+    const length = Math.max(1, curve.getLength());
+
+    const data: GrindRailEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      points: spec.points.map((p) => ({ ...p })),
+      color: spec.color,
+      speed: spec.speed,
+    };
+    this.grindRails.push(data);
+
+    const railGroup = new THREE.Group();
+    railGroup.name = `GrindRail_${spec.id}`;
+
+    const tubeSegs = spec.isQaShowcase ? 64 : 120;
+    const tubeGeo = new THREE.TubeGeometry(curve, tubeSegs, 0.2, 8, true);
+    if (spec.isQaShowcase) {
+      this.qaShowcaseGeos.push(tubeGeo);
+    } else {
+      this.addGeo(tubeGeo);
+    }
+
+    const railMat = this.getSharedMat(`grind_rail_tube_${spec.color}`, () =>
+      new THREE.MeshStandardMaterial({
+        color: spec.color,
+        emissive: spec.color,
+        emissiveIntensity: 1.45,
+        roughness: 0.18,
+        metalness: 0.45,
+      }),
+    );
+    const bracketMat = this.getSharedMat(`grind_rail_bracket_${spec.color}`, () =>
+      new THREE.MeshStandardMaterial({
+        color: spec.color,
+        emissive: spec.color,
+        emissiveIntensity: 0.9,
+        roughness: 0.25,
+        metalness: 0.55,
+      }),
+    );
+    const pylonMat = this.getSharedMat('grind_rail_pylon', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#1e293b',
+        roughness: 0.4,
+        metalness: 0.8,
+      }),
+    );
+    const ringMat = this.getSharedMat('grind_rail_energy_ring', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#f8fafc',
+        transparent: true,
+        opacity: 0.92,
+      }),
+    );
+
+    const tubeMesh = new THREE.Mesh(tubeGeo, railMat);
+    tubeMesh.castShadow = true;
+    railGroup.add(tubeMesh);
+
+    const pylonCylGeo = this.getSharedGeo('grind_pylon_cyl', () =>
+      new THREE.CylinderGeometry(0.14, 0.2, 1, 8),
+    );
+    const pylonBaseGeo = this.getSharedGeo('grind_pylon_base', () =>
+      new THREE.CylinderGeometry(0.36, 0.44, 0.16, 10),
+    );
+    const bracketGeo = this.getSharedGeo('grind_pylon_bracket', () =>
+      new THREE.TorusGeometry(0.24, 0.055, 6, 12),
+    );
+    const ringGeo = this.getSharedGeo('grind_energy_ring_geo', () =>
+      new THREE.TorusGeometry(0.32, 0.055, 6, 16),
+    );
+
+    const pylonCount = spec.isQaShowcase ? 4 : 10;
+    for (let i = 0; i < pylonCount; i++) {
+      const u = i / pylonCount;
+      const pt = curve.getPointAt(u);
+      const tan = curve.getTangentAt(u).normalize();
+      const groundY = this.terrain.getHeightAt(pt.x, pt.z);
+      const height = Math.max(0.45, pt.y - groundY);
+
+      const post = new THREE.Mesh(pylonCylGeo, pylonMat);
+      post.scale.set(1, height, 1);
+      post.position.set(pt.x, groundY + height * 0.5, pt.z);
+      post.castShadow = true;
+      railGroup.add(post);
+
+      const base = new THREE.Mesh(pylonBaseGeo, pylonMat);
+      base.position.set(pt.x, groundY + 0.08, pt.z);
+      railGroup.add(base);
+
+      const bracket = new THREE.Mesh(bracketGeo, bracketMat);
+      bracket.position.set(pt.x, pt.y, pt.z);
+      bracket.quaternion.setFromUnitVectors(_tmpForwardZ, tan);
+      railGroup.add(bracket);
+    }
+
+    const rings: GrindRailRingEntry[] = [];
+    const ringCount = spec.isQaShowcase ? 3 : 6;
+    for (let j = 0; j < ringCount; j++) {
+      const t = j / ringCount;
+      const pt = curve.getPointAt(t);
+      const tan = curve.getTangentAt(t).normalize();
+      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+      ringMesh.position.copy(pt);
+      ringMesh.quaternion.setFromUnitVectors(_tmpForwardZ, tan);
+      railGroup.add(ringMesh);
+      rings.push({
+        mesh: ringMesh,
+        curve,
+        length,
+        speed: spec.speed,
+        t,
+      });
+    }
+
+    const samples: GrindRailSamplePoint[] = [];
+    for (let s = 0; s < GRIND_RAIL_SAMPLE_COUNT; s++) {
+      const u = s / GRIND_RAIL_SAMPLE_COUNT;
+      const p = curve.getPointAt(u);
+      samples.push({ t: u, x: p.x, y: p.y, z: p.z });
+    }
+
+    this.group.add(railGroup);
+    const visual: GrindRailVisual = {
+      data,
+      group: railGroup,
+      curve,
+      length,
+      samples,
+      rings,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.grindRailsMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildGrindRails(terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      color: string;
+      offsets: Array<[number, number, number]>;
+    }> = [
+      {
+        id: 'rail_metro_towers',
+        poiId: 'metro_towers',
+        color: '#22d3ee',
+        offsets: [
+          [0, 25, 2.3],
+          [27, 24, 4.2],
+          [32, 6, 7.2],
+          [32, -10, 8.4],
+          [28, -24, 6.5],
+          [14, -25, 5.2],
+          [-14, -25, 5.2],
+          [-28, -24, 6.8],
+          [-32, -8, 4.8],
+          [-31, 14, 3.6],
+          [-26, 26, 2.6],
+        ],
+      },
+      {
+        id: 'rail_skyline_spire',
+        poiId: 'skyline_spire',
+        color: '#a855f7',
+        offsets: [
+          [0, 24, 2.3],
+          [18, 23, 4.2],
+          [24, 6, 7.2],
+          [25, -16, 8.4],
+          [12, -24, 6.5],
+          [-12, -24, 5.5],
+          [-27, -20, 4.8],
+          [-32, -8, 3.6],
+          [-31, 12, 3.0],
+          [-22, 22, 2.5],
+        ],
+      },
+      {
+        id: 'rail_market_row',
+        poiId: 'market_row',
+        color: '#ec4899',
+        offsets: [
+          [-6, 24, 2.3],
+          [14, 24, 3.6],
+          [29, 18, 6.4],
+          [32, 2, 8.2],
+          [30, -18, 7.0],
+          [14, -26, 5.4],
+          [-12, -26, 5.4],
+          [-27, -20, 4.4],
+          [-32, -4, 3.2],
+          [-25, 21, 2.5],
+        ],
+      },
+      {
+        id: 'rail_frostpeak_citadel',
+        poiId: 'frostpeak_citadel',
+        color: '#38bdf8',
+        offsets: [
+          [-2, 23, 2.3],
+          [18, 25, 4.2],
+          [25, 12, 6.6],
+          [25, -12, 7.8],
+          [18, -25, 6.4],
+          [0, -24, 5.2],
+          [-19, -25, 6.2],
+          [-24, -10, 5.0],
+          [-24, 18, 3.4],
+          [-16, 24, 2.6],
+        ],
+      },
+    ];
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+      const points: Vec3Like[] = spec.offsets.map(([dx, dz, h]) => {
+        const px = poi.x + dx;
+        const pz = poi.z + dz;
+        return {
+          x: px,
+          y: terrain.getHeightAt(px, pz) + h,
+          z: pz,
+        };
+      });
+      this.createGrindRailEntry({
+        id: spec.id,
+        poiId: spec.poiId,
+        points,
+        color: spec.color,
+        speed: GRIND_RAIL_SPEED,
+      });
+    }
+  }
+
+  getGrindRails(): GrindRailEntity[] {
+    return this.grindRails;
+  }
+
+  sampleGrindRailAt(id: string, t: number): GrindRailSampleResult | null {
+    if (!Number.isFinite(t)) return null;
+    const entry = this.grindRailsMap.get(id);
+    if (!entry) return null;
+    const u = this.wrapUnitInterval(t);
+    entry.curve.getPointAt(u, _tmpRailPos);
+    entry.curve.getTangentAt(u, _tmpRailTan).normalize();
+    return {
+      position: { x: _tmpRailPos.x, y: _tmpRailPos.y, z: _tmpRailPos.z },
+      tangent: { x: _tmpRailTan.x, y: _tmpRailTan.y, z: _tmpRailTan.z },
+    };
+  }
+
+  findNearbyGrindRail(pos: Vec3Like, maxDist = 2.8): NearbyGrindRailResult | null {
+    if (
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.y) ||
+      !Number.isFinite(pos.z) ||
+      maxDist < 0
+    ) {
+      return null;
+    }
+
+    let bestEntry: GrindRailVisual | null = null;
+    let bestT = 0;
+    let bestDistSq = maxDist * maxDist;
+    let bestX = 0;
+    let bestY = 0;
+    let bestZ = 0;
+
+    const step = 1 / GRIND_RAIL_SAMPLE_COUNT;
+
+    for (const entry of this.grindRailsMap.values()) {
+      let coarseIdx = 0;
+      let coarseMinSq = Infinity;
+      const samples = entry.samples;
+      for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        const dx = s.x - pos.x;
+        const dy = s.y - pos.y;
+        const dz = s.z - pos.z;
+        const dSq = dx * dx + dy * dy + dz * dz;
+        if (dSq < coarseMinSq) {
+          coarseMinSq = dSq;
+          coarseIdx = i;
+        }
+      }
+
+      let left = coarseIdx * step - step;
+      let right = coarseIdx * step + step;
+      for (let iter = 0; iter < 8; iter++) {
+        const m1 = left + (right - left) / 3;
+        const m2 = right - (right - left) / 3;
+        entry.curve.getPointAt(this.wrapUnitInterval(m1), _tmpRailPos);
+        const d1 =
+          (_tmpRailPos.x - pos.x) ** 2 +
+          (_tmpRailPos.y - pos.y) ** 2 +
+          (_tmpRailPos.z - pos.z) ** 2;
+        entry.curve.getPointAt(this.wrapUnitInterval(m2), _tmpRailPos);
+        const d2 =
+          (_tmpRailPos.x - pos.x) ** 2 +
+          (_tmpRailPos.y - pos.y) ** 2 +
+          (_tmpRailPos.z - pos.z) ** 2;
+        if (d1 < d2) {
+          right = m2;
+        } else {
+          left = m1;
+        }
+      }
+
+      const candidateT = this.wrapUnitInterval((left + right) * 0.5);
+      entry.curve.getPointAt(candidateT, _tmpRailPos);
+      const dx = _tmpRailPos.x - pos.x;
+      const dy = _tmpRailPos.y - pos.y;
+      const dz = _tmpRailPos.z - pos.z;
+      const dSq = dx * dx + dy * dy + dz * dz;
+      if (dSq <= bestDistSq) {
+        bestDistSq = dSq;
+        bestEntry = entry;
+        bestT = candidateT;
+        bestX = _tmpRailPos.x;
+        bestY = _tmpRailPos.y;
+        bestZ = _tmpRailPos.z;
+      }
+    }
+
+    if (!bestEntry) return null;
+    bestEntry.curve.getTangentAt(bestT, _tmpRailTan).normalize();
+    return {
+      rail: bestEntry.data,
+      t: bestT,
+      position: { x: bestX, y: bestY, z: bestZ },
+      tangent: { x: _tmpRailTan.x, y: _tmpRailTan.y, z: _tmpRailTan.z },
+    };
+  }
+
+  private syncRebootVanVisual(v: RebootVanVisual): void {
+    if (v.data.available) {
+      v.beamMesh.visible = true;
+      for (const m of v.stripeMeshes) m.material = v.activeMat;
+      for (const m of v.holoMeshes) m.material = v.activeMat;
+      v.holoGroup.scale.setScalar(1.0);
+    } else {
+      v.beamMesh.visible = false;
+      for (const m of v.stripeMeshes) m.material = v.cooldownMat;
+      for (const m of v.holoMeshes) m.material = v.cooldownMat;
+      v.holoGroup.scale.setScalar(0.72);
+    }
+  }
+
+  private createRebootVanEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    rotationY: number;
+    isQaShowcase?: boolean;
+  }): RebootVanVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const data: RebootVanEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x: spec.x,
+      y,
+      z: spec.z,
+      rotationY: spec.rotationY,
+      cooldownRemainingSec: 0,
+      available: true,
+    };
+    this.rebootVans.push(data);
+
+    const chassisBlueMat = this.getSharedMat('reboot_van_body', () =>
+      new THREE.MeshStandardMaterial({ color: '#1d4ed8', roughness: 0.34, metalness: 0.48 }),
+    );
+    const darkArmorMat = this.getSharedMat('reboot_van_dark', () =>
+      new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.46, metalness: 0.72 }),
+    );
+    const tireMat = this.getSharedMat('reboot_van_tire', () =>
+      new THREE.MeshStandardMaterial({ color: '#090d16', roughness: 0.9 }),
+    );
+    const glassMat = this.getSharedMat('reboot_van_glass', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#38bdf8',
+        emissive: '#0284c7',
+        emissiveIntensity: 0.42,
+        roughness: 0.14,
+        metalness: 0.55,
+      }),
+    );
+    const activeMat = this.getSharedMat('reboot_van_holo_active', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#38bdf8',
+        emissive: '#0ea5e9',
+        emissiveIntensity: 1.75,
+        roughness: 0.16,
+        metalness: 0.25,
+      }),
+    );
+    const cooldownMat = this.getSharedMat('reboot_van_holo_cooldown', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#475569',
+        emissive: '#1e293b',
+        emissiveIntensity: 0.25,
+        roughness: 0.55,
+        metalness: 0.6,
+      }),
+    );
+    const beamMat = this.getSharedMat('reboot_van_beam', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.24,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+
+    const chassisGeo = this.getSharedGeo('reboot_van_chassis_geo', () => new THREE.BoxGeometry(2.15, 1.32, 3.8));
+    const cabGeo = this.getSharedGeo('reboot_van_cab_geo', () => new THREE.BoxGeometry(2.02, 1.02, 1.35));
+    const windshieldGeo = this.getSharedGeo('reboot_van_windshield_geo', () => new THREE.BoxGeometry(1.8, 0.52, 0.1));
+    const bumperGeo = this.getSharedGeo('reboot_van_bumper_geo', () => new THREE.BoxGeometry(2.2, 0.26, 0.28));
+    const wheelGeo = this.getSharedGeo('reboot_van_wheel_geo', () => {
+      const g = new THREE.CylinderGeometry(0.42, 0.42, 0.3, 12);
+      g.rotateZ(Math.PI * 0.5);
+      return g;
+    });
+    const stripeGeo = this.getSharedGeo('reboot_van_stripe_geo', () => new THREE.BoxGeometry(0.08, 0.2, 3.4));
+    const roofRackGeo = this.getSharedGeo('reboot_van_rack_geo', () => new THREE.BoxGeometry(1.65, 0.22, 2.2));
+    const projectorBaseGeo = this.getSharedGeo('reboot_van_proj_geo', () => new THREE.CylinderGeometry(0.45, 0.55, 0.18, 12));
+    const beamGeo = this.getSharedGeo('reboot_van_beam_geo', () => new THREE.CylinderGeometry(0.42, 0.65, 6.2, 14, 1, true));
+    const holoRingGeo = this.getSharedGeo('reboot_van_holo_ring_geo', () => new THREE.TorusGeometry(0.56, 0.055, 8, 24));
+    const holoCrossGeo = this.getSharedGeo('reboot_van_holo_cross_geo', () => new THREE.BoxGeometry(0.52, 0.15, 0.15));
+    const holoDiamondGeo = this.getSharedGeo('reboot_van_holo_diamond_geo', () => new THREE.OctahedronGeometry(0.24, 0));
+
+    const vanGroup = new THREE.Group();
+    vanGroup.name = `RebootVan_${spec.id}`;
+    vanGroup.position.set(spec.x, y, spec.z);
+    vanGroup.rotation.y = spec.rotationY;
+
+    const mainBody = new THREE.Mesh(chassisGeo, chassisBlueMat);
+    mainBody.position.set(0, 1.05, -0.45);
+    mainBody.castShadow = true;
+    mainBody.receiveShadow = true;
+    vanGroup.add(mainBody);
+
+    const cab = new THREE.Mesh(cabGeo, chassisBlueMat);
+    cab.position.set(0, 0.9, 1.82);
+    cab.castShadow = true;
+    cab.receiveShadow = true;
+    vanGroup.add(cab);
+
+    const windshield = new THREE.Mesh(windshieldGeo, glassMat);
+    windshield.position.set(0, 1.15, 2.48);
+    windshield.rotation.x = -0.18;
+    vanGroup.add(windshield);
+
+    const frontBumper = new THREE.Mesh(bumperGeo, darkArmorMat);
+    frontBumper.position.set(0, 0.42, 2.52);
+    vanGroup.add(frontBumper);
+
+    const rearBumper = new THREE.Mesh(bumperGeo, darkArmorMat);
+    rearBumper.position.set(0, 0.42, -2.38);
+    vanGroup.add(rearBumper);
+
+    for (const wx of [-1.05, 1.05]) {
+      for (const wz of [-1.62, 1.52]) {
+        const wheel = new THREE.Mesh(wheelGeo, tireMat);
+        wheel.position.set(wx, 0.42, wz);
+        wheel.castShadow = true;
+        vanGroup.add(wheel);
+      }
+    }
+
+    const stripeMeshes: THREE.Mesh[] = [];
+    for (const sx of [-1.09, 1.09]) {
+      const stripe = new THREE.Mesh(stripeGeo, activeMat);
+      stripe.position.set(sx, 1.05, -0.45);
+      vanGroup.add(stripe);
+      stripeMeshes.push(stripe);
+    }
+
+    const roofRack = new THREE.Mesh(roofRackGeo, darkArmorMat);
+    roofRack.position.set(0, 1.82, -0.45);
+    roofRack.castShadow = true;
+    vanGroup.add(roofRack);
+
+    const beaconGroup = new THREE.Group();
+    beaconGroup.name = `RebootVanBeacon_${spec.id}`;
+    beaconGroup.position.set(0, 1.94, -0.45);
+
+    const projBase = new THREE.Mesh(projectorBaseGeo, darkArmorMat);
+    projBase.position.y = 0.08;
+    beaconGroup.add(projBase);
+
+    const beamMesh = new THREE.Mesh(beamGeo, beamMat);
+    beamMesh.position.y = 3.2;
+    beaconGroup.add(beamMesh);
+
+    const baseHoloY = 1.15;
+    const holoGroup = new THREE.Group();
+    holoGroup.position.y = baseHoloY;
+
+    const holoRing = new THREE.Mesh(holoRingGeo, activeMat);
+    holoRing.rotation.x = Math.PI * 0.35;
+    const crossH = new THREE.Mesh(holoCrossGeo, activeMat);
+    const crossV = new THREE.Mesh(holoCrossGeo, activeMat);
+    crossV.rotation.z = Math.PI * 0.5;
+    const diamond = new THREE.Mesh(holoDiamondGeo, activeMat);
+    holoGroup.add(holoRing, crossH, crossV, diamond);
+    beaconGroup.add(holoGroup);
+    vanGroup.add(beaconGroup);
+
+    this.group.add(vanGroup);
+
+    const collider = this.makeRotatedCollider(
+      `${spec.id}_col`,
+      spec.x,
+      spec.z,
+      0,
+      0,
+      1.25,
+      2.55,
+      y,
+      y + 2.4,
+      spec.rotationY,
+      'metal',
+      `reboot_van:${spec.id}`,
+    );
+
+    const visual: RebootVanVisual = {
+      data,
+      group: vanGroup,
+      beaconGroup,
+      beamMesh,
+      holoGroup,
+      holoRing,
+      activeMat,
+      cooldownMat,
+      stripeMeshes,
+      holoMeshes: [holoRing, crossH, crossV, diamond],
+      baseHoloY,
+      collider,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.syncRebootVanVisual(visual);
+    this.rebootVansMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildRebootVans(_terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      dx: number;
+      dz: number;
+      rotationY: number;
+    }> = [
+      { id: 'van_metro_towers', poiId: 'metro_towers', dx: -16, dz: 0, rotationY: Math.PI * 0.5 },
+      { id: 'van_market_row', poiId: 'market_row', dx: 13, dz: 0, rotationY: Math.PI * 0.5 },
+      { id: 'van_sunny_suburbs', poiId: 'sunny_suburbs', dx: 0, dz: -13, rotationY: 0 },
+      { id: 'van_crater_depot', poiId: 'crater_depot', dx: 4, dz: 2, rotationY: 0 },
+      { id: 'van_frostpeak_citadel', poiId: 'frostpeak_citadel', dx: -6, dz: 33, rotationY: Math.PI * 0.25 },
+      { id: 'van_skyline_spire', poiId: 'skyline_spire', dx: 0, dz: 19, rotationY: Math.PI * 0.5 },
+    ];
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+      this.createRebootVanEntry({
+        id: spec.id,
+        poiId: spec.poiId,
+        x: poi.x + spec.dx,
+        z: poi.z + spec.dz,
+        rotationY: spec.rotationY,
+      });
+    }
+  }
+
+  getRebootVans(): RebootVanEntity[] {
+    return this.rebootVans;
+  }
+
+  getRebootVanColliders(): ColliderBox[] {
+    return Array.from(this.rebootVansMap.values(), (v) => v.collider);
+  }
+
+  triggerRebootVan(id: string): boolean {
+    const entry = this.rebootVansMap.get(id);
+    if (!entry || !entry.data.available) {
+      return false;
+    }
+    entry.data.available = false;
+    entry.data.cooldownRemainingSec = REBOOT_VAN_COOLDOWN_SEC;
+    this.syncRebootVanVisual(entry);
+    return true;
+  }
+
+  private createSupplyDroneEntry(spec: {
+    id: string;
+    poiId: string;
+    orbitCenterX: number;
+    orbitCenterZ: number;
+    heightOffset: number;
+    orbitRadius: number;
+    orbitAngle: number;
+    orbitSpeed: number;
+    rarity: Rarity;
+    weaponId: WeaponId;
+    gold: number;
+    trapKind: TrapKind;
+    isQaShowcase?: boolean;
+  }): SupplyDroneVisual {
+    const groundY = this.terrain.getHeightAt(spec.orbitCenterX, spec.orbitCenterZ);
+    const baseY = groundY + spec.heightOffset;
+    const x = spec.orbitCenterX + Math.cos(spec.orbitAngle) * spec.orbitRadius;
+    const z = spec.orbitCenterZ + Math.sin(spec.orbitAngle) * spec.orbitRadius;
+
+    const data: SupplyDroneEntity = {
+      id: spec.id,
+      poiId: spec.poiId,
+      x,
+      y: baseY,
+      z,
+      baseY,
+      orbitCenterX: spec.orbitCenterX,
+      orbitCenterZ: spec.orbitCenterZ,
+      orbitRadius: spec.orbitRadius,
+      orbitAngle: spec.orbitAngle,
+      orbitSpeed: spec.orbitSpeed,
+      hp: SUPPLY_DRONE_HP,
+      maxHp: SUPPLY_DRONE_HP,
+      rarity: spec.rarity,
+      destroyed: false,
+    };
+    this.supplyDrones.push(data);
+
+    const chassisMat = this.getSharedMat('drone_chassis_mat', () =>
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.35, metalness: 0.78 }),
+    );
+    const trimMat = this.getSharedMat('drone_trim_mat', () =>
+      new THREE.MeshStandardMaterial({ color: '#94a3b8', roughness: 0.28, metalness: 0.85 }),
+    );
+    const bladeMat = this.getSharedMat('drone_blade_mat', () =>
+      new THREE.MeshBasicMaterial({ color: '#e2e8f0', transparent: true, opacity: 0.78 }),
+    );
+    const rarityHex = RARITY_COLORS[spec.rarity];
+    const coreMat = this.getSharedMat(`drone_core_${spec.rarity}`, () =>
+      new THREE.MeshStandardMaterial({
+        color: rarityHex,
+        emissive: rarityHex,
+        emissiveIntensity: 1.55,
+        roughness: 0.16,
+        metalness: 0.25,
+      }),
+    );
+
+    const hullGeo = this.getSharedGeo('drone_hull_geo', () => new THREE.BoxGeometry(1.15, 0.38, 0.76));
+    const armGeo = this.getSharedGeo('drone_arm_geo', () => new THREE.BoxGeometry(0.66, 0.08, 0.14));
+    const cowlingGeo = this.getSharedGeo('drone_cowling_geo', () => {
+      const g = new THREE.TorusGeometry(0.48, 0.055, 6, 16);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const rotorHubGeo = this.getSharedGeo('drone_hub_geo', () => new THREE.CylinderGeometry(0.08, 0.08, 0.12, 8));
+    const bladeGeo = this.getSharedGeo('drone_blade_geo', () => new THREE.BoxGeometry(0.92, 0.025, 0.11));
+    const coreCrateGeo = this.getSharedGeo('drone_core_crate_geo', () => new THREE.BoxGeometry(0.62, 0.52, 0.62));
+    const coreGemGeo = this.getSharedGeo('drone_core_gem_geo', () => new THREE.OctahedronGeometry(0.24, 0));
+
+    const droneGroup = new THREE.Group();
+    droneGroup.name = `SupplyDrone_${spec.id}`;
+    droneGroup.position.set(x, baseY, z);
+    droneGroup.rotation.y = -spec.orbitAngle;
+
+    const bodyGroup = new THREE.Group();
+
+    const hull = new THREE.Mesh(hullGeo, chassisMat);
+    hull.castShadow = true;
+    bodyGroup.add(hull);
+
+    const rotors: THREE.Object3D[] = [];
+    for (const side of [-1, 1]) {
+      const arm = new THREE.Mesh(armGeo, trimMat);
+      arm.position.set(side * 0.78, 0.08, 0);
+      bodyGroup.add(arm);
+
+      const cowling = new THREE.Mesh(cowlingGeo, trimMat);
+      cowling.position.set(side * 1.08, 0.14, 0);
+      bodyGroup.add(cowling);
+
+      const rotorGroup = new THREE.Group();
+      rotorGroup.position.set(side * 1.08, 0.18, 0);
+      const hub = new THREE.Mesh(rotorHubGeo, chassisMat);
+      const bladeA = new THREE.Mesh(bladeGeo, bladeMat);
+      const bladeB = new THREE.Mesh(bladeGeo, bladeMat);
+      bladeB.rotation.y = Math.PI * 0.5;
+      rotorGroup.add(hub, bladeA, bladeB);
+      bodyGroup.add(rotorGroup);
+      rotors.push(rotorGroup);
+    }
+
+    const coreGroup = new THREE.Group();
+    coreGroup.position.set(0, -0.48, 0);
+    const coreCrate = new THREE.Mesh(coreCrateGeo, coreMat);
+    const coreGem = new THREE.Mesh(coreGemGeo, coreMat);
+    coreGem.position.y = -0.34;
+    coreGroup.add(coreCrate, coreGem);
+    bodyGroup.add(coreGroup);
+
+    droneGroup.add(bodyGroup);
+    this.group.add(droneGroup);
+
+    const visual: SupplyDroneVisual = {
+      data,
+      initialAngle: spec.orbitAngle,
+      group: droneGroup,
+      bodyGroup,
+      rotors,
+      coreGroup,
+      coreMat,
+      rewardWeaponId: spec.weaponId,
+      rewardGold: spec.gold,
+      rewardTrapKind: spec.trapKind,
+      hitAnim: 0,
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.supplyDronesMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private buildSupplyDrones(_terrain: TerrainQuery): void {
+    const poiMap = new Map(POIS.map((p) => [p.id, p]));
+    const specs: Array<{
+      id: string;
+      poiId: string;
+      dx: number;
+      dz: number;
+      heightOffset: number;
+      orbitRadius: number;
+      orbitAngle: number;
+      orbitSpeed: number;
+      rarity: Rarity;
+      weaponId: WeaponId;
+      gold: number;
+      trapKind: TrapKind;
+    }> = [
+      { id: 'drone_metro_towers_1', poiId: 'metro_towers', dx: 0, dz: 0, heightOffset: 14.5, orbitRadius: 11, orbitAngle: 0.3, orbitSpeed: 0.42, rarity: 'epic', weaponId: 'railgun', gold: 75, trapKind: 'spike_trap' },
+      { id: 'drone_metro_towers_2', poiId: 'metro_towers', dx: 0, dz: 0, heightOffset: 16.4, orbitRadius: 21, orbitAngle: 3.4, orbitSpeed: -0.34, rarity: 'legendary', weaponId: 'minigun', gold: 100, trapKind: 'bouncer_pad' },
+      { id: 'drone_sunny_suburbs', poiId: 'sunny_suburbs', dx: 0, dz: 1, heightOffset: 13.5, orbitRadius: 12, orbitAngle: 1.1, orbitSpeed: 0.46, rarity: 'rare', weaponId: 'tactical_dmr', gold: 50, trapKind: 'spike_trap' },
+      { id: 'drone_crystal_basin', poiId: 'crystal_basin', dx: 0, dz: 0, heightOffset: 15.0, orbitRadius: 14, orbitAngle: 2.0, orbitSpeed: -0.4, rarity: 'epic', weaponId: 'minigun', gold: 75, trapKind: 'bouncer_pad' },
+      { id: 'drone_market_row_1', poiId: 'market_row', dx: 0, dz: 0, heightOffset: 13.0, orbitRadius: 12, orbitAngle: 0.8, orbitSpeed: 0.48, rarity: 'rare', weaponId: 'railgun', gold: 50, trapKind: 'bouncer_pad' },
+      { id: 'drone_market_row_2', poiId: 'market_row', dx: 0, dz: 0, heightOffset: 16.0, orbitRadius: 20, orbitAngle: 4.1, orbitSpeed: -0.36, rarity: 'epic', weaponId: 'kinetic_blade', gold: 75, trapKind: 'spike_trap' },
+      { id: 'drone_crater_depot', poiId: 'crater_depot', dx: -4, dz: -4, heightOffset: 14.0, orbitRadius: 10, orbitAngle: 1.7, orbitSpeed: 0.44, rarity: 'legendary', weaponId: 'railgun', gold: 100, trapKind: 'spike_trap' },
+      { id: 'drone_whispering_pines', poiId: 'whispering_pines', dx: 0, dz: 0, heightOffset: 15.5, orbitRadius: 15, orbitAngle: 2.6, orbitSpeed: -0.38, rarity: 'rare', weaponId: 'heavy_shotgun', gold: 50, trapKind: 'bouncer_pad' },
+      { id: 'drone_frostpeak_citadel', poiId: 'frostpeak_citadel', dx: 0, dz: 4, heightOffset: 16.2, orbitRadius: 13, orbitAngle: 0.5, orbitSpeed: 0.4, rarity: 'legendary', weaponId: 'minigun', gold: 100, trapKind: 'spike_trap' },
+      { id: 'drone_scorched_caldera', poiId: 'scorched_caldera', dx: 10, dz: 0, heightOffset: 14.8, orbitRadius: 9, orbitAngle: 3.9, orbitSpeed: -0.45, rarity: 'epic', weaponId: 'boom_bow', gold: 75, trapKind: 'bouncer_pad' },
+      { id: 'drone_sunken_oasis', poiId: 'sunken_oasis', dx: 6, dz: -4, heightOffset: 13.8, orbitRadius: 8, orbitAngle: 5.0, orbitSpeed: 0.43, rarity: 'rare', weaponId: 'combat_smg', gold: 50, trapKind: 'spike_trap' },
+      { id: 'drone_skyline_spire', poiId: 'skyline_spire', dx: 0, dz: 0, heightOffset: 14.2, orbitRadius: 21, orbitAngle: 1.4, orbitSpeed: 0.47, rarity: 'epic', weaponId: 'railgun', gold: 75, trapKind: 'bouncer_pad' },
+    ];
+
+    for (const spec of specs) {
+      const poi = poiMap.get(spec.poiId);
+      if (!poi) continue;
+      this.createSupplyDroneEntry({
+        id: spec.id,
+        poiId: spec.poiId,
+        orbitCenterX: poi.x + spec.dx,
+        orbitCenterZ: poi.z + spec.dz,
+        heightOffset: spec.heightOffset,
+        orbitRadius: spec.orbitRadius,
+        orbitAngle: spec.orbitAngle,
+        orbitSpeed: spec.orbitSpeed,
+        rarity: spec.rarity,
+        weaponId: spec.weaponId,
+        gold: spec.gold,
+        trapKind: spec.trapKind,
+      });
+    }
+  }
+
+  getSupplyDrones(): SupplyDroneEntity[] {
+    return this.supplyDrones;
+  }
+
+  damageSupplyDrone(id: string, dmg: number): SupplyDroneDamageResult | null {
+    const entry = this.supplyDronesMap.get(id);
+    if (!entry || entry.data.destroyed) {
+      return null;
+    }
+
+    const { x, y, z, rarity } = entry.data;
+    if (dmg <= 0) {
+      return {
+        destroyed: false,
+        x,
+        y,
+        z,
+        rarity,
+        weaponId: entry.rewardWeaponId,
+        gold: 0,
+        trapKind: entry.rewardTrapKind,
+      };
+    }
+
+    entry.data.hp = Math.max(0, entry.data.hp - dmg);
+    if (entry.data.hp <= 0) {
+      entry.data.hp = 0;
+      entry.data.destroyed = true;
+      entry.group.visible = false;
+      entry.hitAnim = 0;
+
+      const pos: Vec3Like = { x, y, z };
+      this.eventBus?.emit('vfx:drone_explode', {
+        position: pos,
+        rarity,
+      });
+      this.eventBus?.emit('sound:play', {
+        id: 'drone_explode',
+        position: pos,
+        volume: 0.85,
+        spatial: true,
+      });
+
+      return {
+        destroyed: true,
+        x,
+        y,
+        z,
+        rarity,
+        weaponId: entry.rewardWeaponId,
+        gold: entry.rewardGold,
+        trapKind: entry.rewardTrapKind,
+      };
+    }
+
+    entry.hitAnim = 1.0;
+    return {
+      destroyed: false,
+      x,
+      y,
+      z,
+      rarity,
+      weaponId: entry.rewardWeaponId,
+      gold: 0,
+      trapKind: entry.rewardTrapKind,
+    };
+  }
+
   private removeQaShowcaseDynamicEntities(): void {
     const qaBunkerId = 'bunker_qa_showcase';
     const qaBunker = this.weaponBunkersMap.get(qaBunkerId);
@@ -4005,6 +4984,37 @@ export class WorldInteractables {
       const idx = this.slurpTankers.findIndex((t) => t.id === qaTankerId);
       if (idx >= 0) this.slurpTankers.splice(idx, 1);
     }
+
+    const qaVanId = 'van_qa_showcase';
+    const qaVan = this.rebootVansMap.get(qaVanId);
+    if (qaVan) {
+      this.group.remove(qaVan.group);
+      this.rebootVansMap.delete(qaVanId);
+      const idx = this.rebootVans.findIndex((v) => v.id === qaVanId);
+      if (idx >= 0) this.rebootVans.splice(idx, 1);
+    }
+
+    const qaRailId = 'rail_qa_showcase';
+    const qaRail = this.grindRailsMap.get(qaRailId);
+    if (qaRail) {
+      this.group.remove(qaRail.group);
+      this.grindRailsMap.delete(qaRailId);
+      const idx = this.grindRails.findIndex((r) => r.id === qaRailId);
+      if (idx >= 0) this.grindRails.splice(idx, 1);
+    }
+
+    for (const qaDroneId of ['drone_qa_showcase_1', 'drone_qa_showcase_2']) {
+      const qaDrone = this.supplyDronesMap.get(qaDroneId);
+      if (qaDrone) {
+        this.group.remove(qaDrone.group);
+        this.supplyDronesMap.delete(qaDroneId);
+        const idx = this.supplyDrones.findIndex((d) => d.id === qaDroneId);
+        if (idx >= 0) this.supplyDrones.splice(idx, 1);
+      }
+    }
+
+    for (const g of this.qaShowcaseGeos) g.dispose();
+    this.qaShowcaseGeos = [];
   }
 
   qaPlaceWave6Showcase(centerPos: Vec3Like): Wave6ShowcaseResult {
@@ -4045,6 +5055,85 @@ export class WorldInteractables {
     };
   }
 
+  qaPlaceWave7Showcase(centerPos: Vec3Like): Wave7ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities();
+
+    const vanSpot = this.findDryGroundNear(centerPos, -5.5, 2.0);
+    const vanVisual = this.createRebootVanEntry({
+      id: 'van_qa_showcase',
+      poiId: 'qa_showcase',
+      x: vanSpot.x,
+      z: vanSpot.z,
+      rotationY: Math.PI * 0.25,
+      isQaShowcase: true,
+    });
+
+    const railOrigin = this.findDryGroundNear(centerPos, 5.0, 2.0);
+    const railOffsets: Array<[number, number, number]> = [
+      [0, -4.5, 2.3],
+      [4.5, -2.5, 3.2],
+      [5.0, 2.5, 4.1],
+      [1.0, 5.2, 3.5],
+      [-4.0, 3.5, 2.6],
+      [-4.5, -1.8, 2.2],
+    ];
+    const railPoints: Vec3Like[] = railOffsets.map(([dx, dz, h]) => {
+      const px = railOrigin.x + dx;
+      const pz = railOrigin.z + dz;
+      return {
+        x: px,
+        y: this.terrain.getHeightAt(px, pz) + h,
+        z: pz,
+      };
+    });
+    const railVisual = this.createGrindRailEntry({
+      id: 'rail_qa_showcase',
+      poiId: 'qa_showcase',
+      points: railPoints,
+      color: '#22d3ee',
+      speed: GRIND_RAIL_SPEED,
+      isQaShowcase: true,
+    });
+
+    const droneSpot = this.findDryGroundNear(centerPos, 0, 2.5);
+    const drone1 = this.createSupplyDroneEntry({
+      id: 'drone_qa_showcase_1',
+      poiId: 'qa_showcase',
+      orbitCenterX: droneSpot.x,
+      orbitCenterZ: droneSpot.z,
+      heightOffset: 13.5,
+      orbitRadius: 5.5,
+      orbitAngle: 0.4,
+      orbitSpeed: 0.55,
+      rarity: 'epic',
+      weaponId: 'railgun',
+      gold: 75,
+      trapKind: 'spike_trap',
+      isQaShowcase: true,
+    });
+    const drone2 = this.createSupplyDroneEntry({
+      id: 'drone_qa_showcase_2',
+      poiId: 'qa_showcase',
+      orbitCenterX: droneSpot.x,
+      orbitCenterZ: droneSpot.z,
+      heightOffset: 15.5,
+      orbitRadius: 8.0,
+      orbitAngle: 3.5,
+      orbitSpeed: -0.48,
+      rarity: 'legendary',
+      weaponId: 'minigun',
+      gold: 100,
+      trapKind: 'bouncer_pad',
+      isQaShowcase: true,
+    });
+
+    return {
+      rebootVan: vanVisual.data,
+      grindRail: railVisual.data,
+      drones: [drone1.data, drone2.data],
+    };
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -4062,6 +5151,7 @@ export class WorldInteractables {
       ...this.getLootIslandColliders(),
       ...this.getWeaponBunkerColliders(),
       ...this.getSlurpTankerColliders(),
+      ...this.getRebootVanColliders(),
     ];
   }
 
@@ -4165,6 +5255,29 @@ export class WorldInteractables {
       st.bodyGroup.scale.set(1, 1, 1);
       st.bodyGroup.rotation.set(0, 0, 0);
       st.hitAnim = 0;
+    }
+
+    for (const rv of this.rebootVansMap.values()) {
+      rv.data.available = true;
+      rv.data.cooldownRemainingSec = 0;
+      rv.holoGroup.position.y = rv.baseHoloY;
+      rv.holoGroup.rotation.set(0, 0, 0);
+      this.syncRebootVanVisual(rv);
+    }
+
+    for (const dr of this.supplyDronesMap.values()) {
+      dr.data.hp = dr.data.maxHp;
+      dr.data.destroyed = false;
+      dr.data.orbitAngle = dr.initialAngle;
+      dr.data.x = dr.data.orbitCenterX + Math.cos(dr.initialAngle) * dr.data.orbitRadius;
+      dr.data.z = dr.data.orbitCenterZ + Math.sin(dr.initialAngle) * dr.data.orbitRadius;
+      dr.data.y = dr.data.baseY;
+      dr.hitAnim = 0;
+      dr.group.visible = true;
+      dr.group.position.set(dr.data.x, dr.data.y, dr.data.z);
+      dr.group.rotation.set(0, -dr.initialAngle, 0);
+      dr.bodyGroup.rotation.set(0, 0, 0);
+      dr.bodyGroup.scale.set(1, 1, 1);
     }
 
     for (const dm of this.droppedMedallionsMap.values()) {
@@ -4460,6 +5573,64 @@ export class WorldInteractables {
       this.stepBarrelHitWobble(st, safeDt);
     }
 
+    // Animate Neon Energy Grind Rail energy rings along splines
+    for (const rail of this.grindRailsMap.values()) {
+      for (let i = 0; i < rail.rings.length; i++) {
+        const ring = rail.rings[i];
+        ring.t = this.wrapUnitInterval(ring.t + safeDt * (ring.speed / ring.length));
+        ring.curve.getPointAt(ring.t, _tmpRailPos);
+        ring.curve.getTangentAt(ring.t, _tmpRailTan).normalize();
+        ring.mesh.position.copy(_tmpRailPos);
+        ring.mesh.quaternion.setFromUnitVectors(_tmpForwardZ, _tmpRailTan);
+      }
+    }
+
+    // Spin Reboot Van holographic roof beacons & tick cooldowns
+    let vanIdx = 0;
+    for (const rv of this.rebootVansMap.values()) {
+      if (!rv.data.available) {
+        rv.data.cooldownRemainingSec = Math.max(0, rv.data.cooldownRemainingSec - safeDt);
+        if (rv.data.cooldownRemainingSec <= 0) {
+          rv.data.cooldownRemainingSec = 0;
+          rv.data.available = true;
+          this.syncRebootVanVisual(rv);
+        }
+      }
+      const spinSpeed = rv.data.available ? 1.9 : 0.45;
+      const t = elapsed + vanIdx * 0.8;
+      rv.holoGroup.rotation.y += safeDt * spinSpeed;
+      rv.holoRing.rotation.z = t * 1.25;
+      rv.holoGroup.position.y = rv.baseHoloY + Math.sin(t * 2.6) * 0.1;
+      vanIdx++;
+    }
+
+    // Orbit non-destroyed Flying Supply Drones, spin twin rotors & pulse undercarriage core
+    let droneIdx = 0;
+    for (const dr of this.supplyDronesMap.values()) {
+      if (!dr.data.destroyed) {
+        dr.data.orbitAngle =
+          (dr.data.orbitAngle + dr.data.orbitSpeed * safeDt) % (Math.PI * 2);
+        dr.data.x =
+          dr.data.orbitCenterX + Math.cos(dr.data.orbitAngle) * dr.data.orbitRadius;
+        dr.data.z =
+          dr.data.orbitCenterZ + Math.sin(dr.data.orbitAngle) * dr.data.orbitRadius;
+        dr.data.y = dr.data.baseY + Math.sin(elapsed * 2.1 + droneIdx * 0.75) * 0.42;
+
+        dr.group.position.set(dr.data.x, dr.data.y, dr.data.z);
+        dr.group.rotation.y = -dr.data.orbitAngle;
+
+        for (let r = 0; r < dr.rotors.length; r++) {
+          dr.rotors[r].rotation.y += safeDt * (r % 2 === 0 ? 24 : -24);
+        }
+
+        const pulse = 1.0 + Math.sin(elapsed * 4.2 + droneIdx * 0.9) * 0.1;
+        dr.coreGroup.scale.set(pulse, pulse, pulse);
+        dr.coreGroup.rotation.y = elapsed * 1.8 + droneIdx;
+        this.stepBarrelHitWobble(dr, safeDt);
+      }
+      droneIdx++;
+    }
+
     // Spin & hover dynamic Dropped Medallions and Dropped Crowns
     let pickupIdx = 0;
     for (const dm of this.droppedMedallionsMap.values()) {
@@ -4488,6 +5659,8 @@ export class WorldInteractables {
     this.group.clear();
     for (const g of this.geometries) g.dispose();
     this.geometries = [];
+    for (const g of this.qaShowcaseGeos) g.dispose();
+    this.qaShowcaseGeos = [];
     for (const m of this.materials) m.dispose();
     this.materials = [];
     for (const g of this.sharedGeos.values()) g.dispose();
@@ -4524,6 +5697,12 @@ export class WorldInteractables {
     this.droppedMedallionsMap.clear();
     this.droppedCrowns = [];
     this.droppedCrownsMap.clear();
+    this.grindRails = [];
+    this.grindRailsMap.clear();
+    this.rebootVans = [];
+    this.rebootVansMap.clear();
+    this.supplyDrones = [];
+    this.supplyDronesMap.clear();
     this.lootIslandGeyserRings = [];
     this.lootIslandState = {
       active: false,

@@ -59,6 +59,7 @@ import {
   selectThrowableForCombat,
   shouldBotBuildDefense,
   shouldBotDeployShieldBubble,
+  updateAnimState,
   updateBot,
   type BotCombatTarget,
   type BotEntity,
@@ -3567,5 +3568,308 @@ describe('Wave 6 Duos Squads, DBNO/Revive, Boss Medallions, Victory Crowns & New
     expect(selectBestWeaponForRange(emptyBowLoadout, 55, noHeavy)?.item.weaponId).toBe(
       'combat_smg',
     );
+  });
+});
+
+describe('Wave 7 Nexus Overdrive: Reboot Vans, Railgun/Minigun Scoring, Grind & Siren Awareness', () => {
+  it('tracks hasPartnerRebootCard() and completes full rebootDuoPartner(vanPos) respawn lifecycle with win-check immunity', () => {
+    // 1. Non-duos mode never yields reboot cards or reboots
+    const soloCtx = makeMockContext({ gameMode: 'solo' });
+    const soloMgr = new BotManager(soloCtx, 'standard', 1234, 'solo');
+    soloMgr.spawnBots(2, 20, 'solo');
+    expect(soloMgr.hasPartnerRebootCard()).toBe(false);
+    expect(soloMgr.rebootDuoPartner({ x: 40, y: 10, z: 20 })).toBeNull();
+    soloMgr.dispose();
+
+    // 2. Duos mode lifecycle: alive -> knocked (no card) -> eliminated (card ready) -> rebooted gliding -> landed
+    const ctx = makeMockContext({ gameMode: 'duos' });
+    const manager = new BotManager(ctx, 'standard', 7711, 'duos');
+    const soundEvents: Array<{ id: string; position?: Vec3Like }> = [];
+    ctx.eventBus.on('sound:play', (ev) => soundEvents.push({ id: ev.id, position: ev.position }));
+
+    manager.spawnBots(2, 20, 'duos');
+    const partner = manager.getDuoPartner()!;
+    const enemies = manager.getBots().filter((b) => !b.isDuoPartner);
+    expect(enemies).toHaveLength(2);
+    expect(manager.getAliveCount()).toBe(2);
+
+    // Alive partner -> no reboot card
+    expect(manager.hasPartnerRebootCard()).toBe(false);
+    expect(manager.rebootDuoPartner({ x: 40, y: 10, z: 20 })).toBeNull();
+
+    // Knock partner (player alive) -> still DBNO, not eliminated -> no reboot card yet
+    expect(manager.damageBot(partner.id, 250, enemies[0].id, enemies[0].name, 10)).toBe(true);
+    expect(partner.isKnocked).toBe(true);
+    expect(partner.alive).toBe(true);
+    expect(manager.hasPartnerRebootCard()).toBe(false);
+    expect(manager.rebootDuoPartner({ x: 40, y: 10, z: 20 })).toBeNull();
+
+    // Thirst partner -> eliminated -> hasPartnerRebootCard() === true
+    expect(manager.damageBot(partner.id, 150, enemies[0].id, enemies[0].name, 12)).toBe(true);
+    expect(partner.alive).toBe(false);
+    expect(partner.state).toBe('eliminated');
+    expect(manager.hasPartnerRebootCard()).toBe(true);
+    expect(manager.getDuoPartner()).toBeNull();
+
+    // Reboot at Reboot Van -> spawns 32m above vanPos in gliding state with restored loadout
+    const vanPos: Vec3Like = { x: 42, y: 10, z: -28 };
+    const rebooted = manager.rebootDuoPartner(vanPos);
+    expect(rebooted).not.toBeNull();
+    expect(rebooted!.id).toBe('duo_partner');
+    expect(manager.hasPartnerRebootCard()).toBe(false);
+    expect(manager.getDuoPartner()?.id).toBe('duo_partner');
+
+    expect(rebooted!.alive).toBe(true);
+    expect(rebooted!.state).toBe('gliding');
+    expect(rebooted!.animState).toBe('glide');
+    expect(rebooted!.gliderOpen).toBe(true);
+    expect(rebooted!.grounded).toBe(false);
+    expect(rebooted!.position.x).toBeCloseTo(vanPos.x, 3);
+    expect(rebooted!.position.y).toBeCloseTo(vanPos.y + 32, 3);
+    expect(rebooted!.position.z).toBeCloseTo(vanPos.z, 3);
+
+    expect(rebooted!.hp).toBe(100);
+    expect(rebooted!.maxHp).toBe(100);
+    expect(rebooted!.shield).toBe(0);
+    expect(rebooted!.isKnocked).toBe(false);
+    expect(rebooted!.bleedOutHp).toBeUndefined();
+
+    // Inventory & starter resources restored
+    expect(
+      rebooted!.inventory.items.some((i) => i?.weaponId === 'ar' && i.rarity === 'rare'),
+    ).toBe(true);
+    expect(rebooted!.inventory.items.some((i) => i?.weaponId === 'smg')).toBe(true);
+    expect(
+      rebooted!.inventory.items.some(
+        (i) => i?.weaponId === 'mini_shield' && i.stackCount >= 2,
+      ),
+    ).toBe(true);
+    expect(rebooted!.inventory.ammo.light).toBeGreaterThan(0);
+    expect(rebooted!.inventory.ammo.medium).toBeGreaterThan(0);
+    expect(rebooted!.inventory.materials.wood).toBeGreaterThan(0);
+    expect(rebooted!.inventory.materials.brick).toBeGreaterThan(0);
+    expect(rebooted!.inventory.materials.metal).toBeGreaterThan(0);
+
+    expect(soundEvents.some((s) => s.id === 'reboot_complete')).toBe(true);
+
+    const hudAfterReboot = manager.getDuoPartnerHudState({ x: 40, y: 10, z: -28 });
+    expect(hudAfterReboot).toMatchObject({
+      alive: true,
+      knocked: false,
+      hp: 100,
+      maxHp: 100,
+      shield: 0,
+      bleedOutHp: undefined,
+    });
+
+    // Stepping simulation: stays gliding mid-air without premature snap, then lands into rotating
+    manager.update(0.1, 13.0, { x: 0, y: 175, z: 0 }, { x: 0, y: 10, z: 0 });
+    expect(rebooted!.state).toBe('gliding');
+    expect(rebooted!.animState).toBe('glide');
+    expect(rebooted!.gliderOpen).toBe(true);
+    expect(rebooted!.position.y).toBeGreaterThan(15);
+
+    for (let i = 1; i <= 60 && rebooted!.state === 'gliding'; i++) {
+      manager.update(0.1, 13.0 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 40, y: 10, z: -28 });
+    }
+    expect(rebooted!.state).toBe('rotating');
+    expect(rebooted!.grounded).toBe(true);
+    expect(rebooted!.gliderOpen).toBe(false);
+
+    // Friendly-fire immunity and DBNO re-knocking still work post-reboot
+    expect(manager.damageBot(rebooted!.id, 150, 'player', 'Player', 20)).toBe(false);
+    expect(rebooted!.hp).toBe(100);
+    expect(manager.damageBot(rebooted!.id, 200, enemies[0].id, enemies[0].name, 21)).toBe(true);
+    expect(rebooted!.isKnocked).toBe(true);
+    expect(rebooted!.state).toBe('knocked');
+
+    // Alive win-check immunity preserved: eliminating all hostiles yields getAliveCount() === 0 while partner lives!
+    expect(manager.damageBot(enemies[0].id, 250, 'player', 'Player', 22)).toBe(true);
+    expect(manager.damageBot(enemies[1].id, 250, 'player', 'Player', 22.1)).toBe(true);
+    expect(manager.getAliveCount()).toBe(0);
+    expect(rebooted!.alive).toBe(true);
+
+    manager.dispose();
+  });
+
+  it('scores railgun (mid/long) and minigun (close/mid suppression) cleanly in selectBestWeaponForRange', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 180, medium: 90, shells: 20, heavy: 12, rockets: 0 };
+
+    // Railgun outscores AR/Sniper/Minigun at mid/long range (45m, 80m) and yields at close range (8m)
+    const railLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'epic', 30),
+      makeItem('sniper', 'epic', 1),
+      makeItem('railgun', 'epic', 1),
+      makeItem('minigun', 'epic', 0),
+    ];
+    expect(selectBestWeaponForRange(railLoadout, 45, fullAmmo)?.item.weaponId).toBe(
+      'railgun',
+    );
+    expect(brain.selectBestWeaponForRange(railLoadout, 80, fullAmmo)?.item.weaponId).toBe(
+      'railgun',
+    );
+    expect(selectBestWeaponForRange(railLoadout, 8, fullAmmo)?.item.weaponId).toBe(
+      'minigun',
+    );
+
+    // Minigun outscores SMG, Combat SMG, and AR in close/mid suppression range (12m, 24m)
+    const minigunVsSmg: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('smg', 'epic', 30),
+      makeItem('combat_smg', 'epic', 30),
+      makeItem('ar', 'epic', 30),
+      makeItem('minigun', 'epic', 0),
+    ];
+    expect(selectBestWeaponForRange(minigunVsSmg, 12, fullAmmo)?.item.weaponId).toBe(
+      'minigun',
+    );
+    expect(brain.selectBestWeaponForRange(minigunVsSmg, 24, fullAmmo)?.item.weaponId).toBe(
+      'minigun',
+    );
+    // At long range (65m), AR beats minigun
+    expect(selectBestWeaponForRange(minigunVsSmg, 65, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // Empty heavy ammo skips railgun; empty light ammo skips reserve-fed minigun
+    const noHeavy = { ...fullAmmo, heavy: 0 };
+    const emptyRailLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('railgun', 'legendary', 0),
+    ];
+    expect(selectBestWeaponForRange(emptyRailLoadout, 60, noHeavy)?.item.weaponId).toBe(
+      'ar',
+    );
+
+    const noLight = { ...fullAmmo, light: 0 };
+    const emptyMiniLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('minigun', 'legendary', 0),
+    ];
+    expect(selectBestWeaponForRange(emptyMiniLoadout, 14, noLight)?.item.weaponId).toBe(
+      'ar',
+    );
+
+    // Reserve-fed minigun (magAmmo: 0, light: 60) fires cleanly in combat without 0s reload stall
+    const target: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 14 },
+      eyePos: { x: 0, y: 11.6, z: 14 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      isPlayer: true,
+    };
+    const combatCtx = makeMockContext({ getCombatTargets: () => [target] });
+    const miniBot = makeBotEntity({
+      state: 'combat',
+      position: { x: 0, y: 10, z: 0 },
+      yaw: 0,
+      grounded: true,
+      reactionTimer: 0,
+      fireCooldown: 0,
+    });
+    miniBot.inventory.items[1] = makeItem('minigun', 'epic', 0);
+    miniBot.inventory.ammo.light = 60;
+    for (let i = 0; i < 6; i++) {
+      updateBot(
+        miniBot,
+        combatCtx,
+        'sweaty',
+        { x: 0, y: 175, z: 0 },
+        10 + i * 0.05,
+        0.05,
+        false,
+      );
+    }
+    expect(combatCtx.firedCalls.some((c) => c.weaponId === 'minigun')).toBe(true);
+    expect(miniBot.inventory.ammo.light).toBeLessThan(60);
+  });
+
+  it('handles grind anim/state transitions safely and routes hostile bots cleanly toward Reboot Van siren audio:noise pulses', () => {
+    const ctx = makeMockContext({ gameMode: 'duos' });
+    const manager = new BotManager(ctx, 'standard', 9898, 'duos');
+    manager.spawnBots(3, 20, 'duos');
+    const partner = manager.getDuoPartner()!;
+    const [b1, b2, b3] = manager.getBots().filter((b) => !b.isDuoPartner);
+
+    // 1. Grind state & animation safety (even while airborne on elevated rail)
+    b1.state = 'rotating';
+    b1.position = { x: 0, y: 18, z: 0 };
+    b1.grounded = false;
+    b1.isGrinding = true;
+    b1.inventory.items[1] = makeItem('ar', 'rare', 30);
+    b1.inventory.ammo.medium = 60;
+
+    expect(shouldBotBuildDefense(b1, 'sweaty', 10, 15, 0.1, 'duos')).toBe(false);
+    updateBot(b1, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10, 0.05, false);
+    expect(b1.animState).toBe('grind');
+    expect(manager.getRenderStates().find((r) => r.id === b1.id)?.isGrinding).toBe(true);
+
+    // Stopping grind transitions cleanly back out of 'grind'
+    b1.isGrinding = false;
+    (b1.state as string) = 'grind';
+    updateBot(b1, ctx, 'standard', { x: 0, y: 175, z: 0 }, 10.1, 0.05, false);
+    expect(b1.state).toBe('rotating');
+    expect(b1.animState).not.toBe('grind');
+
+    // Direct updateAnimState handles knocking while grinding cleanly
+    b1.isGrinding = true;
+    b1.isKnocked = true;
+    b1.state = 'knocked';
+    updateAnimState(b1);
+    expect(b1.isGrinding).toBe(false);
+    expect(b1.animState).toBe('knocked');
+
+    // Clear b1 back to eliminated so b2 (same squad) does not stop to revive b1 during the siren test
+    b1.isKnocked = false;
+    b1.alive = false;
+    b1.state = 'eliminated';
+
+    // 2. Reboot Van siren audio:noise pulses draw armed hostile bots (looting/rotating) while skipping gliding/companions & NaN payloads
+    b2.state = 'looting';
+    b2.personality = 'rusher';
+    b2.position = { x: 0, y: 10, z: 0 };
+    b2.grounded = true;
+    b2.inventory.items[1] = makeItem('ar', 'rare', 30);
+    b2.inventory.ammo.medium = 60;
+
+    b3.state = 'gliding';
+    b3.position = { x: 0, y: 35, z: 5 };
+    b3.grounded = false;
+
+    manager.update(0.05, 15.0, { x: 0, y: 175, z: 0 }, { x: 50, y: 10, z: 0 });
+
+    // Malformed / NaN audio:noise pulse is ignored safely
+    ctx.eventBus.emit('audio:noise', {
+      position: { x: Number.NaN, y: 10, z: 0 },
+      kind: 'chest',
+      sourceId: 'reboot_van_1',
+      radius: 100,
+    });
+    expect(b2.lastHeardNoisePos).toBeNull();
+
+    // Valid Reboot Van siren pulse alerts armed looting bot b2, skips gliding b3 & duo partner
+    ctx.eventBus.emit('audio:noise', {
+      position: { x: 35, y: 10, z: 0 },
+      kind: 'chest',
+      sourceId: 'reboot_van_1',
+      radius: 110,
+    });
+    expect(b2.lastHeardNoisePos).toEqual({ x: 35, y: 10, z: 0 });
+    expect(b3.lastHeardNoisePos).toBeNull();
+    expect(partner.lastHeardNoisePos).toBeNull();
+
+    const startX = b2.position.x;
+    for (let i = 1; i <= 5; i++) {
+      manager.update(0.1, 15.0 + i * 0.1, { x: 0, y: 175, z: 0 }, { x: 180, y: 10, z: 180 });
+    }
+    expect(b2.state).toBe('rotating');
+    expect(b2.position.x).toBeGreaterThan(startX);
+
+    manager.dispose();
   });
 });

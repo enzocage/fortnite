@@ -1259,25 +1259,25 @@
 .fdr-build-mats-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 
 .fdr-mats-strip {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .fdr-mat-chip {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
+  padding: 3px 7px;
   background: rgba(10, 18, 38, 0.84);
   border: 2px solid rgba(255, 255, 255, 0.2);
   border-radius: 4px;
   transform: skewX(-8deg);
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 800;
 }
 
@@ -2065,6 +2065,10 @@
   border: 2px solid rgba(255, 255, 255, 0.28);
   border-radius: 10px;
   box-shadow: 0 22px 54px rgba(0, 0, 0, 0.75);
+}
+
+.fdr-modal-card.fdr-summary-card {
+  width: min(680px, 94vw);
 }
 
 .fdr-modal-card.crowned-victory {
@@ -5410,5 +5414,430 @@
   .fdr-fullmap-canvas {
     width: min(74vh, 62vw, 560px);
     height: min(74vh, 62vw, 560px);
+  }
+}
+
+/* ============================================================================
+   WAVE 7 UI: TRAP SLOT CHIP, RAILGUN / MINIGUN RETICLE METERS,
+   REBOOT CARD / CHANNEL BAR, OVERDRIVE MAP LEGEND & MATCH HIGHLIGHTS
+   ============================================================================ */
+
+/* Compact [T] Trap Slot Chip inside .fdr-build-mats-bar */
+.fdr-trap-slot-chip {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 22, 46, 0.9);
+  border: 2px solid rgba(34, 211, 238, 0.72);
+  border-radius: 5px;
+  padding: 3px;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.fdr-trap-slot-chip.empty {
+  opacity: 0.62;
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.fdr-trap-slot-chip.has-traps {
+  border-color: #22d3ee;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+}
+
+.fdr-trap-slot-chip.active {
+  border-color: #ffd000;
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.92), rgba(10, 32, 64, 0.94));
+  box-shadow: 0 0 14px rgba(255, 208, 0, 0.55);
+  transform: translateY(-2px);
+}
+
+.fdr-trap-key {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  color: #ffd000;
+  text-shadow: 0 1px 2px #000000;
+}
+
+.fdr-trap-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fdr-trap-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-trap-count {
+  position: absolute;
+  bottom: 1px;
+  right: 3px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  color: #ffffff;
+  text-shadow: 0 1px 2px #000000;
+}
+
+/* Railgun Charge Bar & Minigun Heat Gauge below Crosshair */
+.fdr-reticle-meter {
+  position: absolute;
+  top: calc(50% + 42px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 152px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.fdr-reticle-sub {
+  padding: 3px 7px 4px;
+  border-radius: 5px;
+  background: rgba(8, 15, 32, 0.88);
+  border: 1.5px solid rgba(56, 189, 248, 0.72);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.58);
+}
+
+.fdr-reticle-sub.railgun.ready {
+  border-color: #22d3ee;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.5);
+}
+
+.fdr-reticle-sub.railgun.full {
+  border-color: #ffd000;
+  box-shadow: 0 0 14px rgba(255, 208, 0, 0.65);
+}
+
+.fdr-reticle-sub.minigun {
+  border-color: rgba(251, 146, 60, 0.78);
+}
+
+.fdr-reticle-sub.minigun.hot {
+  border-color: #f97316;
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.55);
+}
+
+.fdr-reticle-sub.minigun.overheated {
+  background: rgba(69, 10, 10, 0.94);
+  border-color: #ef4444;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.82);
+  animation: fdrOverheatPulse 0.45s ease-in-out infinite;
+}
+
+.fdr-reticle-meter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #e0f2fe;
+  margin-bottom: 2px;
+}
+
+.fdr-reticle-sub.minigun .fdr-reticle-meter-head {
+  color: #ffedd5;
+}
+
+.fdr-reticle-sub.minigun.overheated .fdr-reticle-meter-head {
+  color: #fecaca;
+}
+
+.fdr-reticle-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.fdr-reticle-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  transition: width 0.05s linear;
+}
+
+.fdr-reticle-fill.railgun {
+  background: linear-gradient(90deg, #0284c7, #22d3ee, #e0f2fe);
+}
+
+.fdr-reticle-sub.railgun.full .fdr-reticle-fill.railgun {
+  background: linear-gradient(90deg, #22d3ee, #ffd000, #ffffff);
+}
+
+.fdr-reticle-fill.minigun {
+  background: linear-gradient(90deg, #fbbf24, #f97316);
+}
+
+.fdr-reticle-sub.minigun.hot .fdr-reticle-fill.minigun {
+  background: linear-gradient(90deg, #f97316, #ef4444);
+}
+
+.fdr-reticle-sub.minigun.overheated .fdr-reticle-fill.minigun {
+  background: linear-gradient(90deg, #dc2626, #f87171);
+}
+
+@keyframes fdrOverheatPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.72);
+  }
+  50% {
+    transform: scale(1.04);
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.98);
+  }
+}
+
+/* Duo Partner REBOOT CARD READY & Reboot Channel Bar */
+.fdr-duo-card.reboot-card {
+  border-color: rgba(56, 189, 248, 0.92);
+  border-left-color: #22d3ee;
+  background: linear-gradient(155deg, rgba(8, 47, 73, 0.92), rgba(10, 20, 44, 0.95));
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.42);
+}
+
+.fdr-duo-card.reboot-card .fdr-duo-status {
+  background: rgba(34, 211, 238, 0.28);
+  color: #bae6fd;
+}
+
+.fdr-reboot-bar {
+  width: 100%;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: rgba(8, 38, 72, 0.94);
+  border: 2px solid #22d3ee;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.55), 0 0 16px rgba(34, 211, 238, 0.42);
+}
+
+.fdr-reboot-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #e0f2fe;
+  margin-bottom: 3px;
+}
+
+.fdr-reboot-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fdr-reboot-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-reboot-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-reboot-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.fdr-reboot-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0284c7, #22d3ee, #e0f2fe);
+  transition: width 0.08s linear;
+}
+
+/* FullMapOverlay Wave-7 Legend Swatches */
+.fdr-legend-swatch.grindrail svg,
+.fdr-legend-swatch.rebootvan svg,
+.fdr-legend-swatch.drone svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* MatchOverlay Summary Card 4-Col Grid & Match Highlights Badges */
+.fdr-summary-card .fdr-stats-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fdr-highlights-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: rgba(9, 18, 40, 0.84);
+  border: 1px solid rgba(255, 208, 0, 0.36);
+}
+
+.fdr-highlight-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  border: 1.5px solid #22d3ee;
+  background: rgba(8, 38, 72, 0.88);
+  color: #bae6fd;
+  white-space: nowrap;
+}
+
+.fdr-highlight-badge.tone-gold {
+  border-color: #ffd000;
+  background: rgba(120, 53, 15, 0.85);
+  color: #fef08a;
+  box-shadow: 0 0 10px rgba(255, 208, 0, 0.3);
+}
+
+.fdr-highlight-badge.tone-cyan {
+  border-color: #22d3ee;
+  background: rgba(8, 47, 73, 0.88);
+  color: #cffafe;
+}
+
+.fdr-highlight-badge.tone-emerald {
+  border-color: #34eb5e;
+  background: rgba(6, 78, 59, 0.88);
+  color: #dcfce7;
+}
+
+.fdr-highlight-badge.tone-crimson {
+  border-color: #f87171;
+  background: rgba(127, 29, 29, 0.88);
+  color: #fee2e2;
+}
+
+@media (max-width: 1360px), (max-height: 760px) {
+  .fdr-build-mats-bar {
+    gap: 5px;
+  }
+
+  .fdr-gold-pill {
+    padding: 2px 6px;
+    font-size: 13px;
+    gap: 4px;
+  }
+
+  .fdr-mats-strip {
+    gap: 4px;
+  }
+
+  .fdr-mat-chip {
+    padding: 2px 5px;
+    font-size: 13px;
+    gap: 3px;
+  }
+
+  .fdr-build-tiles {
+    gap: 4px;
+  }
+
+  .fdr-build-tile {
+    width: 36px;
+    height: 36px;
+    padding: 3px;
+  }
+
+  .fdr-trap-slot-chip {
+    width: 39px;
+    height: 36px;
+  }
+
+  .fdr-map-legend {
+    gap: 4px 10px;
+    padding: 8px 10px;
+  }
+
+  .fdr-map-legend-row {
+    font-size: 11.5px;
+    gap: 6px;
+  }
+
+  .fdr-summary-card {
+    padding: 12px 18px;
+  }
+
+  .fdr-summary-card .fdr-modal-header {
+    margin-bottom: 6px;
+  }
+
+  .fdr-summary-card .fdr-crowned-victory-banner {
+    margin-bottom: 6px;
+    padding: 4px 14px;
+    font-size: 14px;
+  }
+
+  .fdr-summary-card .fdr-summary-sub {
+    margin-bottom: 8px;
+    font-size: 15px;
+  }
+
+  .fdr-summary-card .fdr-stats-grid {
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+
+  .fdr-summary-card .fdr-stat-box {
+    padding: 5px 8px;
+  }
+
+  .fdr-summary-card .fdr-stat-v {
+    font-size: 16px;
+  }
+
+  .fdr-highlights-row {
+    margin-bottom: 7px;
+    padding: 5px 8px;
+    gap: 5px;
+  }
+
+  .fdr-summary-card .fdr-summary-augments {
+    margin-bottom: 8px;
+    padding: 6px 10px;
+  }
+
+  .fdr-summary-card .fdr-xp-breakdown-card {
+    margin-bottom: 9px;
+    padding: 8px 12px;
+  }
+
+  .fdr-summary-card .fdr-summary-quest-row {
+    margin-bottom: 6px;
+    padding: 4px 8px;
+  }
+
+  .fdr-summary-card .fdr-modal-actions {
+    margin-top: 8px;
   }
 }

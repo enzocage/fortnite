@@ -60,6 +60,8 @@ export type CrosshairStyle = 'dynamic' | 'dot' | 'classic';
 
 export type SpecialistRole = 'scout' | 'medic' | 'heavy';
 
+export type TrapKind = 'spike_trap' | 'bouncer_pad';
+
 export type BiomeType =
   | 'ocean'
   | 'beach'

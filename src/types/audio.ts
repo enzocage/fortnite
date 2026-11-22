@@ -102,7 +102,17 @@ export type SoundEventId =
   | 'medallion_pickup'
   | 'crown_glint'
   | 'bunker_unlock'
-  | 'slurp_tanker_burst';
+  | 'slurp_tanker_burst'
+  | 'shot_railgun'
+  | 'railgun_charge'
+  | 'shot_minigun'
+  | 'minigun_overheat'
+  | 'grind_attach'
+  | 'trap_snap'
+  | 'bouncer_launch'
+  | 'reboot_channel'
+  | 'reboot_complete'
+  | 'drone_explode';
 
 export type MusicTrackId =
   | 'none'

@@ -5,6 +5,7 @@ import type {
   MaterialType,
   MedallionId,
   SpecialistRole,
+  TrapKind,
   VehicleKind,
   VisualSoundCue,
   WeaponId,
@@ -250,6 +251,31 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <circle cx="51" cy="13" r="3" fill="#e879f9"/>
     <path d="M35 13C43 14 50 21 51 29" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>
     <path d="M31 19C36 20 40 24 41 29" stroke="#e879f9" stroke-width="1.8" stroke-linecap="round"/>
+  </svg>`,
+
+  railgun: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M5 35L15 30H39V38H28L25 48H19L21 38H14L7 43L5 35Z" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="20" y="21" width="15" height="5" rx="1.2" fill="#0284c7" stroke="#0f172a" stroke-width="1.5"/>
+    <path d="M23 26V30M32 26V30" stroke="#f8fafc" stroke-width="2"/>
+    <rect x="38" y="27.5" width="21" height="3.2" rx="1" fill="#38bdf8" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="38" y="34" width="21" height="3.2" rx="1" fill="#38bdf8" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="39" y="31.2" width="17" height="2.3" rx="1" fill="#e0f2fe"/>
+    <rect x="21" y="31.5" width="14" height="4" rx="1.2" fill="#7c3aed" stroke="#0f172a" stroke-width="1.2"/>
+    <circle cx="59" cy="32.4" r="2.8" fill="#ffd000"/>
+    <path d="M43 27.5V37.2M49 27.5V37.2" stroke="#0f172a" stroke-width="1.3"/>
+  </svg>`,
+
+  minigun: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M12 22H26V26H16V30H12V22Z" fill="#94a3b8" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <rect x="10" y="29" width="24" height="12" rx="2.5" fill="#475569" stroke="#0f172a" stroke-width="1.8"/>
+    <rect x="15" y="39" width="13" height="10" rx="2" fill="#334155" stroke="#0f172a" stroke-width="1.7"/>
+    <rect x="17" y="41" width="9" height="4" rx="1" fill="#ffd000"/>
+    <rect x="34" y="28.5" width="22" height="2.6" rx="1" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.2"/>
+    <rect x="34" y="33.2" width="23" height="2.6" rx="1" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.2"/>
+    <rect x="34" y="37.9" width="22" height="2.6" rx="1" fill="#94a3b8" stroke="#0f172a" stroke-width="1.2"/>
+    <rect x="44" y="27.5" width="3.5" height="14" rx="1" fill="#f97316" stroke="#0f172a" stroke-width="1.2"/>
+    <rect x="53" y="27.5" width="3.5" height="14" rx="1" fill="#ef4444" stroke="#0f172a" stroke-width="1.2"/>
+    <circle cx="29" cy="35" r="3" fill="#fb923c" stroke="#0f172a" stroke-width="1.2"/>
   </svg>`,
 };
 
@@ -690,5 +716,59 @@ export function getReviveCrossSvg(): string {
     <circle cx="16" cy="16" r="12.5" fill="#065f46" stroke="#34eb5e" stroke-width="2"/>
     <rect x="13.2" y="7.5" width="5.6" height="17" rx="1.5" fill="#ffffff"/>
     <rect x="7.5" y="13.2" width="17" height="5.6" rx="1.5" fill="#ffffff"/>
+  </svg>`;
+}
+
+export function getTrapSvg(kind: TrapKind): string {
+  if (kind === 'bouncer_pad') {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+      <rect x="4" y="20" width="24" height="7" rx="2.5" fill="#1e3a8a" stroke="#22d3ee" stroke-width="1.8"/>
+      <rect x="7" y="16" width="18" height="4" rx="1.5" fill="#38bdf8" stroke="#e0f2fe" stroke-width="1.3"/>
+      <path d="M10 13L16 7L22 13" stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M12 18L16 14L20 18" stroke="#a855f7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="9" cy="23.5" r="1.4" fill="#22d3ee"/>
+      <circle cx="23" cy="23.5" r="1.4" fill="#22d3ee"/>
+    </svg>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <rect x="4" y="21" width="24" height="6" rx="2" fill="#475569" stroke="#0f172a" stroke-width="1.8"/>
+    <path d="M7 21L10.5 7L14 21H7Z" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M13 21L16 5L19 21H13Z" fill="#f8fafc" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M18 21L21.5 7L25 21H18Z" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round"/>
+    <rect x="6" y="23" width="20" height="2" rx="1" fill="#ef4444"/>
+  </svg>`;
+}
+
+export function getRebootVanSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M16 4L19 9H13L16 4Z" fill="#e0f2fe" stroke="#22d3ee" stroke-width="1.2" stroke-linejoin="round"/>
+    <rect x="4" y="11" width="17" height="12" rx="2.5" fill="#0284c7" stroke="#0f172a" stroke-width="1.8"/>
+    <path d="M21 13H26L29 17.5V23H21V13Z" fill="#38bdf8" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round"/>
+    <rect x="22.5" y="14.8" width="4" height="3.2" rx="0.8" fill="#e0f2fe"/>
+    <path d="M13.2 13.5L10.5 17.5H13L11.8 20.8L15.2 16.6H12.6L13.2 13.5Z" fill="#ffd000"/>
+    <circle cx="9.5" cy="24.5" r="3" fill="#0f172a" stroke="#7dd3fc" stroke-width="1.5"/>
+    <circle cx="24" cy="24.5" r="3" fill="#0f172a" stroke="#7dd3fc" stroke-width="1.5"/>
+  </svg>`;
+}
+
+export function getSupplyDroneSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M4 9H12M20 9H28" stroke="#e0f2fe" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M8 9V13M24 9V13M8 13H24" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="8" cy="9" r="2.2" fill="#22d3ee" stroke="#0f172a" stroke-width="1.2"/>
+    <circle cx="24" cy="9" r="2.2" fill="#22d3ee" stroke="#0f172a" stroke-width="1.2"/>
+    <rect x="10.5" y="15" width="11" height="11" rx="2" fill="#ffd000" stroke="#78350f" stroke-width="1.8"/>
+    <path d="M16 15V26M10.5 20.5H21.5" stroke="#78350f" stroke-width="1.5"/>
+    <circle cx="16" cy="20.5" r="2" fill="#22d3ee"/>
+  </svg>`;
+}
+
+export function getGrindRailSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <path d="M8 19V27M24 14V27" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M4 21C10 21 13 13 20 12C24 11.4 26.5 11.5 28 11" stroke="#0284c7" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M4 21C10 21 13 13 20 12C24 11.4 26.5 11.5 28 11" stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round"/>
+    <circle cx="16" cy="14" r="2.3" fill="#ffd000"/>
+    <path d="M19 6L24 8L20 11" stroke="#fde047" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`;
 }

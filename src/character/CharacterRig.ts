@@ -40,11 +40,11 @@ export function getContrailDef(contrailId?: string): ContrailDef {
 }
 
 export function shouldActivateContrail(
-  state: Pick<CharacterRenderState, 'animState' | 'grounded' | 'velocityY'>,
+  state: Pick<CharacterRenderState, 'animState' | 'grounded' | 'velocityY' | 'isGrinding'>,
   resolvedAnim?: AnimState,
 ): boolean {
   const anim = resolvedAnim ?? state.animState;
-  if (anim === 'glide') return false;
+  if (anim === 'glide' || anim === 'grind' || state.isGrinding) return false;
   return anim === 'skydive' || (!state.grounded && (state.velocityY ?? 0) < -8);
 }
 

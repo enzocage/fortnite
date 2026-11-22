@@ -23,13 +23,17 @@ export {
   WorldInteractables,
   type CapturePointAdvanceResult,
   type ExplosiveBarrelDamageResult,
+  type GrindRailSampleResult,
   type LootIslandCaptureResult,
+  type NearbyGrindRailResult,
   type RiftTriggerResult,
   type SlurpBarrelDamageResult,
   type SlurpTankerDamageResult,
+  type SupplyDroneDamageResult,
   type UnlockVaultResult,
   type VendingPurchaseResult,
   type Wave6ShowcaseResult,
+  type Wave7ShowcaseResult,
   type WeaponBunkerLootResult,
 } from './WorldInteractables';
 export { EnvironmentDetail } from './EnvironmentDetail';

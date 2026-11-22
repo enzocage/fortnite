@@ -20,6 +20,7 @@ import {
   POIS,
   SKINS,
   WEAPONS,
+  WORLD_HALF,
   clamp,
   dist2D,
   dist3D,
@@ -160,9 +161,23 @@ export class BotManager {
   private bindEvents(): void {
     this.unsubNoise?.();
     this.unsubNoise = this.ctx.eventBus.on('audio:noise', (payload) => {
+      if (
+        !payload?.position ||
+        !Number.isFinite(payload.position.x) ||
+        !Number.isFinite(payload.position.y) ||
+        !Number.isFinite(payload.position.z) ||
+        !Number.isFinite(payload.radius) ||
+        payload.radius <= 0
+      ) {
+        return;
+      }
+      const isFriendlySource =
+        payload.sourceId === 'player' ||
+        payload.sourceId === 'duo_partner' ||
+        payload.sourceId.startsWith('reboot');
       for (const bot of this.bots) {
-        if (!bot.alive || bot.id === payload.sourceId) continue;
-        if ((bot.isAlly || bot.isDuoPartner) && payload.sourceId === 'player') continue;
+        if (!bot.alive || bot.state === 'eliminated' || bot.id === payload.sourceId) continue;
+        if ((bot.isAlly || bot.isDuoPartner) && isFriendlySource) continue;
         if (
           bot.state === 'bus' ||
           bot.state === 'skydiving' ||
@@ -1138,6 +1153,7 @@ export class BotManager {
     partner.reviveProgress = 0;
     partner.reviveTargetId = null;
     partner.isCrouching = false;
+    partner.isGrinding = false;
 
     this.ctx.eventBus.emit('sound:play', {
       id: 'revive_complete',
@@ -1149,6 +1165,168 @@ export class BotManager {
       progress: 1,
     });
     return true;
+  }
+
+  hasPartnerRebootCard(): boolean {
+    if (this.gameMode !== 'duos') return false;
+    const partner =
+      this.botMap.get('duo_partner') ??
+      this.bots.find((b) => b.isDuoPartner);
+    if (!partner) return false;
+    return !partner.alive || partner.state === 'eliminated';
+  }
+
+  rebootDuoPartner(vanPos: Vec3Like): BotEntity | null {
+    if (this.gameMode !== 'duos') return null;
+    const partner =
+      this.botMap.get('duo_partner') ??
+      this.bots.find((b) => b.isDuoPartner);
+    if (!partner || (partner.alive && partner.state !== 'eliminated')) {
+      return null;
+    }
+
+    const rawX = Number.isFinite(vanPos.x) ? vanPos.x : 0;
+    const rawZ = Number.isFinite(vanPos.z) ? vanPos.z : 0;
+    const rawY = Number.isFinite(vanPos.y)
+      ? vanPos.y
+      : this.ctx.terrain.getHeightAt(rawX, rawZ);
+    const spawnX = clamp(rawX, -WORLD_HALF + 8, WORLD_HALF - 8);
+    const spawnZ = clamp(rawZ, -WORLD_HALF + 8, WORLD_HALF - 8);
+    const spawnY = rawY + 32;
+
+    let landingX = spawnX;
+    let landingZ = spawnZ;
+    if (isInVolcanoLavaHazard(landingX, landingZ, VOLCANO_LAVA_SAFE_RADIUS + 2)) {
+      const safe = clampOutsideVolcanoLava(
+        landingX,
+        landingZ,
+        VOLCANO_LAVA_SAFE_RADIUS + 2.5,
+      );
+      landingX = safe.x;
+      landingZ = safe.z;
+    }
+    const landingY = this.ctx.terrain.getHeightAt(landingX, landingZ);
+
+    partner.alive = true;
+    partner.state = 'gliding';
+    partner.animState = 'glide';
+    partner.position = { x: spawnX, y: spawnY, z: spawnZ };
+    partner.velocity = { x: 0, y: -3.5, z: 0 };
+    partner.grounded = false;
+    partner.gliderOpen = true;
+    partner.gliderFactor = 0.5;
+    partner.isCrouching = false;
+    partner.isSprinting = false;
+    partner.isAiming = false;
+    partner.isFiring = false;
+    partner.isBuilding = false;
+    partner.isGrinding = false;
+    partner.emoteId = null;
+    partner.moveSpeed = 0;
+    partner.recoilKick = 0;
+    partner.harvestSwingTimer = 0;
+
+    partner.hp = 100;
+    partner.maxHp = 100;
+    partner.shield = 0;
+    partner.maxShield = 100;
+    partner.overshield = 0;
+    partner.maxOvershield = 0;
+    partner.isKnocked = false;
+    partner.bleedOutHp = undefined;
+    partner.isReviving = false;
+    partner.reviveProgress = 0;
+    partner.reviveTargetId = null;
+    partner.isDuoPartner = true;
+    partner.squadId = 'player_squad';
+
+    partner.dropTarget = { x: landingX, y: landingY, z: landingZ };
+    partner.moveTarget = { x: landingX, y: landingY, z: landingZ };
+    partner.targetEnemyId = null;
+    partner.lastKnownEnemyPos = null;
+    partner.enemyLostTimer = 0;
+    partner.lastHeardNoisePos = null;
+    partner.lastHeardNoiseTime = -999;
+    partner.lastDamageTime = -999;
+    partner.lastDamagerId = null;
+    partner.lastAttackerName = null;
+    partner.lastDamageWeaponId = null;
+    partner.lastDamageRarity = null;
+    partner.lastDamageHeadshot = false;
+    partner.recentDamageTaken = 0;
+    partner.recentDamageWindowStart = -999;
+    partner.eliminatedByPlayer = false;
+    partner.reactionTimer = 0;
+    partner.fireCooldown = 0;
+    partner.burstQueue = 0;
+    partner.burstTimer = 0;
+    partner.reloadTimer = 0;
+    partner.reloadSlot = 0;
+    partner.healTimer = 0;
+    partner.healSlot = 0;
+    partner.buildCooldown = 0;
+    partner.buildAnimTimer = 0;
+    partner.harvestCooldown = 0;
+    partner.retreatTimer = 0;
+    partner.stateTimer = 0;
+    partner.stuckTimer = 0;
+    partner.lastStuckCheckPos = { ...partner.position };
+
+    partner.inventory = {
+      items: [
+        {
+          uid: `${partner.id}_pickaxe`,
+          weaponId: 'pickaxe',
+          rarity: 'common',
+          magAmmo: 0,
+          stackCount: 1,
+        },
+        {
+          uid: `${partner.id}_reboot_ar`,
+          weaponId: 'ar',
+          rarity: 'rare',
+          magAmmo: WEAPONS.ar.magSize,
+          stackCount: 1,
+        },
+        {
+          uid: `${partner.id}_reboot_smg`,
+          weaponId: 'smg',
+          rarity: 'rare',
+          magAmmo: WEAPONS.smg.magSize,
+          stackCount: 1,
+        },
+        {
+          uid: `${partner.id}_reboot_mini_shield`,
+          weaponId: 'mini_shield',
+          rarity: 'uncommon',
+          magAmmo: 0,
+          stackCount: 2,
+        },
+        null,
+        null,
+      ],
+      activeSlot: 1,
+      ammo: {
+        light: 120,
+        medium: 90,
+        shells: 0,
+        heavy: 0,
+        rockets: 0,
+      },
+      materials: {
+        wood: 100,
+        brick: 60,
+        metal: 40,
+      },
+    };
+
+    this.botMap.set(partner.id, partner);
+    this.ctx.eventBus.emit('sound:play', {
+      id: 'reboot_complete',
+      position: { x: spawnX, y: rawY, z: spawnZ },
+      spatial: true,
+    });
+    return partner;
   }
 
   setOnPlayerRevived(cb: ((reviverId: string) => void) | null): void {
@@ -1533,6 +1711,7 @@ export class BotManager {
     bot.isBuilding = false;
     bot.isSprinting = false;
     bot.isCrouching = false;
+    bot.isGrinding = false;
     bot.burstQueue = 0;
     bot.reloadTimer = 0;
     bot.healTimer = 0;
@@ -1814,6 +1993,7 @@ export class BotManager {
     bot.isFiring = false;
     bot.isAiming = false;
     bot.isBuilding = false;
+    bot.isGrinding = false;
     bot.gliderOpen = false;
     bot.gliderFactor = 0;
 
@@ -2084,6 +2264,7 @@ export class BotManager {
         medallions: meds,
         medallionCount,
         isReviving,
+        isGrinding: Boolean(bot.isGrinding),
         bowCharge: bot.bowCharge,
       };
     });

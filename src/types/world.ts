@@ -300,6 +300,43 @@ export interface DroppedCrownEntity {
   collected: boolean;
 }
 
+export interface GrindRailEntity {
+  id: string;
+  poiId: string;
+  points: Vec3Like[];
+  color: string;
+  speed: number;
+}
+
+export interface RebootVanEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  cooldownRemainingSec: number;
+  available: boolean;
+}
+
+export interface SupplyDroneEntity {
+  id: string;
+  poiId: string;
+  x: number;
+  y: number;
+  z: number;
+  baseY: number;
+  orbitCenterX: number;
+  orbitCenterZ: number;
+  orbitRadius: number;
+  orbitAngle: number;
+  orbitSpeed: number;
+  hp: number;
+  maxHp: number;
+  rarity: Rarity;
+  destroyed: boolean;
+}
+
 export interface SupplyDrop {
   id: string;
   x: number;

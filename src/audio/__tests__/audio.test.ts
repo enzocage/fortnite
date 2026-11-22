@@ -119,6 +119,16 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   crown_glint: true,
   bunker_unlock: true,
   slurp_tanker_burst: true,
+  shot_railgun: true,
+  railgun_charge: true,
+  shot_minigun: true,
+  minigun_overheat: true,
+  grind_attach: true,
+  trap_snap: true,
+  bouncer_launch: true,
+  reboot_channel: true,
+  reboot_complete: true,
+  drone_explode: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -449,14 +459,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 102 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 112 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(102);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(112);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -980,6 +990,149 @@ describe('SoundSynthesizer', () => {
     const sparseDest = sparseFilterCtx.createGain();
     const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
     for (const id of wave6Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 7 SFX with strictly positive ramps >= 0.0001 across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave7Ids: SoundEventId[] = [
+      'shot_railgun',
+      'railgun_charge',
+      'shot_minigun',
+      'minigun_overheat',
+      'grind_attach',
+      'trap_snap',
+      'bouncer_launch',
+      'reboot_channel',
+      'reboot_complete',
+      'drone_explode',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave7Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (id === 'shot_railgun' || id === 'reboot_complete') {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.shot_minigun).toBeGreaterThan(0.08);
+    expect(durations.shot_minigun).toBeLessThan(0.2);
+    expect(durations.grind_attach).toBeGreaterThan(0.18);
+    expect(durations.trap_snap).toBeGreaterThan(0.28);
+    expect(durations.bouncer_launch).toBeGreaterThan(0.35);
+    expect(durations.railgun_charge).toBeGreaterThan(0.38);
+    expect(durations.reboot_channel).toBeGreaterThan(0.42);
+    expect(durations.shot_railgun).toBeGreaterThan(0.48);
+    expect(durations.minigun_overheat).toBeGreaterThan(0.62);
+    expect(durations.drone_explode).toBeGreaterThan(0.7);
+    expect(durations.reboot_complete).toBeGreaterThan(1.0);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave7Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave7Ids) {
       expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
     }
     sparseSynth.dispose();
@@ -2251,5 +2404,256 @@ describe('AudioEngine', () => {
     expect(engine.getDynamicIntensity()).toBe(0);
     engine.setDynamicIntensity(0.9);
     expect(engine.getDynamicIntensity()).toBe(0);
+  });
+
+  it('assigns explicit Wave-7 priorities, max hear distances, spatial culling, and manages updateGrindRailLoop cleanly', async () => {
+    expect(getSoundPriority('shot_railgun')).toBe(3);
+    expect(getSoundPriority('trap_snap')).toBe(3);
+    expect(getSoundPriority('bouncer_launch')).toBe(3);
+    expect(getSoundPriority('reboot_complete')).toBe(3);
+    expect(getSoundPriority('drone_explode')).toBe(3);
+    expect(getSoundPriority('shot_minigun')).toBe(2);
+    expect(getSoundPriority('minigun_overheat')).toBe(2);
+    expect(getSoundPriority('grind_attach')).toBe(2);
+    expect(getSoundPriority('reboot_channel')).toBe(2);
+    expect(getSoundPriority('railgun_charge')).toBe(1);
+
+    expect(getMaxHearDistance('railgun_charge')).toBe(70);
+    expect(getMaxHearDistance('grind_attach')).toBe(95);
+    expect(getMaxHearDistance('minigun_overheat')).toBe(105);
+    expect(getMaxHearDistance('trap_snap')).toBe(115);
+    expect(getMaxHearDistance('shot_minigun')).toBe(185);
+    expect(getMaxHearDistance('reboot_channel')).toBe(195);
+    expect(getMaxHearDistance('bouncer_launch')).toBe(210);
+    expect(getMaxHearDistance('drone_explode')).toBe(230);
+    expect(getMaxHearDistance('shot_railgun')).toBe(260);
+    expect(getMaxHearDistance('reboot_complete')).toBe(280);
+
+    const bus = new EventBus();
+
+    // 1. Headless safety (no AudioContext)
+    const headless = new AudioEngine(bus);
+    expect(() => headless.updateGrindRailLoop(true, 16.5)).not.toThrow();
+    expect(() => headless.updateGrindRailLoop(true, Number.NaN)).not.toThrow();
+    expect(() => headless.updateGrindRailLoop(true, -12)).not.toThrow();
+    expect(() => headless.updateGrindRailLoop(true, 120)).not.toThrow();
+    expect(() => headless.updateGrindRailLoop(false, 0)).not.toThrow();
+    expect(headless.getGrindRailLoopState()).toEqual({
+      active: false,
+      speed: 0,
+      freqHz: 0,
+      gain: 0,
+    });
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    // 2. Suspended or muted contexts do not spawn grind rail oscillators
+    const suspendedCtx = new MockAudioContext();
+    suspendedCtx.state = 'suspended';
+    const suspendedEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => suspendedCtx as unknown as AudioContext,
+    });
+    suspendedEngine.updateGrindRailLoop(true, 16.5);
+    expect(suspendedCtx.oscillators.length).toBe(0);
+    expect(suspendedEngine.getGrindRailLoopState().active).toBe(false);
+    suspendedEngine.dispose();
+
+    const mutedCtx = new MockAudioContext();
+    const mutedEngine = new AudioEngine(
+      bus,
+      { ...DEFAULT_SETTINGS, sfxVolume: 0 },
+      { contextFactory: () => mutedCtx as unknown as AudioContext },
+    );
+    await mutedEngine.unlock();
+    mutedEngine.updateGrindRailLoop(true, 20);
+    expect(mutedCtx.oscillators.length).toBe(0);
+    expect(mutedEngine.getGrindRailLoopState().active).toBe(false);
+    mutedEngine.dispose();
+
+    // 3. Active AudioContext: spatial culling, grind loop lifecycle, speed modulation, pause/mute/dispose cleanup
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'railgun_charge', position: { x: 65, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'grind_attach', position: { x: 90, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'minigun_overheat', position: { x: 100, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'trap_snap', position: { x: 110, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'shot_minigun', position: { x: 180, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'reboot_channel', position: { x: 190, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'bouncer_launch', position: { x: 205, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'drone_explode', position: { x: 225, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'shot_railgun', position: { x: 250, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'reboot_complete', position: { x: 270, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'railgun_charge', position: { x: 80, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'grind_attach', position: { x: 105, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'minigun_overheat', position: { x: 115, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'trap_snap', position: { x: 125, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'shot_minigun', position: { x: 195, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'reboot_channel', position: { x: 205, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'bouncer_launch', position: { x: 220, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'drone_explode', position: { x: 240, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'shot_railgun', position: { x: 270, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'reboot_complete', position: { x: 295, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // Clear active one-shots so grind rail loop counts are isolated
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+
+    const oscBeforeGrind = mockCtx.oscillators.length;
+    const srcBeforeGrind = mockCtx.bufferSources.length;
+
+    // Lazy start at 0 m/s
+    engine.updateGrindRailLoop(true, 0);
+    const idleGrind = engine.getGrindRailLoopState();
+    expect(idleGrind.active).toBe(true);
+    expect(idleGrind.freqHz).toBeCloseTo(128, 1);
+    expect(idleGrind.gain).toBeGreaterThan(0);
+    expect(engine.getActiveVoiceCount()).toBe(1);
+    expect(mockCtx.oscillators.length - oscBeforeGrind).toBe(2);
+    expect(mockCtx.bufferSources.length - srcBeforeGrind).toBe(1);
+    const grindOscs = mockCtx.oscillators.slice(oscBeforeGrind);
+    const grindSrc = mockCtx.bufferSources[srcBeforeGrind];
+    expect(grindOscs.every((o) => o.started && !o.stopped)).toBe(true);
+    expect(grindSrc.loop).toBe(true);
+    expect(grindSrc.started).toBe(true);
+    expect(grindSrc.stopped).toBe(false);
+
+    // Calling repeatedly with identical speed allocates zero extra nodes
+    for (let i = 0; i < 40; i++) {
+      engine.updateGrindRailLoop(true, 0);
+    }
+    expect(mockCtx.oscillators.length - oscBeforeGrind).toBe(2);
+    expect(mockCtx.bufferSources.length - srcBeforeGrind).toBe(1);
+
+    // Speed modulation across 0 -> 16.5 -> 30 m/s raises plasma hum pitch & gain
+    engine.updateGrindRailLoop(true, 16.5);
+    const midGrind = engine.getGrindRailLoopState();
+    expect(midGrind.freqHz).toBeGreaterThan(idleGrind.freqHz);
+    expect(midGrind.gain).toBeGreaterThan(idleGrind.gain);
+    expect(grindOscs[0].frequency.value).toBeCloseTo(midGrind.freqHz, 2);
+    expect(grindOscs[1].frequency.value).toBeCloseTo(midGrind.freqHz * 1.5, 2);
+
+    engine.updateGrindRailLoop(true, 30);
+    const fastGrind = engine.getGrindRailLoopState();
+    expect(fastGrind.freqHz).toBeGreaterThan(midGrind.freqHz);
+    expect(fastGrind.freqHz).toBeLessThanOrEqual(260);
+    expect(fastGrind.gain).toBeGreaterThan(midGrind.gain);
+
+    // Clamps extreme/NaN speeds safely
+    engine.updateGrindRailLoop(true, 999);
+    expect(engine.getGrindRailLoopState().freqHz).toBeCloseTo(260, 1);
+    engine.updateGrindRailLoop(true, Number.NaN);
+    expect(engine.getGrindRailLoopState().freqHz).toBeCloseTo(128, 1);
+    expect(mockCtx.oscillators.length - oscBeforeGrind).toBe(2);
+
+    // Clean stop on active=false
+    engine.updateGrindRailLoop(false, 0);
+    expect(engine.getGrindRailLoopState()).toEqual({
+      active: false,
+      speed: 0,
+      freqHz: 0,
+      gain: 0,
+    });
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(grindOscs.every((o) => o.stopped && o.disconnected)).toBe(true);
+    expect(grindSrc.stopped).toBe(true);
+    expect(grindSrc.disconnected).toBe(true);
+
+    // Restart, then pause tears down active grind loop cleanly
+    engine.updateGrindRailLoop(true, 16.5);
+    expect(engine.getGrindRailLoopState().active).toBe(true);
+    engine.setPaused(true);
+    expect(engine.getGrindRailLoopState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    engine.updateGrindRailLoop(true, 20);
+    expect(engine.getGrindRailLoopState().active).toBe(false);
+
+    // Unpause, restart, then mute stops loop cleanly
+    engine.setPaused(false);
+    engine.updateGrindRailLoop(true, 16.5);
+    expect(engine.getGrindRailLoopState().active).toBe(true);
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0 });
+    expect(engine.getGrindRailLoopState().active).toBe(false);
+
+    // Unmute, restart, and verify dispose() stops everything cleanly and post-dispose calls are no-ops
+    engine.updateSettings({ ...DEFAULT_SETTINGS, sfxVolume: 0.85 });
+    engine.updateGrindRailLoop(true, 22);
+    expect(engine.getGrindRailLoopState().active).toBe(true);
+    const oscBeforeDispose = mockCtx.oscillators.length;
+    engine.dispose();
+    expect(engine.getGrindRailLoopState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.slice(oscBeforeGrind).every((o) => o.stopped)).toBe(true);
+    engine.updateGrindRailLoop(true, 25);
+    expect(mockCtx.oscillators.length).toBe(oscBeforeDispose);
+
+    // 4. Minimal mocked Web Audio context without setTargetAtTime, createBiquadFilter, or createBufferSource
+    class MinimalLinearParam {
+      value = 0;
+      setValueAtTime(v: number): this {
+        this.value = v;
+        return this;
+      }
+      linearRampToValueAtTime(v: number): this {
+        this.value = v;
+        return this;
+      }
+      cancelScheduledValues(): this {
+        return this;
+      }
+    }
+    const minOscs: Array<{
+      frequency: MinimalLinearParam;
+      started: boolean;
+      stopped: boolean;
+      start: () => void;
+      stop: () => void;
+      connect: () => void;
+      disconnect: () => void;
+    }> = [];
+    const minCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => ({ gain: new MinimalLinearParam(), connect: () => {}, disconnect: () => {} }),
+      createOscillator: () => {
+        const o = {
+          type: 'sine',
+          frequency: new MinimalLinearParam(),
+          started: false,
+          stopped: false,
+          start() {
+            this.started = true;
+          },
+          stop() {
+            this.stopped = true;
+          },
+          connect() {},
+          disconnect() {},
+        };
+        minOscs.push(o);
+        return o;
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const fallbackEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => minCtx,
+    });
+    await fallbackEngine.unlock();
+    expect(() => fallbackEngine.updateGrindRailLoop(true, 16.5)).not.toThrow();
+    expect(fallbackEngine.getGrindRailLoopState().active).toBe(true);
+    expect(minOscs.length).toBe(2);
+    expect(minOscs[0].frequency.value).toBeGreaterThan(128);
+    expect(() => fallbackEngine.updateGrindRailLoop(false, 0)).not.toThrow();
+    expect(minOscs.every((o) => o.stopped)).toBe(true);
+    fallbackEngine.dispose();
   });
 });

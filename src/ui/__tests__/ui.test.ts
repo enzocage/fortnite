@@ -31,6 +31,7 @@ import type {
   CapturePointEntity,
   DroppedCrownEntity,
   DroppedMedallionEntity,
+  GrindRailEntity,
   HUDState,
   LootIslandState,
   MaterialType,
@@ -38,9 +39,12 @@ import type {
   MatchSummary,
   MedallionId,
   NpcSpecialistEntity,
+  RebootVanEntity,
   RiftEntity,
   SlurpTankerEntity,
   SpecialistRole,
+  SupplyDroneEntity,
+  TrapKind,
   UpgradeBenchEntity,
   VaultEntity,
   VehicleEntity,
@@ -63,6 +67,7 @@ import {
   computeOvershieldPct,
   computeQuestProgressPct,
   DEFAULT_LOBBY_CONFIG,
+  deriveMatchHighlightBadges,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -89,6 +94,7 @@ import {
   getCrownSvg,
   getGameModeMeta,
   getGoldBarSvg,
+  getGrindRailSvg,
   getHeadingFromYaw,
   getKillStreakCallout,
   getLootIslandIconSvg,
@@ -97,14 +103,17 @@ import {
   getMedallionSvg,
   getOvershieldBoltSvg,
   getRarityMeta,
+  getRebootVanSvg,
   getReviveCrossSvg,
   getShortestAngleDiffDeg,
   getSkullSvg,
   getSkyRiftIconSvg,
   getStormEyeSvg,
+  getSupplyDroneSvg,
   getTacticalPingIconSvg,
   getTankerSvg,
   getTotalXpForLevel,
+  getTrapSvg,
   getUpgradeBenchIconSvg,
   getVaultKeySvg,
   getVaultLockSvg,
@@ -399,9 +408,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 25 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 27 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(25);
+    expect(weaponIds.length).toBe(27);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -413,7 +422,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all 5 Wave-1 + 2 Wave-2 + 2 Wave-5 + 2 Wave-6 icons have rich multi-element custom artwork
+    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7 upgraded icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -426,6 +435,8 @@ describe('WeaponIcons & SVG assets', () => {
       'kinetic_blade',
       'combat_smg',
       'boom_bow',
+      'railgun',
+      'minigun',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -3598,6 +3609,525 @@ describe('Wave 6 UI: Victory Crowns, Medallions, Duos Lobby/HUD, Weapon Bunkers,
         (c.args[2] as number) > 20,
     );
     expect(hasMedallionCircleArc).toBe(true);
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 7 UI: Railgun/Minigun, Trap Slot Chip, Reticle Meters, Reboot HUD, Overdrive Map & Match Highlights', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave-7 SVGs (railgun, minigun, spike_trap, bouncer_pad, reboot van, supply drone, grind rail) and derives Match Highlights', () => {
+    for (const id of ['railgun', 'minigun'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    const trapKinds: TrapKind[] = ['spike_trap', 'bouncer_pad'];
+    const spikeSvg = getTrapSvg(trapKinds[0]);
+    const bouncerSvg = getTrapSvg(trapKinds[1]);
+    expect(spikeSvg).not.toBe(bouncerSvg);
+
+    for (const svg of [
+      spikeSvg,
+      bouncerSvg,
+      getRebootVanSvg(),
+      getSupplyDroneSvg(),
+      getGrindRailSvg(),
+    ]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+
+    const badges = deriveMatchHighlightBadges({
+      victory: true,
+      crownedVictory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 7,
+      damageDealt: 1450,
+      shotsFired: 40,
+      shotsHit: 24,
+      accuracy: 60,
+      headshots: 4,
+      structuresBuilt: 14,
+      chestsOpened: 4,
+      survivalTimeSec: 210,
+      reboots: 1,
+      dronesShotDown: 2,
+      trapsPlaced: 2,
+      highlights: ['FIRST BLOOD', 'crowned'],
+    });
+
+    const labels = badges.map((b) => b.label);
+    expect(labels[0]).toBe('FIRST BLOOD');
+    expect(labels).toContain('CROWNED');
+    expect(labels).toContain('REBOOT HERO');
+    expect(labels).toContain('DRONE HUNTER');
+    expect(labels).toContain('TRAP MASTER');
+    expect(labels).toContain('SHARPSHOOTER');
+    expect(labels).toContain('BUILDER PRO');
+    // Case-insensitive deduplication ensures CROWNED appears only once
+    expect(labels.filter((l) => l === 'CROWNED').length).toBe(1);
+  });
+
+  it('renders [T] Trap Slot Chip inside .fdr-build-mats-bar, Railgun/Minigun reticle meters, Duo REBOOT CARD READY & REBOOTING PARTNER channel bar', () => {
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => new MockElement(tag),
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    // 1. Default idle state: reticle meter & reboot bar hidden, trap chip empty at 0
+    hud.update(makeBaseHUDState());
+    const buildMatsBar = hudRoot.findByClass('fdr-build-mats-bar');
+    const trapChip = buildMatsBar?.findByClass('fdr-trap-slot-chip');
+    expect(trapChip).not.toBeNull();
+    expect(buildMatsBar?.children[buildMatsBar.children.length - 1]).toBe(trapChip);
+    expect(trapChip?.textContent).toContain('[T]');
+    expect(trapChip?.textContent).toContain('0');
+    expect(trapChip?.classList.contains('empty')).toBe(true);
+
+    const reticleMeter = hudRoot.findByClass('fdr-reticle-meter');
+    expect(reticleMeter?.classList.contains('fdr-hidden')).toBe(true);
+    const bottomCenter = hudRoot.findByClass('fdr-bottom-center');
+    const rebootBar = bottomCenter?.findByClass('fdr-reboot-bar');
+    expect(rebootBar?.classList.contains('fdr-hidden')).toBe(true);
+
+    // 2. Trap Slot Chip switches between spike_trap and bouncer_pad with counts
+    hud.update(
+      makeBaseHUDState({
+        activeTrapKind: 'spike_trap',
+        traps: { spike_trap: 3, bouncer_pad: 2 },
+      }),
+    );
+    expect(trapChip?.dataset.trapKind).toBe('spike_trap');
+    expect(trapChip?.dataset.trapCount).toBe('3');
+    expect(trapChip?.classList.contains('empty')).toBe(false);
+    expect(trapChip?.classList.contains('has-traps')).toBe(true);
+    expect(trapChip?.innerHTML).toContain(getTrapSvg('spike_trap'));
+
+    hud.update(
+      makeBaseHUDState({
+        activeTrapKind: 'bouncer_pad',
+        traps: { spike_trap: 3, bouncer_pad: 2 },
+      }),
+    );
+    expect(trapChip?.dataset.trapKind).toBe('bouncer_pad');
+    expect(trapChip?.dataset.trapCount).toBe('2');
+    expect(trapChip?.innerHTML).toContain(getTrapSvg('bouncer_pad'));
+
+    // 3. Railgun Charge Bar active -> ready -> full
+    hud.update(makeBaseHUDState({ railgunCharge: 0.72 }));
+    const railMeter = reticleMeter?.findByClass('railgun');
+    const miniMeter = reticleMeter?.findByClass('minigun');
+    expect(reticleMeter?.classList.contains('fdr-hidden')).toBe(false);
+    expect(railMeter?.classList.contains('fdr-hidden')).toBe(false);
+    expect(railMeter?.classList.contains('ready')).toBe(true);
+    expect(railMeter?.textContent).toContain('RAILGUN CHARGE');
+    expect(railMeter?.textContent).toContain('72%');
+    expect(railMeter?.findByClass('fdr-reticle-fill')?.style.width).toBe('72%');
+    expect(miniMeter?.classList.contains('fdr-hidden')).toBe(true);
+
+    // 4. Minigun Heat Gauge -> normal heating -> red/pulsing overheated -> hidden when inactive
+    hud.update(
+      makeBaseHUDState({
+        railgunCharge: null,
+        minigunHeat: 0.65,
+        minigunOverheated: false,
+      }),
+    );
+    expect(reticleMeter?.classList.contains('fdr-hidden')).toBe(false);
+    expect(railMeter?.classList.contains('fdr-hidden')).toBe(true);
+    expect(miniMeter?.classList.contains('fdr-hidden')).toBe(false);
+    expect(miniMeter?.classList.contains('overheated')).toBe(false);
+    expect(miniMeter?.textContent).toContain('MINIGUN HEAT');
+    expect(miniMeter?.textContent).toContain('65%');
+
+    hud.update(
+      makeBaseHUDState({
+        railgunCharge: null,
+        minigunHeat: 1,
+        minigunOverheated: true,
+      }),
+    );
+    expect(reticleMeter?.classList.contains('overheated')).toBe(true);
+    expect(miniMeter?.classList.contains('overheated')).toBe(true);
+    expect(miniMeter?.textContent).toContain('OVERHEATED!');
+    expect(miniMeter?.findByClass('fdr-reticle-fill')?.style.width).toBe('100%');
+
+    hud.update(
+      makeBaseHUDState({
+        railgunCharge: 0,
+        minigunHeat: 0,
+        minigunOverheated: false,
+      }),
+    );
+    expect(reticleMeter?.classList.contains('fdr-hidden')).toBe(true);
+
+    // 5. Duo Partner REBOOT CARD READY state + REBOOTING PARTNER... channel bar
+    hud.update(
+      makeBaseHUDState({
+        gameMode: 'duos',
+        hasPartnerRebootCard: true,
+        rebootProgress: 0.64,
+        duoPartner: {
+          name: 'Apex Valkyrie',
+          hp: 0,
+          maxHp: 100,
+          shield: 0,
+          maxShield: 100,
+          knocked: false,
+          alive: false,
+          distance: 45,
+        },
+      }),
+    );
+    const duoCard = hudRoot.findByClass('fdr-duo-card');
+    expect(duoCard?.classList.contains('fdr-hidden')).toBe(false);
+    expect(duoCard?.classList.contains('reboot-card')).toBe(true);
+    expect(duoCard?.dataset.duoState).toBe('reboot_card');
+    expect(duoCard?.textContent).toContain('REBOOT CARD READY');
+
+    expect(rebootBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(rebootBar?.textContent).toContain('REBOOTING PARTNER...');
+    expect(rebootBar?.textContent).toContain('64%');
+    expect(rebootBar?.findByClass('fdr-reboot-fill')?.style.width).toBe('64%');
+
+    // Progress at 0 (still != null) stays visible
+    hud.update(
+      makeBaseHUDState({
+        gameMode: 'duos',
+        hasPartnerRebootCard: true,
+        rebootProgress: 0,
+      }),
+    );
+    expect(rebootBar?.classList.contains('fdr-hidden')).toBe(false);
+    expect(rebootBar?.textContent).toContain('0%');
+
+    // Cleared when rebootProgress is null & partner respawned
+    hud.update(
+      makeBaseHUDState({
+        gameMode: 'duos',
+        hasPartnerRebootCard: false,
+        rebootProgress: null,
+        duoPartner: {
+          name: 'Apex Valkyrie',
+          hp: 100,
+          maxHp: 100,
+          shield: 0,
+          maxShield: 100,
+          knocked: false,
+          alive: true,
+          distance: 12,
+        },
+      }),
+    );
+    expect(rebootBar?.classList.contains('fdr-hidden')).toBe(true);
+    expect(duoCard?.dataset.duoState).toBe('alive');
+    expect(duoCard?.textContent).toContain('DUO');
+
+    hud.dispose();
+  });
+
+  it('draws Grind Rails, Reboot Vans & active Supply Drones on FullMapOverlay (before POI labels) and Node-safe Minimap, plus MatchOverlay Highlights', () => {
+    const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+
+    // FullMap mock WITHOUT ellipse
+    const fullMockCtx = {
+      clearRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => fullDrawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => fullDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => fullDrawCalls.push({ op: 'arc', args }),
+      fill: () => fullDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => fullDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => fullDrawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => fullDrawCalls.push({ op: 'rotate', args }),
+      setLineDash: () => {},
+      fillText: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    // Minimap mock WITHOUT fillText, strokeText, or ellipse!
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => {},
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: () => {},
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    // First canvas created by UIManager is HUD minimap, second is FullMapOverlay
+    let canvasCount = 0;
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          const idx = canvasCount++;
+          (el as unknown as { getContext: () => unknown }).getContext = () =>
+            idx === 0 ? miniMockCtx : fullMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. FullMap Legend has GRIND RAIL, REBOOT VAN, SUPPLY DRONE
+    const legend = root.findByClass('fdr-map-legend');
+    expect(legend?.textContent).toContain('GRIND RAIL');
+    expect(legend?.textContent).toContain('REBOOT VAN');
+    expect(legend?.textContent).toContain('SUPPLY DRONE');
+
+    // 2. setWorldOverdriveOverlay forwards to both FullMapOverlay and HUD Minimap
+    const rails: GrindRailEntity[] = [
+      {
+        id: 'rail-1',
+        poiId: 'metro_towers',
+        points: [
+          { x: -10, y: 14, z: -10 },
+          { x: 15, y: 16, z: -20 },
+          { x: 30, y: 14, z: 10 },
+        ],
+        color: '#22d3ee',
+        speed: 16.5,
+      },
+    ];
+    const vans: RebootVanEntity[] = [
+      {
+        id: 'van-1',
+        poiId: 'metro_towers',
+        x: -20,
+        y: 12,
+        z: 18,
+        rotationY: 0,
+        cooldownRemainingSec: 0,
+        available: true,
+      },
+    ];
+    const drones: SupplyDroneEntity[] = [
+      {
+        id: 'drone-active',
+        poiId: 'crystal_basin',
+        x: 24,
+        y: 22,
+        z: -16,
+        baseY: 22,
+        orbitCenterX: 24,
+        orbitCenterZ: -16,
+        orbitRadius: 8,
+        orbitAngle: 0,
+        orbitSpeed: 1,
+        hp: 80,
+        maxHp: 80,
+        rarity: 'legendary',
+        destroyed: false,
+      },
+      {
+        id: 'drone-dead',
+        poiId: 'market_row',
+        x: 150,
+        y: 22,
+        z: 40,
+        baseY: 22,
+        orbitCenterX: 150,
+        orbitCenterZ: 40,
+        orbitRadius: 8,
+        orbitAngle: 0,
+        orbitSpeed: 1,
+        hp: 0,
+        maxHp: 80,
+        rarity: 'rare',
+        destroyed: true,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldOverdriveOverlay(rails, vans, drones);
+    ui.toggleFullMap(true);
+    fullDrawCalls.length = 0;
+    miniDrawCalls.length = 0;
+
+    ui.updateHUD(makeBaseHUDState({ playerPos: { x: 0, y: 10, z: 0 } }));
+
+    const findFullTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return fullDrawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const railStart = worldToMapNorm(-10, -10);
+    const railMoveIdx = fullDrawCalls.findIndex(
+      (c) =>
+        c.op === 'moveTo' &&
+        Math.abs((c.args[0] as number) - railStart.nx * 640) < 0.5 &&
+        Math.abs((c.args[1] as number) - railStart.nz * 640) < 0.5,
+    );
+    const vanIdx = findFullTranslateIdx(-20, 18);
+    const activeDroneIdx = findFullTranslateIdx(24, -16);
+    const deadDroneIdx = findFullTranslateIdx(150, 40);
+    const firstPoiLabelIdx = fullDrawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+
+    expect(railMoveIdx).toBeGreaterThanOrEqual(0);
+    expect(vanIdx).toBeGreaterThanOrEqual(0);
+    expect(activeDroneIdx).toBeGreaterThanOrEqual(0);
+    expect(deadDroneIdx).toBe(-1); // destroyed drone skipped
+    expect(firstPoiLabelIdx).toBeGreaterThan(railMoveIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(vanIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(activeDroneIdx);
+
+    // Minimap drew rail spline + van + active drone safely WITHOUT fillText/ellipse
+    const miniSize = 220;
+    const miniPxPerMeter = miniSize / 280;
+    const miniVanPx = miniSize * 0.5 + -20 * miniPxPerMeter;
+    const miniVanPy = miniSize * 0.5 + 18 * miniPxPerMeter;
+    const miniHasVan = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - miniVanPx) < 0.5 &&
+        Math.abs((c.args[1] as number) - miniVanPy) < 0.5,
+    );
+    const miniHasRailMove = miniDrawCalls.some(
+      (c) =>
+        c.op === 'moveTo' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + -10 * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + -10 * miniPxPerMeter)) < 0.5,
+    );
+    expect(miniHasVan).toBe(true);
+    expect(miniHasRailMove).toBe(true);
+
+    // 3. MatchOverlay Match Highlights & Badges row
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      crownedVictory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 6,
+      damageDealt: 1320,
+      shotsFired: 50,
+      shotsHit: 28,
+      accuracy: 56,
+      headshots: 3,
+      structuresBuilt: 12,
+      chestsOpened: 4,
+      survivalTimeSec: 215,
+      reboots: 1,
+      dronesShotDown: 2,
+      trapsPlaced: 1,
+      highlights: ['APEX CLUTCH'],
+    });
+
+    const highlightsRow = root.findByClass('fdr-highlights-row');
+    expect(highlightsRow).not.toBeNull();
+    expect(highlightsRow?.textContent).toContain('APEX CLUTCH');
+    expect(highlightsRow?.textContent).toContain('CROWNED');
+    expect(highlightsRow?.textContent).toContain('REBOOT HERO');
+    expect(highlightsRow?.textContent).toContain('DRONE HUNTER');
+    expect(highlightsRow?.textContent).toContain('TRAP MASTER');
+    expect(highlightsRow?.textContent).toContain('SHARPSHOOTER');
+    expect(highlightsRow?.textContent).toContain('BUILDER PRO');
+
+    // Empty highlights & no milestone stats -> hides highlights row
+    ui.showMatchSummary({
+      victory: false,
+      placement: 18,
+      totalPlayers: 30,
+      kills: 0,
+      damageDealt: 60,
+      shotsFired: 10,
+      shotsHit: 2,
+      accuracy: 20,
+      headshots: 0,
+      structuresBuilt: 2,
+      chestsOpened: 1,
+      survivalTimeSec: 45,
+    });
+    expect(root.findByClass('fdr-highlights-row')).toBeNull();
 
     ui.dispose();
   });

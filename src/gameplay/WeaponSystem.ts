@@ -9,6 +9,7 @@ import type {
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SoundEventId,
+  SupplyDroneEntity,
   Vec3Like,
   VehicleEntity,
   WeaponId,
@@ -31,8 +32,10 @@ import type {
   FireWeaponResult,
   PropsInteractionBridge,
   ShieldBubbleState,
+  SupplyDroneDamageResult,
   VehicleBridge,
   WorldChapterBridge,
+  WorldOverdriveBridge,
   WorldRiftCaptureBridge,
   WorldStationBridge,
 } from './GameplayTypes';
@@ -47,8 +50,10 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   heavy_shotgun: 'shot_heavy_shotgun',
   smg: 'shot_smg',
   combat_smg: 'shot_combat_smg',
+  minigun: 'shot_minigun',
   sniper: 'shot_sniper',
   boom_bow: 'bow_release',
+  railgun: 'shot_railgun',
   pistol: 'shot_pistol',
   rocket_launcher: 'shot_rocket',
   mythic_blade_rifle: 'shot_mythic_rifle',
@@ -189,11 +194,15 @@ export class WeaponSystem {
   private stationBridge: WorldStationBridge | null = null;
   private riftCaptureBridge: WorldRiftCaptureBridge | null = null;
   private chapterBridge: WorldChapterBridge | null = null;
+  private overdriveBridge: WorldOverdriveBridge | null = null;
   private explodingBarrelIds = new Set<string>();
   private rupturingTankerIds = new Set<string>();
   private twinMagSlowUids = new Set<string>();
   private onSlurpBarrelBroken:
     | ((actorId: string, shieldAmount: number) => void)
+    | null = null;
+  private onDroneDestroyed:
+    | ((res: SupplyDroneDamageResult) => void)
     | null = null;
   private projectiles: ActiveProjectile[] = [];
   private pendingBursts: PendingBurst[] = [];
@@ -252,6 +261,20 @@ export class WeaponSystem {
 
   getChapterBridge(): WorldChapterBridge | null {
     return this.chapterBridge;
+  }
+
+  setOverdriveBridge(bridge: WorldOverdriveBridge | null): void {
+    this.overdriveBridge = bridge;
+  }
+
+  getOverdriveBridge(): WorldOverdriveBridge | null {
+    return this.overdriveBridge;
+  }
+
+  setOnDroneDestroyed(
+    cb: ((res: SupplyDroneDamageResult) => void) | null,
+  ): void {
+    this.onDroneDestroyed = cb;
   }
 
   isTwinMagFastReload(item: ItemInstance): boolean {
@@ -661,6 +684,55 @@ export class WeaponSystem {
       if (hit) {
         bestDist = hit.distance;
         best = { vehicle: veh, ...hit };
+      }
+    }
+
+    return best;
+  }
+
+  private raycastSupplyDrones(
+    origin: Vec3Like,
+    dir: Vec3Like,
+    maxDist: number,
+    bridge?: WorldOverdriveBridge | null,
+  ): {
+    drone: SupplyDroneEntity;
+    distance: number;
+    point: Vec3Like;
+    normal: Vec3Like;
+  } | null {
+    const activeBridge = bridge ?? this.overdriveBridge;
+    const drones = activeBridge?.getSupplyDrones();
+    if (!drones || drones.length === 0) return null;
+
+    const r = 0.95;
+    const minYOff = -0.75;
+    const maxYOff = 0.6;
+    let bestDist = maxDist;
+    let best: {
+      drone: SupplyDroneEntity;
+      distance: number;
+      point: Vec3Like;
+      normal: Vec3Like;
+    } | null = null;
+
+    for (let i = 0; i < drones.length; i++) {
+      const drone = drones[i];
+      if (drone.destroyed || drone.hp <= 0) continue;
+      const hit = this.intersectRayAABB(
+        origin,
+        dir,
+        drone.x - r,
+        drone.y + minYOff,
+        drone.z - r,
+        drone.x + r,
+        drone.y + maxYOff,
+        drone.z + r,
+        bestDist,
+      );
+      if (hit) {
+        bestDist = hit.distance;
+        best = { drone, ...hit };
       }
     }
 
@@ -2397,6 +2469,7 @@ export class WeaponSystem {
     const sBridge = params.stationBridge ?? this.stationBridge;
     const rcBridge = params.riftCaptureBridge ?? this.riftCaptureBridge;
     const chBridge = params.chapterBridge ?? this.chapterBridge;
+    const odBridge = params.overdriveBridge ?? this.overdriveBridge;
     const hasDemolisher = Boolean(params.hasDemolisher ?? params.actor.hasDemolisher);
     const hasFirstAssault = Boolean(params.hasFirstAssault ?? params.actor.hasFirstAssault);
     const hasCombatMedallion = Boolean(
@@ -2406,10 +2479,13 @@ export class WeaponSystem {
       hasFirstAssault &&
       def.magSize > 0 &&
       !def.isGrappler &&
+      !def.isMinigun &&
       params.item.magAmmo === def.magSize;
     const firstAssaultMult = firstAssaultBoost ? 1.25 : 1.0;
     const combatMedallionMult = hasCombatMedallion ? 1.12 : 1.0;
     const demolisherMult = hasDemolisher ? 1.3 : 1.0;
+    const isRailgun = Boolean(def.isRailgun || params.item.weaponId === 'railgun');
+    const maxBuildPierces = isRailgun ? Math.max(0, def.pierceBuildCount ?? 1) : 0;
     params.onAmmoConsumed?.();
 
     const muzzle = params.muzzlePos ?? params.origin;
@@ -2427,15 +2503,18 @@ export class WeaponSystem {
       position: params.origin,
       kind: 'gunfire',
       sourceId: params.actor.id,
-      radius: def.category === 'shotgun' ? 85 : 115,
+      radius: def.category === 'shotgun' ? 85 : isRailgun ? 140 : 115,
     });
 
-    if (params.isPlayer && def.category === 'shotgun') {
-      const intensity =
-        params.item.weaponId === 'tac_shotgun' ? 0.2 : 0.3;
+    if (params.isPlayer && (def.category === 'shotgun' || isRailgun)) {
+      const intensity = isRailgun
+        ? 0.34
+        : params.item.weaponId === 'tac_shotgun'
+          ? 0.2
+          : 0.3;
       this.eventBus.emit('vfx:camera_shake', {
         intensity,
-        duration: params.item.weaponId === 'tac_shotgun' ? 0.11 : 0.14,
+        duration: isRailgun ? 0.16 : params.item.weaponId === 'tac_shotgun' ? 0.11 : 0.14,
       });
     }
 
@@ -2456,6 +2535,17 @@ export class WeaponSystem {
     let shotsHit = 0;
     let headshots = 0;
     let totalDamageDealt = 0;
+    const destroyedDrones: SupplyDroneDamageResult[] = [];
+
+    const structDmg = Math.max(
+      1,
+      Math.round(
+        (def.structureDamage *
+          (RARITY_MULTIPLIER[params.item.rarity] ?? 1) *
+          demolisherMult) /
+          pellets,
+      ),
+    );
 
     for (let p = 0; p < pellets; p++) {
       // Keep first pellet closer to center for responsive shotgun aim
@@ -2465,236 +2555,302 @@ export class WeaponSystem {
       const bubbleHit = this.raycastShieldBubbles(params.origin, rayDir, def.range);
       const bubbleMaxDist = bubbleHit ? bubbleHit.distance : def.range;
 
-      const worldHit = this.collision.raycastWorld(params.origin, rayDir, bubbleMaxDist, {
-        checkBuilds: true,
-        checkProps: true,
-        props,
-      });
+      const ignoreBuildIds: string[] = [];
+      let piercedAnyBuild = false;
+      let endPoint: Vec3Like = {
+        x: params.origin.x + rayDir.x * def.range,
+        y: params.origin.y + rayDir.y * def.range,
+        z: params.origin.z + rayDir.z * def.range,
+      };
 
-      const entityMaxDist = worldHit.hit ? worldHit.distance : bubbleMaxDist;
-      const barrelMaxDist =
-        worldHit.hit && worldHit.targetType === 'static'
-          ? Math.min(bubbleMaxDist, worldHit.distance + 0.06)
-          : entityMaxDist;
-      const tankerMaxDist =
-        worldHit.hit &&
-        worldHit.targetType === 'static' &&
-        worldHit.targetId?.includes('tanker')
-          ? bubbleMaxDist
-          : worldHit.hit && worldHit.targetType === 'static'
-            ? Math.min(bubbleMaxDist, worldHit.distance + 0.12)
+      for (let pierceStep = 0; pierceStep <= maxBuildPierces; pierceStep++) {
+        const worldHit = this.collision.raycastWorld(params.origin, rayDir, bubbleMaxDist, {
+          checkBuilds: true,
+          checkProps: true,
+          props,
+          ignoreBuildPieceIds: ignoreBuildIds.length > 0 ? ignoreBuildIds : undefined,
+        });
+
+        const entityMaxDist = worldHit.hit ? worldHit.distance : bubbleMaxDist;
+        const barrelMaxDist =
+          worldHit.hit && worldHit.targetType === 'static'
+            ? Math.min(bubbleMaxDist, worldHit.distance + 0.06)
             : entityMaxDist;
-      const actorHit = this.raycastActors(
-        params.origin,
-        rayDir,
-        entityMaxDist,
-        params.actor.id,
-      );
-      const llamaHit = this.raycastLlamas(params.origin, rayDir, entityMaxDist);
-      const vehicleHit = this.raycastVehicles(
-        params.origin,
-        rayDir,
-        entityMaxDist,
-        vBridge,
-        params.actor.id,
-      );
-      const barrelHit = this.raycastSlurpBarrels(
-        params.origin,
-        rayDir,
-        barrelMaxDist,
-        sBridge,
-      );
-      const expBarrelHit = this.raycastExplosiveBarrels(
-        params.origin,
-        rayDir,
-        barrelMaxDist,
-        rcBridge,
-      );
-      const tankerHit = this.raycastSlurpTankers(
-        params.origin,
-        rayDir,
-        tankerMaxDist,
-        chBridge,
-      );
-
-      let chosenType:
-        | 'actor'
-        | 'llama'
-        | 'vehicle'
-        | 'barrel'
-        | 'exp_barrel'
-        | 'tanker'
-        | 'world'
-        | 'bubble'
-        | 'none' = 'none';
-      let chosenDist = bubbleMaxDist;
-      if (worldHit.hit && worldHit.distance <= chosenDist) {
-        chosenType = 'world';
-        chosenDist = worldHit.distance;
-      }
-      if (
-        expBarrelHit &&
-        expBarrelHit.distance <=
-          chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
-      ) {
-        chosenType = 'exp_barrel';
-        chosenDist = expBarrelHit.distance;
-      }
-      if (
-        barrelHit &&
-        barrelHit.distance <=
-          chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
-      ) {
-        chosenType = 'barrel';
-        chosenDist = barrelHit.distance;
-      }
-      if (
-        tankerHit &&
-        chBridge &&
-        ((chosenType === 'world' &&
+        const tankerMaxDist =
+          worldHit.hit &&
           worldHit.targetType === 'static' &&
-          worldHit.targetId?.includes('tanker')) ||
-          tankerHit.distance <=
-            chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.12 : 0))
-      ) {
-        chosenType = 'tanker';
-        chosenDist = tankerHit.distance;
-      }
-      if (vehicleHit && vehicleHit.distance <= chosenDist) {
-        chosenType = 'vehicle';
-        chosenDist = vehicleHit.distance;
-      }
-      if (llamaHit && llamaHit.distance <= chosenDist) {
-        chosenType = 'llama';
-        chosenDist = llamaHit.distance;
-      }
-      if (actorHit && actorHit.distance <= chosenDist) {
-        chosenType = 'actor';
-        chosenDist = actorHit.distance;
-      }
-      if (chosenType === 'none' && bubbleHit) {
-        chosenType = 'bubble';
-      }
+          worldHit.targetId?.includes('tanker')
+            ? bubbleMaxDist
+            : worldHit.hit && worldHit.targetType === 'static'
+              ? Math.min(bubbleMaxDist, worldHit.distance + 0.12)
+              : entityMaxDist;
+        const actorHit = this.raycastActors(
+          params.origin,
+          rayDir,
+          entityMaxDist,
+          params.actor.id,
+        );
+        const droneHit = this.raycastSupplyDrones(
+          params.origin,
+          rayDir,
+          entityMaxDist,
+          odBridge,
+        );
+        const llamaHit = this.raycastLlamas(params.origin, rayDir, entityMaxDist);
+        const vehicleHit = this.raycastVehicles(
+          params.origin,
+          rayDir,
+          entityMaxDist,
+          vBridge,
+          params.actor.id,
+        );
+        const barrelHit = this.raycastSlurpBarrels(
+          params.origin,
+          rayDir,
+          barrelMaxDist,
+          sBridge,
+        );
+        const expBarrelHit = this.raycastExplosiveBarrels(
+          params.origin,
+          rayDir,
+          barrelMaxDist,
+          rcBridge,
+        );
+        const tankerHit = this.raycastSlurpTankers(
+          params.origin,
+          rayDir,
+          tankerMaxDist,
+          chBridge,
+        );
 
-      const endPoint =
-        chosenType === 'actor'
-          ? actorHit!.point
-          : chosenType === 'llama'
-            ? llamaHit!.point
-            : chosenType === 'vehicle'
-              ? vehicleHit!.point
-              : chosenType === 'exp_barrel'
-                ? expBarrelHit!.point
-                : chosenType === 'barrel'
-                  ? barrelHit!.point
-                  : chosenType === 'tanker'
-                    ? tankerHit!.point
-                    : chosenType === 'world'
-                      ? worldHit.point
-                      : chosenType === 'bubble'
-                        ? bubbleHit!.point
-                        : {
-                            x: params.origin.x + rayDir.x * def.range,
-                            y: params.origin.y + rayDir.y * def.range,
-                            z: params.origin.z + rayDir.z * def.range,
-                          };
+        let chosenType:
+          | 'actor'
+          | 'drone'
+          | 'llama'
+          | 'vehicle'
+          | 'barrel'
+          | 'exp_barrel'
+          | 'tanker'
+          | 'world'
+          | 'bubble'
+          | 'none' = 'none';
+        let chosenDist = bubbleMaxDist;
+        if (worldHit.hit && worldHit.distance <= chosenDist) {
+          chosenType = 'world';
+          chosenDist = worldHit.distance;
+        }
+        if (
+          expBarrelHit &&
+          expBarrelHit.distance <=
+            chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+        ) {
+          chosenType = 'exp_barrel';
+          chosenDist = expBarrelHit.distance;
+        }
+        if (
+          barrelHit &&
+          barrelHit.distance <=
+            chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.06 : 0)
+        ) {
+          chosenType = 'barrel';
+          chosenDist = barrelHit.distance;
+        }
+        if (
+          tankerHit &&
+          chBridge &&
+          ((chosenType === 'world' &&
+            worldHit.targetType === 'static' &&
+            worldHit.targetId?.includes('tanker')) ||
+            tankerHit.distance <=
+              chosenDist + (chosenType === 'world' && worldHit.targetType === 'static' ? 0.12 : 0))
+        ) {
+          chosenType = 'tanker';
+          chosenDist = tankerHit.distance;
+        }
+        if (vehicleHit && vehicleHit.distance <= chosenDist) {
+          chosenType = 'vehicle';
+          chosenDist = vehicleHit.distance;
+        }
+        if (llamaHit && llamaHit.distance <= chosenDist) {
+          chosenType = 'llama';
+          chosenDist = llamaHit.distance;
+        }
+        if (droneHit && droneHit.distance <= chosenDist) {
+          chosenType = 'drone';
+          chosenDist = droneHit.distance;
+        }
+        if (actorHit && actorHit.distance <= chosenDist) {
+          chosenType = 'actor';
+          chosenDist = actorHit.distance;
+        }
+        if (chosenType === 'none' && bubbleHit) {
+          chosenType = 'bubble';
+        }
 
-      const isMythicPulse = params.item.weaponId === 'mythic_blade_rifle';
-      this.eventBus.emit('vfx:tracer', {
-        from: muzzle,
-        to: endPoint,
-        color: isMythicPulse ? 0x38bdf8 : params.isPlayer ? 0xffe49e : 0xffaa55,
-        width: isMythicPulse ? 0.09 : undefined,
-      });
+        if (
+          chosenType === 'world' &&
+          worldHit.hit &&
+          worldHit.targetType === 'build' &&
+          worldHit.targetId &&
+          pierceStep < maxBuildPierces
+        ) {
+          this.applyWorldHitDamage(worldHit, structDmg);
+          ignoreBuildIds.push(worldHit.targetId);
+          piercedAnyBuild = true;
+          endPoint = worldHit.point;
+          continue;
+        }
 
-      const structDmg = Math.max(
-        1,
-        Math.round(
-          (def.structureDamage *
-            (RARITY_MULTIPLIER[params.item.rarity] ?? 1) *
-            demolisherMult) /
-            pellets,
-        ),
-      );
+        endPoint =
+          chosenType === 'actor'
+            ? actorHit!.point
+            : chosenType === 'drone'
+              ? droneHit!.point
+              : chosenType === 'llama'
+                ? llamaHit!.point
+                : chosenType === 'vehicle'
+                  ? vehicleHit!.point
+                  : chosenType === 'exp_barrel'
+                    ? expBarrelHit!.point
+                    : chosenType === 'barrel'
+                      ? barrelHit!.point
+                      : chosenType === 'tanker'
+                        ? tankerHit!.point
+                        : chosenType === 'world'
+                          ? worldHit.point
+                          : chosenType === 'bubble'
+                            ? bubbleHit!.point
+                            : {
+                                x: params.origin.x + rayDir.x * def.range,
+                                y: params.origin.y + rayDir.y * def.range,
+                                z: params.origin.z + rayDir.z * def.range,
+                              };
 
-      if (chosenType === 'actor' && actorHit) {
-        const pelletDmg =
-          (computeWeaponDamage(
-            params.item.weaponId,
-            params.item.rarity,
-            actorHit.distance,
-            actorHit.isHeadshot,
-          ) *
-            firstAssaultMult *
-            combatMedallionMult) /
-          pellets;
+        if (chosenType === 'actor' && actorHit) {
+          const pelletDmg =
+            (computeWeaponDamage(
+              params.item.weaponId,
+              params.item.rarity,
+              actorHit.distance,
+              actorHit.isHeadshot,
+            ) *
+              firstAssaultMult *
+              combatMedallionMult) /
+            pellets;
 
-        const existing = actorAccum.get(actorHit.actor.id);
-        if (existing) {
-          existing.totalDamage += pelletDmg;
-          existing.anyHeadshot = existing.anyHeadshot || actorHit.isHeadshot;
-        } else {
-          actorAccum.set(actorHit.actor.id, {
-            actor: actorHit.actor,
-            totalDamage: pelletDmg,
-            anyHeadshot: actorHit.isHeadshot,
-            hitPoint: actorHit.point,
-            distance: actorHit.distance,
+          const existing = actorAccum.get(actorHit.actor.id);
+          if (existing) {
+            existing.totalDamage += pelletDmg;
+            existing.anyHeadshot = existing.anyHeadshot || actorHit.isHeadshot;
+          } else {
+            actorAccum.set(actorHit.actor.id, {
+              actor: actorHit.actor,
+              totalDamage: pelletDmg,
+              anyHeadshot: actorHit.isHeadshot,
+              hitPoint: actorHit.point,
+              distance: actorHit.distance,
+            });
+          }
+        } else if (chosenType === 'drone' && droneHit && odBridge) {
+          const droneRes = odBridge.damageSupplyDrone(droneHit.drone.id, structDmg);
+          if (droneRes) {
+            this.eventBus.emit('vfx:impact', {
+              position: droneHit.point,
+              normal: droneHit.normal,
+              material: 'metal',
+            });
+            this.eventBus.emit('sound:play', {
+              id: 'hit_metal',
+              position: droneHit.point,
+              spatial: true,
+            });
+            shotsHit += 1;
+            totalDamageDealt += structDmg;
+            if (params.isPlayer) {
+              this.eventBus.emit('combat:hitmarker', {
+                attackerId: params.actor.id,
+                isHeadshot: false,
+                isShield: false,
+                isElimination: droneRes.destroyed,
+              });
+            }
+            if (droneRes.destroyed) {
+              destroyedDrones.push(droneRes);
+              params.onDroneDestroyed?.(droneRes);
+              this.onDroneDestroyed?.(droneRes);
+            }
+          }
+        } else if (chosenType === 'exp_barrel' && expBarrelHit && rcBridge) {
+          this.applyExplosiveBarrelHit(
+            rcBridge,
+            expBarrelHit.barrel.id,
+            structDmg,
+            expBarrelHit.point,
+            expBarrelHit.normal,
+            params.actor,
+            params.isPlayer,
+          );
+        } else if (chosenType === 'barrel' && barrelHit && sBridge) {
+          this.applySlurpBarrelHit(
+            sBridge,
+            barrelHit.barrel.id,
+            structDmg,
+            barrelHit.point,
+            barrelHit.normal,
+            params.actor,
+          );
+        } else if (chosenType === 'tanker' && tankerHit && chBridge) {
+          this.applySlurpTankerHit(
+            chBridge,
+            tankerHit.tanker.id,
+            structDmg,
+            tankerHit.point,
+            tankerHit.normal,
+          );
+        } else if (chosenType === 'llama' && llamaHit) {
+          this.propsBridge.damageLlama?.(llamaHit.llama.id, structDmg, llamaHit.point);
+          this.eventBus.emit('vfx:impact', {
+            position: llamaHit.point,
+            normal: llamaHit.normal,
+            material: 'wood',
+          });
+        } else if (chosenType === 'vehicle' && vehicleHit) {
+          vBridge?.damageVehicle(vehicleHit.vehicle.id, structDmg, vehicleHit.point);
+          this.eventBus.emit('vfx:impact', {
+            position: vehicleHit.point,
+            normal: vehicleHit.normal,
+            material: 'metal',
+          });
+        } else if (chosenType === 'world' && worldHit.hit) {
+          this.applyWorldHitDamage(worldHit, structDmg);
+        } else if (chosenType === 'bubble' && bubbleHit) {
+          this.eventBus.emit('vfx:impact', {
+            position: bubbleHit.point,
+            normal: bubbleHit.normal,
+            material: 'shield',
+          });
+          this.eventBus.emit('sound:play', {
+            id: 'shield_hit',
+            position: bubbleHit.point,
+            spatial: true,
           });
         }
-      } else if (chosenType === 'exp_barrel' && expBarrelHit && rcBridge) {
-        this.applyExplosiveBarrelHit(
-          rcBridge,
-          expBarrelHit.barrel.id,
-          structDmg,
-          expBarrelHit.point,
-          expBarrelHit.normal,
-          params.actor,
-          params.isPlayer,
-        );
-      } else if (chosenType === 'barrel' && barrelHit && sBridge) {
-        this.applySlurpBarrelHit(
-          sBridge,
-          barrelHit.barrel.id,
-          structDmg,
-          barrelHit.point,
-          barrelHit.normal,
-          params.actor,
-        );
-      } else if (chosenType === 'tanker' && tankerHit && chBridge) {
-        this.applySlurpTankerHit(
-          chBridge,
-          tankerHit.tanker.id,
-          structDmg,
-          tankerHit.point,
-          tankerHit.normal,
-        );
-      } else if (chosenType === 'llama' && llamaHit) {
-        this.propsBridge.damageLlama?.(llamaHit.llama.id, structDmg, llamaHit.point);
-        this.eventBus.emit('vfx:impact', {
-          position: llamaHit.point,
-          normal: llamaHit.normal,
-          material: 'wood',
+        break;
+      }
+
+      if (isRailgun) {
+        this.eventBus.emit('vfx:railgun_beam', {
+          from: muzzle,
+          to: endPoint,
+          pierced: piercedAnyBuild,
         });
-      } else if (chosenType === 'vehicle' && vehicleHit) {
-        vBridge?.damageVehicle(vehicleHit.vehicle.id, structDmg, vehicleHit.point);
-        this.eventBus.emit('vfx:impact', {
-          position: vehicleHit.point,
-          normal: vehicleHit.normal,
-          material: 'metal',
-        });
-      } else if (chosenType === 'world' && worldHit.hit) {
-        this.applyWorldHitDamage(worldHit, structDmg);
-      } else if (chosenType === 'bubble' && bubbleHit) {
-        this.eventBus.emit('vfx:impact', {
-          position: bubbleHit.point,
-          normal: bubbleHit.normal,
-          material: 'shield',
-        });
-        this.eventBus.emit('sound:play', {
-          id: 'shield_hit',
-          position: bubbleHit.point,
-          spatial: true,
+      } else {
+        const isMythicPulse = params.item.weaponId === 'mythic_blade_rifle';
+        this.eventBus.emit('vfx:tracer', {
+          from: muzzle,
+          to: endPoint,
+          color: isMythicPulse ? 0x38bdf8 : params.isPlayer ? 0xffe49e : 0xffaa55,
+          width: isMythicPulse ? 0.09 : undefined,
         });
       }
     }
@@ -2722,6 +2878,7 @@ export class WeaponSystem {
       shotsHit,
       headshots,
       damageDealt: totalDamageDealt,
+      ...(destroyedDrones.length > 0 ? { destroyedDrones } : {}),
     };
   }
 

@@ -135,6 +135,8 @@ export class EnvironmentFX {
   private rainGeo: THREE.BufferGeometry;
   private rainMat: THREE.LineBasicMaterial;
   private rainDrops: RainDrop[] = [];
+  private rainSplashMesh: THREE.Mesh;
+  private rainSplashMat: THREE.ShaderMaterial;
 
   private sunDir = new THREE.Vector3(0.55, 0.52, -0.65).normalize();
   private sunCoronaGroup!: THREE.Group;
@@ -263,6 +265,7 @@ export class EnvironmentFX {
         uDayPhase: { value: 0 },
         uOvercast: { value: 0 },
         uLightning: { value: 0 },
+        uRain: { value: 0 },
       },
       vertexShader: `
         uniform float uTime;
@@ -283,6 +286,7 @@ export class EnvironmentFX {
         uniform float uDayPhase;
         uniform float uOvercast;
         uniform float uLightning;
+        uniform float uRain;
         varying vec3 vWorldPos;
 
         float segDist2D(vec2 p, vec2 a, vec2 b) {
@@ -369,6 +373,17 @@ export class EnvironmentFX {
 
           float glint = smoothstep(0.65, 0.98, (rippleA + rippleB) * 0.5) * (1.0 - uOvercast * 0.75);
           col += vec3(0.55, 0.88, 0.96) * glint * 0.14 * (1.0 - smoothstep(420.0, 900.0, r));
+
+          if (uRain > 0.01) {
+            vec2 rainCell = floor(xz * 0.65);
+            vec2 rainLocal = fract(xz * 0.65) - 0.5;
+            float rHash = fract(sin(dot(rainCell, vec2(127.1, 311.7))) * 43758.5453);
+            float rPhase = fract(uTime * 1.7 + rHash);
+            float rRad = 0.05 + rPhase * 0.34;
+            float rRing = (1.0 - smoothstep(0.0, 0.04, abs(length(rainLocal) - rRad))) * (1.0 - smoothstep(0.6, 1.0, rPhase));
+            float rMask = 1.0 - smoothstep(45.0, 140.0, length(xz - cameraPosition.xz));
+            col += vec3(0.65, 0.90, 1.0) * rRing * step(0.35, rHash) * rMask * uRain * 0.24;
+          }
 
           float horizonFog = smoothstep(520.0, 1550.0, r);
           col = mix(col, skyHorizon, horizonFog * 0.92);
@@ -464,6 +479,74 @@ export class EnvironmentFX {
     this.rainLines.visible = false;
     this.rainLines.frustumCulled = false;
     this.group.add(this.rainLines);
+
+    // 6b. Subtle Ground Rain Splash Ripples (visible during 'rain' / 'storm_front')
+    const splashGeo = new THREE.CircleGeometry(18, 32);
+    splashGeo.rotateX(-Math.PI * 0.5);
+    this.geometries.push(splashGeo);
+    this.rainSplashMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      uniforms: {
+        uTime: { value: 0 },
+        uRainStrength: { value: 0 },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        varying vec2 vLocalXZ;
+        void main() {
+          vLocalXZ = position.xz;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorldPos = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uRainStrength;
+        varying vec3 vWorldPos;
+        varying vec2 vLocalXZ;
+
+        float hash21(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+
+        float splashRing(vec2 worldXZ, float scale, float speed, float seedOffset) {
+          vec2 scaled = worldXZ * scale;
+          vec2 gv = fract(scaled) - 0.5;
+          vec2 id = floor(scaled);
+          float rnd = hash21(id + vec2(seedOffset, seedOffset * 1.37));
+          vec2 jitter = vec2(hash21(id + vec2(7.1, 3.3)) - 0.5, hash21(id + vec2(13.7, 9.2)) - 0.5) * 0.44;
+          float d = length(gv - jitter);
+          float t = fract(uTime * speed + rnd);
+          float radius = 0.06 + t * 0.34;
+          float ring = 1.0 - smoothstep(0.0, 0.045, abs(d - radius));
+          float fade = (1.0 - smoothstep(0.65, 1.0, t)) * smoothstep(0.0, 0.08, t);
+          return ring * fade * step(0.32, rnd);
+        }
+
+        void main() {
+          float dist = length(vLocalXZ);
+          float edgeFade = 1.0 - smoothstep(7.0, 17.5, dist);
+          float r1 = splashRing(vWorldPos.xz, 0.85, 1.85, 1.0);
+          float r2 = splashRing(vWorldPos.xz + vec2(3.7, 5.1), 1.35, 2.25, 4.3);
+          float ripple = clamp(r1 + r2 * 0.8, 0.0, 1.0);
+          float alpha = ripple * edgeFade * clamp(uRainStrength, 0.0, 1.0) * 0.28;
+          if (alpha <= 0.004) discard;
+          gl_FragColor = vec4(0.78, 0.92, 1.0, alpha);
+        }
+      `,
+    });
+    this.materials.push(this.rainSplashMat);
+    this.rainSplashMesh = new THREE.Mesh(splashGeo, this.rainSplashMat);
+    this.rainSplashMesh.name = 'RainSplashRipples';
+    this.rainSplashMesh.visible = false;
+    this.rainSplashMesh.frustumCulled = false;
+    this.group.add(this.rainSplashMesh);
 
     // 7. Iconic Battle Bus 3D Group
     const { busGroup, thrusterFlames, burnerGlow } = this.buildBattleBus();
@@ -1037,6 +1120,9 @@ export class EnvironmentFX {
       this.currentRainStrength = Math.max(this.currentRainStrength, p.rain * 0.65);
       this.rainMat.opacity = clamp(this.currentRainStrength * 0.68, 0.25, 0.72);
       this.rainLines.visible = true;
+      this.rainSplashMesh.visible = true;
+      this.rainSplashMat.uniforms.uRainStrength.value = this.currentRainStrength;
+      this.oceanMat.uniforms.uRain.value = this.currentRainStrength;
       if (kind === 'storm_front') {
         this.lightningCooldown = Math.min(this.lightningCooldown, 1.8);
       }
@@ -1044,6 +1130,9 @@ export class EnvironmentFX {
       this.currentRainStrength = 0;
       this.rainMat.opacity = 0;
       this.rainLines.visible = false;
+      this.rainSplashMesh.visible = false;
+      this.rainSplashMat.uniforms.uRainStrength.value = 0;
+      this.oceanMat.uniforms.uRain.value = 0;
       this.lightningIntensity = 0;
     }
 
@@ -1194,6 +1283,7 @@ export class EnvironmentFX {
     this.skyMat.uniforms.uLightning.value = this.lightningIntensity;
     this.oceanMat.uniforms.uOvercast.value = this.currentOvercast;
     this.oceanMat.uniforms.uLightning.value = this.lightningIntensity;
+    this.oceanMat.uniforms.uRain.value = this.currentRainStrength;
 
     this.sunDir
       .set(
@@ -1252,6 +1342,11 @@ export class EnvironmentFX {
       this.rainMat.opacity = targetOpacity;
       this.rainLines.visible = true;
 
+      this.rainSplashMesh.visible = true;
+      this.rainSplashMesh.position.set(center.x, center.y + 0.05, center.z);
+      this.rainSplashMat.uniforms.uTime.value = elapsed;
+      this.rainSplashMat.uniforms.uRainStrength.value = Math.max(0.35, this.currentRainStrength);
+
       const rainAttr = this.rainGeo.getAttribute('position') as THREE.BufferAttribute;
       const arr = rainAttr.array as Float32Array;
       const fallSpeed = 24 + this.currentRainStrength * 10;
@@ -1287,6 +1382,8 @@ export class EnvironmentFX {
     } else {
       this.rainMat.opacity = 0;
       this.rainLines.visible = false;
+      this.rainSplashMesh.visible = false;
+      this.rainSplashMat.uniforms.uRainStrength.value = 0;
     }
 
     // 6. Camera/player-centered Biome Ambient Particle Pool

@@ -3,25 +3,32 @@ import type {
   BuildPiece,
   BuildPieceType,
   BuildPreviewState,
+  DamageEvent,
   EditModeState,
   EditResult,
   EditVariant,
   MaterialType,
   TerrainQuery,
+  TrapEntity,
+  TrapKind,
   Vec3Like,
   WallDir,
 } from '../types';
 import {
+  BOUNCER_IMPULSE_FWD,
+  BOUNCER_IMPULSE_Y,
   BUILD_COST,
   EventBus,
   GRID_XZ,
   GRID_Y,
   MATERIAL_STATS,
+  SPIKE_TRAP_DAMAGE,
   clamp,
   getPieceKey,
   worldToGrid,
 } from '../core';
 import { ROOF_HEIGHT, getRampHeightAtLocal, getRoofHeightAtLocal } from './CollisionSystem';
+import type { CombatActor } from './GameplayTypes';
 
 const WALL_THICK = 0.22;
 const FLOOR_THICK = 0.18;
@@ -217,12 +224,23 @@ interface PieceVisual {
   popAge: number;
 }
 
+interface TrapVisual {
+  trap: TrapEntity;
+  group: THREE.Group;
+  spikesGroup?: THREE.Group;
+  ledMat?: THREE.MeshStandardMaterial;
+  padCoreMat?: THREE.MeshStandardMaterial;
+  pulseRing?: THREE.Mesh;
+  spikeExtend: number;
+}
+
 export class BuildingSystem {
   private scene: THREE.Scene;
   private terrain: TerrainQuery;
   private eventBus: EventBus;
 
   private rootGroup = new THREE.Group();
+  private trapGroup = new THREE.Group();
   private previewGroup = new THREE.Group();
   private editGridGroup = new THREE.Group();
 
@@ -231,6 +249,21 @@ export class BuildingSystem {
   private visualsById = new Map<string, PieceVisual>();
   private piecesArray: BuildPiece[] = [];
   private nextPieceSeq = 1;
+
+  private traps: TrapEntity[] = [];
+  private trapsById = new Map<string, TrapEntity>();
+  private trapVisuals = new Map<string, TrapVisual>();
+  private bouncerActorCooldowns = new Map<string, Map<string, number>>();
+  private nextTrapSeq = 1;
+  private trapDmgSeq = 1;
+  private trapAnimElapsed = 0;
+  private trapSharedGeos: THREE.BufferGeometry[] = [];
+  private trapSharedMats: THREE.Material[] = [];
+  private trapPlateMat: THREE.MeshStandardMaterial | null = null;
+  private trapTrimMat: THREE.MeshStandardMaterial | null = null;
+  private trapSpikeMat: THREE.MeshStandardMaterial | null = null;
+  private trapSpikeGeo: THREE.BufferGeometry | null = null;
+  private trapBouncerRingGeo: THREE.BufferGeometry | null = null;
 
   private unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
   private previewTileGeo = new THREE.PlaneGeometry(1, 1);
@@ -267,12 +300,14 @@ export class BuildingSystem {
     this.eventBus = eventBus;
 
     this.rootGroup.name = 'BuildingSystemRoot';
+    this.trapGroup.name = 'BuildingTrapRoot';
     this.previewGroup.name = 'BuildingPreview';
     this.editGridGroup.name = 'BuildingEditGrid';
     this.previewGroup.visible = false;
     this.editGridGroup.visible = false;
 
     this.scene.add(this.rootGroup);
+    this.scene.add(this.trapGroup);
     this.scene.add(this.previewGroup);
     this.scene.add(this.editGridGroup);
 
@@ -1143,6 +1178,425 @@ export class BuildingSystem {
       visual.mainMat.color.copy(tmpBase);
       visual.trimMat.color.copy(tmpTrim);
     }
+
+    this.updateTraps(dt);
+  }
+
+  private ensureTrapSharedAssets(): void {
+    if (!this.trapPlateMat) {
+      this.trapPlateMat = new THREE.MeshStandardMaterial({
+        color: 0x334155,
+        roughness: 0.45,
+        metalness: 0.72,
+      });
+      this.trapSharedMats.push(this.trapPlateMat);
+    }
+    if (!this.trapTrimMat) {
+      this.trapTrimMat = new THREE.MeshStandardMaterial({
+        color: 0x64748b,
+        roughness: 0.35,
+        metalness: 0.84,
+      });
+      this.trapSharedMats.push(this.trapTrimMat);
+    }
+    if (!this.trapSpikeMat) {
+      this.trapSpikeMat = new THREE.MeshStandardMaterial({
+        color: 0xcbd5e1,
+        roughness: 0.22,
+        metalness: 0.9,
+      });
+      this.trapSharedMats.push(this.trapSpikeMat);
+    }
+    if (!this.trapSpikeGeo) {
+      this.trapSpikeGeo = new THREE.ConeGeometry(0.08, 0.58, 6);
+      this.trapSharedGeos.push(this.trapSpikeGeo);
+    }
+    if (!this.trapBouncerRingGeo) {
+      this.trapBouncerRingGeo = new THREE.TorusGeometry(0.95, 0.055, 8, 24);
+      this.trapBouncerRingGeo.rotateX(Math.PI * 0.5);
+      this.trapSharedGeos.push(this.trapBouncerRingGeo);
+    }
+  }
+
+  private createTrapVisual(trap: TrapEntity): void {
+    this.ensureTrapSharedAssets();
+    const group = new THREE.Group();
+    group.name = `Trap_${trap.id}`;
+    group.position.set(trap.x, trap.y, trap.z);
+    group.rotation.y = trap.rotationY;
+
+    const plateW = trap.kind === 'spike_trap' ? GRID_XZ * 0.86 : 2.9;
+    const plateMat = this.trapPlateMat!;
+    const trimMat = this.trapTrimMat!;
+
+    const base = new THREE.Mesh(this.unitBoxGeo, plateMat);
+    base.scale.set(plateW, 0.06, plateW);
+    base.position.set(0, 0.03, 0);
+    base.receiveShadow = true;
+    group.add(base);
+
+    const frameThick = 0.14;
+    const edgeOffset = plateW * 0.5 - frameThick * 0.5;
+    for (const s of [-1, 1]) {
+      const barX = new THREE.Mesh(this.unitBoxGeo, trimMat);
+      barX.scale.set(plateW, 0.1, frameThick);
+      barX.position.set(0, 0.05, s * edgeOffset);
+      group.add(barX);
+
+      const barZ = new THREE.Mesh(this.unitBoxGeo, trimMat);
+      barZ.scale.set(frameThick, 0.1, plateW);
+      barZ.position.set(s * edgeOffset, 0.05, 0);
+      group.add(barZ);
+    }
+
+    if (trap.kind === 'spike_trap') {
+      const ledMat = new THREE.MeshStandardMaterial({
+        color: 0xef4444,
+        emissive: 0xdc2626,
+        emissiveIntensity: 1.2,
+        roughness: 0.3,
+      });
+      const ledStrip = new THREE.Mesh(this.unitBoxGeo, ledMat);
+      ledStrip.scale.set(plateW * 0.5, 0.03, 0.12);
+      ledStrip.position.set(0, 0.075, edgeOffset - 0.18);
+      group.add(ledStrip);
+
+      const spikesGroup = new THREE.Group();
+      spikesGroup.position.y = -0.52;
+      const gridOffsets = [-0.96, -0.32, 0.32, 0.96];
+      for (let ix = 0; ix < gridOffsets.length; ix++) {
+        for (let iz = 0; iz < gridOffsets.length; iz++) {
+          const spike = new THREE.Mesh(this.trapSpikeGeo!, this.trapSpikeMat!);
+          spike.position.set(gridOffsets[ix], 0.29, gridOffsets[iz]);
+          spike.castShadow = true;
+          spikesGroup.add(spike);
+        }
+      }
+      group.add(spikesGroup);
+      this.trapGroup.add(group);
+      this.trapVisuals.set(trap.id, {
+        trap,
+        group,
+        spikesGroup,
+        ledMat,
+        spikeExtend: 0,
+      });
+    } else {
+      const padCoreMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 1.35,
+        roughness: 0.2,
+        metalness: 0.25,
+      });
+      const padCore = new THREE.Mesh(this.unitBoxGeo, padCoreMat);
+      padCore.scale.set(2.15, 0.08, 2.15);
+      padCore.position.set(0, 0.06, 0);
+      group.add(padCore);
+
+      const chevronL = new THREE.Mesh(this.unitBoxGeo, this.trapSpikeMat!);
+      chevronL.scale.set(0.16, 0.04, 0.9);
+      chevronL.position.set(-0.28, 0.11, 0.12);
+      chevronL.rotation.y = 0.55;
+      group.add(chevronL);
+
+      const chevronR = new THREE.Mesh(this.unitBoxGeo, this.trapSpikeMat!);
+      chevronR.scale.set(0.16, 0.04, 0.9);
+      chevronR.position.set(0.28, 0.11, 0.12);
+      chevronR.rotation.y = -0.55;
+      group.add(chevronR);
+
+      const pulseRing = new THREE.Mesh(this.trapBouncerRingGeo!, padCoreMat);
+      pulseRing.position.set(0, 0.18, 0);
+      group.add(pulseRing);
+
+      this.trapGroup.add(group);
+      this.trapVisuals.set(trap.id, {
+        trap,
+        group,
+        padCoreMat,
+        pulseRing,
+        spikeExtend: 0,
+      });
+    }
+  }
+
+  placeTrap(
+    kind: TrapKind,
+    ownerId: string,
+    pos: Vec3Like,
+    yaw: number,
+    squadId?: string,
+  ): TrapEntity | null {
+    if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) {
+      return null;
+    }
+
+    const id = `trap_${this.nextTrapSeq++}`;
+    const trap: TrapEntity = {
+      id,
+      kind,
+      ownerId,
+      squadId,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      rotationY: Number.isFinite(yaw) ? yaw : 0,
+      armed: true,
+      armTimer: 0,
+      cooldownSec: kind === 'spike_trap' ? 2.5 : 0.4,
+      hp: 150,
+      maxHp: 150,
+    };
+
+    this.traps.push(trap);
+    this.trapsById.set(id, trap);
+    this.createTrapVisual(trap);
+    return trap;
+  }
+
+  getTraps(): TrapEntity[] {
+    return [...this.traps];
+  }
+
+  updateTraps(dt: number): void {
+    const safeDt = Math.max(0, Number.isFinite(dt) ? dt : 0);
+    this.trapAnimElapsed += safeDt;
+
+    for (const [trapId, actorMap] of this.bouncerActorCooldowns.entries()) {
+      for (const [actorId, remaining] of actorMap.entries()) {
+        const next = remaining - safeDt;
+        if (next <= 0) {
+          actorMap.delete(actorId);
+        } else {
+          actorMap.set(actorId, next);
+        }
+      }
+      if (actorMap.size === 0) {
+        this.bouncerActorCooldowns.delete(trapId);
+      }
+    }
+
+    for (let i = 0; i < this.traps.length; i++) {
+      const trap = this.traps[i];
+      if (!trap.armed) {
+        trap.armTimer = Math.max(0, trap.armTimer - safeDt);
+        if (trap.armTimer <= 0) {
+          trap.armed = true;
+          trap.armTimer = 0;
+        }
+      }
+
+      const visual = this.trapVisuals.get(trap.id);
+      if (!visual) continue;
+
+      if (trap.kind === 'spike_trap') {
+        if (visual.spikesGroup) {
+          const targetExtend =
+            !trap.armed && trap.cooldownSec - trap.armTimer < 0.45 ? 1 : 0;
+          const stepRate = targetExtend > visual.spikeExtend ? 18 : 6;
+          visual.spikeExtend = clamp(
+            visual.spikeExtend + (targetExtend - visual.spikeExtend) * Math.min(1, safeDt * stepRate),
+            0,
+            1,
+          );
+          visual.spikesGroup.position.y = -0.52 + visual.spikeExtend * 0.56;
+        }
+        if (visual.ledMat) {
+          visual.ledMat.color.setHex(trap.armed ? 0xef4444 : 0x475569);
+          visual.ledMat.emissive.setHex(trap.armed ? 0xdc2626 : 0x1e293b);
+          visual.ledMat.emissiveIntensity = trap.armed ? 1.2 : 0.25;
+        }
+      } else if (visual.pulseRing) {
+        const phase = (this.trapAnimElapsed * 1.6 + i * 0.37) % 1;
+        visual.pulseRing.position.y = 0.14 + phase * 0.62;
+        const s = 0.85 + phase * 0.35;
+        visual.pulseRing.scale.set(s, 1, s);
+      }
+    }
+  }
+
+  checkTrapTriggers(actors: CombatActor[]): number {
+    if (!actors || actors.length === 0 || this.traps.length === 0) return 0;
+
+    let triggerCount = 0;
+    const spikeHalfFootprint = GRID_XZ * 0.5;
+    const bouncerTriggerRadius = 1.85;
+
+    for (let i = 0; i < this.traps.length; i++) {
+      const trap = this.traps[i];
+      if (trap.hp <= 0) continue;
+
+      if (trap.kind === 'spike_trap') {
+        if (!trap.armed) continue;
+
+        const victims: CombatActor[] = [];
+        for (let a = 0; a < actors.length; a++) {
+          const actor = actors[a];
+          if (!actor.alive) continue;
+          if (actor.id === trap.ownerId) continue;
+          if (trap.squadId && actor.squadId && actor.squadId === trap.squadId) {
+            continue;
+          }
+
+          if (
+            Math.abs(actor.position.x - trap.x) <= spikeHalfFootprint &&
+            Math.abs(actor.position.z - trap.z) <= spikeHalfFootprint &&
+            actor.position.y >= trap.y - 0.6 &&
+            actor.position.y <= trap.y + GRID_Y * 0.85
+          ) {
+            victims.push(actor);
+          }
+        }
+
+        if (victims.length > 0) {
+          trap.armed = false;
+          trap.armTimer = trap.cooldownSec;
+          const visual = this.trapVisuals.get(trap.id);
+          if (visual) {
+            visual.spikeExtend = 1.0;
+            if (visual.spikesGroup) {
+              visual.spikesGroup.position.y = 0.04;
+            }
+          }
+
+          const trapPos = { x: trap.x, y: trap.y, z: trap.z };
+          this.eventBus.emit('vfx:trap_trigger', {
+            position: trapPos,
+            kind: 'spike_trap',
+          });
+          this.eventBus.emit('sound:play', {
+            id: 'trap_snap',
+            position: trapPos,
+            spatial: true,
+          });
+
+          for (let v = 0; v < victims.length; v++) {
+            const victim = victims[v];
+            const dmg = SPIKE_TRAP_DAMAGE;
+            const overshieldBefore = Math.max(0, victim.overshield ?? 0);
+            const overshieldDmg = Math.min(overshieldBefore, dmg);
+            const afterOs = dmg - overshieldDmg;
+            const shieldBefore = Math.max(0, victim.shield);
+            const shieldDmg = Math.min(shieldBefore, afterOs);
+            const remaining = afterOs - shieldDmg;
+            const hpDmg = Math.min(Math.max(0, victim.hp), remaining);
+            const isElimination = victim.hp - hpDmg <= 0;
+
+            if (victim.overshield !== undefined) {
+              victim.overshield = Math.max(0, victim.overshield - overshieldDmg);
+            }
+            victim.shield = Math.max(0, victim.shield - shieldDmg);
+            victim.hp = Math.max(0, victim.hp - hpDmg);
+            if (victim.hp <= 0) {
+              victim.alive = false;
+            }
+
+            const ev: DamageEvent = {
+              targetId: victim.id,
+              attackerId: trap.ownerId,
+              attackerName:
+                trap.ownerId === 'player' ? 'Spike Trap' : 'Enemy Spike Trap',
+              weaponId: 'pickaxe',
+              rarity: 'rare',
+              damage: dmg,
+              hpDamage: hpDmg,
+              shieldDamage: shieldDmg,
+              isHeadshot: false,
+              isElimination,
+              hitPoint: {
+                x: victim.position.x,
+                y: victim.position.y + 0.45,
+                z: victim.position.z,
+              },
+              distance: 0,
+            };
+            victim.onDamage?.(ev);
+            this.eventBus.emit('combat:damage', ev);
+
+            if (trap.ownerId === 'player' && victim.id !== 'player') {
+              const hitShield = shieldDmg > 0 || overshieldDmg > 0;
+              this.eventBus.emit('combat:hitmarker', {
+                attackerId: 'player',
+                isHeadshot: false,
+                isShield: hitShield,
+                isElimination,
+              });
+              this.eventBus.emit('ui:damage_number', {
+                id: `trap_dmg_${this.trapDmgSeq++}`,
+                worldPos: ev.hitPoint,
+                amount: dmg,
+                isShield: hitShield && hpDmg === 0,
+                isHeadshot: false,
+                timestamp: Date.now(),
+              });
+            }
+          }
+
+          triggerCount += 1;
+        }
+      } else if (trap.kind === 'bouncer_pad') {
+        let actorMap = this.bouncerActorCooldowns.get(trap.id);
+        const fwdX = Math.sin(trap.rotationY);
+        const fwdZ = Math.cos(trap.rotationY);
+        const trapPos = { x: trap.x, y: trap.y, z: trap.z };
+        let launchedAny = false;
+
+        for (let a = 0; a < actors.length; a++) {
+          const actor = actors[a];
+          if (!actor.alive) continue;
+          if ((actorMap?.get(actor.id) ?? 0) > 0) continue;
+
+          const horiz = Math.hypot(
+            actor.position.x - trap.x,
+            actor.position.z - trap.z,
+          );
+          if (
+            horiz > bouncerTriggerRadius ||
+            actor.position.y < trap.y - 0.6 ||
+            actor.position.y > trap.y + 2.2
+          ) {
+            continue;
+          }
+
+          const impulse: Vec3Like = {
+            x: fwdX * BOUNCER_IMPULSE_FWD,
+            y: BOUNCER_IMPULSE_Y,
+            z: fwdZ * BOUNCER_IMPULSE_FWD,
+          };
+          actor.fallImmune = true;
+          if (actor.onImpulse) {
+            actor.onImpulse(impulse, true);
+          } else if (actor.velocity) {
+            actor.velocity.x += impulse.x;
+            actor.velocity.y = Math.max(actor.velocity.y, 0) + impulse.y;
+            actor.velocity.z += impulse.z;
+          }
+
+          if (!actorMap) {
+            actorMap = new Map<string, number>();
+            this.bouncerActorCooldowns.set(trap.id, actorMap);
+          }
+          actorMap.set(actor.id, trap.cooldownSec);
+          launchedAny = true;
+          triggerCount += 1;
+        }
+
+        if (launchedAny) {
+          this.eventBus.emit('vfx:trap_trigger', {
+            position: trapPos,
+            kind: 'bouncer_pad',
+          });
+          this.eventBus.emit('sound:play', {
+            id: 'bouncer_launch',
+            position: trapPos,
+            spatial: true,
+          });
+        }
+      }
+    }
+
+    return triggerCount;
   }
 
   getPieces(): BuildPiece[] {
@@ -1540,6 +1994,18 @@ export class BuildingSystem {
     this.piecesById.clear();
     this.piecesByKey.clear();
     this.piecesArray = [];
+
+    for (const tv of this.trapVisuals.values()) {
+      this.trapGroup.remove(tv.group);
+      tv.ledMat?.dispose();
+      tv.padCoreMat?.dispose();
+    }
+    this.trapGroup.clear();
+    this.trapVisuals.clear();
+    this.traps = [];
+    this.trapsById.clear();
+    this.bouncerActorCooldowns.clear();
+
     this.setPreviewVisible(false);
   }
 
@@ -1551,6 +2017,20 @@ export class BuildingSystem {
       this.previewCustomGeos[i].dispose();
     }
     this.previewCustomGeos = [];
+    for (let i = 0; i < this.trapSharedGeos.length; i++) {
+      this.trapSharedGeos[i].dispose();
+    }
+    this.trapSharedGeos = [];
+    for (let i = 0; i < this.trapSharedMats.length; i++) {
+      this.trapSharedMats[i].dispose();
+    }
+    this.trapSharedMats = [];
+    this.trapPlateMat = null;
+    this.trapTrimMat = null;
+    this.trapSpikeMat = null;
+    this.trapSpikeGeo = null;
+    this.trapBouncerRingGeo = null;
+
     this.previewMeshMatValid.dispose();
     this.previewMeshMatInvalid.dispose();
     this.previewWireMatValid.dispose();
@@ -1559,6 +2039,7 @@ export class BuildingSystem {
       this.editTileMats[i].dispose();
     }
     this.scene.remove(this.rootGroup);
+    this.scene.remove(this.trapGroup);
     this.scene.remove(this.previewGroup);
     this.scene.remove(this.editGridGroup);
   }

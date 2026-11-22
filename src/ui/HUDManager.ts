@@ -7,13 +7,17 @@ import type {
   DroppedMedallionEntity,
   EmoteId,
   GameSettings,
+  GrindRailEntity,
   HUDState,
   HitmarkerFeedback,
   ItemInstance,
   KillFeedEntry,
   MatchQuest,
   MaterialType,
+  RebootVanEntity,
   SlurpTankerEntity,
+  SupplyDroneEntity,
+  TrapKind,
   WeaponBunkerEntity,
 } from '../types';
 import {
@@ -24,6 +28,7 @@ import {
   computeOvershieldPct,
   computeQuestProgressPct,
   drawChapterMapOverlay,
+  drawOverdriveMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -41,12 +46,15 @@ import {
   getRarityMeta,
   normalizeBoostChargePct,
   type ResolvedChapterOverlay,
+  type ResolvedOverdriveOverlay,
   resolveChapterOverlayArgs,
   resolveCrosshairColor,
   resolveCrosshairStyle,
   resolveKeybinds,
+  resolveOverdriveOverlayArgs,
   selectVisibleVisualSoundCues,
   type WorldChapterOverlay,
+  type WorldOverdriveOverlay,
   worldToMapNorm,
 } from './UIHelpers';
 import {
@@ -62,10 +70,12 @@ import {
   getMaterialIconSvg,
   getMedallionSvg,
   getOvershieldBoltSvg,
+  getRebootVanSvg,
   getReviveCrossSvg,
   getSkullSvg,
   getStormEyeSvg,
   getTacticalPingIconSvg,
+  getTrapSvg,
   getVaultKeySvg,
   getVehicleIconSvg,
   getVisualAudioIconSvg,
@@ -189,6 +199,11 @@ export class HUDManager {
     droppedMedallions: [],
     droppedCrowns: [],
   };
+  private overdriveOverlay: ResolvedOverdriveOverlay = {
+    rails: [],
+    vans: [],
+    drones: [],
+  };
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
@@ -236,6 +251,10 @@ export class HUDManager {
   private reviveLabelEl: HTMLSpanElement;
   private revivePctEl: HTMLSpanElement;
   private reviveFillEl: HTMLDivElement;
+  private rebootBarEl: HTMLDivElement;
+  private rebootLabelEl: HTMLSpanElement;
+  private rebootPctEl: HTMLSpanElement;
+  private rebootFillEl: HTMLDivElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -264,6 +283,9 @@ export class HUDManager {
   >();
   private buildEls = new Map<BuildPieceType, HTMLDivElement>();
   private buildKeyEls = new Map<BuildPieceType, HTMLSpanElement>();
+  private trapSlotChipEl: HTMLDivElement;
+  private trapIconEl: HTMLSpanElement;
+  private trapCountEl: HTMLSpanElement;
   private ammoWrapEl: HTMLDivElement;
   private ammoMainEl: HTMLDivElement;
   private ammoResEl: HTMLDivElement;
@@ -281,6 +303,14 @@ export class HUDManager {
   private tacticalPingDistEl: HTMLSpanElement;
   private crosshairEl: HTMLDivElement;
   private bowArcEl: HTMLDivElement;
+  private reticleMeterEl: HTMLDivElement;
+  private railgunMeterEl: HTMLDivElement;
+  private railgunValEl: HTMLSpanElement;
+  private railgunFillEl: HTMLDivElement;
+  private minigunMeterEl: HTMLDivElement;
+  private minigunLblEl: HTMLSpanElement;
+  private minigunValEl: HTMLSpanElement;
+  private minigunFillEl: HTMLDivElement;
   private scopeEl: HTMLDivElement;
   private hitmarkerEl: HTMLDivElement;
   private damageArcWrapEl: HTMLDivElement;
@@ -368,6 +398,10 @@ export class HUDManager {
   private lastDbnoKey = '';
   private lastReviveKey = '';
   private lastBowChargeKey = '';
+  private lastTrapKey = '';
+  private lastTrapIconKind: TrapKind | '' = '';
+  private lastReticleMeterKey = '';
+  private lastRebootKey = '';
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -944,6 +978,29 @@ export class HUDManager {
     revTrack.appendChild(this.reviveFillEl);
     this.reviveBarEl.append(revTop, revTrack);
 
+    this.rebootBarEl = document.createElement('div');
+    this.rebootBarEl.className = 'fdr-reboot-bar fdr-hidden';
+    const rebootTop = document.createElement('div');
+    rebootTop.className = 'fdr-reboot-top';
+    const rebootLeft = document.createElement('span');
+    rebootLeft.className = 'fdr-reboot-title';
+    const rebootIcon = document.createElement('span');
+    rebootIcon.className = 'fdr-reboot-icon';
+    rebootIcon.innerHTML = getRebootVanSvg();
+    this.rebootLabelEl = document.createElement('span');
+    this.rebootLabelEl.textContent = 'REBOOTING PARTNER...';
+    rebootLeft.append(rebootIcon, this.rebootLabelEl);
+    this.rebootPctEl = document.createElement('span');
+    this.rebootPctEl.className = 'fdr-reboot-pct';
+    this.rebootPctEl.textContent = '0%';
+    rebootTop.append(rebootLeft, this.rebootPctEl);
+    const rebootTrack = document.createElement('div');
+    rebootTrack.className = 'fdr-reboot-track';
+    this.rebootFillEl = document.createElement('div');
+    this.rebootFillEl.className = 'fdr-reboot-fill';
+    rebootTrack.appendChild(this.rebootFillEl);
+    this.rebootBarEl.append(rebootTop, rebootTrack);
+
     this.vitalsStackEl = document.createElement('div');
     this.vitalsStackEl.className = 'fdr-vitals-stack';
 
@@ -1014,6 +1071,7 @@ export class HUDManager {
       this.campfirePillEl,
       this.dbnoBarEl,
       this.reviveBarEl,
+      this.rebootBarEl,
       this.vitalsStackEl,
     );
 
@@ -1135,7 +1193,27 @@ export class HUDManager {
       this.buildKeyEls.set(bp.type, keySpan);
     }
 
-    buildMatsBar.append(this.goldPillEl, matsStrip, buildTiles);
+    this.trapSlotChipEl = document.createElement('div');
+    this.trapSlotChipEl.className = 'fdr-trap-slot-chip empty';
+    this.trapSlotChipEl.dataset.trapKind = 'spike_trap';
+    this.trapSlotChipEl.dataset.trapCount = '0';
+    const trapKey = document.createElement('span');
+    trapKey.className = 'fdr-trap-key';
+    trapKey.textContent = '[T]';
+    this.trapIconEl = document.createElement('span');
+    this.trapIconEl.className = 'fdr-trap-icon';
+    this.trapIconEl.innerHTML = getTrapSvg('spike_trap');
+    this.trapCountEl = document.createElement('span');
+    this.trapCountEl.className = 'fdr-trap-count';
+    this.trapCountEl.textContent = '0';
+    this.trapSlotChipEl.append(trapKey, this.trapIconEl, this.trapCountEl);
+
+    buildMatsBar.append(
+      this.goldPillEl,
+      matsStrip,
+      buildTiles,
+      this.trapSlotChipEl,
+    );
 
     const hotbarWrap = document.createElement('div');
     hotbarWrap.className = 'fdr-hotbar-wrap';
@@ -1239,6 +1317,45 @@ export class HUDManager {
     this.bowArcEl = document.createElement('div');
     this.bowArcEl.className = 'fdr-bow-charge-arc fdr-hidden';
     this.crosshairEl.appendChild(this.bowArcEl);
+
+    this.reticleMeterEl = document.createElement('div');
+    this.reticleMeterEl.className = 'fdr-reticle-meter fdr-hidden';
+
+    this.railgunMeterEl = document.createElement('div');
+    this.railgunMeterEl.className = 'fdr-reticle-sub railgun fdr-hidden';
+    const railHead = document.createElement('div');
+    railHead.className = 'fdr-reticle-meter-head';
+    const railLbl = document.createElement('span');
+    railLbl.textContent = 'RAILGUN CHARGE';
+    this.railgunValEl = document.createElement('span');
+    this.railgunValEl.className = 'fdr-reticle-meter-val';
+    this.railgunValEl.textContent = '0%';
+    railHead.append(railLbl, this.railgunValEl);
+    const railTrack = document.createElement('div');
+    railTrack.className = 'fdr-reticle-track';
+    this.railgunFillEl = document.createElement('div');
+    this.railgunFillEl.className = 'fdr-reticle-fill railgun';
+    railTrack.appendChild(this.railgunFillEl);
+    this.railgunMeterEl.append(railHead, railTrack);
+
+    this.minigunMeterEl = document.createElement('div');
+    this.minigunMeterEl.className = 'fdr-reticle-sub minigun fdr-hidden';
+    const miniHead = document.createElement('div');
+    miniHead.className = 'fdr-reticle-meter-head';
+    this.minigunLblEl = document.createElement('span');
+    this.minigunLblEl.textContent = 'MINIGUN HEAT';
+    this.minigunValEl = document.createElement('span');
+    this.minigunValEl.className = 'fdr-reticle-meter-val';
+    this.minigunValEl.textContent = '0%';
+    miniHead.append(this.minigunLblEl, this.minigunValEl);
+    const miniTrack = document.createElement('div');
+    miniTrack.className = 'fdr-reticle-track';
+    this.minigunFillEl = document.createElement('div');
+    this.minigunFillEl.className = 'fdr-reticle-fill minigun';
+    miniTrack.appendChild(this.minigunFillEl);
+    this.minigunMeterEl.append(miniHead, miniTrack);
+
+    this.reticleMeterEl.append(this.railgunMeterEl, this.minigunMeterEl);
 
     this.scopeEl = document.createElement('div');
     this.scopeEl.className = 'fdr-sniper-scope fdr-hidden';
@@ -1382,6 +1499,7 @@ export class HUDManager {
       bottomRight,
       this.tacticalPingEl,
       this.crosshairEl,
+      this.reticleMeterEl,
       this.visualAudioRingEl,
       this.scopeEl,
       this.hitmarkerEl,
@@ -1477,6 +1595,25 @@ export class HUDManager {
       tankers,
       droppedMedallions,
       droppedCrowns,
+    );
+    this.lastMinimapDraw = 0;
+  }
+
+  setWorldOverdriveOverlay(
+    rails: GrindRailEntity[],
+    vans: RebootVanEntity[],
+    drones: SupplyDroneEntity[],
+  ): void;
+  setWorldOverdriveOverlay(overlay: WorldOverdriveOverlay): void;
+  setWorldOverdriveOverlay(
+    railsOrOverlay: GrindRailEntity[] | WorldOverdriveOverlay,
+    vans?: RebootVanEntity[],
+    drones?: SupplyDroneEntity[],
+  ): void {
+    this.overdriveOverlay = resolveOverdriveOverlayArgs(
+      railsOrOverlay,
+      vans,
+      drones,
     );
     this.lastMinimapDraw = 0;
   }
@@ -1582,6 +1719,25 @@ export class HUDManager {
     this.bowArcEl.classList.remove('full');
     this.bowArcEl.innerHTML = '';
     this.lastBowChargeKey = '';
+    this.trapSlotChipEl.classList.add('empty');
+    this.trapSlotChipEl.classList.remove('has-traps', 'active');
+    this.trapSlotChipEl.dataset.trapKind = 'spike_trap';
+    this.trapSlotChipEl.dataset.trapCount = '0';
+    this.trapIconEl.innerHTML = getTrapSvg('spike_trap');
+    this.trapCountEl.textContent = '0';
+    this.lastTrapKey = '';
+    this.lastTrapIconKind = 'spike_trap';
+    this.reticleMeterEl.classList.add('fdr-hidden');
+    this.reticleMeterEl.classList.remove('overheated');
+    this.railgunMeterEl.classList.add('fdr-hidden');
+    this.railgunMeterEl.classList.remove('ready', 'full');
+    this.railgunFillEl.style.width = '0%';
+    this.minigunMeterEl.classList.add('fdr-hidden');
+    this.minigunMeterEl.classList.remove('overheated', 'hot');
+    this.minigunFillEl.style.width = '0%';
+    this.lastReticleMeterKey = '';
+    this.rebootBarEl.classList.add('fdr-hidden');
+    this.lastRebootKey = '';
     for (const timer of this.activeQuestToastTimers) {
       clearTimeout(timer);
     }
@@ -1796,6 +1952,7 @@ export class HUDManager {
     this.updateWave4HUD(state, now);
     this.updateWave5HUD(state);
     this.updateWave6HUD(state);
+    this.updateWave7HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2747,50 +2904,68 @@ export class HUDManager {
   private updateWave6HUD(state: HUDState): void {
     // 1. Top-Left Duo Partner Card
     const duo = !state.spectating ? state.duoPartner ?? null : null;
+    const hasRebootCard =
+      !state.spectating && Boolean(state.hasPartnerRebootCard);
     const duoBleedRaw =
       duo && duo.knocked
         ? Math.max(0, Math.min(DBNO_MAX_HP, Math.round(duo.bleedOutHp ?? DBNO_MAX_HP)))
         : DBNO_MAX_HP;
-    const duoKey = duo
-      ? `${duo.name}:${duo.alive ? 1 : 0}:${duo.knocked ? 1 : 0}:${Math.round(duo.hp)}/${Math.round(duo.maxHp)}:${Math.round(duo.shield)}/${Math.round(duo.maxShield)}:${duoBleedRaw}:${Math.round(duo.distance)}`
-      : '';
+    const duoKey =
+      duo || hasRebootCard
+        ? `${duo?.name ?? 'DUO PARTNER'}:${duo?.alive ? 1 : 0}:${duo?.knocked ? 1 : 0}:${hasRebootCard ? 1 : 0}:${Math.round(duo?.hp ?? 0)}/${Math.round(duo?.maxHp ?? 100)}:${Math.round(duo?.shield ?? 0)}/${Math.round(duo?.maxShield ?? 100)}:${duoBleedRaw}:${Math.round(duo?.distance ?? 0)}`
+        : '';
     if (duoKey !== this.lastDuoKey) {
       this.lastDuoKey = duoKey;
-      this.duoCardEl.classList.toggle('fdr-hidden', !duo);
-      if (duo) {
-        const dist = Math.max(0, Math.round(duo.distance));
-        this.duoNameEl.textContent = duo.name.toUpperCase();
-        this.duoDistEl.textContent = `${dist}M`;
+      this.duoCardEl.classList.toggle('fdr-hidden', !duo && !hasRebootCard);
+      if (duo || hasRebootCard) {
+        const dist = duo ? Math.max(0, Math.round(duo.distance)) : 0;
+        this.duoNameEl.textContent = duo ? duo.name.toUpperCase() : 'DUO PARTNER';
+        this.duoDistEl.textContent = duo ? `${dist}M` : 'CARD';
 
-        if (!duo.alive) {
+        if (hasRebootCard) {
+          this.duoCardEl.className = 'fdr-duo-card reboot-card';
+          this.duoCardEl.dataset.duoState = 'reboot_card';
+          this.duoCardEl.dataset.rebootCard = 'true';
+          this.duoIconEl.innerHTML = getRebootVanSvg();
+          this.duoStatusPillEl.textContent = 'REBOOT CARD READY';
+          this.duoBarsEl.classList.add('fdr-hidden');
+          this.duoBleedWrapEl.classList.add('fdr-hidden');
+          this.duoStatsEl.textContent = 'VISIT REBOOT VAN [E] TO REBOOT';
+        } else if (duo && !duo.alive) {
           this.duoCardEl.className = 'fdr-duo-card eliminated';
           this.duoCardEl.dataset.duoState = 'eliminated';
+          this.duoCardEl.dataset.rebootCard = 'false';
+          this.duoIconEl.innerHTML = getReviveCrossSvg();
           this.duoStatusPillEl.textContent = 'ELIMINATED';
           this.duoBarsEl.classList.remove('fdr-hidden');
           this.duoBleedWrapEl.classList.add('fdr-hidden');
           this.duoShieldFillEl.style.width = '0%';
           this.duoHpFillEl.style.width = '0%';
           this.duoStatsEl.textContent = 'SQUAD PARTNER DOWN';
-        } else if (duo.knocked) {
+        } else if (duo && duo.knocked) {
           const bleedPct = Math.max(
             0,
             Math.min(100, (duoBleedRaw / DBNO_MAX_HP) * 100),
           );
           this.duoCardEl.className = 'fdr-duo-card knocked';
           this.duoCardEl.dataset.duoState = 'knocked';
+          this.duoCardEl.dataset.rebootCard = 'false';
+          this.duoIconEl.innerHTML = getReviveCrossSvg();
           this.duoStatusPillEl.textContent = 'KNOCKED';
           this.duoBarsEl.classList.add('fdr-hidden');
           this.duoBleedWrapEl.classList.remove('fdr-hidden');
           this.duoBleedTextEl.textContent = `${duoBleedRaw} / ${DBNO_MAX_HP}`;
           this.duoBleedFillEl.style.width = `${bleedPct.toFixed(1)}%`;
           this.duoStatsEl.textContent = `REVIVE NEEDED • ${dist}M`;
-        } else {
+        } else if (duo) {
           const hp = Math.max(0, Math.round(duo.hp));
           const maxHp = Math.max(1, Math.round(duo.maxHp));
           const shield = Math.max(0, Math.round(duo.shield));
           const maxShield = Math.max(0, Math.round(duo.maxShield));
           this.duoCardEl.className = 'fdr-duo-card alive';
           this.duoCardEl.dataset.duoState = 'alive';
+          this.duoCardEl.dataset.rebootCard = 'false';
+          this.duoIconEl.innerHTML = getReviveCrossSvg();
           this.duoStatusPillEl.textContent = 'DUO';
           this.duoBarsEl.classList.remove('fdr-hidden');
           this.duoBleedWrapEl.classList.add('fdr-hidden');
@@ -2875,6 +3050,127 @@ export class HUDManager {
         this.reviveLabelEl.textContent = revLbl;
         this.revivePctEl.textContent = `${revPct}%`;
         this.reviveFillEl.style.width = `${revPct}%`;
+      }
+    }
+  }
+
+  private updateWave7HUD(state: HUDState): void {
+    // 1. Compact [T] Trap Slot Chip inside .fdr-build-mats-bar
+    const traps = state.traps;
+    const spikeCount = Math.max(0, Math.floor(traps?.spike_trap ?? 0));
+    const bouncerCount = Math.max(0, Math.floor(traps?.bouncer_pad ?? 0));
+    const activeTrapKind: TrapKind =
+      state.activeTrapKind === 'bouncer_pad' || state.activeTrapKind === 'spike_trap'
+        ? state.activeTrapKind
+        : spikeCount === 0 && bouncerCount > 0
+          ? 'bouncer_pad'
+          : 'spike_trap';
+    const activeTrapCount =
+      activeTrapKind === 'bouncer_pad' ? bouncerCount : spikeCount;
+    const trapKey = `${activeTrapKind}:${activeTrapCount}:${state.isBuildMode ? 1 : 0}`;
+    if (trapKey !== this.lastTrapKey) {
+      this.lastTrapKey = trapKey;
+      if (this.lastTrapIconKind !== activeTrapKind) {
+        this.lastTrapIconKind = activeTrapKind;
+        this.trapIconEl.innerHTML = getTrapSvg(activeTrapKind);
+      }
+      this.trapCountEl.textContent = String(activeTrapCount);
+      this.trapSlotChipEl.dataset.trapKind = activeTrapKind;
+      this.trapSlotChipEl.dataset.trapCount = String(activeTrapCount);
+      this.trapSlotChipEl.classList.toggle('empty', activeTrapCount <= 0);
+      this.trapSlotChipEl.classList.toggle('has-traps', activeTrapCount > 0);
+      this.trapSlotChipEl.classList.toggle(
+        'active',
+        Boolean(state.isBuildMode && activeTrapCount > 0),
+      );
+    }
+
+    // 2. Crisp Railgun Charge Bar & Minigun Heat Gauge centered below crosshair (.fdr-reticle-meter)
+    const suppressMeter =
+      state.isBuildMode ||
+      state.editMode.active ||
+      state.phase === 'bus' ||
+      Boolean(state.spectating) ||
+      this.emoteWheelOpen;
+
+    const rawRail =
+      !suppressMeter &&
+      typeof state.railgunCharge === 'number' &&
+      Number.isFinite(state.railgunCharge) &&
+      state.railgunCharge > 0
+        ? Math.max(0, Math.min(1, state.railgunCharge))
+        : null;
+
+    const overheated = !suppressMeter && Boolean(state.minigunOverheated);
+    const rawHeat =
+      !suppressMeter &&
+      typeof state.minigunHeat === 'number' &&
+      Number.isFinite(state.minigunHeat) &&
+      (state.minigunHeat > 0 || overheated)
+        ? Math.max(0, Math.min(1, state.minigunHeat))
+        : overheated
+          ? 1
+          : null;
+
+    const railPct = rawRail !== null ? Math.round(rawRail * 100) : -1;
+    const heatPct = rawHeat !== null ? Math.round(rawHeat * 100) : -1;
+    const meterKey = `${railPct}:${heatPct}:${overheated ? 1 : 0}`;
+    if (meterKey !== this.lastReticleMeterKey) {
+      this.lastReticleMeterKey = meterKey;
+      const showMeter = rawRail !== null || rawHeat !== null;
+      this.reticleMeterEl.classList.toggle('fdr-hidden', !showMeter);
+      this.reticleMeterEl.classList.toggle('overheated', overheated);
+      this.reticleMeterEl.dataset.railgunCharge =
+        rawRail !== null ? rawRail.toFixed(2) : '';
+      this.reticleMeterEl.dataset.minigunHeat =
+        rawHeat !== null ? rawHeat.toFixed(2) : '';
+      this.reticleMeterEl.dataset.minigunOverheated = overheated ? 'true' : 'false';
+
+      this.railgunMeterEl.classList.toggle('fdr-hidden', rawRail === null);
+      if (rawRail !== null) {
+        this.railgunValEl.textContent = `${railPct}%`;
+        this.railgunFillEl.style.width = `${railPct}%`;
+        this.railgunMeterEl.classList.toggle('ready', rawRail >= 0.45);
+        this.railgunMeterEl.classList.toggle('full', rawRail >= 0.95);
+      } else {
+        this.railgunMeterEl.classList.remove('ready', 'full');
+        this.railgunFillEl.style.width = '0%';
+      }
+
+      this.minigunMeterEl.classList.toggle('fdr-hidden', rawHeat === null);
+      if (rawHeat !== null) {
+        this.minigunLblEl.textContent = overheated
+          ? 'OVERHEATED!'
+          : 'MINIGUN HEAT';
+        this.minigunValEl.textContent = `${heatPct}%`;
+        this.minigunFillEl.style.width = `${heatPct}%`;
+        this.minigunMeterEl.classList.toggle('overheated', overheated);
+        this.minigunMeterEl.classList.toggle(
+          'hot',
+          !overheated && rawHeat >= 0.7,
+        );
+      } else {
+        this.minigunMeterEl.classList.remove('overheated', 'hot');
+        this.minigunFillEl.style.width = '0%';
+      }
+    }
+
+    // 3. REBOOTING PARTNER... channel bar inside .fdr-bottom-center when state.rebootProgress != null
+    const hasRebootProg =
+      !state.spectating &&
+      typeof state.rebootProgress === 'number' &&
+      Number.isFinite(state.rebootProgress);
+    const rebootPct = hasRebootProg
+      ? Math.max(0, Math.min(100, Math.round((state.rebootProgress ?? 0) * 100)))
+      : -1;
+    const rebootKey = hasRebootProg ? String(rebootPct) : '';
+    if (rebootKey !== this.lastRebootKey) {
+      this.lastRebootKey = rebootKey;
+      this.rebootBarEl.classList.toggle('fdr-hidden', !hasRebootProg);
+      if (hasRebootProg) {
+        this.rebootLabelEl.textContent = 'REBOOTING PARTNER...';
+        this.rebootPctEl.textContent = `${rebootPct}%`;
+        this.rebootFillEl.style.width = `${rebootPct}%`;
       }
     }
   }
@@ -3146,6 +3442,16 @@ export class HUDManager {
       worldToMini,
       this.chapterOverlay,
       state.medallionCircles,
+      performance.now(),
+    );
+
+    // Wave-7 Overdrive Overlay (Grind Rails, Reboot Vans, Active Supply Drones)
+    drawOverdriveMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      this.overdriveOverlay,
       performance.now(),
     );
 

@@ -9,6 +9,7 @@ import type {
   MedallionId,
   Rarity,
   SpecialistRole,
+  TrapKind,
   Vec3Like,
 } from './common';
 import type { BuildPieceType, EditModeState } from './building';
@@ -199,6 +200,14 @@ export interface HUDState {
     isPlayer: boolean;
     count: number;
   }>;
+  isGrinding?: boolean;
+  railgunCharge?: number | null;
+  minigunHeat?: number | null;
+  minigunOverheated?: boolean;
+  activeTrapKind?: TrapKind;
+  traps?: Record<TrapKind, number>;
+  hasPartnerRebootCard?: boolean;
+  rebootProgress?: number | null;
 }
 
 export interface MatchQuest {
@@ -266,6 +275,10 @@ export interface MatchSummary {
   medallionsHeld?: MedallionId[];
   revives?: number;
   knocks?: number;
+  reboots?: number;
+  dronesShotDown?: number;
+  trapsPlaced?: number;
+  highlights?: string[];
 }
 
 export interface BannerMessage {

@@ -1,4 +1,4 @@
-import type { MaterialType, Vec3Like } from './common';
+import type { MaterialType, TrapKind, Vec3Like } from './common';
 
 export type BuildPieceType = 'wall' | 'floor' | 'ramp' | 'roof';
 
@@ -66,4 +66,20 @@ export interface EditResult {
   pieceId: string;
   editMask: number;
   variant: EditVariant;
+}
+
+export interface TrapEntity {
+  id: string;
+  kind: TrapKind;
+  ownerId: string;
+  squadId?: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  armed: boolean;
+  armTimer: number;
+  cooldownSec: number;
+  hp: number;
+  maxHp: number;
 }

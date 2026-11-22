@@ -650,6 +650,132 @@ interface ReviveBeamSlot {
   sparks: ReviveBeamSpark[];
 }
 
+interface RailgunBeamRing {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  frac: number;
+}
+
+interface RailgunBeamSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  beamLength: number;
+  pierced: boolean;
+  group: THREE.Group;
+  beamGroup: THREE.Group;
+  outerBeamMesh: THREE.Mesh;
+  outerBeamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  violetHaloMesh: THREE.Mesh;
+  violetHaloMat: THREE.MeshBasicMaterial;
+  impactRingMesh: THREE.Mesh;
+  impactRingMat: THREE.MeshBasicMaterial;
+  rings: RailgunBeamRing[];
+}
+
+interface RailSparkParticle {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface RailSparkSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  glowMesh: THREE.Mesh;
+  glowMat: THREE.MeshBasicMaterial;
+  sparks: RailSparkParticle[];
+}
+
+interface TrapTriggerMote {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  baseScale: number;
+}
+
+interface TrapTriggerSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  kind: 'spike_trap' | 'bouncer_pad';
+  group: THREE.Group;
+  baseRingMesh: THREE.Mesh;
+  baseRingMat: THREE.MeshBasicMaterial;
+  pulseRingMesh: THREE.Mesh;
+  pulseRingMat: THREE.MeshBasicMaterial;
+  columnMesh: THREE.Mesh;
+  columnMat: THREE.MeshBasicMaterial;
+  spikes: THREE.Mesh[];
+  spikeMat: THREE.MeshBasicMaterial;
+  motes: TrapTriggerMote[];
+}
+
+interface DroneExplodeShard {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+  isHullDebris: boolean;
+}
+
+interface DroneExplodeSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  coreMesh: THREE.Mesh;
+  coreMat: THREE.MeshBasicMaterial;
+  outerMesh: THREE.Mesh;
+  outerMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  tiltRingMesh: THREE.Mesh;
+  tiltRingMat: THREE.MeshBasicMaterial;
+  shards: DroneExplodeShard[];
+}
+
+interface RebootBeamSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  baseScale: number;
+}
+
+interface RebootBeamSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  progress: number;
+  group: THREE.Group;
+  outerBeamMesh: THREE.Mesh;
+  outerBeamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  baseRingMesh: THREE.Mesh;
+  baseRingMat: THREE.MeshBasicMaterial;
+  pulseRingMesh: THREE.Mesh;
+  pulseRingMat: THREE.MeshBasicMaterial;
+  sparks: RebootBeamSpark[];
+}
+
 function getTacticalPingColor(kind: 'move' | 'danger' | 'loot'): string {
   switch (kind) {
     case 'danger':
@@ -771,6 +897,17 @@ const CROWN_GLINT_POOL_SIZE = 12;
 const CROWN_GLINT_SPARK_COUNT = 8;
 const REVIVE_BEAM_POOL_SIZE = 8;
 const REVIVE_BEAM_SPARK_COUNT = 10;
+const RAILGUN_BEAM_POOL_SIZE = 8;
+const RAILGUN_BEAM_RING_COUNT = 5;
+const RAIL_SPARKS_POOL_SIZE = 24;
+const RAIL_SPARK_PARTICLE_COUNT = 10;
+const TRAP_TRIGGER_POOL_SIZE = 10;
+const TRAP_TRIGGER_SPIKE_COUNT = 8;
+const TRAP_TRIGGER_MOTE_COUNT = 10;
+const DRONE_EXPLODE_POOL_SIZE = 8;
+const DRONE_EXPLODE_SHARD_COUNT = 12;
+const REBOOT_BEAM_POOL_SIZE = 6;
+const REBOOT_BEAM_SPARK_COUNT = 12;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -838,6 +975,11 @@ export class VFXManager {
   private readonly slurpTankerBursts: SlurpTankerBurstSlot[] = [];
   private readonly crownGlints: CrownGlintSlot[] = [];
   private readonly reviveBeams: ReviveBeamSlot[] = [];
+  private readonly railgunBeams: RailgunBeamSlot[] = [];
+  private readonly railSparks: RailSparkSlot[] = [];
+  private readonly trapTriggers: TrapTriggerSlot[] = [];
+  private readonly droneExplodes: DroneExplodeSlot[] = [];
+  private readonly rebootBeams: RebootBeamSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -885,6 +1027,11 @@ export class VFXManager {
   private slurpTankerBurstCursor = 0;
   private crownGlintCursor = 0;
   private reviveBeamCursor = 0;
+  private railgunBeamCursor = 0;
+  private railSparksCursor = 0;
+  private trapTriggerCursor = 0;
+  private droneExplodeCursor = 0;
+  private rebootBeamCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -3229,6 +3376,484 @@ export class VFXManager {
         sparks,
       });
     }
+
+    // 30. Pulse Railgun Beam (twin cyan-violet plasma beam + traveling pulse rings + impact ring)
+    for (let i = 0; i < RAILGUN_BEAM_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_railgun_beam';
+      group.visible = false;
+
+      const beamGroup = new THREE.Group();
+      group.add(beamGroup);
+
+      const outerBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerBeamMesh = new THREE.Mesh(this.unitCylinderGeo, outerBeamMat);
+      outerBeamMesh.rotation.x = Math.PI / 2;
+      beamGroup.add(outerBeamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      coreBeamMesh.rotation.x = Math.PI / 2;
+      beamGroup.add(coreBeamMesh);
+
+      const violetHaloMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.45,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const violetHaloMesh = new THREE.Mesh(this.unitCylinderGeo, violetHaloMat);
+      violetHaloMesh.rotation.x = Math.PI / 2;
+      beamGroup.add(violetHaloMesh);
+
+      const impactRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xc084fc,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const impactRingMesh = new THREE.Mesh(this.unitRingGeo, impactRingMat);
+      beamGroup.add(impactRingMesh);
+
+      const rings: RailgunBeamRing[] = [];
+      for (let r = 0; r < RAILGUN_BEAM_RING_COUNT; r++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: r % 2 === 0 ? 0x22d3ee : 0xa855f7,
+            transparent: true,
+            opacity: 0.92,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitRingGeo, material);
+        beamGroup.add(mesh);
+        rings.push({
+          mesh,
+          material,
+          frac: (r + 1) / (RAILGUN_BEAM_RING_COUNT + 1),
+        });
+      }
+
+      this.root.add(group);
+      this.railgunBeams.push({
+        active: false,
+        age: 0,
+        duration: 0.44,
+        beamLength: 1,
+        pierced: false,
+        group,
+        beamGroup,
+        outerBeamMesh,
+        outerBeamMat,
+        coreBeamMesh,
+        coreBeamMat,
+        violetHaloMesh,
+        violetHaloMat,
+        impactRingMesh,
+        impactRingMat,
+        rings,
+      });
+    }
+
+    // 31. Grind Rail Sparks (high-energy gold-cyan friction sparks spraying off rail)
+    for (let i = 0; i < RAIL_SPARKS_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_rail_sparks';
+      group.visible = false;
+
+      const glowMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const glowMesh = new THREE.Mesh(this.unitSphereGeo, glowMat);
+      group.add(glowMesh);
+
+      const sparks: RailSparkParticle[] = [];
+      for (let s = 0; s < RAIL_SPARK_PARTICLE_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xfef08a : s % 2 === 0 ? 0xfbbf24 : 0x22d3ee,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const geo = s % 2 === 0 ? this.unitBoxGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.08,
+        });
+      }
+
+      this.root.add(group);
+      this.railSparks.push({
+        active: false,
+        age: 0,
+        duration: 0.34,
+        group,
+        glowMesh,
+        glowMat,
+        sparks,
+      });
+    }
+
+    // 32. Tactical Trap Triggers (crimson metallic spikes for spike_trap / cyan-violet launch burst for bouncer_pad)
+    for (let i = 0; i < TRAP_TRIGGER_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_trap_trigger';
+      group.visible = false;
+
+      const baseRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xef4444,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const baseRingMesh = new THREE.Mesh(this.unitRingGeo, baseRingMat);
+      baseRingMesh.rotation.x = -Math.PI / 2;
+      group.add(baseRingMesh);
+
+      const pulseRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xa855f7,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const pulseRingMesh = new THREE.Mesh(this.unitRingGeo, pulseRingMat);
+      pulseRingMesh.rotation.x = -Math.PI / 2;
+      group.add(pulseRingMesh);
+
+      const columnMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.48,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const columnMesh = new THREE.Mesh(this.beamCylGeo, columnMat);
+      group.add(columnMesh);
+
+      const spikeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe2e8f0,
+          transparent: true,
+          opacity: 0.95,
+        }),
+      );
+      const spikes: THREE.Mesh[] = [];
+      for (let sp = 0; sp < TRAP_TRIGGER_SPIKE_COUNT; sp++) {
+        const ang = (sp / TRAP_TRIGGER_SPIKE_COUNT) * Math.PI * 2;
+        const rad = 0.52 + (sp % 2) * 0.35;
+        const spike = new THREE.Mesh(this.unitConeGeo, spikeMat);
+        spike.position.set(Math.cos(ang) * rad, 0.45, Math.sin(ang) * rad);
+        spike.scale.set(0.14, 1.05, 0.14);
+        group.add(spike);
+        spikes.push(spike);
+      }
+
+      const motes: TrapTriggerMote[] = [];
+      for (let m = 0; m < TRAP_TRIGGER_MOTE_COUNT; m++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: 0xfef08a,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        motes.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          baseScale: 0.11,
+        });
+      }
+
+      this.root.add(group);
+      this.trapTriggers.push({
+        active: false,
+        age: 0,
+        duration: 0.55,
+        kind: 'spike_trap',
+        group,
+        baseRingMesh,
+        baseRingMat,
+        pulseRingMesh,
+        pulseRingMat,
+        columnMesh,
+        columnMat,
+        spikes,
+        spikeMat,
+        motes,
+      });
+    }
+
+    // 33. Flying Supply Drone Explode (rarity-tinted aerial blast + tumbling hull/loot shards)
+    for (let i = 0; i < DRONE_EXPLODE_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_drone_explode';
+      group.visible = false;
+
+      const coreMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreMesh = new THREE.Mesh(this.unitSphereGeo, coreMat);
+      group.add(coreMesh);
+
+      const outerMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x26a6ff,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerMesh = new THREE.Mesh(this.unitSphereGeo, outerMat);
+      group.add(outerMesh);
+
+      const ringMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x26a6ff,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const ringMesh = new THREE.Mesh(this.unitRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      group.add(ringMesh);
+
+      const tiltRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.86,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const tiltRingMesh = new THREE.Mesh(this.unitRingGeo, tiltRingMat);
+      tiltRingMesh.rotation.set(Math.PI / 3, 0, Math.PI / 4);
+      group.add(tiltRingMesh);
+
+      const shards: DroneExplodeShard[] = [];
+      for (let s = 0; s < DRONE_EXPLODE_SHARD_COUNT; s++) {
+        const isHullDebris = s % 3 === 0;
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: isHullDebris ? 0x334155 : 0x26a6ff,
+            transparent: true,
+            opacity: 1,
+            depthWrite: isHullDebris,
+            blending: isHullDebris ? THREE.NormalBlending : THREE.AdditiveBlending,
+          }),
+        );
+        const geo = isHullDebris ? this.unitBoxGeo : this.unitCrystalGeo;
+        const mesh = new THREE.Mesh(geo, material);
+        group.add(mesh);
+        shards.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.14,
+          isHullDebris,
+        });
+      }
+
+      this.root.add(group);
+      this.droneExplodes.push({
+        active: false,
+        age: 0,
+        duration: 0.72,
+        group,
+        coreMesh,
+        coreMat,
+        outerMesh,
+        outerMat,
+        ringMesh,
+        ringMat,
+        tiltRingMesh,
+        tiltRingMat,
+        shards,
+      });
+    }
+
+    // 34. Reboot Van Skyward Respawn Beam (progress-scaled cyan-gold reboot pillar + rising halos)
+    for (let i = 0; i < REBOOT_BEAM_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_reboot_beam';
+      group.visible = false;
+
+      const outerBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.36,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerBeamMesh = new THREE.Mesh(this.beamCylGeo, outerBeamMat);
+      outerBeamMesh.position.y = 9.0;
+      outerBeamMesh.scale.set(0.95, 18, 0.95);
+      group.add(outerBeamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      coreBeamMesh.position.y = 11.0;
+      coreBeamMesh.scale.set(0.28, 22, 0.28);
+      group.add(coreBeamMesh);
+
+      const baseRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const baseRingMesh = new THREE.Mesh(this.unitRingGeo, baseRingMat);
+      baseRingMesh.rotation.x = -Math.PI / 2;
+      baseRingMesh.position.y = 0.08;
+      group.add(baseRingMesh);
+
+      const pulseRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfde047,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const pulseRingMesh = new THREE.Mesh(this.unitRingGeo, pulseRingMat);
+      pulseRingMesh.rotation.x = -Math.PI / 2;
+      pulseRingMesh.position.y = 0.25;
+      group.add(pulseRingMesh);
+
+      const sparks: RebootBeamSpark[] = [];
+      for (let s = 0; s < REBOOT_BEAM_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xffffff : s % 2 === 0 ? 0xfde047 : 0x22d3ee,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / REBOOT_BEAM_SPARK_COUNT) * Math.PI * 2,
+          radius: 0.85,
+          speedY: 2.2,
+          baseScale: 0.11,
+        });
+      }
+
+      this.root.add(group);
+      this.rebootBeams.push({
+        active: false,
+        age: 0,
+        duration: 0.6,
+        progress: 0,
+        group,
+        outerBeamMesh,
+        outerBeamMat,
+        coreBeamMesh,
+        coreBeamMat,
+        baseRingMesh,
+        baseRingMat,
+        pulseRingMesh,
+        pulseRingMat,
+        sparks,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -3400,6 +4025,11 @@ export class VFXManager {
       ),
       this.eventBus.on('vfx:crown_glint', (e) => this.spawnCrownGlint(e.position)),
       this.eventBus.on('vfx:revive_beam', (e) => this.spawnReviveBeam(e.position, e.progress)),
+      this.eventBus.on('vfx:railgun_beam', (e) => this.spawnRailgunBeam(e.from, e.to, e.pierced)),
+      this.eventBus.on('vfx:rail_sparks', (e) => this.spawnRailSparks(e.position, e.velocity)),
+      this.eventBus.on('vfx:trap_trigger', (e) => this.spawnTrapTrigger(e.position, e.kind)),
+      this.eventBus.on('vfx:drone_explode', (e) => this.spawnDroneExplode(e.position, e.rarity)),
+      this.eventBus.on('vfx:reboot_beam', (e) => this.spawnRebootBeam(e.position, e.progress)),
     );
   }
 
@@ -3415,16 +4045,16 @@ export class VFXManager {
   }
 
   private spawnTracer(from: Vec3Like, to: Vec3Like, color = 0xffe066, width = 0.036): void {
-    if (this.disposed) return;
-
-    const slot = this.tracers[this.tracerCursor];
-    this.tracerCursor = (this.tracerCursor + 1) % TRACER_POOL_SIZE;
+    if (this.disposed || !isFiniteVec3(from) || !isFiniteVec3(to)) return;
 
     this.tmpA.set(from.x, from.y, from.z);
     this.tmpB.set(to.x, to.y, to.z);
     this.tmpDir.subVectors(this.tmpB, this.tmpA);
     const len = this.tmpDir.length();
-    if (len < 1e-4) return;
+    if (!Number.isFinite(len) || len < 1e-4) return;
+
+    const slot = this.tracers[this.tracerCursor];
+    this.tracerCursor = (this.tracerCursor + 1) % TRACER_POOL_SIZE;
 
     this.tmpDir.divideScalar(len);
     this.tmpQuat.setFromUnitVectors(this.upAxis, this.tmpDir);
@@ -3444,8 +4074,9 @@ export class VFXManager {
   }
 
   private spawnMuzzle(position: Vec3Like, direction: Vec3Like, weaponId: WeaponId): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
+    const safeDir: Vec3Like = isFiniteVec3(direction) ? direction : { x: 0, y: 0, z: 1 };
     const slot = this.muzzles[this.muzzleCursor];
     this.muzzleCursor = (this.muzzleCursor + 1) % MUZZLE_POOL_SIZE;
 
@@ -3454,6 +4085,12 @@ export class VFXManager {
     if (weaponId === 'rocket_launcher') {
       scale = 1.85;
       color = 0xf97316;
+    } else if (weaponId === 'railgun') {
+      scale = 1.65;
+      color = 0xa855f7;
+    } else if (weaponId === 'minigun') {
+      scale = 1.25;
+      color = 0xfb923c;
     } else if (weaponId === 'heavy_shotgun') {
       scale = 1.55;
       color = 0xf59e0b;
@@ -3488,23 +4125,24 @@ export class VFXManager {
     slot.baseScale = scale;
 
     slot.group.position.set(position.x, position.y, position.z);
-    this.orientToDirection(slot.group, direction, this.zAxis);
+    this.orientToDirection(slot.group, safeDir, this.zAxis);
     slot.group.rotateZ(this.nextRand() * Math.PI);
     slot.group.scale.setScalar(scale);
     slot.material.color.setHex(color);
     slot.material.opacity = 0.95;
     slot.group.visible = true;
 
-    // Eject spinning brass casing or shotgun shell for bullet/shell firearms (not arrows)
+    // Eject spinning brass casing or shotgun shell for bullet/shell firearms (not arrows or railgun energy slugs)
     const ammoType = WEAPONS[weaponId]?.ammoType;
     if (
       weaponId !== 'boom_bow' &&
+      weaponId !== 'railgun' &&
       (ammoType === 'light' ||
         ammoType === 'medium' ||
         ammoType === 'heavy' ||
         ammoType === 'shells')
     ) {
-      this.spawnCasing(position, direction, ammoType);
+      this.spawnCasing(position, safeDir, ammoType);
     }
   }
 
@@ -3777,7 +4415,7 @@ export class VFXManager {
     material: MaterialType,
     pieceType: BuildPieceType,
   ): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
     const slot = this.bursts[this.burstCursor];
     this.burstCursor = (this.burstCursor + 1) % BURST_POOL_SIZE;
@@ -3822,7 +4460,7 @@ export class VFXManager {
   }
 
   private spawnChestOpen(position: Vec3Like): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
     const slot = this.bursts[this.burstCursor];
     this.burstCursor = (this.burstCursor + 1) % BURST_POOL_SIZE;
@@ -3864,7 +4502,7 @@ export class VFXManager {
   }
 
   private spawnExplosion(position: Vec3Like, radius: number): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
     const slot = this.explosions[this.explosionCursor];
     this.explosionCursor = (this.explosionCursor + 1) % EXPLOSION_POOL_SIZE;
@@ -3903,7 +4541,7 @@ export class VFXManager {
   }
 
   private spawnShockwave(position: Vec3Like, radius: number): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
     const slot = this.shockwaves[this.shockwaveCursor];
     this.shockwaveCursor = (this.shockwaveCursor + 1) % SHOCKWAVE_POOL_SIZE;
@@ -3932,7 +4570,7 @@ export class VFXManager {
   }
 
   private spawnSplashHeal(position: Vec3Like, radius: number): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
     const slot = this.splashHeals[this.splashHealCursor];
     this.splashHealCursor = (this.splashHealCursor + 1) % SPLASH_HEAL_POOL_SIZE;
@@ -3971,7 +4609,7 @@ export class VFXManager {
   }
 
   private spawnSlideDust(position: Vec3Like, biome: BiomeType): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
     const slot = this.slideDusts[this.slideDustCursor];
     this.slideDustCursor = (this.slideDustCursor + 1) % SLIDE_DUST_POOL_SIZE;
@@ -4004,7 +4642,7 @@ export class VFXManager {
   }
 
   private spawnElimination(position: Vec3Like, skinColor?: string): void {
-    if (this.disposed) return;
+    if (this.disposed || !isFiniteVec3(position)) return;
 
     const slot = this.eliminations[this.eliminationCursor];
     this.eliminationCursor = (this.eliminationCursor + 1) % ELIMINATION_POOL_SIZE;
@@ -4061,6 +4699,9 @@ export class VFXManager {
       return;
     }
 
+    if (!isFiniteVec3(position)) return;
+    const safeNormal: Vec3Like = isFiniteVec3(normal) ? normal : { x: 0, y: 0, z: 1 };
+
     if (!slot) {
       slot = this.weakpoints.find((w) => !w.active) ?? this.weakpoints[0];
     }
@@ -4069,7 +4710,7 @@ export class VFXManager {
     slot.propId = propId;
     slot.age = 0;
 
-    this.tmpDir.set(normal.x, normal.y, normal.z);
+    this.tmpDir.set(safeNormal.x, safeNormal.y, safeNormal.z);
     if (this.tmpDir.lengthSq() < 1e-8) {
       this.tmpDir.set(0, 0, 1);
     } else {
@@ -5078,6 +5719,219 @@ export class VFXManager {
         sp.material.opacity = fade;
       }
     }
+
+    // 31. Pulse Railgun Beam
+    for (let i = 0; i < RAILGUN_BEAM_POOL_SIZE; i++) {
+      const rg = this.railgunBeams[i];
+      if (!rg.active) continue;
+      rg.age += safeDt;
+      const t = rg.age / rg.duration;
+      if (t >= 1) {
+        rg.active = false;
+        rg.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const shrink = 1 - 0.65 * t;
+      const pierceBoost = rg.pierced ? 1.45 : 1.0;
+
+      rg.outerBeamMesh.scale.set(0.16 * shrink * pierceBoost, rg.beamLength, 0.16 * shrink * pierceBoost);
+      rg.outerBeamMat.opacity = 0.72 * fade;
+
+      rg.coreBeamMesh.scale.set(0.065 * (1 - 0.75 * t), rg.beamLength, 0.065 * (1 - 0.75 * t));
+      rg.coreBeamMat.opacity = 0.96 * fade;
+
+      rg.violetHaloMesh.scale.set(0.26 * shrink * pierceBoost, rg.beamLength, 0.26 * shrink * pierceBoost);
+      rg.violetHaloMat.opacity = (rg.pierced ? 0.68 : 0.42) * fade * fade;
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      rg.impactRingMesh.scale.setScalar((0.35 + 1.45 * easeOut) * pierceBoost);
+      rg.impactRingMat.opacity = 0.92 * fade;
+
+      for (let r = 0; r < RAILGUN_BEAM_RING_COUNT; r++) {
+        const ring = rg.rings[r];
+        const ringZ = clamp(ring.frac + 0.12 * t, 0.04, 0.98) * rg.beamLength;
+        ring.mesh.position.z = ringZ;
+        ring.mesh.rotation.z += (r % 2 === 0 ? 5.5 : -5.5) * safeDt;
+        ring.mesh.scale.setScalar((0.28 + 0.72 * easeOut) * pierceBoost);
+        ring.material.opacity = 0.9 * fade;
+      }
+    }
+
+    // 32. Grind Rail Sparks
+    for (let i = 0; i < RAIL_SPARKS_POOL_SIZE; i++) {
+      const rs = this.railSparks[i];
+      if (!rs.active) continue;
+      rs.age += safeDt;
+      const t = rs.age / rs.duration;
+      if (t >= 1) {
+        rs.active = false;
+        rs.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      rs.glowMesh.scale.setScalar(0.28 * (1 - 0.6 * t));
+      rs.glowMat.opacity = 0.9 * fade * fade;
+
+      for (let s = 0; s < RAIL_SPARK_PARTICLE_COUNT; s++) {
+        const sp = rs.sparks[s];
+        sp.vy -= 12.5 * safeDt;
+        sp.mesh.position.x += sp.vx * safeDt;
+        sp.mesh.position.y += sp.vy * safeDt;
+        sp.mesh.position.z += sp.vz * safeDt;
+        sp.mesh.rotation.x += sp.rx * safeDt;
+        sp.mesh.rotation.y += sp.ry * safeDt;
+        sp.mesh.scale.set(
+          sp.baseScale * 0.65 * fade,
+          sp.baseScale * 0.65 * fade,
+          sp.baseScale * 2.1 * fade,
+        );
+        sp.material.opacity = fade;
+      }
+    }
+
+    // 33. Tactical Trap Triggers (spike_trap / bouncer_pad)
+    for (let i = 0; i < TRAP_TRIGGER_POOL_SIZE; i++) {
+      const tt = this.trapTriggers[i];
+      if (!tt.active) continue;
+      tt.age += safeDt;
+      const t = tt.age / tt.duration;
+      if (t >= 1) {
+        tt.active = false;
+        tt.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      tt.baseRingMesh.scale.setScalar(0.55 + 2.1 * easeOut);
+      tt.baseRingMat.opacity = 0.92 * fade;
+
+      if (tt.kind === 'spike_trap') {
+        tt.pulseRingMesh.position.y = 0.18 + 0.6 * easeOut;
+        tt.pulseRingMesh.scale.setScalar(0.45 + 1.35 * easeOut);
+        tt.pulseRingMat.opacity = 0.85 * fade * fade;
+
+        // Sharp upward spike thrust followed by snap retraction
+        const spikeLift = t < 0.25 ? t / 0.25 : 1 - (t - 0.25) / 0.75;
+        const spikeHeight = Math.max(0.1, 1.15 * spikeLift);
+        tt.spikeMat.opacity = clamp(0.95 * (1 - Math.max(0, (t - 0.65) / 0.35)), 0, 1);
+        for (let s = 0; s < TRAP_TRIGGER_SPIKE_COUNT; s++) {
+          const sp = tt.spikes[s];
+          sp.position.y = spikeHeight * 0.5;
+          sp.scale.set(0.14, spikeHeight, 0.14);
+        }
+      } else {
+        tt.pulseRingMesh.position.y = 0.1 + 2.8 * easeOut;
+        tt.pulseRingMesh.scale.setScalar(0.75 + 1.65 * easeOut);
+        tt.pulseRingMat.opacity = 0.9 * fade;
+
+        const colH = 2.6 * (0.4 + 0.6 * easeOut);
+        const colW = 1.25 * (1 - 0.45 * t);
+        tt.columnMesh.position.y = colH * 0.5;
+        tt.columnMesh.scale.set(colW, colH, colW);
+        tt.columnMat.opacity = 0.48 * fade;
+      }
+
+      for (let m = 0; m < TRAP_TRIGGER_MOTE_COUNT; m++) {
+        const mt = tt.motes[m];
+        if (tt.kind === 'spike_trap') {
+          mt.vy -= 10.0 * safeDt;
+        }
+        mt.mesh.position.x += mt.vx * safeDt;
+        mt.mesh.position.y += mt.vy * safeDt;
+        mt.mesh.position.z += mt.vz * safeDt;
+        mt.mesh.rotation.y += 6 * safeDt;
+        mt.mesh.scale.setScalar(mt.baseScale * fade);
+        mt.material.opacity = fade;
+      }
+    }
+
+    // 34. Supply Drone Explode
+    for (let i = 0; i < DRONE_EXPLODE_POOL_SIZE; i++) {
+      const de = this.droneExplodes[i];
+      if (!de.active) continue;
+      de.age += safeDt;
+      const t = de.age / de.duration;
+      if (t >= 1) {
+        de.active = false;
+        de.group.visible = false;
+        continue;
+      }
+
+      const expand = 1 - Math.pow(1 - Math.min(1, t * 2.4), 2);
+      const fade = 1 - t;
+
+      de.coreMesh.scale.setScalar(1.35 * expand);
+      de.coreMat.opacity = Math.max(0, 1 - t * 1.6);
+
+      de.outerMesh.scale.setScalar(2.4 * expand);
+      de.outerMat.opacity = 0.78 * fade;
+
+      de.ringMesh.scale.setScalar(0.65 + 2.6 * expand);
+      de.ringMat.opacity = 0.92 * fade;
+
+      de.tiltRingMesh.rotation.y += 4.8 * safeDt;
+      de.tiltRingMesh.scale.setScalar(0.45 + 2.1 * expand);
+      de.tiltRingMat.opacity = 0.86 * fade * fade;
+
+      for (let s = 0; s < DRONE_EXPLODE_SHARD_COUNT; s++) {
+        const sh = de.shards[s];
+        sh.vy -= (sh.isHullDebris ? 13.5 : 6.5) * safeDt;
+        sh.mesh.position.x += sh.vx * safeDt;
+        sh.mesh.position.y += sh.vy * safeDt;
+        sh.mesh.position.z += sh.vz * safeDt;
+        sh.mesh.rotation.x += sh.rx * safeDt;
+        sh.mesh.rotation.y += sh.ry * safeDt;
+        sh.mesh.scale.setScalar(sh.baseScale * (1 - 0.55 * t));
+        sh.material.opacity = fade;
+      }
+    }
+
+    // 35. Reboot Van Skyward Beam
+    for (let i = 0; i < REBOOT_BEAM_POOL_SIZE; i++) {
+      const rb = this.rebootBeams[i];
+      if (!rb.active) continue;
+      rb.age += safeDt;
+      const t = rb.age / rb.duration;
+      if (t >= 1) {
+        rb.active = false;
+        rb.group.visible = false;
+        continue;
+      }
+
+      const fade = 1 - t;
+      const pulse = 1 + 0.1 * Math.sin(rb.age * 11);
+      const beamW = (0.75 + 0.45 * rb.progress) * pulse;
+      rb.outerBeamMesh.scale.set(beamW, 18, beamW);
+      rb.outerBeamMat.opacity = (0.30 + 0.20 * rb.progress) * fade;
+
+      const coreW = 0.22 + 0.14 * rb.progress;
+      rb.coreBeamMesh.scale.set(coreW, 22, coreW);
+      rb.coreBeamMat.opacity = (0.65 + 0.25 * rb.progress) * fade;
+
+      rb.baseRingMesh.scale.setScalar((0.95 + 1.15 * rb.progress) * pulse);
+      rb.baseRingMat.opacity = 0.94 * fade;
+
+      const riseFrac = (rb.age * 1.9) % 1;
+      rb.pulseRingMesh.position.y = 0.2 + riseFrac * 6.5;
+      rb.pulseRingMesh.scale.setScalar(0.85 + 0.85 * (1 - riseFrac));
+      rb.pulseRingMat.opacity = 0.9 * (1 - riseFrac) * fade;
+
+      for (let s = 0; s < REBOOT_BEAM_SPARK_COUNT; s++) {
+        const sp = rb.sparks[s];
+        const ang = sp.angle + rb.age * 3.6;
+        sp.mesh.position.x = Math.cos(ang) * sp.radius;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * sp.radius;
+        sp.mesh.rotation.y += 5.5 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.45 * t));
+        sp.material.opacity = fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -5836,6 +6690,278 @@ export class VFXManager {
     }
   }
 
+  private spawnRailgunBeam(from: Vec3Like, to: Vec3Like, pierced = false): void {
+    if (this.disposed || !isFiniteVec3(from) || !isFiniteVec3(to)) return;
+
+    this.tmpA.set(from.x, from.y, from.z);
+    this.tmpB.set(to.x, to.y, to.z);
+    this.tmpDir.subVectors(this.tmpB, this.tmpA);
+    const rawLen = this.tmpDir.length();
+    if (!Number.isFinite(rawLen) || rawLen < 1e-4) return;
+
+    const len = clamp(rawLen, 0.05, 500);
+    this.tmpDir.divideScalar(rawLen);
+
+    const slot = this.railgunBeams[this.railgunBeamCursor];
+    this.railgunBeamCursor = (this.railgunBeamCursor + 1) % RAILGUN_BEAM_POOL_SIZE;
+
+    const isPierced = Boolean(pierced);
+    const pierceBoost = isPierced ? 1.45 : 1.0;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.44;
+    slot.beamLength = len;
+    slot.pierced = isPierced;
+
+    slot.group.position.copy(this.tmpA);
+    slot.group.visible = true;
+
+    this.tmpQuat.setFromUnitVectors(this.zAxis, this.tmpDir);
+    slot.beamGroup.quaternion.copy(this.tmpQuat);
+
+    slot.outerBeamMesh.position.set(0, 0, len * 0.5);
+    slot.outerBeamMesh.scale.set(0.16 * pierceBoost, len, 0.16 * pierceBoost);
+    slot.outerBeamMat.opacity = 0.72;
+
+    slot.coreBeamMesh.position.set(0, 0, len * 0.5);
+    slot.coreBeamMesh.scale.set(0.065, len, 0.065);
+    slot.coreBeamMat.opacity = 0.96;
+
+    slot.violetHaloMesh.position.set(0, 0, len * 0.5);
+    slot.violetHaloMesh.scale.set(0.26 * pierceBoost, len, 0.26 * pierceBoost);
+    slot.violetHaloMat.opacity = isPierced ? 0.68 : 0.42;
+
+    slot.impactRingMesh.position.set(0, 0, len);
+    slot.impactRingMesh.scale.setScalar(0.35 * pierceBoost);
+    slot.impactRingMat.color.setHex(isPierced ? 0xa855f7 : 0x22d3ee);
+    slot.impactRingMat.opacity = 0.92;
+
+    for (let r = 0; r < RAILGUN_BEAM_RING_COUNT; r++) {
+      const ring = slot.rings[r];
+      ring.frac = (r + 1) / (RAILGUN_BEAM_RING_COUNT + 1);
+      ring.mesh.position.set(0, 0, ring.frac * len);
+      ring.mesh.rotation.z = r * 0.7;
+      ring.mesh.scale.setScalar(0.28 * pierceBoost);
+      ring.material.opacity = 0.9;
+    }
+  }
+
+  private spawnRailSparks(position: Vec3Like, velocity?: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.railSparks[this.railSparksCursor];
+    this.railSparksCursor = (this.railSparksCursor + 1) % RAIL_SPARKS_POOL_SIZE;
+
+    const hasVel = isFiniteVec3(velocity);
+    const velX = hasVel ? clamp(velocity.x, -40, 40) : 0;
+    const velY = hasVel ? clamp(velocity.y, -40, 40) : 0;
+    const velZ = hasVel ? clamp(velocity.z, -40, 40) : 0;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.34;
+
+    slot.group.position.set(position.x, position.y + 0.06, position.z);
+    slot.group.visible = true;
+
+    slot.glowMesh.scale.setScalar(0.28);
+    slot.glowMat.opacity = 0.9;
+
+    for (let s = 0; s < RAIL_SPARK_PARTICLE_COUNT; s++) {
+      const sp = slot.sparks[s];
+      const ang = (s / RAIL_SPARK_PARTICLE_COUNT) * Math.PI * 2 + this.nextRand() * 0.45;
+      const radialSpeed = 1.6 + this.nextRand() * 2.4;
+      sp.vx = Math.cos(ang) * radialSpeed - velX * 0.32;
+      sp.vy = 1.8 + this.nextRand() * 2.2 + Math.max(0, -velY * 0.2);
+      sp.vz = Math.sin(ang) * radialSpeed - velZ * 0.32;
+      sp.rx = (this.nextRand() - 0.5) * 18;
+      sp.ry = (this.nextRand() - 0.5) * 18;
+      sp.baseScale = 0.06 + this.nextRand() * 0.04;
+
+      sp.mesh.position.set((this.nextRand() - 0.5) * 0.16, 0.04, (this.nextRand() - 0.5) * 0.16);
+      sp.mesh.rotation.set(this.nextRand() * Math.PI, this.nextRand() * Math.PI, 0);
+      sp.mesh.scale.set(sp.baseScale * 0.65, sp.baseScale * 0.65, sp.baseScale * 2.1);
+      sp.material.opacity = 1;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnTrapTrigger(position: Vec3Like, kind: 'spike_trap' | 'bouncer_pad'): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.trapTriggers[this.trapTriggerCursor];
+    this.trapTriggerCursor = (this.trapTriggerCursor + 1) % TRAP_TRIGGER_POOL_SIZE;
+
+    const safeKind = kind === 'bouncer_pad' ? 'bouncer_pad' : 'spike_trap';
+    const isBouncer = safeKind === 'bouncer_pad';
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = isBouncer ? 0.58 : 0.52;
+    slot.kind = safeKind;
+
+    slot.group.position.set(position.x, position.y + 0.05, position.z);
+    slot.group.visible = true;
+
+    slot.baseRingMat.color.setHex(isBouncer ? 0x22d3ee : 0xef4444);
+    slot.baseRingMat.opacity = 0.92;
+    slot.baseRingMesh.scale.setScalar(0.55);
+
+    slot.pulseRingMat.color.setHex(isBouncer ? 0xa855f7 : 0xf87171);
+    slot.pulseRingMat.opacity = 0.88;
+    slot.pulseRingMesh.position.y = 0.1;
+    slot.pulseRingMesh.scale.setScalar(0.45);
+
+    slot.columnMesh.visible = isBouncer;
+    slot.columnMat.opacity = 0.48;
+    slot.columnMesh.position.y = 1.0;
+    slot.columnMesh.scale.set(1.1, 2.0, 1.1);
+
+    slot.spikeMat.opacity = 0.95;
+    for (let s = 0; s < TRAP_TRIGGER_SPIKE_COUNT; s++) {
+      const sp = slot.spikes[s];
+      sp.visible = !isBouncer;
+      sp.position.y = 0.45;
+      sp.scale.set(0.14, 0.9, 0.14);
+    }
+
+    for (let m = 0; m < TRAP_TRIGGER_MOTE_COUNT; m++) {
+      const mt = slot.motes[m];
+      const ang = (m / TRAP_TRIGGER_MOTE_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      if (isBouncer) {
+        mt.vx = Math.cos(ang) * (0.4 + this.nextRand() * 0.6);
+        mt.vy = 4.2 + this.nextRand() * 3.4;
+        mt.vz = Math.sin(ang) * (0.4 + this.nextRand() * 0.6);
+        mt.material.color.setHex(m % 2 === 0 ? 0x22d3ee : 0xa855f7);
+      } else {
+        const horiz = 1.8 + this.nextRand() * 2.4;
+        mt.vx = Math.cos(ang) * horiz;
+        mt.vy = 2.4 + this.nextRand() * 2.2;
+        mt.vz = Math.sin(ang) * horiz;
+        mt.material.color.setHex(m % 2 === 0 ? 0xef4444 : 0xfef08a);
+      }
+      mt.baseScale = 0.085 + this.nextRand() * 0.05;
+      mt.mesh.position.set(Math.cos(ang) * 0.35, 0.15, Math.sin(ang) * 0.35);
+      mt.mesh.scale.setScalar(mt.baseScale);
+      mt.material.opacity = 1;
+      mt.mesh.visible = true;
+    }
+  }
+
+  private spawnDroneExplode(position: Vec3Like, rarity: Rarity): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.droneExplodes[this.droneExplodeCursor];
+    this.droneExplodeCursor = (this.droneExplodeCursor + 1) % DRONE_EXPLODE_POOL_SIZE;
+
+    const rarityColor = RARITY_COLORS[rarity] ?? RARITY_COLORS.rare;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.72;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.coreMesh.scale.setScalar(0.35);
+    slot.coreMat.opacity = 0.96;
+
+    slot.outerMesh.scale.setScalar(0.65);
+    slot.outerMat.color.set(rarityColor);
+    slot.outerMat.opacity = 0.78;
+
+    slot.ringMesh.scale.setScalar(0.65);
+    slot.ringMat.color.set(rarityColor);
+    slot.ringMat.opacity = 0.92;
+
+    slot.tiltRingMesh.rotation.set(Math.PI / 3, this.nextRand() * Math.PI, Math.PI / 4);
+    slot.tiltRingMesh.scale.setScalar(0.45);
+    slot.tiltRingMat.color.set(rarityColor);
+    slot.tiltRingMat.opacity = 0.86;
+
+    for (let s = 0; s < DRONE_EXPLODE_SHARD_COUNT; s++) {
+      const sh = slot.shards[s];
+      const ang = (s / DRONE_EXPLODE_SHARD_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      const spd = 2.6 + this.nextRand() * 3.8;
+      sh.vx = Math.cos(ang) * spd;
+      sh.vy = 1.6 + this.nextRand() * 3.4;
+      sh.vz = Math.sin(ang) * spd;
+      sh.rx = (this.nextRand() - 0.5) * 14;
+      sh.ry = (this.nextRand() - 0.5) * 14;
+      sh.baseScale = sh.isHullDebris ? 0.14 + this.nextRand() * 0.08 : 0.11 + this.nextRand() * 0.06;
+      sh.mesh.position.set(0, 0, 0);
+      sh.mesh.rotation.set(this.nextRand() * 2, this.nextRand() * 2, 0);
+      sh.mesh.scale.setScalar(sh.baseScale);
+      if (!sh.isHullDebris) {
+        sh.material.color.set(s % 2 === 0 ? rarityColor : '#ffffff');
+      }
+      sh.material.opacity = 1;
+      sh.mesh.visible = true;
+    }
+  }
+
+  private spawnRebootBeam(position: Vec3Like, progress: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const safeProgress = clamp(Number.isFinite(progress) ? progress : 0, 0, 1);
+
+    // Reuse an active reboot beam at the same van so 5.0s channel updates smoothly
+    let slot = this.rebootBeams.find((rb) => {
+      if (!rb.active) return false;
+      const dx = rb.group.position.x - position.x;
+      const dy = rb.group.position.y - position.y;
+      const dz = rb.group.position.z - position.z;
+      return dx * dx + dy * dy + dz * dz < 1.44;
+    });
+
+    if (!slot) {
+      slot =
+        this.rebootBeams.find((rb) => !rb.active) ??
+        this.rebootBeams[this.rebootBeamCursor];
+      this.rebootBeamCursor = (this.rebootBeamCursor + 1) % REBOOT_BEAM_POOL_SIZE;
+    }
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.6;
+    slot.progress = safeProgress;
+
+    slot.group.position.set(position.x, position.y, position.z);
+    slot.group.visible = true;
+
+    slot.outerBeamMesh.scale.set(0.75 + 0.45 * safeProgress, 18, 0.75 + 0.45 * safeProgress);
+    slot.outerBeamMat.color.setHex(safeProgress > 0.85 ? 0x34d399 : 0x22d3ee);
+    slot.outerBeamMat.opacity = 0.30 + 0.20 * safeProgress;
+
+    slot.coreBeamMesh.scale.set(0.22 + 0.14 * safeProgress, 22, 0.22 + 0.14 * safeProgress);
+    slot.coreBeamMat.opacity = 0.65 + 0.25 * safeProgress;
+
+    slot.baseRingMat.color.setHex(safeProgress > 0.8 ? 0xfde047 : 0x22d3ee);
+    slot.baseRingMesh.scale.setScalar(0.95 + 1.15 * safeProgress);
+    slot.baseRingMat.opacity = 0.94;
+
+    slot.pulseRingMesh.position.y = 0.2;
+    slot.pulseRingMesh.scale.setScalar(0.85);
+    slot.pulseRingMat.opacity = 0.9;
+
+    for (let s = 0; s < REBOOT_BEAM_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / REBOOT_BEAM_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      sp.radius = 0.55 + this.nextRand() * 0.45;
+      sp.speedY = 1.8 + this.nextRand() * 2.0;
+      sp.baseScale = 0.09 + this.nextRand() * 0.045;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.2 + this.nextRand() * 0.9,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.96;
+      sp.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -5967,6 +7093,11 @@ export class VFXManager {
     for (const st of this.slurpTankerBursts) if (st.active) count++;
     for (const cg of this.crownGlints) if (cg.active) count++;
     for (const rb of this.reviveBeams) if (rb.active) count++;
+    for (const rg of this.railgunBeams) if (rg.active) count++;
+    for (const rs of this.railSparks) if (rs.active) count++;
+    for (const tt of this.trapTriggers) if (tt.active) count++;
+    for (const de of this.droneExplodes) if (de.active) count++;
+    for (const rb of this.rebootBeams) if (rb.active) count++;
     return count;
   }
 
@@ -6112,6 +7243,36 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveRailgunBeamCount(): number {
+    let count = 0;
+    for (const rg of this.railgunBeams) if (rg.active) count++;
+    return count;
+  }
+
+  public getActiveRailSparksCount(): number {
+    let count = 0;
+    for (const rs of this.railSparks) if (rs.active) count++;
+    return count;
+  }
+
+  public getActiveTrapTriggerCount(): number {
+    let count = 0;
+    for (const tt of this.trapTriggers) if (tt.active) count++;
+    return count;
+  }
+
+  public getActiveDroneExplodeCount(): number {
+    let count = 0;
+    for (const de of this.droneExplodes) if (de.active) count++;
+    return count;
+  }
+
+  public getActiveRebootBeamCount(): number {
+    let count = 0;
+    for (const rb of this.rebootBeams) if (rb.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -6228,6 +7389,26 @@ export class VFXManager {
       cg.group.visible = false;
     }
     for (const rb of this.reviveBeams) {
+      rb.active = false;
+      rb.group.visible = false;
+    }
+    for (const rg of this.railgunBeams) {
+      rg.active = false;
+      rg.group.visible = false;
+    }
+    for (const rs of this.railSparks) {
+      rs.active = false;
+      rs.group.visible = false;
+    }
+    for (const tt of this.trapTriggers) {
+      tt.active = false;
+      tt.group.visible = false;
+    }
+    for (const de of this.droneExplodes) {
+      de.active = false;
+      de.group.visible = false;
+    }
+    for (const rb of this.rebootBeams) {
       rb.active = false;
       rb.group.visible = false;
     }

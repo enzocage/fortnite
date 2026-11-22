@@ -11,6 +11,7 @@ import type {
   DroppedCrownEntity,
   DroppedMedallionEntity,
   ExplosiveBarrelEntity,
+  GrindRailEntity,
   HarvestableProp,
   ItemInstance,
   LaunchPadEntity,
@@ -22,12 +23,15 @@ import type {
   NpcSpecialistEntity,
   POIDef,
   Rarity,
+  RebootVanEntity,
   RiftEntity,
   SlurpBarrelEntity,
   SlurpTankerEntity,
   SoundEventId,
+  SupplyDroneEntity,
   SupplyDrop,
   TerrainQuery,
+  TrapKind,
   UpgradeBenchEntity,
   VaultEntity,
   Vec3Like,
@@ -38,6 +42,8 @@ import type {
 } from '../../types';
 import {
   AUGMENTS,
+  BOUNCER_IMPULSE_FWD,
+  BOUNCER_IMPULSE_Y,
   DBNO_BLEED_DPS,
   DBNO_MAX_HP,
   DEFAULT_SETTINGS,
@@ -45,13 +51,16 @@ import {
   GLIDER_FORCE_HEIGHT,
   GRID_XZ,
   GRID_Y,
+  GRIND_RAIL_SPEED,
   MAX_GOLD_BARS,
   MAX_MATS,
   PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
   RARITY_MULTIPLIER,
+  REBOOT_DURATION_SEC,
   REVIVE_DURATION_SEC,
+  SPIKE_TRAP_DAMAGE,
   STARTING_GOLD_BARS,
   UPGRADE_COSTS,
   WEAPONS,
@@ -76,12 +85,15 @@ import {
   getRampHeightAtLocal,
   getRoofHeightAtLocal,
   type CombatActor,
+  type DuoRebootBridge,
   type DuoReviveBridge,
   type PropsInteractionBridge,
+  type SupplyDroneDamageResult,
   type VaultBridge,
   type VehicleBridge,
   type WorldChapterBridge,
   type WorldEconomyBridge,
+  type WorldOverdriveBridge,
   type WorldRiftCaptureBridge,
   type WorldStationBridge,
 } from '../index';
@@ -4930,5 +4942,760 @@ describe('Wave 6 Gameplay Systems (Medallions, Twin-Mag, Boom Bow, Slurp Tanker,
     });
     expect(player.getPhase()).toBe('eliminated');
     expect(player.isAlive()).toBe(false);
+  });
+});
+
+describe('Wave 7 Gameplay Systems (Grind Rails, Tactical Traps, Pulse Railgun, Minigun, Supply Drones, Reboot Vans)', () => {
+  function setupWave7Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'Wave7Tester');
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  function createLoopGrindRail(
+    id = 'rail_test',
+    center: Vec3Like = { x: 0, y: 3, z: -20 },
+    radius = 20,
+  ): GrindRailEntity {
+    const points: Vec3Like[] = [];
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2;
+      points.push({
+        x: center.x + Math.sin(ang) * radius,
+        y: center.y,
+        z: center.z + Math.cos(ang) * radius,
+      });
+    }
+    return {
+      id,
+      poiId: 'metro_towers',
+      points,
+      color: '#22d3ee',
+      speed: GRIND_RAIL_SPEED,
+    };
+  }
+
+  function createMockOverdriveBridge(init?: {
+    rails?: GrindRailEntity[];
+    vans?: RebootVanEntity[];
+    drones?: SupplyDroneEntity[];
+  }): WorldOverdriveBridge & {
+    rails: GrindRailEntity[];
+    vans: RebootVanEntity[];
+    drones: SupplyDroneEntity[];
+    triggeredVanIds: string[];
+  } {
+    const rails = init?.rails ?? [];
+    const vans = init?.vans ?? [];
+    const drones = init?.drones ?? [];
+    const triggeredVanIds: string[] = [];
+
+    const sampleGrindRailAt = (
+      id: string,
+      t: number,
+    ): { position: Vec3Like; tangent: Vec3Like } | null => {
+      const rail = rails.find((r) => r.id === id);
+      if (!rail || rail.points.length < 2) return null;
+      const wrapped = ((t % 1) + 1) % 1;
+      const pts = rail.points;
+      const n = pts.length;
+      const scaled = wrapped * n;
+      const i0 = Math.floor(scaled) % n;
+      const i1 = (i0 + 1) % n;
+      const frac = scaled - Math.floor(scaled);
+      const a = pts[i0];
+      const b = pts[i1];
+      const pos = {
+        x: a.x + (b.x - a.x) * frac,
+        y: a.y + (b.y - a.y) * frac,
+        z: a.z + (b.z - a.z) * frac,
+      };
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dz = b.z - a.z;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      return {
+        position: pos,
+        tangent: { x: dx / len, y: dy / len, z: dz / len },
+      };
+    };
+
+    return {
+      rails,
+      vans,
+      drones,
+      triggeredVanIds,
+      getGrindRails: () => rails,
+      sampleGrindRailAt,
+      findNearbyGrindRail: (pos, maxDist = 2.8) => {
+        let best: {
+          rail: GrindRailEntity;
+          t: number;
+          position: Vec3Like;
+          tangent: Vec3Like;
+          dist: number;
+        } | null = null;
+        for (const rail of rails) {
+          for (let i = 0; i < 64; i++) {
+            const t = i / 64;
+            const s = sampleGrindRailAt(rail.id, t);
+            if (!s) continue;
+            const d = dist3D(pos, s.position);
+            if (d <= maxDist && (!best || d < best.dist)) {
+              best = { rail, t, position: s.position, tangent: s.tangent, dist: d };
+            }
+          }
+        }
+        return best
+          ? { rail: best.rail, t: best.t, position: best.position, tangent: best.tangent }
+          : null;
+      },
+      getRebootVans: () => vans,
+      triggerRebootVan: (id) => {
+        const van = vans.find((v) => v.id === id);
+        if (!van || !van.available) return false;
+        van.available = false;
+        van.cooldownRemainingSec = 60;
+        triggeredVanIds.push(id);
+        return true;
+      },
+      getSupplyDrones: () => drones,
+      damageSupplyDrone: (id, dmg) => {
+        const drone = drones.find((d) => d.id === id);
+        if (!drone || drone.destroyed || drone.hp <= 0) return null;
+        drone.hp = Math.max(0, drone.hp - dmg);
+        const destroyed = drone.hp <= 0;
+        if (destroyed) drone.destroyed = true;
+        return {
+          destroyed,
+          x: drone.x,
+          y: drone.y,
+          z: drone.z,
+          rarity: drone.rarity,
+          weaponId: 'railgun',
+          gold: 120,
+          trapKind: 'spike_trap',
+        };
+      },
+    };
+  }
+
+  it('traverses Neon Grind Rails via [E] & airborne landing, advances at GRIND_RAIL_SPEED, allows aiming/shooting, and dismounts on [Space] with fall immunity', () => {
+    const { bus, weapons, player } = setupWave7Harness();
+    const sounds: SoundEventId[] = [];
+    const sparkVfx: Array<{ position: Vec3Like; velocity?: Vec3Like }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:rail_sparks', (ev) => sparkVfx.push(ev));
+
+    const rail = createLoopGrindRail('rail_1', { x: 0, y: 3, z: -20 }, 20);
+    const overdrive = createMockOverdriveBridge({ rails: [rail] });
+    player.setOverdriveBridge(overdrive);
+
+    // 1. Attach via [E] near rail point 0 -> (0, 3, 0)
+    player.teleport({ x: 0, y: 2.0, z: 0.5 });
+    player.setLook(Math.PI * 0.5, 0);
+    player.update(0.016, 0.016);
+    expect(player.getInteractPrompt()?.label).toBe('Grind Rail');
+
+    player.pressKey('KeyE');
+    expect(sounds).toContain('grind_attach');
+    expect(sparkVfx.length).toBeGreaterThanOrEqual(1);
+    expect(player.getHudSnapshot().isGrinding).toBe(true);
+    expect(player.getHudSnapshot().showSpeedLines).toBe(true);
+    expect(player.getCharacterRenderState().animState).toBe('grind');
+    expect(player.getCharacterRenderState().isGrinding).toBe(true);
+
+    // 2. Advance along spline at GRIND_RAIL_SPEED & emit periodic sparks
+    const startPos = player.getPosition();
+    let t = 0.05;
+    const sparksBefore = sparkVfx.length;
+    for (let i = 0; i < 10; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const midPos = player.getPosition();
+    expect(dist3D(startPos, midPos)).toBeGreaterThan(GRIND_RAIL_SPEED * 0.35);
+    expect(sparkVfx.length).toBeGreaterThan(sparksBefore);
+
+    // 3. Aim and shoot while grinding
+    player.getInventory().addItem({
+      uid: 'ar_grind',
+      weaponId: 'ar',
+      rarity: 'rare',
+      magAmmo: 30,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+    player.setMouseButton(2, true);
+    player.update(0.02, t + 0.02);
+    expect(player.getHudSnapshot().isAiming).toBe(true);
+    player.setLook(0, 0); // +Z
+    const targetPos = player.getPosition();
+    const enemy: CombatActor = {
+      id: 'bot_rail_target',
+      name: 'Target',
+      position: { x: targetPos.x, y: targetPos.y, z: targetPos.z + 8 },
+      eyePos: { x: targetPos.x, y: targetPos.y + 1.6, z: targetPos.z + 8 },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), enemy]);
+    player.setMouseButton(0, true);
+    expect(enemy.hp).toBeLessThan(100);
+    player.setMouseButton(0, false);
+    player.setMouseButton(2, false);
+
+    // 4. [Space] dismount grants jump boost & fall immunity
+    player.pressKey('Space');
+    expect(player.getHudSnapshot().isGrinding).toBe(false);
+    expect(player.isFallImmune()).toBe(true);
+    expect((player.getCharacterRenderState().velocityY ?? 0)).toBeGreaterThan(6);
+    expect(sounds).toContain('jump');
+
+    // 5. Airborne landing near rail auto-attaches after cooldown
+    for (let i = 0; i < 15; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.teleport({ x: 0, y: 4.2, z: 0 }); // elevated above rail at y=3
+    for (let i = 0; i < 4; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().isGrinding).toBe(true);
+  });
+
+  it('places & triggers Spike Traps (100 dmg, friendly-safe, 2.5s cooldown) and Bouncer Pads (launch + fall immunity) and cleans up on clearAll/dispose', () => {
+    const { bus, building, player } = setupWave7Harness();
+    const sounds: SoundEventId[] = [];
+    const trapVfx: Array<{ position: Vec3Like; kind: TrapKind }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:trap_trigger', (ev) => trapVfx.push(ev));
+
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'TrapTester', 'duos');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, 0);
+
+    // 1. Tactical Trap inventory & [KeyT] placement on nearby ground/floor
+    expect(player.getHudSnapshot().traps).toEqual({ spike_trap: 0, bouncer_pad: 0 });
+    expect(player.placeActiveTrap()).toBeNull();
+
+    player.addTrap('spike_trap', 1);
+    player.addTrap('bouncer_pad', 1);
+    expect(player.getActiveTrapKind()).toBe('spike_trap');
+    expect(player.cycleTrapKind()).toBe('bouncer_pad');
+    player.setActiveTrapKind('spike_trap');
+
+    const floorPiece = building.placePieceForEntity('player', 'floor', 'wood', 0, 0, -1, 'N', 0)!;
+    expect(floorPiece).not.toBeNull();
+    player.pressKey('KeyT');
+    expect(player.getStats().trapsPlaced).toBe(1);
+    expect(player.getTraps()).toEqual({ spike_trap: 0, bouncer_pad: 1 });
+    expect(building.getTraps().length).toBe(1);
+    const placedSpike = building.getTraps()[0];
+    expect(placedSpike.kind).toBe('spike_trap');
+    expect(placedSpike.ownerId).toBe('player');
+    expect(placedSpike.squadId).toBe('player_squad');
+    expect(placedSpike.x).toBeCloseTo(GRID_XZ * 0.5, 2);
+    expect(placedSpike.z).toBeCloseTo(-GRID_XZ * 0.5, 2);
+
+    // 2. Spike Trap ignores owner & squadmate, damages enemy within floor footprint by SPIKE_TRAP_DAMAGE (100)
+    const squadmate: CombatActor = {
+      id: 'duo_partner',
+      name: 'Partner',
+      position: { x: placedSpike.x, y: placedSpike.y, z: placedSpike.z },
+      eyePos: { x: placedSpike.x, y: placedSpike.y + 1.6, z: placedSpike.z },
+      hp: 100,
+      shield: 0,
+      squadId: 'player_squad',
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const farEnemy: CombatActor = {
+      id: 'enemy_far',
+      name: 'FarEnemy',
+      position: { x: placedSpike.x + 8, y: placedSpike.y, z: placedSpike.z },
+      eyePos: { x: placedSpike.x + 8, y: placedSpike.y + 1.6, z: placedSpike.z },
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    const nearEnemy: CombatActor = {
+      id: 'enemy_near',
+      name: 'NearEnemy',
+      position: { x: placedSpike.x + 0.9, y: placedSpike.y, z: placedSpike.z - 0.8 },
+      eyePos: { x: placedSpike.x + 0.9, y: placedSpike.y + 1.6, z: placedSpike.z - 0.8 },
+      hp: 100,
+      shield: 50,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+
+    // Owner + squadmate + far enemy do not trigger trap
+    player.teleport({ x: placedSpike.x, y: placedSpike.y, z: placedSpike.z });
+    expect(building.checkTrapTriggers([player.getCombatActor(), squadmate, farEnemy])).toBe(0);
+    expect(player.getHealth()).toBe(100);
+    expect(squadmate.hp).toBe(100);
+    expect(farEnemy.hp).toBe(100);
+
+    // Enemy in footprint triggers 100 dmg -> 50 shield + 50 HP left
+    expect(building.checkTrapTriggers([player.getCombatActor(), squadmate, nearEnemy])).toBe(1);
+    expect(nearEnemy.shield).toBe(0);
+    expect(nearEnemy.hp).toBe(100 - (SPIKE_TRAP_DAMAGE - 50));
+    expect(placedSpike.armed).toBe(false);
+    expect(trapVfx.some((v) => v.kind === 'spike_trap')).toBe(true);
+    expect(sounds).toContain('trap_snap');
+
+    // 3. Cooldown prevents immediate re-trigger, re-arms after 2.5s
+    building.updateTraps(1.0);
+    expect(placedSpike.armed).toBe(false);
+    expect(building.checkTrapTriggers([nearEnemy])).toBe(0);
+    expect(nearEnemy.hp).toBe(50);
+
+    building.updateTraps(1.6); // total 2.6s >= 2.5s
+    expect(placedSpike.armed).toBe(true);
+    expect(building.checkTrapTriggers([nearEnemy])).toBe(1);
+    expect(nearEnemy.hp).toBe(0);
+    expect(nearEnemy.alive).toBe(false);
+
+    // 4. Bouncer Pad launches any actor with BOUNCER_IMPULSE_Y + BOUNCER_IMPULSE_FWD + fall immunity
+    player.teleport({ x: 30, y: 0, z: 0 });
+    player.setLook(0, 0); // facing +Z
+    player.pressKey('KeyT'); // auto-selects remaining bouncer_pad
+    expect(player.getStats().trapsPlaced).toBe(2);
+    const bouncer = building.getTraps().find((t) => t.kind === 'bouncer_pad')!;
+    expect(bouncer).toBeDefined();
+
+    player.teleport({ x: bouncer.x, y: bouncer.y, z: bouncer.z });
+    const botActor: CombatActor = {
+      id: 'bot_bounce',
+      name: 'BouncerBot',
+      position: { x: bouncer.x + 0.3, y: bouncer.y, z: bouncer.z },
+      eyePos: { x: bouncer.x + 0.3, y: bouncer.y + 1.6, z: bouncer.z },
+      hp: 100,
+      shield: 0,
+      velocity: { x: 0, y: 0, z: 0 },
+      fallImmune: false,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    expect(building.checkTrapTriggers([player.getCombatActor(), botActor])).toBe(2);
+    expect(player.isFallImmune()).toBe(true);
+    expect(player.getCharacterRenderState().velocityY).toBeCloseTo(BOUNCER_IMPULSE_Y, 1);
+    expect(botActor.fallImmune).toBe(true);
+    expect(botActor.velocity!.y).toBeCloseTo(BOUNCER_IMPULSE_Y, 1);
+    expect(Math.hypot(botActor.velocity!.x, botActor.velocity!.z)).toBeCloseTo(
+      BOUNCER_IMPULSE_FWD,
+      1,
+    );
+    expect(trapVfx.some((v) => v.kind === 'bouncer_pad')).toBe(true);
+    expect(sounds).toContain('bouncer_launch');
+
+    // 5. clearAll and dispose remove all trap meshes & state
+    building.clearAll();
+    expect(building.getTraps().length).toBe(0);
+    building.placeTrap('spike_trap', 'player', { x: 5, y: 0, z: 5 }, 0);
+    expect(building.getTraps().length).toBe(1);
+    building.dispose();
+    expect(building.getTraps().length).toBe(0);
+  });
+
+  it('implements Pulse Railgun hold-LMB charge (>=0.45 release & auto-fire) and wall-piercing hitscan beam', () => {
+    expect(WEAPON_SOUND_MAP.railgun).toBe('shot_railgun');
+    expect(WEAPON_SOUND_MAP.minigun).toBe('shot_minigun');
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+
+    const { bus, building, weapons, player } = setupWave7Harness();
+    const sounds: SoundEventId[] = [];
+    const railBeams: Array<{ from: Vec3Like; to: Vec3Like; pierced?: boolean }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:railgun_beam', (ev) => railBeams.push(ev));
+
+    player.teleport({ x: 2, y: 0, z: 0 });
+    player.setLook(Math.PI, 0); // facing -Z
+    player.getInventory().addAmmo('heavy', 10);
+    player.getInventory().addItem({
+      uid: 'rg_1',
+      weaponId: 'railgun',
+      rarity: 'epic',
+      magAmmo: 1,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+
+    // Place 1 build wall between player (z=0) and enemy (z=-10)
+    const wall1 = building.placePieceForEntity('bot', 'wall', 'metal', 0, 0, -1, 'N', 0)!; // z = -4, hp = 115
+    const enemy1: CombatActor = {
+      id: 'bot_rg_1',
+      name: 'BehindWall1',
+      position: { x: 2, y: 0, z: -10 },
+      eyePos: { x: 2, y: 1.6, z: -10 },
+      hp: 150,
+      shield: 0,
+      maxHp: 150,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), enemy1]);
+
+    // 1. Release early (< 0.45 charge) cancels without firing
+    player.setMouseButton(0, true);
+    expect(sounds).toContain('railgun_charge');
+    expect(player.getHudSnapshot().railgunCharge).toBe(0);
+    player.update(0.05, 0.05);
+    player.update(0.05, 0.1);
+    player.update(0.05, 0.15); // 0.15 / 0.85 ~ 0.176 < 0.45
+    player.setMouseButton(0, false);
+    expect(player.getHudSnapshot().railgunCharge).toBeNull();
+    expect(player.getStats().shotsFired).toBe(0);
+    expect(enemy1.hp).toBe(150);
+
+    // 2. Hold >= 0.45 (0.5s / 0.85s ~ 0.588) and release -> pierces wall1 & hits enemy1!
+    player.setMouseButton(0, true);
+    let t = 0.2;
+    for (let i = 0; i < 10; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().railgunCharge!).toBeGreaterThanOrEqual(0.45);
+    expect(player.getCharacterRenderState().weaponCharge).toBeGreaterThanOrEqual(0.45);
+    player.setMouseButton(0, false);
+
+    expect(player.getStats().shotsFired).toBe(1);
+    expect(sounds).toContain('shot_railgun');
+    expect(railBeams.length).toBe(1);
+    expect(railBeams[0].pierced).toBe(true);
+    expect(wall1.hp).toBe(0); // 180 * 1.22 > 115 metal startHp
+    expect(enemy1.hp).toBeLessThan(150);
+
+    // 3. Auto-fire at full charge (1.0) & pierceBuildCount = 1 stops at 2nd wall
+    const rgItem = player.getInventory().getSlot(1)!;
+    rgItem.magAmmo = 1;
+    const wallA = building.placePieceForEntity('bot', 'wall', 'metal', 0, 0, -1, 'N', 0)!; // z = -4
+    const wallB = building.placePieceForEntity('bot', 'wall', 'metal', 0, 0, -2, 'N', 0)!; // z = -8
+    const enemyBehind2: CombatActor = {
+      id: 'bot_rg_2',
+      name: 'BehindTwoWalls',
+      position: { x: 2, y: 0, z: -14 },
+      eyePos: { x: 2, y: 1.6, z: -14 },
+      hp: 150,
+      shield: 0,
+      maxHp: 150,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), enemyBehind2]);
+
+    // Wait out fireCooldown (1 / 0.72 ~ 1.39s)
+    for (let i = 0; i < 30; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+
+    player.setMouseButton(0, true);
+    for (let i = 0; i < 18; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 0.90s >= 0.85s -> auto-fires!
+    }
+    player.setMouseButton(0, false);
+
+    expect(player.getStats().shotsFired).toBe(2);
+    expect(railBeams.length).toBe(2);
+    expect(railBeams[1].pierced).toBe(true);
+    expect(wallA.hp).toBe(0);
+    expect(wallB.hp).toBe(0); // stopped on 2nd wall and damaged it
+    expect(enemyBehind2.hp).toBe(150); // protected behind 2nd wall!
+  });
+
+  it('implements Overheat Minigun spin-up, light ammo reserve draw without reload, overheat lock, and cooldown', () => {
+    const { bus, player } = setupWave7Harness();
+    const sounds: SoundEventId[] = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.getInventory().addAmmo('light', 120);
+    player.getInventory().addItem({
+      uid: 'mg_1',
+      weaponId: 'minigun',
+      rarity: 'legendary',
+      magAmmo: 999,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+
+    // Manual reload KeyR does nothing on Minigun
+    player.pressKey('KeyR');
+    expect(player.getHudSnapshot().reloadProgress).toBeNull();
+
+    // 1. Spin-up period (< 0.45s): no shots fired yet
+    player.setMouseButton(0, true);
+    let t = 0;
+    for (let i = 0; i < 8; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 0.40s < 0.45s
+    }
+    expect(player.getStats().shotsFired).toBe(0);
+    expect(player.getInventory().getAmmo('light')).toBe(120);
+    expect(player.getHudSnapshot().minigunHeat).toBe(0);
+
+    // 2. Past spinUpSec -> fires rapidly drawing from 'light' reserve & heating up
+    for (let i = 0; i < 10; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    const shotsMid = player.getStats().shotsFired;
+    expect(shotsMid).toBeGreaterThan(0);
+    expect(player.getInventory().getAmmo('light')).toBe(120 - shotsMid);
+    expect(player.getHudSnapshot().minigunHeat!).toBeCloseTo(
+      shotsMid * (WEAPONS.minigun.heatPerShot ?? 0.022),
+      2,
+    );
+    expect(sounds).toContain('shot_minigun');
+
+    // 3. Release LMB and verify idle cooling at coolRatePerSec
+    player.setMouseButton(0, false);
+    const heatBeforeCool = player.getHudSnapshot().minigunHeat!;
+    for (let i = 0; i < 10; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 0.5s
+    }
+    expect(player.getHudSnapshot().minigunHeat!).toBeCloseTo(
+      Math.max(0, heatBeforeCool - (WEAPONS.minigun.coolRatePerSec ?? 0.34) * 0.5),
+      2,
+    );
+
+    // 4. Fire until overheat (minigunHeat = 1.0 -> minigunOverheated lock)
+    player.getInventory().addAmmo('light', 200);
+    player.setMouseButton(0, true);
+    for (let i = 0; i < 140; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+      if (player.getHudSnapshot().minigunOverheated) break;
+    }
+    expect(player.getHudSnapshot().minigunOverheated).toBe(true);
+    expect(player.getHudSnapshot().minigunHeat).toBeCloseTo(1.0, 2);
+    expect(sounds).toContain('minigun_overheat');
+
+    // Locked during overheatLockSec (2.4s): holding LMB fires 0 shots
+    const shotsAtOverheat = player.getStats().shotsFired;
+    const ammoAtOverheat = player.getInventory().getAmmo('light');
+    for (let i = 0; i < 24; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.2s < 2.4s
+    }
+    expect(player.getHudSnapshot().minigunOverheated).toBe(true);
+    expect(player.getStats().shotsFired).toBe(shotsAtOverheat);
+    expect(player.getInventory().getAmmo('light')).toBe(ammoAtOverheat);
+
+    // Unlocks after 2.4s total when LMB released -> heat clears to null and can fire again
+    player.setMouseButton(0, false);
+    for (let i = 0; i < 26; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.3s more -> 2.5s > 2.4s
+    }
+    expect(player.getHudSnapshot().minigunOverheated).toBe(false);
+    expect(player.getHudSnapshot().minigunHeat).toBeNull();
+  });
+
+  it('hits and destroys Flying Supply Drones via hitscan, returns loot coordinates, and triggers onDroneDestroyed & stats.dronesShotDown', () => {
+    const { weapons, player } = setupWave7Harness();
+    const destroyedCallbacks: SupplyDroneDamageResult[] = [];
+    player.setOnDroneDestroyed((res) => destroyedCallbacks.push(res));
+
+    const drone: SupplyDroneEntity = {
+      id: 'drone_1',
+      poiId: 'metro_towers',
+      x: 0,
+      y: 15,
+      z: -10,
+      baseY: 15,
+      orbitCenterX: 0,
+      orbitCenterZ: -10,
+      orbitRadius: 8,
+      orbitAngle: 0,
+      orbitSpeed: 0.6,
+      hp: 90,
+      maxHp: 90,
+      rarity: 'epic',
+      destroyed: false,
+    };
+    const overdrive = createMockOverdriveBridge({ drones: [drone] });
+    player.setOverdriveBridge(overdrive);
+
+    player.teleport({ x: 0, y: 0, z: 0 });
+    // Aim straight at drone from eyePos (0, 1.63, 0) to (0, 15, -10)
+    const dx = drone.x - 0;
+    const dy = drone.y - 1.63;
+    const dz = drone.z - 0;
+    const horiz = Math.hypot(dx, dz);
+    const aimPitch = Math.atan2(dy, horiz);
+    const aimYaw = Math.atan2(dx, dz);
+    player.setLook(aimYaw, aimPitch);
+
+    player.getInventory().addItem({
+      uid: 'rg_drone',
+      weaponId: 'railgun',
+      rarity: 'rare',
+      magAmmo: 1,
+      stackCount: 1,
+    });
+    player.pressKey('Digit2');
+
+    // Charge railgun & fire at overhead drone
+    player.setMouseButton(0, true);
+    let t = 0;
+    for (let i = 0; i < 18; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    player.setMouseButton(0, false);
+
+    expect(drone.destroyed).toBe(true);
+    expect(player.getStats().dronesShotDown).toBe(1);
+    expect(destroyedCallbacks.length).toBe(1);
+    expect(destroyedCallbacks[0]).toMatchObject({
+      destroyed: true,
+      x: 0,
+      y: 15,
+      z: -10,
+      weaponId: 'railgun',
+      trapKind: 'spike_trap',
+    });
+
+    // Direct WeaponSystem.fireWeapon also returns destroyedDrones coordinates
+    const drone2: SupplyDroneEntity = {
+      ...drone,
+      id: 'drone_2',
+      x: 5,
+      y: 14,
+      z: -8,
+      hp: 30,
+      maxHp: 90,
+      destroyed: false,
+    };
+    overdrive.drones.push(drone2);
+    const directRes = weapons.fireWeapon({
+      actor: player.getCombatActor(),
+      item: { uid: 'ar_d', weaponId: 'ar', rarity: 'common', magAmmo: 30, stackCount: 1 },
+      origin: { x: 5, y: 1.5, z: 0 },
+      aimDir: { x: 0, y: 12.5, z: -8 },
+      spreadRad: 0,
+      isPlayer: true,
+    });
+    expect(directRes.fired).toBe(true);
+    expect(directRes.shotsHit).toBe(1);
+    expect(directRes.destroyedDrones?.length).toBe(1);
+    expect(directRes.destroyedDrones![0].x).toBe(5);
+    expect(directRes.destroyedDrones![0].y).toBe(14);
+    expect(directRes.destroyedDrones![0].z).toBe(-8);
+  });
+
+  it('completes Reboot Van [E] 5.0s channel when partner reboot card is held, emits VFX/SFX/noise, and increments stats.reboots', () => {
+    const { bus, player } = setupWave7Harness();
+    const sounds: SoundEventId[] = [];
+    const rebootBeams: Array<{ position: Vec3Like; progress: number }> = [];
+    const noises: Array<{ kind: string; radius: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:reboot_beam', (ev) => rebootBeams.push(ev));
+    bus.on('audio:noise', (ev) => noises.push({ kind: ev.kind, radius: ev.radius }));
+
+    const van: RebootVanEntity = {
+      id: 'van_metro',
+      poiId: 'metro_towers',
+      x: 0,
+      y: 0,
+      z: -3,
+      rotationY: 0,
+      cooldownRemainingSec: 0,
+      available: true,
+    };
+    const overdrive = createMockOverdriveBridge({ vans: [van] });
+
+    let hasCard = false;
+    const rebootPositions: Vec3Like[] = [];
+    const duoReboot: DuoRebootBridge = {
+      hasPartnerRebootCard: () => hasCard,
+      rebootPartnerAt: (pos) => {
+        rebootPositions.push(pos);
+        hasCard = false;
+        return { id: 'duo_partner', alive: true };
+      },
+    };
+
+    player.resetForMatch({ x: 0, y: 175, z: 0 }, 'RebootHero', 'duos');
+    player.setOverdriveBridge(overdrive);
+    player.setDuoRebootBridge(duoReboot);
+    player.teleport({ x: 0, y: 0, z: 0 });
+
+    // Without reboot card -> no reboot prompt
+    player.update(0.016, 0.016);
+    expect(player.getHudSnapshot().hasPartnerRebootCard).toBe(false);
+    expect(player.getInteractPrompt()).toBeNull();
+
+    // With reboot card -> prompt appears
+    hasCard = true;
+    player.update(0.016, 0.032);
+    expect(player.getHudSnapshot().hasPartnerRebootCard).toBe(true);
+    expect(player.getInteractPrompt()?.label).toContain('REBOOT PARTNER');
+
+    // Early release cancels reboot cleanly
+    player.pressKey('KeyE');
+    let t = 0.05;
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t); // 1.0s
+    }
+    expect(player.getHudSnapshot().rebootProgress!).toBeCloseTo(1.0 / REBOOT_DURATION_SEC, 1);
+    expect(sounds).toContain('reboot_channel');
+    expect(noises.some((n) => n.radius >= 100)).toBe(true);
+
+    player.releaseKey('KeyE');
+    player.update(0.05, t + 0.05);
+    expect(player.getHudSnapshot().rebootProgress).toBeNull();
+    expect(rebootPositions.length).toBe(0);
+    expect(player.getStats().reboots).toBe(0);
+
+    // Full 5.0s channel completes reboot
+    player.pressKey('KeyE');
+    for (let i = 0; i < 102; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(overdrive.triggeredVanIds).toEqual(['van_metro']);
+    expect(van.available).toBe(false);
+    expect(rebootPositions.length).toBe(1);
+    expect(rebootPositions[0]).toEqual({ x: 0, y: 0, z: -3 });
+    expect(player.getStats().reboots).toBe(1);
+    expect(player.getHudSnapshot().rebootProgress).toBeNull();
+    expect(player.getHudSnapshot().hasPartnerRebootCard).toBe(false);
+    expect(sounds).toContain('reboot_complete');
+    expect(rebootBeams.some((b) => b.progress === 1)).toBe(true);
   });
 });
