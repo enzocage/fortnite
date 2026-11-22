@@ -317,6 +317,25 @@ export class BotManager {
 
     const terrainPois = this.ctx.terrain.getPOIs();
     const poiList: POIDef[] = terrainPois.length > 0 ? terrainPois : POIS;
+    const rawHotDropIds = this.ctx.hotDropPoiIds;
+    const hotDropSet =
+      rawHotDropIds && rawHotDropIds.length > 0 ? new Set(rawHotDropIds) : null;
+    const hotDropPois = hotDropSet
+      ? poiList.filter((p) => hotDropSet.has(p.id))
+      : [];
+    const nonHotDropPois =
+      hotDropSet && hotDropPois.length > 0 && hotDropPois.length < poiList.length
+        ? poiList.filter((p) => !hotDropSet.has(p.id))
+        : [];
+    const hotDropBiasShare =
+      hotDropPois.length > 0 && nonHotDropPois.length > 0
+        ? clamp(
+            (hotDropPois.length * 3.0) /
+              (hotDropPois.length * 3.0 + nonHotDropPois.length),
+            0.32,
+            0.55,
+          )
+        : 0;
     const isDuos = this.gameMode === 'duos';
     const isTeamRumble = this.gameMode === 'team_rumble';
 
@@ -362,10 +381,26 @@ export class BotManager {
           ? `squad_${Math.floor(i / 2) + 1}`
           : undefined;
 
-      const poi = squadPartner
-        ? poiList.find((p) => p.id === squadPartner.targetPoiId) ??
-          poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length]
-        : poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length];
+      let poi: POIDef;
+      if (squadPartner) {
+        poi =
+          poiList.find((p) => p.id === squadPartner.targetPoiId) ??
+          poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length];
+      } else if (hotDropBiasShare > 0) {
+        if (rng() < hotDropBiasShare) {
+          poi =
+            hotDropPois[
+              (i + Math.floor(rng() * hotDropPois.length)) % hotDropPois.length
+            ];
+        } else {
+          poi =
+            nonHotDropPois[
+              (i + Math.floor(rng() * nonHotDropPois.length)) % nonHotDropPois.length
+            ];
+        }
+      } else {
+        poi = poiList[(i + Math.floor(rng() * poiList.length)) % poiList.length];
+      }
 
       // Pick landing offset around the target POI (or near squadmate in Duos), avoiding water & volcano lava
       let dropX = squadPartner
@@ -2748,6 +2783,9 @@ export class BotManager {
         isReviving,
         isGrinding: Boolean(bot.isGrinding),
         bowCharge: bot.bowCharge,
+        isShieldBlocking:
+          displayWeaponId === 'ballistic_shield' &&
+          (bot.isAiming || bot.state === 'combat'),
       };
     });
   }

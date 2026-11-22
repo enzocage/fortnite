@@ -161,6 +161,13 @@ const SOUND_EVENT_MAP: Record<SoundEventId, true> = {
   fishing_cast: true,
   fishing_catch: true,
   balloon_ascend: true,
+  tank_cannon: true,
+  tank_impact: true,
+  shield_block: true,
+  c4_plant: true,
+  c4_detonate: true,
+  streak_surge: true,
+  hot_drop_chime: true,
 };
 
 const ALL_SOUND_EVENT_IDS = Object.keys(SOUND_EVENT_MAP) as SoundEventId[];
@@ -491,14 +498,14 @@ describe('computeBusGains', () => {
 });
 
 describe('SoundSynthesizer', () => {
-  it('synthesizes all 144 SoundEventIds with valid Web Audio nodes and positive durations', () => {
+  it('synthesizes all 151 SoundEventIds with valid Web Audio nodes and positive durations', () => {
     const mockCtx = new MockAudioContext();
     const ctx = mockCtx as unknown as AudioContext;
     const dest = ctx.createGain();
     const synth = new SoundSynthesizer(ctx, dest);
 
     expect(mockCtx.convolvers.length).toBe(1);
-    expect(ALL_SOUND_EVENT_IDS.length).toBe(144);
+    expect(ALL_SOUND_EVENT_IDS.length).toBe(151);
 
     for (const id of ALL_SOUND_EVENT_IDS) {
       const oscBefore = mockCtx.oscillators.length;
@@ -1737,6 +1744,144 @@ describe('SoundSynthesizer', () => {
     const sparseDest = sparseFilterCtx.createGain();
     const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
     for (const id of wave11Ids) {
+      expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
+    }
+    sparseSynth.dispose();
+    synth.dispose();
+  });
+
+  it('creates bespoke multi-layered Wave 12 SFX with strictly positive ramps >= 0.0001 across pitch/volume bounds', () => {
+    const mockCtx = new MockAudioContext();
+    const ctx = mockCtx as unknown as AudioContext;
+    const dest = ctx.createGain();
+    const synth = new SoundSynthesizer(ctx, dest);
+
+    const wave12Ids: SoundEventId[] = [
+      'tank_cannon',
+      'tank_impact',
+      'shield_block',
+      'c4_plant',
+      'c4_detonate',
+      'streak_surge',
+      'hot_drop_chime',
+    ];
+
+    const durations: Partial<Record<SoundEventId, number>> = {};
+    for (const id of wave12Ids) {
+      const oscBefore = mockCtx.oscillators.length;
+      const srcBefore = mockCtx.bufferSources.length;
+      const gainBefore = mockCtx.gains.length;
+      const dur = synth.play(id, dest, { volume: 1.0, pitch: 1.0 });
+      durations[id] = dur;
+
+      const oscCreated = mockCtx.oscillators.length - oscBefore;
+      const srcCreated = mockCtx.bufferSources.length - srcBefore;
+      const gainsCreated = mockCtx.gains.length - gainBefore;
+
+      expect(oscCreated).toBeGreaterThanOrEqual(4);
+      expect(srcCreated).toBeGreaterThanOrEqual(2);
+      expect(oscCreated + srcCreated).toBeGreaterThanOrEqual(6);
+      expect(gainsCreated).toBeGreaterThanOrEqual(6);
+
+      if (id === 'streak_surge' || id === 'hot_drop_chime') {
+        const newOscs = mockCtx.oscillators.slice(oscBefore);
+        const newGains = mockCtx.gains.slice(gainBefore);
+        const fmWired = newGains.some((g) =>
+          newOscs.some((o) => g.connections.includes(o.frequency as unknown as AudioNode)),
+        );
+        expect(fmWired).toBe(true);
+      }
+
+      // Extreme pitch/volume bounds must never throw on exponentialRampToValueAtTime
+      expect(() => synth.play(id, dest, { volume: 0.05, pitch: 0.25 })).not.toThrow();
+      expect(() => synth.play(id, dest, { volume: 2.0, pitch: 4.0 })).not.toThrow();
+    }
+
+    expect(durations.shield_block).toBeGreaterThan(0.12);
+    expect(durations.shield_block).toBeLessThan(0.25);
+    expect(durations.c4_plant).toBeGreaterThan(0.22);
+    expect(durations.c4_plant).toBeLessThan(0.38);
+    expect(durations.streak_surge).toBeGreaterThan(0.55);
+    expect(durations.hot_drop_chime).toBeGreaterThan(0.65);
+    expect(durations.tank_cannon).toBeGreaterThan(0.68);
+    expect(durations.tank_impact).toBeGreaterThan(0.8);
+    expect(durations.c4_detonate).toBeGreaterThan(0.85);
+
+    // Every scheduled exponential ramp across gains, oscillators, and filters stayed strictly >= 0.0001
+    for (const g of mockCtx.gains) {
+      for (const ev of g.gain.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const o of mockCtx.oscillators) {
+      for (const ev of o.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+    for (const f of mockCtx.filters) {
+      for (const ev of f.frequency.events) {
+        if (ev.kind === 'exp') expect(ev.value).toBeGreaterThanOrEqual(0.0001);
+      }
+    }
+
+    // Minimal Node mock without optional filter/convolver/waveshaper/buffer must still succeed
+    const minimalCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => new MockGainNode(),
+      createOscillator: () => new MockOscillatorNode(),
+      close: async () => {},
+    } as unknown as AudioContext;
+    const minDest = minimalCtx.createGain();
+    const minSynth = new SoundSynthesizer(minimalCtx, minDest);
+    for (const id of wave12Ids) {
+      expect(() => minSynth.play(id, minDest, { volume: 0.9, pitch: 1.1 })).not.toThrow();
+    }
+    minSynth.dispose();
+
+    // Partial filter/AudioParam mock where filter properties are optional and AudioParam connect throws
+    const sparseFilterCtx = {
+      currentTime: 0,
+      sampleRate: 44100,
+      state: 'running',
+      destination: new MockAudioNode(),
+      createGain: () => {
+        const g = new MockGainNode();
+        const origConnect = g.connect.bind(g);
+        g.connect = (d: AudioNode) => {
+          if (d instanceof MockAudioParam) {
+            throw new Error('AudioParam connect unsupported');
+          }
+          return origConnect(d);
+        };
+        return g;
+      },
+      createOscillator: () => {
+        const osc = new MockOscillatorNode();
+        return {
+          type: osc.type,
+          frequency: osc.frequency,
+          connect: osc.connect.bind(osc),
+          disconnect: osc.disconnect.bind(osc),
+          start: osc.start.bind(osc),
+          stop: osc.stop.bind(osc),
+        };
+      },
+      createBiquadFilter: () => {
+        const node = new MockAudioNode();
+        return {
+          type: 'lowpass',
+          connect: node.connect.bind(node),
+          disconnect: node.disconnect.bind(node),
+        };
+      },
+      close: async () => {},
+    } as unknown as AudioContext;
+    const sparseDest = sparseFilterCtx.createGain();
+    const sparseSynth = new SoundSynthesizer(sparseFilterCtx, sparseDest);
+    for (const id of wave12Ids) {
       expect(() => sparseSynth.play(id, sparseDest, { volume: 1.0, pitch: 1.2 })).not.toThrow();
     }
     sparseSynth.dispose();
@@ -3818,6 +3963,201 @@ describe('AudioEngine', () => {
     // Polyphony stays bounded under rapid Wave-11 SFX bursts
     for (let i = 0; i < 30; i++) {
       engine.playSound({ id: 'turret_fire' });
+    }
+    expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
+
+    engine.dispose();
+  });
+
+  it('assigns explicit Wave-12 priorities, max hear distances, spatial culling, and tunes hover_tank diesel-turbine engine profile', async () => {
+    expect(getSoundPriority('tank_cannon')).toBe(3);
+    expect(getSoundPriority('tank_impact')).toBe(3);
+    expect(getSoundPriority('c4_detonate')).toBe(3);
+    expect(getSoundPriority('streak_surge')).toBe(3);
+    expect(getSoundPriority('hot_drop_chime')).toBe(3);
+    expect(getSoundPriority('shield_block')).toBe(2);
+    expect(getSoundPriority('c4_plant')).toBe(2);
+
+    expect(getMaxHearDistance('c4_plant')).toBe(75);
+    expect(getMaxHearDistance('shield_block')).toBe(115);
+    expect(getMaxHearDistance('streak_surge')).toBe(145);
+    expect(getMaxHearDistance('hot_drop_chime')).toBe(220);
+    expect(getMaxHearDistance('c4_detonate')).toBe(245);
+    expect(getMaxHearDistance('tank_impact')).toBe(265);
+    expect(getMaxHearDistance('tank_cannon')).toBe(275);
+
+    const bus = new EventBus();
+
+    // 1. Headless, suspended, and muted safety for Wave-12 SFX and hover_tank
+    const headless = new AudioEngine(bus);
+    expect(() => headless.playSound({ id: 'tank_cannon' })).not.toThrow();
+    expect(() =>
+      headless.playSound({ id: 'hot_drop_chime', spatial: true, position: { x: 10, y: 0, z: 0 } }),
+    ).not.toThrow();
+    expect(() => headless.updateVehicleEngine(true, 65, true, 'hover_tank')).not.toThrow();
+    expect(() => headless.updateVehicleEngine(true, Number.NaN, false, 'hover_tank')).not.toThrow();
+    expect(headless.getVehicleEngineState().active).toBe(false);
+    expect(headless.getActiveVoiceCount()).toBe(0);
+    headless.dispose();
+
+    const suspendedCtx = new MockAudioContext();
+    suspendedCtx.state = 'suspended';
+    const suspendedEngine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => suspendedCtx as unknown as AudioContext,
+    });
+    suspendedEngine.updateVehicleEngine(true, 65, true, 'hover_tank');
+    expect(suspendedCtx.oscillators.length).toBe(0);
+    expect(suspendedEngine.getVehicleEngineState().active).toBe(false);
+    suspendedEngine.dispose();
+
+    const mutedCtx = new MockAudioContext();
+    const mutedEngine = new AudioEngine(
+      bus,
+      { ...DEFAULT_SETTINGS, sfxVolume: 0 },
+      { contextFactory: () => mutedCtx as unknown as AudioContext },
+    );
+    await mutedEngine.unlock();
+    mutedEngine.updateVehicleEngine(true, 65, true, 'hover_tank');
+    expect(mutedCtx.oscillators.length).toBe(0);
+    expect(mutedEngine.getVehicleEngineState().active).toBe(false);
+    mutedEngine.dispose();
+
+    // 2. Spatial culling for all 7 Wave-12 SoundEventIds
+    const mockCtx = new MockAudioContext();
+    const engine = new AudioEngine(bus, DEFAULT_SETTINGS, {
+      contextFactory: () => mockCtx as unknown as AudioContext,
+    });
+    await engine.unlock();
+    engine.updateListener({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 });
+
+    // Within max hear distance -> plays
+    expect(engine.playSound({ id: 'c4_plant', position: { x: 70, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'shield_block', position: { x: 110, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'streak_surge', position: { x: 140, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'hot_drop_chime', position: { x: 215, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'c4_detonate', position: { x: 240, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'tank_impact', position: { x: 260, y: 0, z: 0 }, spatial: true })).toBe(true);
+    expect(engine.playSound({ id: 'tank_cannon', position: { x: 270, y: 0, z: 0 }, spatial: true })).toBe(true);
+
+    // Beyond max hear distance -> culled
+    expect(engine.playSound({ id: 'c4_plant', position: { x: 85, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'shield_block', position: { x: 125, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'streak_surge', position: { x: 155, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'hot_drop_chime', position: { x: 230, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'c4_detonate', position: { x: 255, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'tank_impact', position: { x: 275, y: 0, z: 0 }, spatial: true })).toBe(false);
+    expect(engine.playSound({ id: 'tank_cannon', position: { x: 285, y: 0, z: 0 }, spatial: true })).toBe(false);
+
+    // EventBus routing triggers Wave-12 SFX cleanly
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    bus.emit('sound:play', { id: 'tank_cannon', position: { x: 18, y: 0, z: 0 }, spatial: true });
+    bus.emit('sound:play', { id: 'c4_detonate', position: { x: 12, y: 0, z: 0 }, spatial: true });
+    expect(engine.getActiveVoiceCount()).toBe(2);
+
+    // Clear one-shots before isolating hover_tank engine loop
+    mockCtx.currentTime += 5.0;
+    expect(engine.getActiveVoiceCount()).toBe(0);
+
+    // 3. Vanguard Hover Tank heavy armored diesel-turbine engine loop
+    const oscBeforeTank = mockCtx.oscillators.length;
+    const filterBeforeTank = mockCtx.filters.length;
+    const gainsBeforeTank = mockCtx.gains.length;
+
+    engine.updateVehicleEngine(true, 0, false, 'hover_tank');
+    expect(engine.getVehicleEngineState()).toEqual({
+      active: true,
+      speedKmh: 0,
+      isBoosting: false,
+      kind: 'hover_tank',
+    });
+    expect(engine.getActiveVoiceCount()).toBe(1);
+    expect(mockCtx.oscillators.length - oscBeforeTank).toBe(3);
+    expect(mockCtx.filters.length - filterBeforeTank).toBe(1);
+
+    const oscA = mockCtx.oscillators[oscBeforeTank];
+    const oscB = mockCtx.oscillators[oscBeforeTank + 1];
+    const boostOsc = mockCtx.oscillators[oscBeforeTank + 2];
+    const humFilter = mockCtx.filters[filterBeforeTank];
+    const tankMasterGain = mockCtx.gains[gainsBeforeTank];
+    const tankHumGain = mockCtx.gains[gainsBeforeTank + 1];
+    const tankWhineGain = mockCtx.gains[gainsBeforeTank + 2];
+    const tankBoostGain = mockCtx.gains[gainsBeforeTank + 3];
+
+    const idleTankFreqA = oscA.frequency.value;
+    const idleTankFilterFreq = humFilter.frequency.value;
+    expect(idleTankFreqA).toBeGreaterThanOrEqual(38);
+    expect(idleTankFreqA).toBeLessThan(48);
+    expect(tankBoostGain.gain.value).toBeCloseTo(0.0001, 4);
+
+    // Repeated identical calls allocate zero extra nodes
+    for (let i = 0; i < 30; i++) {
+      engine.updateVehicleEngine(true, 0, false, 'hover_tank');
+    }
+    expect(mockCtx.oscillators.length - oscBeforeTank).toBe(3);
+
+    // Speed & boost modulation
+    engine.updateVehicleEngine(true, 80, false, 'hover_tank');
+    const tank80FreqA = oscA.frequency.value;
+    const tank80FreqB = oscB.frequency.value;
+    const tank80FilterFreq = humFilter.frequency.value;
+    const tank80HumGain = tankHumGain.gain.value;
+    const tank80WhineGain = tankWhineGain.gain.value;
+    const tank80MasterGain = tankMasterGain.gain.value;
+    expect(tank80FreqA).toBeGreaterThan(idleTankFreqA);
+    expect(tank80FilterFreq).toBeGreaterThan(idleTankFilterFreq);
+
+    engine.updateVehicleEngine(true, 80, true, 'hover_tank');
+    expect(oscA.frequency.value).toBeGreaterThan(tank80FreqA);
+    expect(boostOsc.frequency.value).toBeGreaterThan(24);
+    expect(tankBoostGain.gain.value).toBeGreaterThan(0.12);
+    expect(tankWhineGain.gain.value).toBeGreaterThan(tank80WhineGain);
+    expect(tankMasterGain.gain.value).toBeGreaterThan(tank80MasterGain);
+
+    // Compare at identical 80 km/h cruise against speedboat, hover_atv, and cyber_bike
+    engine.updateVehicleEngine(true, 80, false, 'speedboat');
+    const boat80FreqA = oscA.frequency.value;
+    const boat80FilterFreq = humFilter.frequency.value;
+    const boat80HumGain = tankHumGain.gain.value;
+    const boat80WhineGain = tankWhineGain.gain.value;
+    const boat80MasterGain = tankMasterGain.gain.value;
+
+    engine.updateVehicleEngine(true, 80, false, 'hover_atv');
+    const atv80FreqA = oscA.frequency.value;
+    const atv80FilterFreq = humFilter.frequency.value;
+    const atv80HumGain = tankHumGain.gain.value;
+    const atv80WhineGain = tankWhineGain.gain.value;
+
+    engine.updateVehicleEngine(true, 80, false, 'cyber_bike');
+    const bike80FreqA = oscA.frequency.value;
+    const bike80FilterFreq = humFilter.frequency.value;
+    const bike80WhineGain = tankWhineGain.gain.value;
+
+    // Hover tank diesel-turbine is deeper & heavier in hum/master than all others, with audible turbine spool
+    expect(tank80FreqA).toBeLessThan(boat80FreqA);
+    expect(tank80FreqA).toBeLessThan(atv80FreqA);
+    expect(tank80FreqA).toBeLessThan(bike80FreqA);
+    expect(tank80FreqB).toBeGreaterThan(tank80FreqA * 2);
+    expect(tank80FilterFreq).toBeLessThan(boat80FilterFreq);
+    expect(tank80FilterFreq).toBeLessThan(atv80FilterFreq);
+    expect(tank80FilterFreq).toBeLessThan(bike80FilterFreq);
+    expect(tank80HumGain).toBeGreaterThan(boat80HumGain);
+    expect(tank80HumGain).toBeGreaterThan(atv80HumGain);
+    expect(tank80WhineGain).toBeGreaterThan(boat80WhineGain);
+    expect(tank80WhineGain).toBeGreaterThan(atv80WhineGain);
+    expect(tank80WhineGain).toBeLessThan(bike80WhineGain);
+    expect(tank80MasterGain).toBeGreaterThan(boat80MasterGain);
+    expect(mockCtx.oscillators.length - oscBeforeTank).toBe(3);
+
+    // Clean stop on active=false
+    engine.updateVehicleEngine(false, 0, false, 'hover_tank');
+    expect(engine.getVehicleEngineState().active).toBe(false);
+    expect(engine.getActiveVoiceCount()).toBe(0);
+    expect(mockCtx.oscillators.slice(oscBeforeTank).every((o) => o.stopped)).toBe(true);
+
+    // Polyphony stays bounded under rapid Wave-12 SFX bursts
+    for (let i = 0; i < 30; i++) {
+      engine.playSound({ id: 'tank_cannon' });
     }
     expect(engine.getActiveVoiceCount()).toBeLessThanOrEqual(MAX_POLYPHONY);
 

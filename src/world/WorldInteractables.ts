@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   EventBus,
   GRIND_RAIL_SPEED,
+  HOT_DROP_POI_COUNT,
   ISLAND_RADIUS,
   MEDALLIONS,
   METEOR_CRATER_CRYSTAL_RESPAWN_SEC,
@@ -18,6 +19,7 @@ import {
   WEAPONS,
   WILD_BOAR_MAX_HP,
   clamp,
+  mulberry32,
   normalizeAngle,
 } from '../core';
 import type {
@@ -230,6 +232,13 @@ export interface FishingCastResult {
 export interface Wave11ShowcaseResult {
   balloon: SkyBalloonEntity;
   fishingHole: FishingHoleEntity;
+}
+
+export interface Wave12ShowcaseResult {
+  poiId: string;
+  hotDropPoiIds: string[];
+  drone: SupplyDroneEntity;
+  beaconPosition: Vec3Like;
 }
 
 interface VendingMachineVisual {
@@ -525,6 +534,19 @@ interface SkyBalloonVisual {
   isQaShowcase?: boolean;
 }
 
+interface HotDropBeaconVisual {
+  id: string;
+  poiId: string;
+  position: Vec3Like;
+  group: THREE.Group;
+  beamMesh: THREE.Mesh;
+  ringMesh: THREE.Mesh;
+  diamondMesh: THREE.Mesh;
+  haloMesh: THREE.Mesh;
+  phaseOffset: number;
+  isQaShowcase?: boolean;
+}
+
 const RIFT_SKY_OFFSET_Y = 92;
 const RIFT_OPEN_WINDOW_SEC = 8;
 const RIFT_COOLDOWN_SEC = 45;
@@ -672,6 +694,10 @@ export class WorldInteractables {
   private fishingHolesMap = new Map<string, FishingHoleVisual>();
   private skyBalloons: SkyBalloonEntity[] = [];
   private skyBalloonsMap = new Map<string, SkyBalloonVisual>();
+  private hotDropPoiIds: string[] = [];
+  private hotDropDroneIds: string[] = [];
+  private hotDropBeaconsMap = new Map<string, HotDropBeaconVisual>();
+  private qaFlaggedHotDropPoiId: string | null = null;
   private trainGroup!: THREE.Group;
   private trainTrackGroup!: THREE.Group;
   private trainTrackGeos: THREE.BufferGeometry[] = [];
@@ -5027,6 +5053,7 @@ export class WorldInteractables {
     weaponId: WeaponId;
     gold: number;
     trapKind: TrapKind;
+    isGoldenHotDrop?: boolean;
     isQaShowcase?: boolean;
   }): SupplyDroneVisual {
     const groundY = this.terrain.getHeightAt(spec.orbitCenterX, spec.orbitCenterZ);
@@ -5053,12 +5080,32 @@ export class WorldInteractables {
     };
     this.supplyDrones.push(data);
 
-    const chassisMat = this.getSharedMat('drone_chassis_mat', () =>
-      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.35, metalness: 0.78 }),
-    );
-    const trimMat = this.getSharedMat('drone_trim_mat', () =>
-      new THREE.MeshStandardMaterial({ color: '#94a3b8', roughness: 0.28, metalness: 0.85 }),
-    );
+    const chassisMat = spec.isGoldenHotDrop
+      ? this.getSharedMat('drone_golden_chassis_mat', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#eab308',
+            emissive: '#92400e',
+            emissiveIntensity: 0.38,
+            roughness: 0.24,
+            metalness: 0.88,
+          }),
+        )
+      : this.getSharedMat('drone_chassis_mat', () =>
+          new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.35, metalness: 0.78 }),
+        );
+    const trimMat = spec.isGoldenHotDrop
+      ? this.getSharedMat('drone_golden_trim_mat', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#fef08a',
+            emissive: '#ca8a04',
+            emissiveIntensity: 0.45,
+            roughness: 0.18,
+            metalness: 0.9,
+          }),
+        )
+      : this.getSharedMat('drone_trim_mat', () =>
+          new THREE.MeshStandardMaterial({ color: '#94a3b8', roughness: 0.28, metalness: 0.85 }),
+        );
     const bladeMat = this.getSharedMat('drone_blade_mat', () =>
       new THREE.MeshBasicMaterial({ color: '#e2e8f0', transparent: true, opacity: 0.78 }),
     );
@@ -5123,6 +5170,16 @@ export class WorldInteractables {
     const coreGem = new THREE.Mesh(coreGemGeo, coreMat);
     coreGem.position.y = -0.34;
     coreGroup.add(coreCrate, coreGem);
+    if (spec.isGoldenHotDrop) {
+      const goldenHaloGeo = this.getSharedGeo('drone_golden_halo_geo', () => {
+        const g = new THREE.TorusGeometry(0.62, 0.045, 6, 18);
+        g.rotateX(Math.PI * 0.5);
+        return g;
+      });
+      const goldenHalo = new THREE.Mesh(goldenHaloGeo, trimMat);
+      goldenHalo.position.y = 0.02;
+      coreGroup.add(goldenHalo);
+    }
     bodyGroup.add(coreGroup);
 
     droneGroup.add(bodyGroup);
@@ -6179,6 +6236,29 @@ export class WorldInteractables {
       this.skyBalloonsMap.delete(qaBalloonId);
       const idx = this.skyBalloons.findIndex((b) => b.id === qaBalloonId);
       if (idx >= 0) this.skyBalloons.splice(idx, 1);
+    }
+
+    const qaWave12DroneId = 'drone_qa_wave12_showcase';
+    const qaWave12Drone = this.supplyDronesMap.get(qaWave12DroneId);
+    if (qaWave12Drone) {
+      this.group.remove(qaWave12Drone.group);
+      this.supplyDronesMap.delete(qaWave12DroneId);
+      const idx = this.supplyDrones.findIndex((d) => d.id === qaWave12DroneId);
+      if (idx >= 0) this.supplyDrones.splice(idx, 1);
+    }
+    const hdIdx = this.hotDropDroneIds.indexOf(qaWave12DroneId);
+    if (hdIdx >= 0) this.hotDropDroneIds.splice(hdIdx, 1);
+
+    const qaHotDropBeaconId = 'hotdrop_beacon_qa_showcase';
+    const qaHotDropBeacon = this.hotDropBeaconsMap.get(qaHotDropBeaconId);
+    if (qaHotDropBeacon) {
+      this.group.remove(qaHotDropBeacon.group);
+      this.hotDropBeaconsMap.delete(qaHotDropBeaconId);
+    }
+
+    if (this.qaFlaggedHotDropPoiId) {
+      this.hotDropPoiIds = this.hotDropPoiIds.filter((id) => id !== this.qaFlaggedHotDropPoiId);
+      this.qaFlaggedHotDropPoiId = null;
     }
 
     for (const g of this.qaShowcaseGeos) g.dispose();
@@ -8795,6 +8875,301 @@ export class WorldInteractables {
     };
   }
 
+  private createHotDropBeaconEntry(spec: {
+    id: string;
+    poiId: string;
+    x: number;
+    z: number;
+    isQaShowcase?: boolean;
+  }): HotDropBeaconVisual {
+    const y = this.terrain.getHeightAt(spec.x, spec.z);
+    const beamMat = this.getSharedMat('hotdrop_beam_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#facc15',
+        transparent: true,
+        opacity: 0.24,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    const goldEmissiveMat = this.getSharedMat('hotdrop_gold_emissive_mat', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#ffdf40',
+        emissive: '#f59e0b',
+        emissiveIntensity: 1.65,
+        roughness: 0.2,
+        metalness: 0.72,
+      }),
+    );
+    const ringMat = this.getSharedMat('hotdrop_ring_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: '#fde047',
+        transparent: true,
+        opacity: 0.75,
+        side: THREE.DoubleSide,
+      }),
+    );
+
+    const beamGeo = this.getSharedGeo(
+      'hotdrop_beam_geo',
+      () => new THREE.CylinderGeometry(0.45, 0.95, 44, 14, 1, true),
+    );
+    const ringGeo = this.getSharedGeo('hotdrop_ring_geo', () => {
+      const g = new THREE.TorusGeometry(2.1, 0.12, 8, 28);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const diamondGeo = this.getSharedGeo(
+      'hotdrop_diamond_geo',
+      () => new THREE.OctahedronGeometry(0.65, 0),
+    );
+    const haloGeo = this.getSharedGeo('hotdrop_halo_geo', () => {
+      const g = new THREE.TorusGeometry(1.05, 0.08, 8, 24);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+
+    const beaconGroup = new THREE.Group();
+    beaconGroup.name = `HotDropBeacon_${spec.id}`;
+    beaconGroup.position.set(spec.x, y, spec.z);
+
+    const beamMesh = new THREE.Mesh(beamGeo, beamMat);
+    beamMesh.position.y = 22;
+    beaconGroup.add(beamMesh);
+
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.position.y = 0.22;
+    beaconGroup.add(ringMesh);
+
+    const diamondMesh = new THREE.Mesh(diamondGeo, goldEmissiveMat);
+    diamondMesh.position.y = 3.1;
+    beaconGroup.add(diamondMesh);
+
+    const haloMesh = new THREE.Mesh(haloGeo, goldEmissiveMat);
+    haloMesh.position.y = 3.1;
+    beaconGroup.add(haloMesh);
+
+    this.group.add(beaconGroup);
+
+    const visual: HotDropBeaconVisual = {
+      id: spec.id,
+      poiId: spec.poiId,
+      position: { x: spec.x, y, z: spec.z },
+      group: beaconGroup,
+      beamMesh,
+      ringMesh,
+      diamondMesh,
+      haloMesh,
+      phaseOffset: (this.hotDropBeaconsMap.size * 1.17) % (Math.PI * 2),
+      isQaShowcase: spec.isQaShowcase,
+    };
+    this.hotDropBeaconsMap.set(spec.id, visual);
+    return visual;
+  }
+
+  private clearHotDropState(): void {
+    if (this.hotDropDroneIds.length > 0) {
+      const dropIdSet = new Set(this.hotDropDroneIds);
+      for (const droneId of this.hotDropDroneIds) {
+        const visual = this.supplyDronesMap.get(droneId);
+        if (visual) {
+          this.group.remove(visual.group);
+          this.supplyDronesMap.delete(droneId);
+        }
+      }
+      this.supplyDrones = this.supplyDrones.filter((d) => !dropIdSet.has(d.id));
+      this.hotDropDroneIds = [];
+    }
+
+    for (const beacon of this.hotDropBeaconsMap.values()) {
+      this.group.remove(beacon.group);
+    }
+    this.hotDropBeaconsMap.clear();
+    this.hotDropPoiIds = [];
+    this.qaFlaggedHotDropPoiId = null;
+  }
+
+  getHotDropPoiIds(): string[] {
+    return this.hotDropPoiIds.slice();
+  }
+
+  isHotDropPoi(poiId: string): boolean {
+    return this.hotDropPoiIds.includes(poiId);
+  }
+
+  setHotDropPoiIds(ids: string[]): string[] {
+    this.clearHotDropState();
+
+    const validPoiMap = new Map(POIS.map((p) => [p.id, p]));
+    const uniqueIds: string[] = [];
+    for (const raw of ids) {
+      if (typeof raw !== 'string') continue;
+      const clean = raw.trim();
+      if (!validPoiMap.has(clean) || uniqueIds.includes(clean)) continue;
+      uniqueIds.push(clean);
+    }
+
+    this.hotDropPoiIds = uniqueIds;
+
+    for (let i = 0; i < uniqueIds.length; i++) {
+      const poiId = uniqueIds[i];
+      const poi = validPoiMap.get(poiId)!;
+      const beaconSpot = this.findDryGroundNear(
+        { x: poi.x, y: poi.plateauY, z: poi.z },
+        0,
+        0,
+      );
+      this.createHotDropBeaconEntry({
+        id: `hotdrop_beacon_${poiId}`,
+        poiId,
+        x: beaconSpot.x,
+        z: beaconSpot.z,
+      });
+
+      const droneSpecs: ReadonlyArray<{
+        suffix: string;
+        heightOffset: number;
+        orbitRadius: number;
+        orbitAngle: number;
+        orbitSpeed: number;
+        rarity: Rarity;
+        weaponId: WeaponId;
+        gold: number;
+        trapKind: TrapKind;
+      }> = [
+        {
+          suffix: '1',
+          heightOffset: 13.8,
+          orbitRadius: 11.5,
+          orbitAngle: 0.9 + i * 0.65,
+          orbitSpeed: 0.52,
+          rarity: 'legendary',
+          weaponId: 'heavy_shotgun',
+          gold: 125,
+          trapKind: 'spike_trap',
+        },
+        {
+          suffix: '2',
+          heightOffset: 15.2,
+          orbitRadius: 14.5,
+          orbitAngle: 4.04 + i * 0.65,
+          orbitSpeed: -0.44,
+          rarity: 'mythic',
+          weaponId: 'ballistic_shield',
+          gold: 150,
+          trapKind: 'bouncer_pad',
+        },
+      ];
+
+      for (const ds of droneSpecs) {
+        const droneId = `drone_hotdrop_${poiId}_${ds.suffix}`;
+        this.createSupplyDroneEntry({
+          id: droneId,
+          poiId,
+          orbitCenterX: poi.x,
+          orbitCenterZ: poi.z,
+          heightOffset: ds.heightOffset,
+          orbitRadius: ds.orbitRadius,
+          orbitAngle: ds.orbitAngle,
+          orbitSpeed: ds.orbitSpeed,
+          rarity: ds.rarity,
+          weaponId: ds.weaponId,
+          gold: ds.gold,
+          trapKind: ds.trapKind,
+          isGoldenHotDrop: true,
+        });
+        this.hotDropDroneIds.push(droneId);
+      }
+    }
+
+    return this.getHotDropPoiIds();
+  }
+
+  selectHotDropPois(seed: number): string[] {
+    const safeSeed = Number.isFinite(seed) ? Math.floor(seed) : 4201;
+    const rng = mulberry32(((safeSeed >>> 0) ^ 0x9e3779b9) >>> 0);
+    const pool = POIS.map((p) => p.id);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    const count = Math.min(HOT_DROP_POI_COUNT, pool.length);
+    return this.setHotDropPoiIds(pool.slice(0, count));
+  }
+
+  qaPlaceWave12Showcase(
+    centerPos: Vec3Like,
+    poiId?: string,
+  ): Wave12ShowcaseResult {
+    this.removeQaShowcaseDynamicEntities();
+
+    let targetPoiId = typeof poiId === 'string' ? poiId.trim() : '';
+    if (!targetPoiId) {
+      let bestDist = Infinity;
+      let nearestId = POIS[0]?.id ?? 'metro_towers';
+      for (const poi of POIS) {
+        const d = Math.hypot(poi.x - centerPos.x, poi.z - centerPos.z);
+        if (d < bestDist) {
+          bestDist = d;
+          nearestId = poi.id;
+        }
+      }
+      targetPoiId = nearestId;
+    }
+
+    if (!this.hotDropPoiIds.includes(targetPoiId)) {
+      this.hotDropPoiIds.push(targetPoiId);
+      this.qaFlaggedHotDropPoiId = targetPoiId;
+    }
+
+    const beaconSpot = this.findDryGroundNear(centerPos, 4.0, 7.0);
+    this.createHotDropBeaconEntry({
+      id: 'hotdrop_beacon_qa_showcase',
+      poiId: targetPoiId,
+      x: beaconSpot.x,
+      z: beaconSpot.z,
+      isQaShowcase: true,
+    });
+
+    const qaDroneId = 'drone_qa_wave12_showcase';
+    const droneVisual = this.createSupplyDroneEntry({
+      id: qaDroneId,
+      poiId: targetPoiId,
+      orbitCenterX: centerPos.x,
+      orbitCenterZ: centerPos.z,
+      heightOffset: 13.5,
+      orbitRadius: 7.0,
+      orbitAngle: 0.45,
+      orbitSpeed: 0.55,
+      rarity: 'mythic',
+      weaponId: 'ballistic_shield',
+      gold: 150,
+      trapKind: 'bouncer_pad',
+      isGoldenHotDrop: true,
+      isQaShowcase: true,
+    });
+    this.hotDropDroneIds.push(qaDroneId);
+
+    this.eventBus?.emit('vfx:hot_drop_beam', {
+      position: { x: beaconSpot.x, y: beaconSpot.y, z: beaconSpot.z },
+    });
+    this.eventBus?.emit('sound:play', {
+      id: 'hot_drop_chime',
+      position: { x: beaconSpot.x, y: beaconSpot.y + 1.5, z: beaconSpot.z },
+      volume: 0.85,
+      spatial: true,
+    });
+
+    return {
+      poiId: targetPoiId,
+      hotDropPoiIds: this.getHotDropPoiIds(),
+      drone: droneVisual.data,
+      beaconPosition: { x: beaconSpot.x, y: beaconSpot.y, z: beaconSpot.z },
+    };
+  }
+
   getStationColliders(): ColliderBox[] {
     return [
       ...this.getUpgradeBenchColliders(),
@@ -8821,6 +9196,7 @@ export class WorldInteractables {
 
   reset(): void {
     this.removeQaShowcaseDynamicEntities();
+    this.clearHotDropState();
 
     for (const v of this.vaultsMap.values()) {
       v.data.unlocked = false;
@@ -9671,9 +10047,22 @@ export class WorldInteractables {
         sb.ascentRings[r].scale.set(s, s, s);
       }
     }
+
+    // Animate Golden Hot-Drop POI sky beacons & rotating diamond halos
+    for (const hb of this.hotDropBeaconsMap.values()) {
+      const t = elapsed + hb.phaseOffset;
+      hb.diamondMesh.rotation.y = t * 1.85;
+      hb.diamondMesh.position.y = 3.1 + Math.sin(t * 2.4) * 0.28;
+      hb.haloMesh.position.y = hb.diamondMesh.position.y;
+      const haloScale = 1.0 + Math.sin(t * 3.1) * 0.14;
+      hb.haloMesh.scale.set(haloScale, haloScale, haloScale);
+      const groundScale = 1.0 + Math.sin(t * 2.8) * 0.16;
+      hb.ringMesh.scale.set(groundScale, groundScale, groundScale);
+    }
   }
 
   dispose(): void {
+    this.clearHotDropState();
     this.group.clear();
     this.clearTrainTrackVisuals();
     for (const g of this.geometries) g.dispose();

@@ -169,7 +169,8 @@ function isThrowable(weaponId: WeaponId): boolean {
     weaponId === 'shield_bubble' ||
     weaponId === 'port_a_bunker' ||
     weaponId === 'emp_grenade' ||
-    weaponId === 'auto_turret'
+    weaponId === 'auto_turret' ||
+    weaponId === 'remote_c4'
   );
 }
 
@@ -494,6 +495,13 @@ export class CharacterAnimator {
       rig.setBurningState(Boolean(state.isBurning), data.time);
     } else if (rig.isBurningActive()) {
       rig.setBurningState(true, data.time);
+    }
+
+    if (state.killStreak !== undefined) {
+      const safeStreak = Number.isFinite(state.killStreak) ? state.killStreak : 0;
+      rig.setStreakAura(safeStreak, data.time);
+    } else if (rig.isStreakAuraVisible()) {
+      rig.setStreakAura(rig.getKillStreak(), data.time);
     }
   }
 
@@ -1115,9 +1123,13 @@ export class CharacterAnimator {
     const aimPitch = clamp(finiteOr(state.pitch), -1.35, 1.35);
     const recoil = clamp(finiteOr(state.recoilKick), 0, 1);
     const recoilTilt = recoil * 0.28;
-
-    const isSprintingUnfocused = anim === 'sprint' && !state.isAiming && !state.isFiring;
     const weapon = state.weaponId;
+
+    const isSprintingUnfocused =
+      anim === 'sprint' &&
+      !state.isAiming &&
+      !state.isFiring &&
+      !(weapon === 'ballistic_shield' && state.isShieldBlocking);
 
     if (isSprintingUnfocused) {
       if (weapon === 'minigun') {
@@ -1155,6 +1167,27 @@ export class CharacterAnimator {
         p.lShRy = -0.56;
         p.lShRz = 0.12;
         p.lElRx = -0.88;
+      } else if (weapon === 'ballistic_shield') {
+        // Tactical sidearm + curved ballistic shield tucked forward across chest while sprinting
+        const strideBob = Math.sin(t * 11) * 0.06;
+        p.chestRy += 0.14;
+        p.rShRx = -0.68 + strideBob;
+        p.rShRy = 0.24;
+        p.rShRz = -0.14;
+        p.rElRx = -0.92;
+        p.lShRx = -0.58 - strideBob;
+        p.lShRy = -0.25;
+        p.lShRz = 0.10;
+        p.lElRx = -0.84;
+      } else if (weapon === 'remote_c4') {
+        // Tactical C4 pack + wireless detonator sprint carry
+        p.rShRx = -0.56 + Math.sin(t * 11) * 0.10;
+        p.rShRy = 0.18;
+        p.rShRz = -0.12;
+        p.rElRx = -0.88;
+        p.lShRx = -0.44 - Math.sin(t * 11) * 0.10;
+        p.lShRy = -0.16;
+        p.lElRx = -0.78;
       } else if (weapon === 'auto_turret') {
         // Briefcase tactical sprint carry in right hand
         p.rShRx = -0.55 + Math.sin(t * 11) * 0.12;
@@ -1267,6 +1300,101 @@ export class CharacterAnimator {
         p.lShRx = -0.48;
         p.lShRy = -0.25;
         p.lElRx = -0.65;
+      }
+      return;
+    }
+
+    if (weapon === 'ballistic_shield') {
+      if (state.isShieldBlocking) {
+        // Raised forward guard stance: curved shield braced squarely in front of torso/visor
+        p.spineRx += 0.06;
+        p.chestRy += 0.18;
+        const shieldTorsoPitch = p.hipsRx + p.spineRx + p.chestRx;
+        p.rShRx = -1.26 - aimPitch * 0.48 - recoilTilt * 0.35;
+        p.rShRy = 0.42;
+        p.rShRz = -0.06;
+        p.rElRx = -0.52;
+        p.rHaRx = clamp(
+          -Math.PI / 2 - shieldTorsoPitch - aimPitch * 0.65 - p.rShRx - p.rElRx + recoilTilt * 0.22,
+          -0.65,
+          0.65,
+        );
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -1.12 - aimPitch * 0.38;
+          p.lShRy = -0.58;
+          p.lShRz = 0.14;
+          p.lElRx = -0.92;
+        }
+      } else if (state.isAiming || state.isFiring) {
+        // Firing / aiming integrated sidearm pistol alongside shield
+        p.chestRy += 0.08;
+        const sidearmTorsoPitch = p.hipsRx + p.spineRx + p.chestRx;
+        p.rElRx = state.isAiming ? -0.36 : -0.52;
+        p.rHaRx = 0;
+        p.rShRx = -Math.PI / 2 - sidearmTorsoPitch - aimPitch - recoilTilt - p.rElRx;
+        p.rShRy = 0.20;
+        p.rShRz = -0.06;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -0.68 - aimPitch * 0.25;
+          p.lShRy = -0.36;
+          p.lShRz = 0.10;
+          p.lElRx = -0.82;
+        }
+      } else {
+        // Unblocked tactical ready carry stance
+        p.rShRx = -0.58 - aimPitch * 0.20;
+        p.rShRy = 0.18;
+        p.rShRz = -0.14;
+        p.rElRx = -0.68;
+        p.rHaRx = 0;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -0.38;
+          p.lShRy = -0.22;
+          p.lShRz = 0.10;
+          p.lElRx = -0.56;
+        }
+      }
+      return;
+    }
+
+    if (weapon === 'remote_c4') {
+      if (state.isFiring) {
+        // Overhand throw wind-up for sticky C4 demolition charge
+        p.rShRx = -2.10 - aimPitch * 0.65 - recoilTilt * 0.6;
+        p.rShRy = -0.15;
+        p.rShRz = -0.22;
+        p.rElRx = -0.78;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -1.25 - aimPitch * 0.6;
+          p.lShRy = -0.25;
+          p.lShRz = 0.18;
+          p.lElRx = -0.25;
+        }
+      } else if (state.isAiming) {
+        // Raised wireless detonator trigger fob stance (clacker held at chest level)
+        p.rShRx = -1.18 - aimPitch * 0.45 - recoilTilt * 0.25;
+        p.rShRy = 0.28;
+        p.rShRz = -0.10;
+        p.rElRx = -1.02;
+        p.rHaRx = 0.18;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -1.06 - aimPitch * 0.40;
+          p.lShRy = -0.36;
+          p.lShRz = 0.12;
+          p.lElRx = -0.96;
+        }
+      } else {
+        // Tactical C4 pack + wireless detonator fob ready carry
+        p.rShRx = -0.68;
+        p.rShRy = 0.22;
+        p.rShRz = -0.10;
+        p.rElRx = -0.78;
+        if (!keepLeftGripOnZipline) {
+          p.lShRx = -0.44;
+          p.lShRy = -0.20;
+          p.lShRz = 0.10;
+          p.lElRx = -0.62;
+        }
       }
       return;
     }

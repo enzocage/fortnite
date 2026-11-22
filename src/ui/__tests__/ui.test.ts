@@ -18,6 +18,7 @@ import {
   RARITY_ORDER,
   SKINS,
   STARTING_GOLD_BARS,
+  TANK_CANNON_COOLDOWN_SEC,
   WEAPON_WRAPS,
   WEAPONS,
   WORLD_HALF,
@@ -79,10 +80,12 @@ import {
   DEFAULT_LOBBY_CONFIG,
   deriveMatchHighlightBadges,
   drawFrontierMapOverlay,
+  drawHoverTankMapChevron,
   drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
   drawSpeedboatMapChevron,
   drawTideMapOverlay,
+  drawVanguardMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -116,6 +119,8 @@ import {
   getGrindRailSvg,
   getHeadingFromYaw,
   getHopCrystalSvg,
+  getHotDropSvg,
+  getHoverTankSvg,
   getJetpackFlameSvg,
   getKillStreakCallout,
   getLootIslandIconSvg,
@@ -135,6 +140,7 @@ import {
   getSpeedboatSvg,
   getStealthLeafSvg,
   getStormEyeSvg,
+  getStreakFlameSvg,
   getSupplyDroneSvg,
   getTacticalPingIconSvg,
   getTankerSvg,
@@ -169,6 +175,7 @@ import {
   resolveOverlordOverlayArgs,
   resolveSkyforgeOverlayArgs,
   resolveTideOverlayArgs,
+  resolveVanguardOverlayArgs,
   sanitizeGameMode,
   saveStoredLobbyConfig,
   saveStoredSettings,
@@ -180,6 +187,7 @@ import {
   type WorldOverlordOverlay,
   type WorldSkyforgeOverlay,
   type WorldTideOverlay,
+  type WorldVanguardOverlay,
   worldToMapNorm,
   xpForLevelStep,
 } from '../index';
@@ -450,9 +458,9 @@ describe('UIHelpers', () => {
 });
 
 describe('WeaponIcons & SVG assets', () => {
-  it('returns valid distinct <svg> markup for all 35 WeaponIds without placeholders', () => {
+  it('returns valid distinct <svg> markup for all 37 WeaponIds without placeholders', () => {
     const weaponIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(weaponIds.length).toBe(35);
+    expect(weaponIds.length).toBe(37);
 
     const seen = new Set<string>();
     for (const id of weaponIds) {
@@ -464,7 +472,7 @@ describe('WeaponIcons & SVG assets', () => {
       seen.add(svg);
     }
 
-    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9/Wave-10/Wave-11 upgraded icons have rich multi-element custom artwork
+    // Verify all Wave-1/Wave-2/Wave-5/Wave-6/Wave-7/Wave-8/Wave-9/Wave-10/Wave-11/Wave-12 upgraded icons have rich multi-element custom artwork
     const upgraded: WeaponId[] = [
       'heavy_shotgun',
       'mythic_blade_rifle',
@@ -487,6 +495,8 @@ describe('WeaponIcons & SVG assets', () => {
       'flare_gun',
       'auto_turret',
       'chug_cannon',
+      'ballistic_shield',
+      'remote_c4',
     ];
     for (const id of upgraded) {
       const svg = getWeaponSvg(id);
@@ -4639,7 +4649,7 @@ describe('Wave 8 UI: Frontier Loadout (5-Mode Lobby, Team Rumble HUD/Summary, St
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(30);
+    expect(legendRowCount).toBe(32);
     expect(legend?.textContent).toContain('MOD BENCH');
     expect(legend?.textContent).toContain('FORECAST TOWER');
 
@@ -4994,6 +5004,9 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const flarePill = chipRow?.findByClass('fdr-flare-pill');
     const turretPill = chipRow?.findByClass('fdr-turret-pill');
     const thermalPill = chipRow?.findByClass('fdr-thermal-pill');
+    const bshieldPill = chipRow?.findByClass('fdr-bshield-pill');
+    const c4Pill = chipRow?.findByClass('fdr-c4-pill');
+    const streakPill = chipRow?.findByClass('fdr-streak-pill');
     const vitalsStack = bottomCenter?.findByClass('fdr-vitals-stack');
     const channelBar = bottomCenter?.findByClass('fdr-channel-bar');
 
@@ -5005,6 +5018,9 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     expect(flarePill?.classList.contains('fdr-hidden')).toBe(true);
     expect(turretPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(thermalPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(bshieldPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(c4Pill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(streakPill?.classList.contains('fdr-hidden')).toBe(true);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeGreaterThanOrEqual(0);
     expect(bottomCenter?.children.indexOf(chipRow!)).toBeLessThan(
       bottomCenter?.children.indexOf(vitalsStack!) ?? 999,
@@ -5016,6 +5032,9 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
       flarePill,
       turretPill,
       thermalPill,
+      bshieldPill,
+      c4Pill,
+      streakPill,
     ]);
 
     // 2. All 3 status chips active + Train Hack channel bar + Minimap Skyforge Overlay
@@ -5230,7 +5249,7 @@ describe('Wave 9 UI: Skyforge Express (Jetpack, Plasma Flamethrower, Status Chip
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(30);
+    expect(legendRowCount).toBe(32);
     expect(legend?.textContent).toContain('APEX TRAIN');
     expect(legend?.textContent).toContain('RIFT CRATER');
 
@@ -5860,7 +5879,7 @@ describe('Wave 10 UI: Tide & Recon (Shockwave Hammer, Flare Gun, Apex Speedboat,
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(30);
+    expect(legendRowCount).toBe(32);
     expect(legend?.textContent).toContain('SPEEDBOAT');
     expect(legend?.textContent).toContain('WILDLIFE');
 
@@ -6417,7 +6436,7 @@ describe('Wave 11 UI: Overlord (Auto-Turret, Chug Cannon, Fishing Channel, Therm
     const legendRowCount = (
       legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
     ).length;
-    expect(legendRowCount).toBe(30);
+    expect(legendRowCount).toBe(32);
     expect(legend?.textContent).toContain('SKY BALLOON');
     expect(legend?.textContent).toContain('FISHING HOLE');
 
@@ -6514,6 +6533,593 @@ describe('Wave 11 UI: Overlord (Auto-Turret, Chug Cannon, Fishing Channel, Therm
     const highlightsRow = root.findByClass('fdr-highlights-row');
     expect(highlightsRow?.textContent).toContain('TURRET ENGINEER');
     expect(highlightsRow?.textContent).toContain('MASTER ANGLER');
+
+    ui.dispose();
+  });
+});
+
+describe('Wave 12 UI: Vanguard (Ballistic Shield, Remote C4, Hover Tank, Hot-Drop POIs, Kill-Streak Pill, Vanguard Map & Highlights)', () => {
+  const prevStorageDesc = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    resetCareerStats();
+  });
+
+  afterEach(() => {
+    resetCareerStats();
+    if (prevStorageDesc) {
+      Object.defineProperty(globalThis, 'localStorage', prevStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as Record<string, unknown>).window;
+    } else {
+      (globalThis as Record<string, unknown>).window = prevWindow;
+    }
+    if (prevDoc === undefined) {
+      delete (globalThis as Record<string, unknown>).document;
+    } else {
+      (globalThis as Record<string, unknown>).document = prevDoc;
+    }
+  });
+
+  it('provides Wave-12 SVGs (ballistic_shield, remote_c4, getHoverTankSvg, getHotDropSvg, getStreakFlameSvg), VANGUARD TANK label, Node-safe drawVanguardMapOverlay & DEMOLITIONS / AEGIS WALL highlights', () => {
+    for (const id of ['ballistic_shield', 'remote_c4'] as const) {
+      const svg = getWeaponSvg(id);
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+      const shapes = (svg.match(/<(path|rect|circle|ellipse|polygon)/g) ?? []).length;
+      expect(shapes).toBeGreaterThanOrEqual(5);
+    }
+
+    const tankSvg = getHoverTankSvg();
+    const hotDropSvg = getHotDropSvg();
+    const flameSvg = getStreakFlameSvg();
+    for (const svg of [tankSvg, hotDropSvg, flameSvg]) {
+      expect(svg.trim().startsWith('<svg')).toBe(true);
+      expect(svg.includes('</svg>')).toBe(true);
+    }
+    expect(getVehicleIconSvg('hover_tank')).toBe(tankSvg);
+    expect(getVehicleIconSvg('hover_tank')).not.toBe(getVehicleIconSvg('hover_atv'));
+    expect(getVehicleIconSvg('hover_tank')).not.toBe(getVehicleIconSvg('speedboat'));
+    expect(formatVehicleKindLabel('hover_tank')).toBe('VANGUARD TANK');
+
+    const hotPoi = POIS[0]; // metro_towers (-75, -40)
+    const tanks: VehicleEntity[] = [
+      {
+        id: 'tank-live',
+        kind: 'hover_tank',
+        x: 34,
+        y: 12,
+        z: 22,
+        yaw: 0.5,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 900,
+        maxHp: 900,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: 'player',
+        destroyed: false,
+      },
+      {
+        id: 'tank-dead',
+        kind: 'hover_tank',
+        x: 92,
+        y: 12,
+        z: 88,
+        yaw: 0,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 0,
+        maxHp: 900,
+        boostCharge: 0,
+        isBoosting: false,
+        driverId: null,
+        destroyed: true,
+      },
+    ];
+
+    const byArgs: WorldVanguardOverlay = resolveVanguardOverlayArgs(
+      [hotPoi.id],
+      tanks,
+    );
+    expect(byArgs.hotDropPoiIds).toEqual([hotPoi.id]);
+    expect(byArgs.vehicles?.length).toBe(2);
+
+    const byObj: WorldVanguardOverlay = resolveVanguardOverlayArgs({
+      hotDropPoiIds: [hotPoi.id],
+      vehicles: tanks,
+    });
+    expect(byObj.hotDropPoiIds).toEqual([hotPoi.id]);
+    expect(byObj.vehicles?.[0].id).toBe('tank-live');
+
+    // Minimal Node canvas mock WITHOUT fillText, strokeText, ellipse, rotate, strokeRect, or createRadialGradient!
+    const directCalls: Array<{ op: string; args: unknown[] }> = [];
+    const safeCtx = {
+      save: () => directCalls.push({ op: 'save', args: [] }),
+      restore: () => directCalls.push({ op: 'restore', args: [] }),
+      translate: (...args: unknown[]) => directCalls.push({ op: 'translate', args }),
+      beginPath: () => directCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => directCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => directCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => directCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => directCalls.push({ op: 'arc', args }),
+      fill: () => directCalls.push({ op: 'fill', args: [] }),
+      stroke: () => directCalls.push({ op: 'stroke', args: [] }),
+      fillRect: (...args: unknown[]) => directCalls.push({ op: 'fillRect', args }),
+      setLineDash: (...args: unknown[]) => directCalls.push({ op: 'setLineDash', args }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    drawVanguardMapOverlay(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      220,
+      220 / 280,
+      (wx, wz) => ({ x: 110 + wx * (220 / 280), y: 110 + wz * (220 / 280) }),
+      [hotPoi.id],
+      tanks,
+      1600,
+    );
+
+    const hasTranslated = (wx: number, wz: number) =>
+      directCalls.some(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - (110 + wx * (220 / 280))) < 0.5 &&
+          Math.abs((c.args[1] as number) - (110 + wz * (220 / 280))) < 0.5,
+      );
+
+    expect(hasTranslated(hotPoi.x, hotPoi.z)).toBe(true);
+    expect(hasTranslated(34, 22)).toBe(true);
+    expect(hasTranslated(92, 88)).toBe(false);
+    expect(directCalls.some((c) => c.op === 'setLineDash')).toBe(true);
+
+    // Direct drawHoverTankMapChevron check without rotate on mock
+    drawHoverTankMapChevron(
+      safeCtx as unknown as CanvasRenderingContext2D,
+      50,
+      60,
+      0.8,
+      true,
+    );
+
+    const noWave12Badges = deriveMatchHighlightBadges({
+      victory: false,
+      placement: 10,
+      totalPlayers: 30,
+      kills: 2,
+      damageDealt: 240,
+      shotsFired: 12,
+      shotsHit: 4,
+      accuracy: 33,
+      headshots: 0,
+      structuresBuilt: 1,
+      chestsOpened: 2,
+      survivalTimeSec: 110,
+      c4Blasts: 0,
+      shieldBlockedDmg: 99,
+    });
+    expect(noWave12Badges.some((b) => b.label === 'DEMOLITIONS')).toBe(false);
+    expect(noWave12Badges.some((b) => b.label === 'AEGIS WALL')).toBe(false);
+
+    const wave12Badges = deriveMatchHighlightBadges({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 6,
+      damageDealt: 1320,
+      shotsFired: 36,
+      shotsHit: 18,
+      accuracy: 50,
+      headshots: 2,
+      structuresBuilt: 8,
+      chestsOpened: 4,
+      survivalTimeSec: 230,
+      c4Blasts: 1,
+      shieldBlockedDmg: 100,
+    });
+    expect(wave12Badges.find((b) => b.label === 'DEMOLITIONS')?.tone).toBe('crimson');
+    expect(wave12Badges.find((b) => b.label === 'AEGIS WALL')?.tone).toBe('cyan');
+  });
+
+  it('renders Ballistic Shield, Armed C4, Kill-Streak Flame pills, golden HOT DROP zone badge, VANGUARD TANK cannon cooldown/ready HUD, hotbar SVGs & Node-safe Minimap Vanguard overlay', () => {
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    // Minimal 2D canvas context WITHOUT fillText, strokeText, or ellipse!
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          (el as unknown as { getContext: () => unknown }).getContext = () => miniMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const hudRoot = new MockElement('div');
+    const hud = new HUDManager(
+      hudRoot as unknown as HTMLElement,
+      DEFAULT_SETTINGS,
+      {
+        onEmoteSelect: () => {},
+        onEditTileToggle: () => {},
+        onEditConfirm: () => {},
+        onEditReset: () => {},
+      },
+    );
+    hud.setVisible(true);
+
+    const hotPoi = POIS[0]; // metro_towers (-75, -40)
+    const tankVec: VehicleEntity = {
+      id: 'tank-mini-1',
+      kind: 'hover_tank',
+      x: 28,
+      y: 12,
+      z: -24,
+      yaw: 0.4,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 850,
+      maxHp: 900,
+      boostCharge: 0.8,
+      isBoosting: false,
+      driverId: 'player',
+      destroyed: false,
+    };
+    hud.setWorldVehicles([tankVec]);
+    miniDrawCalls.length = 0;
+
+    // 1. All Wave-12 chips active + HOT DROP badge + hover_tank cannon cooling down (1.4S)
+    hud.update(
+      makeBaseHUDState({
+        playerPos: { x: hotPoi.x, y: 12, z: hotPoi.z },
+        ballisticShieldHp: { current: 210, max: 250, blocking: true },
+        activeC4Count: 2,
+        killStreak: 3,
+        inHotDropPoi: true,
+        hotDropPoiIds: [hotPoi.id],
+        vehicle: {
+          kind: 'hover_tank',
+          speedKmh: 62,
+          hp: 850,
+          maxHp: 900,
+          boostCharge: 0.8,
+          isBoosting: false,
+        },
+        tankCannonCooldown: 1.4,
+        slots: [
+          { uid: 'pick', weaponId: 'pickaxe', rarity: 'common', magAmmo: 0, stackCount: 1 },
+          { uid: 'bs', weaponId: 'ballistic_shield', rarity: 'mythic', magAmmo: 15, stackCount: 1 },
+          { uid: 'c4', weaponId: 'remote_c4', rarity: 'epic', magAmmo: 0, stackCount: 4 },
+          null,
+          null,
+          null,
+        ],
+        activeSlot: 1,
+      }),
+    );
+
+    const chipRow = hudRoot.findByClass('fdr-status-chip-row');
+    const bshieldPill = chipRow?.findByClass('fdr-bshield-pill');
+    const c4Pill = chipRow?.findByClass('fdr-c4-pill');
+    const streakPill = chipRow?.findByClass('fdr-streak-pill');
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(false);
+    expect(bshieldPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(bshieldPill?.classList.contains('blocking')).toBe(true);
+    expect(bshieldPill?.dataset.blocking).toBe('true');
+    expect(bshieldPill?.textContent).toContain('AEGIS 210/250');
+
+    expect(c4Pill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(c4Pill?.dataset.count).toBe('2');
+    expect(c4Pill?.textContent).toContain('C4 · 2 ARMED');
+
+    expect(streakPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(streakPill?.dataset.streak).toBe('3');
+    expect(streakPill?.textContent).toContain('3X STREAK');
+
+    const zoneMeta = hudRoot.findByClass('fdr-zone-meta');
+    const hotDropBadge = zoneMeta?.findByClass('fdr-hotdrop-badge');
+    expect(hotDropBadge?.classList.contains('fdr-hidden')).toBe(false);
+    expect(hotDropBadge?.dataset.hotDrop).toBe('true');
+    expect(hotDropBadge?.textContent).toContain('HOT DROP');
+
+    const vehDash = hudRoot.findByClass('fdr-vehicle-dash');
+    const cannonRow = vehDash?.findByClass('fdr-vehicle-cannon-row');
+    expect(vehDash?.classList.contains('fdr-hidden')).toBe(false);
+    expect(vehDash?.textContent).toContain('VANGUARD TANK');
+    expect(vehDash?.innerHTML).toContain(getHoverTankSvg());
+    expect(cannonRow?.classList.contains('fdr-hidden')).toBe(false);
+    expect(cannonRow?.classList.contains('cooling')).toBe(true);
+    expect(cannonRow?.dataset.cannonReady).toBe('false');
+    expect(cannonRow?.textContent).toContain('CANNON');
+    expect(cannonRow?.textContent).toContain('1.4S');
+    const expectedPct = (((TANK_CANNON_COOLDOWN_SEC - 1.4) / TANK_CANNON_COOLDOWN_SEC) * 100).toFixed(1);
+    expect(cannonRow?.findByClass('fdr-vehicle-fill')?.style.width).toBe(`${expectedPct}%`);
+
+    const slotCards = hudRoot.findAllByClass('fdr-slot-card');
+    expect(slotCards[1]?.innerHTML).toContain(getWeaponSvg('ballistic_shield'));
+    expect(slotCards[1]?.innerHTML).toContain('15');
+    expect(slotCards[2]?.innerHTML).toContain(getWeaponSvg('remote_c4'));
+    expect(slotCards[2]?.innerHTML).toContain('x4');
+
+    // Minimap rendered Hot-Drop POI halo/marker & Vanguard Tank chevron safely without fillText/ellipse
+    const miniSize = 220;
+    const miniPxPerMeter = miniSize / 280;
+    const hasHotDropMini = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + (hotPoi.x - hotPoi.x) * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + (hotPoi.z - hotPoi.z) * miniPxPerMeter)) < 0.5,
+    );
+    const hasTankMini = miniDrawCalls.some(
+      (c) =>
+        c.op === 'translate' &&
+        Math.abs((c.args[0] as number) - (miniSize * 0.5 + (28 - hotPoi.x) * miniPxPerMeter)) < 0.5 &&
+        Math.abs((c.args[1] as number) - (miniSize * 0.5 + (-24 - hotPoi.z) * miniPxPerMeter)) < 0.5,
+    );
+    expect(hasHotDropMini).toBe(true);
+    expect(hasTankMini).toBe(true);
+
+    // 2. Cannon READY state + rampage streak (5X) + killStreak < 3 hides pill
+    hud.update(
+      makeBaseHUDState({
+        ballisticShieldHp: null,
+        activeC4Count: 0,
+        killStreak: 5,
+        inHotDropPoi: false,
+        vehicle: {
+          kind: 'hover_tank',
+          speedKmh: 44,
+          hp: 900,
+          maxHp: 900,
+          boostCharge: 1,
+          isBoosting: false,
+        },
+        tankCannonCooldown: 0,
+      }),
+    );
+    expect(bshieldPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(c4Pill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(streakPill?.classList.contains('fdr-hidden')).toBe(false);
+    expect(streakPill?.classList.contains('rampage')).toBe(true);
+    expect(streakPill?.textContent).toContain('5X STREAK');
+    expect(hotDropBadge?.classList.contains('fdr-hidden')).toBe(true);
+    expect(cannonRow?.classList.contains('ready')).toBe(true);
+    expect(cannonRow?.dataset.cannonReady).toBe('true');
+    expect(cannonRow?.textContent).toContain('READY');
+
+    // 3. Clearing killStreak to 2 & switching to hover_atv hides streak pill & cannon row cleanly
+    hud.update(
+      makeBaseHUDState({
+        killStreak: 2,
+        vehicle: {
+          kind: 'hover_atv',
+          speedKmh: 50,
+          hp: 400,
+          maxHp: 400,
+          boostCharge: 1,
+          isBoosting: false,
+        },
+      }),
+    );
+    expect(streakPill?.classList.contains('fdr-hidden')).toBe(true);
+    expect(chipRow?.classList.contains('fdr-hidden')).toBe(true);
+    expect(cannonRow?.classList.contains('fdr-hidden')).toBe(true);
+
+    hud.dispose();
+  });
+
+  it('renders Golden Hot-Drop POI halos/markers & Vanguard Tank markers on FullMapOverlay BEFORE POI labels (32 legend rows) & shows DEMOLITIONS / AEGIS WALL highlights on MatchOverlay', () => {
+    const fullDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+    const miniDrawCalls: Array<{ op: string; args: unknown[] }> = [];
+
+    // FullMap mock WITHOUT ellipse
+    const fullMockCtx = {
+      clearRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: (...args: unknown[]) => fullDrawCalls.push({ op: 'drawImage', args }),
+      beginPath: () => fullDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => fullDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => fullDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => fullDrawCalls.push({ op: 'arc', args }),
+      fill: () => fullDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => fullDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => fullDrawCalls.push({ op: 'translate', args }),
+      rotate: (...args: unknown[]) => fullDrawCalls.push({ op: 'rotate', args }),
+      setLineDash: (...args: unknown[]) => fullDrawCalls.push({ op: 'setLineDash', args }),
+      fillText: (...args: unknown[]) => fullDrawCalls.push({ op: 'fillText', args }),
+      strokeText: (...args: unknown[]) => fullDrawCalls.push({ op: 'strokeText', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+
+    const miniMockCtx = {
+      clearRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'clearRect', args }),
+      rect: () => {},
+      fillRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'fillRect', args }),
+      strokeRect: (...args: unknown[]) => miniDrawCalls.push({ op: 'strokeRect', args }),
+      drawImage: () => {},
+      beginPath: () => miniDrawCalls.push({ op: 'beginPath', args: [] }),
+      closePath: () => miniDrawCalls.push({ op: 'closePath', args: [] }),
+      moveTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'moveTo', args }),
+      lineTo: (...args: unknown[]) => miniDrawCalls.push({ op: 'lineTo', args }),
+      arc: (...args: unknown[]) => miniDrawCalls.push({ op: 'arc', args }),
+      fill: () => miniDrawCalls.push({ op: 'fill', args: [] }),
+      stroke: () => miniDrawCalls.push({ op: 'stroke', args: [] }),
+      save: () => {},
+      restore: () => {},
+      translate: (...args: unknown[]) => miniDrawCalls.push({ op: 'translate', args }),
+      rotate: () => {},
+      setLineDash: (...args: unknown[]) => miniDrawCalls.push({ op: 'setLineDash', args }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    };
+
+    let canvasCount = 0;
+    (globalThis as Record<string, unknown>).document = {
+      createElement: (tag: string) => {
+        const el = new MockElement(tag);
+        if (tag.toLowerCase() === 'canvas') {
+          const idx = canvasCount++;
+          (el as unknown as { getContext: () => unknown }).getContext = () =>
+            idx === 0 ? miniMockCtx : fullMockCtx;
+        }
+        return el;
+      },
+    };
+
+    const root = new MockElement('div');
+    const bus = new EventBus();
+    const ui = new UIManager(root as unknown as HTMLElement, bus);
+
+    // 1. Legend has exactly 32 rows including VANGUARD TANK & HOT DROP
+    const legend = root.findByClass('fdr-map-legend');
+    const legendRowCount = (
+      legend?.innerHTML.match(/class="fdr-map-legend-row"/g) ?? []
+    ).length;
+    expect(legendRowCount).toBe(32);
+    expect(legend?.textContent).toContain('VANGUARD TANK');
+    expect(legend?.textContent).toContain('HOT DROP');
+
+    // 2. Hot-Drop POI halos/markers & Vanguard Tank markers render BEFORE POI text labels
+    const hotPoi = POIS[1]; // sunny_suburbs (-165, ...)
+    const tanks: VehicleEntity[] = [
+      {
+        id: 'tank-full-1',
+        kind: 'hover_tank',
+        x: 112,
+        y: 12,
+        z: -84,
+        yaw: 0.7,
+        pitch: 0,
+        roll: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        hp: 900,
+        maxHp: 900,
+        boostCharge: 1,
+        isBoosting: false,
+        driverId: null,
+        destroyed: false,
+      },
+    ];
+
+    ui.setPhase('playing');
+    ui.setWorldVehicles(tanks);
+    ui.toggleFullMap(true);
+    fullDrawCalls.length = 0;
+    miniDrawCalls.length = 0;
+
+    ui.updateHUD(
+      makeBaseHUDState({
+        playerPos: { x: 0, y: 10, z: 0 },
+        hotDropPoiIds: [hotPoi.id],
+      }),
+    );
+
+    const findFullTranslateIdx = (wx: number, wz: number) => {
+      const n = worldToMapNorm(wx, wz);
+      const px = n.nx * 640;
+      const py = n.nz * 640;
+      return fullDrawCalls.findIndex(
+        (c) =>
+          c.op === 'translate' &&
+          Math.abs((c.args[0] as number) - px) < 0.5 &&
+          Math.abs((c.args[1] as number) - py) < 0.5,
+      );
+    };
+
+    const hotDropIdx = findFullTranslateIdx(hotPoi.x, hotPoi.z);
+    const tankIdx = findFullTranslateIdx(112, -84);
+    const firstPoiLabelIdx = fullDrawCalls.findIndex(
+      (c) => c.op === 'fillText' && c.args[0] === 'METRO TOWERS',
+    );
+    const hotDropTagCalled = fullDrawCalls.some(
+      (c) => c.op === 'fillText' && typeof c.args[0] === 'string' && c.args[0].includes('HOT DROP'),
+    );
+
+    expect(hotDropIdx).toBeGreaterThanOrEqual(0);
+    expect(tankIdx).toBeGreaterThanOrEqual(0);
+    expect(firstPoiLabelIdx).toBeGreaterThan(hotDropIdx);
+    expect(firstPoiLabelIdx).toBeGreaterThan(tankIdx);
+    expect(hotDropTagCalled).toBe(true);
+
+    // 3. MatchOverlay shows DEMOLITIONS & AEGIS WALL badges
+    ui.setPhase('victory');
+    ui.showMatchSummary({
+      victory: true,
+      placement: 1,
+      totalPlayers: 30,
+      kills: 7,
+      damageDealt: 1490,
+      shotsFired: 48,
+      shotsHit: 25,
+      accuracy: 52,
+      headshots: 3,
+      structuresBuilt: 8,
+      chestsOpened: 5,
+      survivalTimeSec: 235,
+      c4Blasts: 2,
+      shieldBlockedDmg: 165,
+      tankElims: 1,
+    });
+    const highlightsRow = root.findByClass('fdr-highlights-row');
+    expect(highlightsRow?.textContent).toContain('DEMOLITIONS');
+    expect(highlightsRow?.textContent).toContain('AEGIS WALL');
 
     ui.dispose();
   });

@@ -180,6 +180,7 @@ export class UIManager {
 
   setWorldVehicles(vehicles: VehicleEntity[]): void {
     this.fullMap.setWorldVehicles(vehicles);
+    this.hud.setWorldVehicles(vehicles);
   }
 
   setWorldVaults(vaults: VaultEntity[]): void {

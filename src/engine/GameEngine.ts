@@ -127,6 +127,7 @@ export interface FortdropDebugAPI {
   giveWave9Loadout(): void;
   giveWave10Loadout(): void;
   giveWave11Loadout(): void;
+  giveWave12Loadout(): void;
   forceAugmentOffer(): [AugmentId, AugmentId] | null;
 }
 
@@ -644,11 +645,13 @@ export class GameEngine {
       const search = new URLSearchParams(window.location.search);
       const qaPoi =
         search.get('qaPoi') ??
-        (search.has('qaWave11') || search.has('qaWave10')
-          ? 'crystal_basin'
-          : search.has('qaWave9')
-            ? 'sunny_suburbs'
-            : null);
+        (search.has('qaWave12')
+          ? 'crater_depot'
+          : search.has('qaWave11') || search.has('qaWave10')
+            ? 'crystal_basin'
+            : search.has('qaWave9')
+              ? 'sunny_suburbs'
+              : null);
       if (qaPoi && POIS.some((p) => p.id === qaPoi)) {
         const qaModeParam = search.get('qaMode');
         const qaMode: GameModeId | undefined =
@@ -683,7 +686,81 @@ export class GameEngine {
         this.startMatch(qaCfg, true);
         this.discoveredPois.add(qaPoi);
         window.__GAME__?.teleportToPOI(qaPoi);
-        if (search.has('qaWave11')) {
+        if (search.has('qaWave12')) {
+          window.__GAME__?.giveWave12Loadout();
+          this.playerController.setBallisticShieldHp(210);
+          this.playerController.setKillStreak(3);
+          this.playerController.setJetpackFuel(92);
+          this.playerController.setGoldBars(800);
+
+          const p = this.playerController.getPosition();
+          const yaw = this.playerController.getYaw();
+          const fwdX = Math.sin(yaw);
+          const fwdZ = Math.cos(yaw);
+          const rightX = -Math.cos(yaw);
+          const rightZ = Math.sin(yaw);
+
+          this.worldInteractables.qaPlaceWave12Showcase(p, qaPoi);
+          this.playerController.setHotDropPoiIds(this.worldInteractables.getHotDropPoiIds());
+
+          const tankX = p.x + fwdX * 8.0 + rightX * 2.8;
+          const tankZ = p.z + fwdZ * 8.0 + rightZ * 2.8;
+          this.vehicleSystem.spawnVehicleAt('hover_tank', tankX, tankZ, yaw + Math.PI * 0.65);
+
+          const squadId = this.gameMode === 'duos' ? 'player_squad' : undefined;
+          const teamId = this.gameMode === 'team_rumble' ? 'team_blue' : undefined;
+          const c4Spots: ReadonlyArray<[number, number]> = [
+            [-1.8, 4.8],
+            [0.4, 5.2],
+          ];
+          for (const [ro, fo] of c4Spots) {
+            const cx = p.x + rightX * ro + fwdX * fo;
+            const cz = p.z + rightZ * ro + fwdZ * fo;
+            this.buildingSystem.placeC4(
+              { x: cx, y: this.terrain.getHeightAt(cx, cz) + 0.06, z: cz },
+              'player',
+              squadId,
+              teamId,
+            );
+          }
+
+          this.collision.setPropColliders([
+            ...this.propsAndLoot.getActivePropColliders(),
+            ...this.propsAndLoot.getActiveLlamaColliders(),
+            ...this.worldInteractables.getColliders(),
+            ...this.vehicleSystem.getActiveVehicleColliders(),
+          ]);
+          this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
+          this.uiManager.setWorldChapterOverlay(
+            this.worldInteractables.getWeaponBunkers(),
+            this.worldInteractables.getSlurpTankers(),
+            this.worldInteractables.getDroppedMedallions(),
+            this.worldInteractables.getDroppedCrowns(),
+          );
+          this.uiManager.setWorldOverdriveOverlay(
+            this.worldInteractables.getGrindRails(),
+            this.worldInteractables.getRebootVans(),
+            this.worldInteractables.getSupplyDrones(),
+          );
+          this.uiManager.setWorldFrontierOverlay(
+            this.worldInteractables.getModBenches(),
+            this.worldInteractables.getForecastTowers(),
+          );
+          this.uiManager.setWorldSkyforgeOverlay(
+            this.worldInteractables.getTrainState(),
+            this.worldInteractables.getMeteorCraters(),
+          );
+          this.uiManager.setWorldTideOverlay(
+            this.worldInteractables.getWildBoars(),
+            this.worldInteractables.getShieldMushrooms(),
+          );
+          this.uiManager.setWorldOverlordOverlay(
+            this.worldInteractables.getFishingHoles(),
+            this.worldInteractables.getSkyBalloons(),
+          );
+          this.syncPlayerRig(this.playerController.getCharacterRenderState(), 1 / 60);
+          this.pushHUDState(false);
+        } else if (search.has('qaWave11')) {
           window.__GAME__?.giveWave11Loadout();
           this.playerController.setThermalVisionTimer(11.5);
           this.playerController.setJetpackFuel(88);
@@ -1365,6 +1442,9 @@ export class GameEngine {
       getTrainState: () => this.worldInteractables.getTrainState(),
       getMeteorCraters: () => this.worldInteractables.getMeteorCraters(),
       getTurrets: () => this.buildingSystem.getTurrets(),
+      get hotDropPoiIds() {
+        return self.worldInteractables.getHotDropPoiIds();
+      },
       getSquadmates: (squadId: string) =>
         this.botManager.getAliveBots().filter((b) => b.squadId === squadId),
       getMedallionHolders: () => this.botManager.getMedallionHolders(),
@@ -1869,6 +1949,7 @@ export class GameEngine {
     this.weaponSystem.clear();
     this.vfxManager.clear();
     this.worldInteractables.reset();
+    this.worldInteractables.selectHotDropPois(this.matchSeed);
     this.vehicleSystem.reset();
     this.questTracker.reset(this.matchSeed, this.gameMode);
     this.uiManager.setWorldVehicles(this.vehicleSystem.getVehicles());
@@ -1975,6 +2056,7 @@ export class GameEngine {
 
     // Reset player controller & augments
     this.playerController.resetForMatch(this.busStart, config.playerName, this.gameMode);
+    this.playerController.setHotDropPoiIds(this.worldInteractables.getHotDropPoiIds());
     const savedCareer = loadCareerStats();
     this.playerController.setGoldBars(savedCareer.goldBars);
     this.playerController.setVictoryCrown(savedCareer.hasVictoryCrown);
@@ -3097,6 +3179,9 @@ export class GameEngine {
       turretsDeployed: stats.turretsDeployed ?? 0,
       fishCaught: stats.fishCaught ?? 0,
       chugHeals: stats.chugHeals ?? 0,
+      c4Blasts: stats.c4Blasts ?? 0,
+      shieldBlockedDmg: Math.round(stats.shieldBlockedDmg ?? 0),
+      tankElims: stats.tankElims ?? 0,
       teamRumbleScore:
         this.gameMode === 'team_rumble'
           ? (() => {
@@ -3116,6 +3201,9 @@ export class GameEngine {
         ...(stats.flaresFired && stats.flaresFired >= 1 ? ['RECON ACE'] : []),
         ...(stats.turretsDeployed && stats.turretsDeployed >= 1 ? ['TURRET ENGINEER'] : []),
         ...(stats.fishCaught && stats.fishCaught >= 1 ? ['MASTER ANGLER'] : []),
+        ...(stats.c4Blasts && stats.c4Blasts >= 1 ? ['DEMOLITIONIST'] : []),
+        ...(stats.shieldBlockedDmg && stats.shieldBlockedDmg >= 50 ? ['AEGIS BULWARK'] : []),
+        ...(stats.tankElims && stats.tankElims >= 1 ? ['ARMOR BREAKER'] : []),
       ],
     };
     this.lastMatchSummary = summary;
@@ -3163,7 +3251,8 @@ export class GameEngine {
       s.includes('qaWave8') ||
       s.includes('qaWave9') ||
       s.includes('qaWave10') ||
-      s.includes('qaWave11')
+      s.includes('qaWave11') ||
+      s.includes('qaWave12')
     );
   }
 
@@ -3789,6 +3878,11 @@ export class GameEngine {
       thermalVisionRemainingSec: snap.thermalVisionRemainingSec ?? null,
       fishingProgress: snap.fishingProgress ?? null,
       deployedTurrets: snap.deployedTurrets ?? [],
+      ballisticShieldHp: snap.ballisticShieldHp ?? null,
+      activeC4Count: snap.activeC4Count ?? 0,
+      tankCannonCooldown: snap.tankCannonCooldown ?? null,
+      inHotDropPoi: Boolean(snap.inHotDropPoi),
+      hotDropPoiIds: this.worldInteractables.getHotDropPoiIds(),
     };
 
     this.uiManager.updateHUD(hudState);
@@ -4125,6 +4219,9 @@ export class GameEngine {
         } else if (poi.id === 'sunken_oasis') {
           offsetX = 12;
           offsetZ = 33;
+        } else if (poi.id === 'crater_depot') {
+          offsetX = -10;
+          offsetZ = 36;
         }
         let x = poi.x + offsetX;
         let z = poi.z + offsetZ;
@@ -4474,6 +4571,34 @@ export class GameEngine {
           });
         });
         inv.addAmmo('light', 200);
+        inv.addAmmo('medium', 160);
+        inv.addMaterial('wood', 500);
+        inv.addMaterial('brick', 500);
+        inv.addMaterial('metal', 500);
+        inv.setActiveSlot(1);
+        engine.pushHUDState(false);
+      },
+      giveWave12Loadout() {
+        const inv = engine.playerController.getInventory();
+        inv.reset();
+        const items: Array<{ id: WeaponId; rarity: 'mythic' | 'legendary' | 'epic'; stack: number }> = [
+          { id: 'ballistic_shield', rarity: 'mythic', stack: 1 },
+          { id: 'remote_c4', rarity: 'epic', stack: 4 },
+          { id: 'chug_cannon', rarity: 'mythic', stack: 1 },
+          { id: 'auto_turret', rarity: 'legendary', stack: 2 },
+          { id: 'jetpack', rarity: 'legendary', stack: 1 },
+        ];
+        items.forEach((entry, i) => {
+          const def = WEAPONS[entry.id];
+          inv.addItem({
+            uid: `qa_w12_${entry.id}_${i}`,
+            weaponId: entry.id,
+            rarity: entry.rarity,
+            magAmmo: def.magSize,
+            stackCount: entry.stack,
+          });
+        });
+        inv.addAmmo('light', 240);
         inv.addAmmo('medium', 160);
         inv.addMaterial('wood', 500);
         inv.addMaterial('brick', 500);

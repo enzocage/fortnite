@@ -1,4 +1,11 @@
-import { DBNO_MAX_HP, EMOTES, WEAPON_MODS, WEAPONS, WORLD_SIZE } from '../core';
+import {
+  DBNO_MAX_HP,
+  EMOTES,
+  TANK_CANNON_COOLDOWN_SEC,
+  WEAPON_MODS,
+  WEAPONS,
+  WORLD_SIZE,
+} from '../core';
 import type {
   ApexTrainState,
   AugmentId,
@@ -25,6 +32,7 @@ import type {
   SlurpTankerEntity,
   SupplyDroneEntity,
   TrapKind,
+  VehicleEntity,
   WeaponBunkerEntity,
   WildBoarEntity,
 } from '../types';
@@ -41,6 +49,7 @@ import {
   drawOverlordMapOverlay,
   drawSkyforgeMapOverlay,
   drawTideMapOverlay,
+  drawVanguardMapOverlay,
   formatBiomeLabel,
   formatCompassTicks,
   formatCountdown,
@@ -88,6 +97,7 @@ import {
   getFlareScanSvg,
   getGoldBarSvg,
   getHopCrystalSvg,
+  getHotDropSvg,
   getJetpackFlameSvg,
   getLootIslandIconSvg,
   getMaterialIconSvg,
@@ -98,6 +108,7 @@ import {
   getSkullSvg,
   getStealthLeafSvg,
   getStormEyeSvg,
+  getStreakFlameSvg,
   getTacticalPingIconSvg,
   getThermalVisionSvg,
   getTrapSvg,
@@ -253,12 +264,14 @@ export class HUDManager {
     fishingHoles: [],
     skyBalloons: [],
   };
+  private vehicles: VehicleEntity[] = [];
   private mapKeyTagEl: HTMLDivElement;
   private stormPillEl: HTMLDivElement;
   private stormTextEl: HTMLSpanElement;
   private stormDistEl: HTMLDivElement;
   private modeChipEl: HTMLDivElement;
   private locationChipEl: HTMLDivElement;
+  private hotDropBadgeEl: HTMLDivElement;
   private weatherPillEl: HTMLDivElement;
   private weatherIconEl: HTMLSpanElement;
   private weatherTextEl: HTMLSpanElement;
@@ -291,6 +304,9 @@ export class HUDManager {
   private vehicleHpTextEl: HTMLSpanElement;
   private vehicleBoostFillEl: HTMLDivElement;
   private vehicleHpFillEl: HTMLDivElement;
+  private vehicleCannonRowEl: HTMLDivElement;
+  private vehicleCannonFillEl: HTMLDivElement;
+  private vehicleCannonStateEl: HTMLSpanElement;
   private vehicleHintEl: HTMLDivElement;
   private campfirePillEl: HTMLDivElement;
   private dbnoBarEl: HTMLDivElement;
@@ -317,6 +333,12 @@ export class HUDManager {
   private turretLabelEl: HTMLSpanElement;
   private thermalPillEl: HTMLDivElement;
   private thermalLabelEl: HTMLSpanElement;
+  private bshieldPillEl: HTMLDivElement;
+  private bshieldLabelEl: HTMLSpanElement;
+  private c4PillEl: HTMLDivElement;
+  private c4LabelEl: HTMLSpanElement;
+  private streakPillEl: HTMLDivElement;
+  private streakLabelEl: HTMLSpanElement;
   private vitalsStackEl: HTMLDivElement;
   private staminaWrapEl: HTMLDivElement;
   private staminaFillEl: HTMLDivElement;
@@ -476,6 +498,11 @@ export class HUDManager {
   private lastFlareMarkedCount = 0;
   private lastTurretSec = 0;
   private lastThermalSec = 0;
+  private lastInHotDrop = false;
+  private lastBShieldKey = '';
+  private lastBShieldVisible = false;
+  private lastC4Count = 0;
+  private lastStreakPillCount = 0;
 
   private pointerUpHandler = () => {
     this.isDraggingEdit = false;
@@ -858,7 +885,7 @@ export class HUDManager {
     teleRow.append(this.stormPillEl, alivePill, elimsPill);
 
     const zoneMetaRow = document.createElement('div');
-    zoneMetaRow.className = 'fdr-zone-meta-row';
+    zoneMetaRow.className = 'fdr-zone-meta-row fdr-zone-meta';
 
     this.modeChipEl = document.createElement('div');
     this.modeChipEl.className = 'fdr-zone-pill mode fdr-hidden';
@@ -869,6 +896,16 @@ export class HUDManager {
 
     this.locationChipEl = document.createElement('div');
     this.locationChipEl.className = 'fdr-zone-pill location fdr-hidden';
+
+    this.hotDropBadgeEl = document.createElement('div');
+    this.hotDropBadgeEl.className = 'fdr-zone-pill fdr-hotdrop-badge fdr-hidden';
+    this.hotDropBadgeEl.dataset.hotDrop = 'false';
+    const hotDropIcon = document.createElement('span');
+    hotDropIcon.className = 'fdr-hotdrop-icon';
+    hotDropIcon.innerHTML = getHotDropSvg();
+    const hotDropText = document.createElement('span');
+    hotDropText.textContent = 'HOT DROP';
+    this.hotDropBadgeEl.append(hotDropIcon, hotDropText);
 
     this.weatherPillEl = document.createElement('div');
     this.weatherPillEl.className = 'fdr-zone-pill weather fdr-hidden';
@@ -881,6 +918,7 @@ export class HUDManager {
       this.modeChipEl,
       this.stormDistEl,
       this.locationChipEl,
+      this.hotDropBadgeEl,
       this.weatherPillEl,
     );
     minimapCluster.append(minimapFrame, teleRow, zoneMetaRow);
@@ -1042,7 +1080,30 @@ export class HUDManager {
     this.vehicleHpFillEl.className = 'fdr-vehicle-fill hp';
     vHpTrack.appendChild(this.vehicleHpFillEl);
     vHpRow.append(vHpLbl, vHpTrack);
-    vehBars.append(boostRow, vHpRow);
+
+    this.vehicleCannonRowEl = document.createElement('div');
+    this.vehicleCannonRowEl.className =
+      'fdr-vehicle-bar-row fdr-vehicle-cannon-row fdr-hidden';
+    this.vehicleCannonRowEl.dataset.cannonReady = 'true';
+    const cannonLbl = document.createElement('span');
+    cannonLbl.className = 'fdr-vehicle-bar-lbl';
+    cannonLbl.textContent = 'CANNON';
+    const cannonTrack = document.createElement('div');
+    cannonTrack.className = 'fdr-vehicle-track';
+    this.vehicleCannonFillEl = document.createElement('div');
+    this.vehicleCannonFillEl.className = 'fdr-vehicle-fill cannon';
+    this.vehicleCannonFillEl.style.width = '100%';
+    cannonTrack.appendChild(this.vehicleCannonFillEl);
+    this.vehicleCannonStateEl = document.createElement('span');
+    this.vehicleCannonStateEl.className = 'fdr-vehicle-cannon-state';
+    this.vehicleCannonStateEl.textContent = 'READY';
+    this.vehicleCannonRowEl.append(
+      cannonLbl,
+      cannonTrack,
+      this.vehicleCannonStateEl,
+    );
+
+    vehBars.append(boostRow, vHpRow, this.vehicleCannonRowEl);
 
     this.vehicleHintEl = document.createElement('div');
     this.vehicleHintEl.className = 'fdr-vehicle-hint';
@@ -1204,6 +1265,39 @@ export class HUDManager {
     this.thermalLabelEl.textContent = 'THERMAL · 0s';
     this.thermalPillEl.append(thermalIcon, this.thermalLabelEl);
 
+    this.bshieldPillEl = document.createElement('div');
+    this.bshieldPillEl.className = 'fdr-bshield-pill fdr-hidden';
+    this.bshieldPillEl.dataset.blocking = 'false';
+    const bshieldIcon = document.createElement('span');
+    bshieldIcon.className = 'fdr-bshield-icon';
+    bshieldIcon.innerHTML = getWeaponSvg('ballistic_shield');
+    this.bshieldLabelEl = document.createElement('span');
+    this.bshieldLabelEl.className = 'fdr-bshield-label';
+    this.bshieldLabelEl.textContent = 'AEGIS 250/250';
+    this.bshieldPillEl.append(bshieldIcon, this.bshieldLabelEl);
+
+    this.c4PillEl = document.createElement('div');
+    this.c4PillEl.className = 'fdr-c4-pill fdr-hidden';
+    this.c4PillEl.dataset.count = '0';
+    const c4Icon = document.createElement('span');
+    c4Icon.className = 'fdr-c4-icon';
+    c4Icon.innerHTML = getWeaponSvg('remote_c4');
+    this.c4LabelEl = document.createElement('span');
+    this.c4LabelEl.className = 'fdr-c4-label';
+    this.c4LabelEl.textContent = 'C4 · 0 ARMED';
+    this.c4PillEl.append(c4Icon, this.c4LabelEl);
+
+    this.streakPillEl = document.createElement('div');
+    this.streakPillEl.className = 'fdr-streak-pill fdr-hidden';
+    this.streakPillEl.dataset.streak = '0';
+    const streakIcon = document.createElement('span');
+    streakIcon.className = 'fdr-streak-icon';
+    streakIcon.innerHTML = getStreakFlameSvg();
+    this.streakLabelEl = document.createElement('span');
+    this.streakLabelEl.className = 'fdr-streak-label';
+    this.streakLabelEl.textContent = '3X STREAK';
+    this.streakPillEl.append(streakIcon, this.streakLabelEl);
+
     this.statusChipRowEl.append(
       this.stealthPillEl,
       this.jetpackPillEl,
@@ -1211,6 +1305,9 @@ export class HUDManager {
       this.flarePillEl,
       this.turretPillEl,
       this.thermalPillEl,
+      this.bshieldPillEl,
+      this.c4PillEl,
+      this.streakPillEl,
     );
 
     this.staminaWrapEl = document.createElement('div');
@@ -1880,6 +1977,11 @@ export class HUDManager {
     this.lastMinimapDraw = 0;
   }
 
+  setWorldVehicles(vehicles: VehicleEntity[]): void {
+    this.vehicles = Array.isArray(vehicles) ? vehicles : [];
+    this.lastMinimapDraw = 0;
+  }
+
   setVisible(visible: boolean): void {
     this.visible = visible;
     this.containerEl.classList.toggle('fdr-hidden', !visible);
@@ -2040,6 +2142,32 @@ export class HUDManager {
     delete this.thermalPillEl.dataset.remainingSec;
     this.thermalLabelEl.textContent = 'THERMAL · 0s';
     this.lastThermalSec = 0;
+    this.bshieldPillEl.classList.add('fdr-hidden');
+    this.bshieldPillEl.classList.remove('blocking', 'empty');
+    this.bshieldPillEl.dataset.blocking = 'false';
+    delete this.bshieldPillEl.dataset.current;
+    delete this.bshieldPillEl.dataset.max;
+    this.bshieldLabelEl.textContent = 'AEGIS 250/250';
+    this.lastBShieldKey = '';
+    this.lastBShieldVisible = false;
+    this.c4PillEl.classList.add('fdr-hidden');
+    this.c4PillEl.dataset.count = '0';
+    this.c4LabelEl.textContent = 'C4 · 0 ARMED';
+    this.lastC4Count = 0;
+    this.streakPillEl.classList.add('fdr-hidden');
+    this.streakPillEl.classList.remove('rampage');
+    this.streakPillEl.dataset.streak = '0';
+    this.streakLabelEl.textContent = '3X STREAK';
+    this.lastStreakPillCount = 0;
+    this.hotDropBadgeEl.classList.add('fdr-hidden');
+    this.hotDropBadgeEl.dataset.hotDrop = 'false';
+    this.lastInHotDrop = false;
+    this.vehicleCannonRowEl.classList.add('fdr-hidden');
+    this.vehicleCannonRowEl.classList.remove('ready', 'cooling');
+    this.vehicleCannonRowEl.dataset.cannonReady = 'true';
+    delete this.vehicleCannonRowEl.dataset.cannonCooldown;
+    this.vehicleCannonFillEl.style.width = '100%';
+    this.vehicleCannonStateEl.textContent = 'READY';
     this.statusChipRowEl.classList.add('fdr-hidden');
     this.channelEl.classList.add('fdr-hidden');
     this.channelEl.classList.remove('train-hack', 'fishing');
@@ -2263,6 +2391,7 @@ export class HUDManager {
     this.updateWave9HUD(state);
     this.updateWave10HUD(state);
     this.updateWave11HUD(state);
+    this.updateWave12HUD(state);
     this.updateCenterCombat(state, now);
     this.updateEditGrid(state);
     this.updatePointerPrompt(state);
@@ -2802,8 +2931,16 @@ export class HUDManager {
     const interactKey = formatKeyCodeLabel(
       resolveKeybinds(this.settings.keybinds).interact,
     );
+    const isTank = Boolean(veh && veh.kind === 'hover_tank');
+    const rawCannonCd =
+      isTank &&
+      typeof state.tankCannonCooldown === 'number' &&
+      Number.isFinite(state.tankCannonCooldown)
+        ? Math.max(0, state.tankCannonCooldown)
+        : 0;
+    const cannonTenths = Math.round(rawCannonCd * 10);
     const vehKey = veh
-      ? `${veh.kind}:${Math.round(veh.speedKmh)}:${Math.round(veh.hp)}/${Math.round(veh.maxHp)}:${Math.round(normalizeBoostChargePct(veh.boostCharge))}:${veh.isBoosting ? 1 : 0}:${interactKey}`
+      ? `${veh.kind}:${Math.round(veh.speedKmh)}:${Math.round(veh.hp)}/${Math.round(veh.maxHp)}:${Math.round(normalizeBoostChargePct(veh.boostCharge))}:${veh.isBoosting ? 1 : 0}:${isTank ? cannonTenths : -1}:${interactKey}`
       : '';
     if (vehKey !== this.lastVehicleKey) {
       this.lastVehicleKey = vehKey;
@@ -2822,7 +2959,28 @@ export class HUDManager {
         this.vehicleBoostFillEl.classList.toggle('boosting', veh.isBoosting);
         this.vehicleHpFillEl.style.width = `${hpPct.toFixed(1)}%`;
         this.vehicleHpFillEl.classList.toggle('low', hpPct <= 30);
-        this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [SHIFT] BOOST • [H] HORN`;
+
+        this.vehicleCannonRowEl.classList.toggle('fdr-hidden', !isTank);
+        if (isTank) {
+          const isReady = cannonTenths <= 0;
+          const maxCd = Math.max(0.1, TANK_CANNON_COOLDOWN_SEC);
+          const readyPct = isReady
+            ? 100
+            : Math.max(0, Math.min(100, ((maxCd - rawCannonCd) / maxCd) * 100));
+          this.vehicleCannonRowEl.classList.toggle('ready', isReady);
+          this.vehicleCannonRowEl.classList.toggle('cooling', !isReady);
+          this.vehicleCannonRowEl.dataset.cannonReady = isReady ? 'true' : 'false';
+          this.vehicleCannonRowEl.dataset.cannonCooldown = (cannonTenths / 10).toFixed(1);
+          this.vehicleCannonFillEl.style.width = `${readyPct.toFixed(1)}%`;
+          this.vehicleCannonStateEl.textContent = isReady
+            ? 'READY'
+            : `${(cannonTenths / 10).toFixed(1)}S`;
+          this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [LMB] CANNON • [SHIFT] BOOST`;
+        } else {
+          this.vehicleCannonRowEl.classList.remove('ready', 'cooling');
+          delete this.vehicleCannonRowEl.dataset.cannonCooldown;
+          this.vehicleHintEl.textContent = `[${interactKey}] EXIT • [SHIFT] BOOST • [H] HORN`;
+        }
       }
     }
 
@@ -3670,6 +3828,95 @@ export class HUDManager {
     this.syncStatusChipRow();
   }
 
+  private updateWave12HUD(state: HUDState): void {
+    // 1. Ballistic Shield Integrity (.fdr-bshield-pill: AEGIS 210/250)
+    const bshield =
+      !state.spectating && state.ballisticShieldHp != null
+        ? state.ballisticShieldHp
+        : null;
+    const bshieldKey = bshield
+      ? `${Math.max(0, Math.round(bshield.current))}/${Math.max(1, Math.round(bshield.max))}:${bshield.blocking ? 1 : 0}`
+      : '';
+    if (bshieldKey !== this.lastBShieldKey) {
+      this.lastBShieldKey = bshieldKey;
+      const visible = bshield !== null;
+      this.lastBShieldVisible = visible;
+      this.bshieldPillEl.classList.toggle('fdr-hidden', !visible);
+      if (bshield) {
+        const maxHp = Math.max(
+          1,
+          Math.round(Number.isFinite(bshield.max) ? bshield.max : 250),
+        );
+        const curHp = Math.max(
+          0,
+          Math.min(
+            maxHp,
+            Math.round(Number.isFinite(bshield.current) ? bshield.current : 0),
+          ),
+        );
+        const blocking = Boolean(bshield.blocking);
+        this.bshieldPillEl.classList.toggle('blocking', blocking);
+        this.bshieldPillEl.classList.toggle('empty', curHp <= 0);
+        this.bshieldPillEl.dataset.blocking = blocking ? 'true' : 'false';
+        this.bshieldPillEl.dataset.current = String(curHp);
+        this.bshieldPillEl.dataset.max = String(maxHp);
+        this.bshieldLabelEl.textContent = `AEGIS ${curHp}/${maxHp}`;
+      } else {
+        this.bshieldPillEl.classList.remove('blocking', 'empty');
+        this.bshieldPillEl.dataset.blocking = 'false';
+        delete this.bshieldPillEl.dataset.current;
+        delete this.bshieldPillEl.dataset.max;
+      }
+    }
+
+    // 2. Armed C4 Counter (.fdr-c4-pill: C4 · 2 ARMED)
+    const c4Count =
+      !state.spectating &&
+      typeof state.activeC4Count === 'number' &&
+      Number.isFinite(state.activeC4Count) &&
+      state.activeC4Count > 0
+        ? Math.round(state.activeC4Count)
+        : 0;
+    if (c4Count !== this.lastC4Count) {
+      this.lastC4Count = c4Count;
+      const hasC4 = c4Count > 0;
+      this.c4PillEl.classList.toggle('fdr-hidden', !hasC4);
+      this.c4PillEl.dataset.count = String(c4Count);
+      this.c4LabelEl.textContent = hasC4
+        ? `C4 · ${c4Count} ARMED`
+        : 'C4 · 0 ARMED';
+    }
+
+    // 3. Kill-Streak Flame Pill (.fdr-streak-pill: 3X STREAK)
+    const streakVal =
+      !state.spectating &&
+      typeof state.killStreak === 'number' &&
+      Number.isFinite(state.killStreak)
+        ? Math.max(0, Math.floor(state.killStreak))
+        : 0;
+    const streakPillCount = streakVal >= 3 ? streakVal : 0;
+    if (streakPillCount !== this.lastStreakPillCount) {
+      this.lastStreakPillCount = streakPillCount;
+      const hasStreak = streakPillCount >= 3;
+      this.streakPillEl.classList.toggle('fdr-hidden', !hasStreak);
+      this.streakPillEl.classList.toggle('rampage', streakPillCount >= 5);
+      this.streakPillEl.dataset.streak = String(streakPillCount);
+      this.streakLabelEl.textContent = hasStreak
+        ? `${streakPillCount}X STREAK`
+        : '3X STREAK';
+    }
+
+    // 4. Golden HOT DROP badge inside .fdr-zone-meta
+    const inHotDrop = !state.spectating && Boolean(state.inHotDropPoi);
+    if (inHotDrop !== this.lastInHotDrop) {
+      this.lastInHotDrop = inHotDrop;
+      this.hotDropBadgeEl.classList.toggle('fdr-hidden', !inHotDrop);
+      this.hotDropBadgeEl.dataset.hotDrop = inHotDrop ? 'true' : 'false';
+    }
+
+    this.syncStatusChipRow();
+  }
+
   private syncStatusChipRow(): void {
     const anyChipVisible =
       this.lastStealthKey ||
@@ -3677,7 +3924,10 @@ export class HUDManager {
       this.lastLowGVisible ||
       this.lastFlareMarkedCount > 0 ||
       this.lastTurretSec > 0 ||
-      this.lastThermalSec > 0;
+      this.lastThermalSec > 0 ||
+      this.lastBShieldVisible ||
+      this.lastC4Count > 0 ||
+      this.lastStreakPillCount >= 3;
     this.statusChipRowEl.classList.toggle('fdr-hidden', !anyChipVisible);
   }
 
@@ -4108,6 +4358,17 @@ export class HUDManager {
       worldToMini,
       this.overlordOverlay,
       state.deployedTurrets,
+      performance.now(),
+    );
+
+    // Wave-12 Vanguard Overlay (Golden Hot-Drop POI halos/markers & Vanguard Hover Tanks)
+    drawVanguardMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      worldToMini,
+      state.hotDropPoiIds,
+      this.vehicles,
       performance.now(),
     );
 

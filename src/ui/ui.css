@@ -6623,3 +6623,228 @@
     height: 13px;
   }
 }
+
+/* ============================================================================
+   WAVE 12 UI: VANGUARD (AEGIS SHIELD PILL, C4 COUNTER PILL, STREAK FLAME PILL,
+   HOT DROP ZONE BADGE, TANK CANNON BAR & 32-ROW LEGEND AT 1280x720)
+   ============================================================================ */
+
+.fdr-bshield-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(15, 23, 42, 0.94), rgba(14, 116, 144, 0.92));
+  border: 1.5px solid #38bdf8;
+  box-shadow: 0 3px 10px rgba(56, 189, 248, 0.34), 0 0 10px rgba(34, 211, 238, 0.22);
+  color: #e0f2fe;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-bshield-pill.blocking {
+  border-color: #22d3ee;
+  background: linear-gradient(90deg, rgba(8, 47, 73, 0.96), rgba(6, 182, 212, 0.92));
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.68), 0 0 8px rgba(224, 242, 254, 0.35);
+  color: #ffffff;
+}
+
+.fdr-bshield-pill.empty {
+  border-color: #ef4444;
+  background: linear-gradient(90deg, rgba(69, 10, 10, 0.94), rgba(30, 41, 59, 0.92));
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.45);
+  color: #fecaca;
+}
+
+.fdr-bshield-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-bshield-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-c4-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(69, 10, 10, 0.94), rgba(154, 52, 18, 0.92));
+  border: 1.5px solid #fb923c;
+  box-shadow: 0 3px 10px rgba(249, 115, 22, 0.38), 0 0 10px rgba(239, 68, 68, 0.28);
+  color: #ffedd5;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-c4-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-c4-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-streak-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(124, 45, 18, 0.95), rgba(185, 28, 28, 0.94));
+  border: 1.5px solid #ffd000;
+  box-shadow: 0 3px 10px rgba(245, 158, 11, 0.44), 0 0 10px rgba(239, 68, 68, 0.35);
+  color: #fef08a;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdr-streak-pill.rampage {
+  border-color: #fef9c3;
+  box-shadow: 0 0 14px rgba(255, 208, 0, 0.72), 0 0 12px rgba(239, 68, 68, 0.52);
+  color: #ffffff;
+}
+
+.fdr-streak-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-streak-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-hotdrop-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: linear-gradient(90deg, rgba(120, 53, 15, 0.94), rgba(180, 83, 9, 0.94));
+  border-color: #ffd000;
+  color: #fef08a;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  box-shadow: 0 0 14px rgba(255, 208, 0, 0.5);
+}
+
+.fdr-hotdrop-badge > * {
+  transform: skewX(8deg);
+}
+
+.fdr-hotdrop-icon {
+  width: 13px;
+  height: 13px;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.fdr-hotdrop-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.fdr-vehicle-cannon-row {
+  grid-template-columns: 44px 1fr auto;
+}
+
+.fdr-vehicle-fill.cannon {
+  background: linear-gradient(90deg, #f59e0b, #ffd000);
+}
+
+.fdr-vehicle-cannon-row.cooling .fdr-vehicle-fill.cannon {
+  background: linear-gradient(90deg, #ea580c, #fb923c);
+}
+
+.fdr-vehicle-cannon-state {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #ffd000;
+  min-width: 38px;
+  text-align: right;
+}
+
+.fdr-vehicle-cannon-row.cooling .fdr-vehicle-cannon-state {
+  color: #fdba74;
+}
+
+.fdr-legend-swatch.hovertank svg,
+.fdr-legend-swatch.hotdrop svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 1360px), (max-height: 760px) {
+  .fdr-bshield-pill,
+  .fdr-c4-pill,
+  .fdr-streak-pill {
+    padding: 1.5px 6px;
+    gap: 3px;
+    font-size: 9.5px;
+    letter-spacing: 0.04em;
+  }
+
+  .fdr-bshield-icon,
+  .fdr-c4-icon,
+  .fdr-streak-icon {
+    width: 11px;
+    height: 11px;
+  }
+
+  .fdr-zone-meta-row,
+  .fdr-zone-meta {
+    gap: 3px;
+  }
+
+  .fdr-zone-pill {
+    padding: 2px 8px;
+    font-size: 11px;
+  }
+
+  .fdr-hotdrop-icon {
+    width: 11px;
+    height: 11px;
+  }
+
+  .fdr-map-legend {
+    gap: 1.5px 8px;
+    padding: 4px 8px;
+  }
+
+  .fdr-map-legend-row {
+    font-size: 9.8px;
+    gap: 5px;
+    line-height: 1.04;
+  }
+
+  .fdr-legend-swatch.hovertank svg,
+  .fdr-legend-swatch.hotdrop svg {
+    width: 13px;
+    height: 13px;
+  }
+}

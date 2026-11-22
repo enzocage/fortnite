@@ -7,6 +7,7 @@ import {
   DEFAULT_SETTINGS,
   GAME_MODES,
   MEDALLIONS,
+  POIS,
   RARITY_COLORS,
   WEAPON_MODS,
   WORLD_HALF,
@@ -538,6 +539,7 @@ export function formatWeatherLabel(weather?: WeatherKind): string {
 export function formatVehicleKindLabel(kind: VehicleKind): string {
   if (kind === 'cyber_bike') return 'CYBER BIKE';
   if (kind === 'speedboat') return 'APEX SPEEDBOAT';
+  if (kind === 'hover_tank') return 'VANGUARD TANK';
   return 'HOVER ATV';
 }
 
@@ -1208,7 +1210,8 @@ function classifyHighlightTone(
     label.includes('SHARP') ||
     label.includes('ELIM') ||
     label.includes('SLAYER') ||
-    label.includes('RECON')
+    label.includes('RECON') ||
+    label.includes('DEMO')
   ) {
     return 'crimson';
   }
@@ -1253,6 +1256,12 @@ export function deriveMatchHighlightBadges(
 
   if (summary.crownedVictory) {
     pushBadge('CROWNED', 'gold');
+  }
+  if ((summary.c4Blasts ?? 0) >= 1) {
+    pushBadge('DEMOLITIONS', 'crimson');
+  }
+  if ((summary.shieldBlockedDmg ?? 0) >= 100) {
+    pushBadge('AEGIS WALL', 'cyan');
   }
   if ((summary.trainChestsHacked ?? 0) >= 1) {
     pushBadge('TRAIN HEIST', 'gold');
@@ -2209,5 +2218,188 @@ export function drawOverlordMapOverlay(
 
       ctx.restore();
     }
+  }
+}
+
+export interface WorldVanguardOverlay {
+  hotDropPoiIds?: string[];
+  vehicles?: VehicleEntity[];
+}
+
+export interface ResolvedVanguardOverlay {
+  hotDropPoiIds: string[];
+  vehicles: VehicleEntity[];
+}
+
+export function resolveVanguardOverlayArgs(
+  hotDropPoiIdsOrOverlay: string[] | Partial<WorldVanguardOverlay> = [],
+  vehicles: VehicleEntity[] = [],
+): ResolvedVanguardOverlay {
+  if (Array.isArray(hotDropPoiIdsOrOverlay)) {
+    return {
+      hotDropPoiIds: hotDropPoiIdsOrOverlay,
+      vehicles: Array.isArray(vehicles) ? vehicles : [],
+    };
+  }
+  const ov = hotDropPoiIdsOrOverlay ?? {};
+  return {
+    hotDropPoiIds: Array.isArray(ov.hotDropPoiIds) ? ov.hotDropPoiIds : [],
+    vehicles: Array.isArray(ov.vehicles) ? ov.vehicles : [],
+  };
+}
+
+/**
+ * Draws an armored Vanguard Hover Tank chevron marker at pixel coordinates `(px, py)`
+ * without fillText, strokeText, or ellipse (Node test mock safe).
+ */
+export function drawHoverTankMapChevron(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  yaw = 0,
+  occupied = false,
+): void {
+  ctx.save();
+  ctx.translate(px, py);
+  if (typeof yaw === 'number' && Number.isFinite(yaw)) {
+    ctx.rotate?.(-yaw);
+  }
+
+  // Heavy composite hull backdrop disc
+  ctx.beginPath();
+  ctx.arc(0, 0, 8.6, 0, Math.PI * 2);
+  ctx.fillStyle = occupied ? 'rgba(66, 32, 6, 0.94)' : 'rgba(15, 23, 42, 0.94)';
+  ctx.fill();
+  ctx.strokeStyle = occupied ? '#ffd000' : '#f59e0b';
+  ctx.lineWidth = 1.7;
+  ctx.stroke();
+
+  // Twin glowing cyan hover treads
+  ctx.fillStyle = '#22d3ee';
+  ctx.fillRect(-5.4, -3.6, 1.9, 7.2);
+  ctx.fillRect(3.5, -3.6, 1.9, 7.2);
+
+  // Sloped armor chevron hull
+  ctx.beginPath();
+  ctx.moveTo(0, -6.2);
+  ctx.lineTo(4.6, 3.6);
+  ctx.lineTo(0, 1.4);
+  ctx.lineTo(-4.6, 3.6);
+  ctx.closePath();
+  ctx.fillStyle = occupied ? '#ffd000' : '#fbbf24';
+  ctx.strokeStyle = '#fef9c3';
+  ctx.lineWidth = 1.1;
+  ctx.fill();
+  ctx.stroke();
+
+  // Turret cannon barrel & cupola core
+  ctx.fillStyle = '#fef08a';
+  ctx.fillRect(-1.0, -7.8, 2.0, 4.8);
+  ctx.beginPath();
+  ctx.arc(0, -0.4, 1.7, 0, Math.PI * 2);
+  ctx.fillStyle = '#0f172a';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * Draws Wave-12 Vanguard overlay items (pulsing Golden Hot-Drop POI halos/markers
+ * and Vanguard Hover Tank armor chevrons) without fillText, strokeText, or ellipse (Node test mock safe).
+ */
+export function drawVanguardMapOverlay(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  pxPerMeter: number,
+  toPx: (wx: number, wz: number) => { x: number; y: number },
+  hotDropPoiIdsOrOverlay?: string[] | Partial<WorldVanguardOverlay>,
+  vehicles?: VehicleEntity[],
+  nowMs = performance.now(),
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(nowMs * 0.006);
+  const resolved = resolveVanguardOverlayArgs(hotDropPoiIdsOrOverlay, vehicles);
+
+  // 1. Golden Hot-Drop POI Pulsing Halos & Gold-Tinted Markers
+  if (resolved.hotDropPoiIds.length > 0) {
+    const hotDropSet = new Set(resolved.hotDropPoiIds);
+    for (const poi of POIS) {
+      if (!hotDropSet.has(poi.id)) continue;
+      const hp = toPx(poi.x, poi.z);
+      const baseRad = Math.max(12, poi.radius * pxPerMeter);
+      if (
+        hp.x + baseRad < -18 ||
+        hp.x - baseRad > size + 18 ||
+        hp.y + baseRad < -18 ||
+        hp.y - baseRad > size + 18
+      ) {
+        continue;
+      }
+
+      const pulseRad = baseRad * (0.94 + pulse * 0.08) + 2;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(hp.x, hp.y, baseRad, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 208, 0, ${(0.09 + pulse * 0.07).toFixed(2)})`;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      ctx.setLineDash?.([6, 4]);
+      ctx.beginPath();
+      ctx.arc(hp.x, hp.y, pulseRad, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(254, 240, 138, ${(0.55 + pulse * 0.35).toFixed(2)})`;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.setLineDash?.([]);
+      ctx.restore();
+
+      // Gold-tinted Hot-Drop beacon diamond marker positioned cleanly above POI label center
+      ctx.save();
+      ctx.translate(hp.x, hp.y);
+
+      const beaconY = -Math.min(18, Math.max(11, baseRad * 0.42));
+      ctx.beginPath();
+      ctx.arc(0, beaconY, 5.4 + pulse * 1.1, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(254, 240, 138, 0.78)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(0, beaconY - 4.4);
+      ctx.lineTo(4.0, beaconY);
+      ctx.lineTo(0, beaconY + 4.4);
+      ctx.lineTo(-4.0, beaconY);
+      ctx.closePath();
+      ctx.fillStyle = '#ffd000';
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 1.2;
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(0, beaconY, 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#fef9c3';
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  // 2. Vanguard Hover Tank Armor Chevrons
+  for (const vehicle of resolved.vehicles) {
+    if (!vehicle || vehicle.destroyed || vehicle.kind !== 'hover_tank') continue;
+    if (!Number.isFinite(vehicle.x) || !Number.isFinite(vehicle.z)) continue;
+    const vp = toPx(vehicle.x, vehicle.z);
+    if (vp.x < -16 || vp.x > size + 16 || vp.y < -16 || vp.y > size + 16) {
+      continue;
+    }
+    drawHoverTankMapChevron(
+      ctx,
+      vp.x,
+      vp.y,
+      vehicle.yaw,
+      vehicle.driverId !== null,
+    );
   }
 }

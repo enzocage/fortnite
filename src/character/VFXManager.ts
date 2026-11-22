@@ -1189,6 +1189,118 @@ interface FishingSplashSlot {
   droplets: FishingSplashDroplet[];
 }
 
+interface TankShellShard {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface TankShellSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  beamLength: number;
+  group: THREE.Group;
+  beamMesh: THREE.Mesh;
+  beamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  flashMesh: THREE.Mesh;
+  flashMat: THREE.MeshBasicMaterial;
+  fireballMesh: THREE.Mesh;
+  fireballMat: THREE.MeshBasicMaterial;
+  shockRingMesh: THREE.Mesh;
+  shockRingMat: THREE.MeshBasicMaterial;
+  hexRingMesh: THREE.Mesh;
+  hexRingMat: THREE.MeshBasicMaterial;
+  shards: TankShellShard[];
+}
+
+interface ShieldRicochetSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface ShieldRicochetSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  flashMesh: THREE.Mesh;
+  flashMat: THREE.MeshBasicMaterial;
+  outerRingMesh: THREE.Mesh;
+  outerRingMat: THREE.MeshBasicMaterial;
+  hexShieldMesh: THREE.Mesh;
+  hexShieldMat: THREE.MeshBasicMaterial;
+  sparks: ShieldRicochetSpark[];
+}
+
+interface C4BlastShard {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  vx: number;
+  vy: number;
+  vz: number;
+  rx: number;
+  ry: number;
+  baseScale: number;
+}
+
+interface C4BlastSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  radius: number;
+  group: THREE.Group;
+  flashMesh: THREE.Mesh;
+  flashMat: THREE.MeshBasicMaterial;
+  domeMesh: THREE.Mesh;
+  domeMat: THREE.MeshBasicMaterial;
+  shockRingMesh: THREE.Mesh;
+  shockRingMat: THREE.MeshBasicMaterial;
+  emberRingMesh: THREE.Mesh;
+  emberRingMat: THREE.MeshBasicMaterial;
+  shards: C4BlastShard[];
+}
+
+interface HotDropBeamSpark {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  angle: number;
+  radius: number;
+  speedY: number;
+  spin: number;
+  baseScale: number;
+}
+
+interface HotDropBeamSlot {
+  active: boolean;
+  age: number;
+  duration: number;
+  group: THREE.Group;
+  outerBeamMesh: THREE.Mesh;
+  outerBeamMat: THREE.MeshBasicMaterial;
+  coreBeamMesh: THREE.Mesh;
+  coreBeamMat: THREE.MeshBasicMaterial;
+  groundRingMesh: THREE.Mesh;
+  groundRingMat: THREE.MeshBasicMaterial;
+  hexRingMesh: THREE.Mesh;
+  hexRingMat: THREE.MeshBasicMaterial;
+  sparks: HotDropBeamSpark[];
+}
+
 function getWeaponModColor(modId: WeaponModId): string {
   const found = WEAPON_MODS.find((m) => m.id === modId);
   return found?.accentColor ?? '#38bdf8';
@@ -1357,6 +1469,14 @@ const SLURP_ORB_POOL_SIZE = 10;
 const SLURP_ORB_DROPLET_COUNT = 16;
 const FISHING_SPLASH_POOL_SIZE = 12;
 const FISHING_SPLASH_DROPLET_COUNT = 14;
+const TANK_SHELL_POOL_SIZE = 8;
+const TANK_SHELL_SHARD_COUNT = 14;
+const SHIELD_RICOCHET_POOL_SIZE = 16;
+const SHIELD_RICOCHET_SPARK_COUNT = 12;
+const C4_BLAST_POOL_SIZE = 8;
+const C4_BLAST_SHARD_COUNT = 18;
+const HOT_DROP_BEAM_POOL_SIZE = 6;
+const HOT_DROP_BEAM_SPARK_COUNT = 14;
 const THROW_ARC_MAX_POINTS = 64;
 const THROW_ARC_DOT_COUNT = 40;
 
@@ -1445,6 +1565,10 @@ export class VFXManager {
   private readonly turretLasers: TurretLaserSlot[] = [];
   private readonly slurpOrbs: SlurpOrbSlot[] = [];
   private readonly fishingSplashes: FishingSplashSlot[] = [];
+  private readonly tankShells: TankShellSlot[] = [];
+  private readonly shieldRicochets: ShieldRicochetSlot[] = [];
+  private readonly c4Blasts: C4BlastSlot[] = [];
+  private readonly hotDropBeams: HotDropBeamSlot[] = [];
 
   private readonly throwArcGroup: THREE.Group;
   private readonly throwArcPositions: Float32Array;
@@ -1513,6 +1637,10 @@ export class VFXManager {
   private turretLaserCursor = 0;
   private slurpOrbCursor = 0;
   private fishingSplashCursor = 0;
+  private tankShellCursor = 0;
+  private shieldRicochetCursor = 0;
+  private c4BlastCursor = 0;
+  private hotDropBeamCursor = 0;
   private rngSeed = 918273;
   private disposed = false;
 
@@ -5944,6 +6072,435 @@ export class VFXManager {
         droplets,
       });
     }
+
+    // 51. Vanguard Tank Main Cannon Shell (heavy fiery shell tracer beam + high-explosive blast + shrapnel)
+    for (let i = 0; i < TANK_SHELL_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_tank_shell';
+      group.visible = false;
+
+      const beamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.86,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const beamMesh = new THREE.Mesh(this.unitCylinderGeo, beamMat);
+      group.add(beamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.unitCylinderGeo, coreBeamMat);
+      group.add(coreBeamMesh);
+
+      const flashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const flashMesh = new THREE.Mesh(this.unitSphereGeo, flashMat);
+      group.add(flashMesh);
+
+      const fireballMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const fireballMesh = new THREE.Mesh(this.unitSphereGeo, fireballMat);
+      group.add(fireballMesh);
+
+      const shockRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const shockRingMesh = new THREE.Mesh(this.unitRingGeo, shockRingMat);
+      shockRingMesh.rotation.x = -Math.PI / 2;
+      shockRingMesh.position.y = 0.08;
+      group.add(shockRingMesh);
+
+      const hexRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xef4444,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const hexRingMesh = new THREE.Mesh(this.hexRingGeo, hexRingMat);
+      hexRingMesh.rotation.x = -Math.PI / 2;
+      hexRingMesh.position.y = 0.12;
+      group.add(hexRingMesh);
+
+      const shards: TankShellShard[] = [];
+      for (let s = 0; s < TANK_SHELL_SHARD_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xfef08a : s % 2 === 0 ? 0xf97316 : 0xef4444,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        shards.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.16,
+        });
+      }
+
+      this.root.add(group);
+      this.tankShells.push({
+        active: false,
+        age: 0,
+        duration: 0.78,
+        radius: 5.5,
+        beamLength: 0,
+        group,
+        beamMesh,
+        beamMat,
+        coreBeamMesh,
+        coreBeamMat,
+        flashMesh,
+        flashMat,
+        fireballMesh,
+        fireballMat,
+        shockRingMesh,
+        shockRingMat,
+        hexRingMesh,
+        hexRingMat,
+        shards,
+      });
+    }
+
+    // 52. Aegis Ballistic Shield Ricochet (cyan metallic deflection flare + hex ripple + sparks)
+    for (let i = 0; i < SHIELD_RICOCHET_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_shield_ricochet';
+      group.visible = false;
+
+      const flashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xe0f2fe,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const flashMesh = new THREE.Mesh(this.unitSphereGeo, flashMat);
+      group.add(flashMesh);
+
+      const outerRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x22d3ee,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerRingMesh = new THREE.Mesh(this.unitRingGeo, outerRingMat);
+      group.add(outerRingMesh);
+
+      const hexShieldMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const hexShieldMesh = new THREE.Mesh(this.hexRingGeo, hexShieldMat);
+      group.add(hexShieldMesh);
+
+      const sparks: ShieldRicochetSpark[] = [];
+      for (let s = 0; s < SHIELD_RICOCHET_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xffffff : s % 2 === 0 ? 0x22d3ee : 0xfbbf24,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.085,
+        });
+      }
+
+      this.root.add(group);
+      this.shieldRicochets.push({
+        active: false,
+        age: 0,
+        duration: 0.34,
+        group,
+        flashMesh,
+        flashMat,
+        outerRingMesh,
+        outerRingMat,
+        hexShieldMesh,
+        hexShieldMat,
+        sparks,
+      });
+    }
+
+    // 53. Remote C4 Demolition Blast (crimson-orange blast dome + shock ring + fiery shrapnel)
+    for (let i = 0; i < C4_BLAST_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_c4_blast';
+      group.visible = false;
+
+      const flashMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.96,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const flashMesh = new THREE.Mesh(this.unitSphereGeo, flashMat);
+      group.add(flashMesh);
+
+      const domeMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf97316,
+          transparent: true,
+          opacity: 0.62,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const domeMesh = new THREE.Mesh(this.unitSphereGeo, domeMat);
+      group.add(domeMesh);
+
+      const shockRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xef4444,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const shockRingMesh = new THREE.Mesh(this.unitRingGeo, shockRingMat);
+      shockRingMesh.rotation.x = -Math.PI / 2;
+      shockRingMesh.position.y = 0.08;
+      group.add(shockRingMesh);
+
+      const emberRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const emberRingMesh = new THREE.Mesh(this.hexRingGeo, emberRingMat);
+      emberRingMesh.rotation.x = -Math.PI / 2;
+      emberRingMesh.position.y = 0.14;
+      group.add(emberRingMesh);
+
+      const shards: C4BlastShard[] = [];
+      for (let s = 0; s < C4_BLAST_SHARD_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xfef08a : s % 2 === 0 ? 0xef4444 : 0xf97316,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        shards.push({
+          mesh,
+          material,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          rx: 0,
+          ry: 0,
+          baseScale: 0.16,
+        });
+      }
+
+      this.root.add(group);
+      this.c4Blasts.push({
+        active: false,
+        age: 0,
+        duration: 0.88,
+        radius: 5.5,
+        group,
+        flashMesh,
+        flashMat,
+        domeMesh,
+        domeMat,
+        shockRingMesh,
+        shockRingMat,
+        emberRingMesh,
+        emberRingMat,
+        shards,
+      });
+    }
+
+    // 54. Hot-Drop Gold POI Sky Beam (radiant amber sky spotlight pillar + golden rings + rising drop sparks)
+    for (let i = 0; i < HOT_DROP_BEAM_POOL_SIZE; i++) {
+      const group = new THREE.Group();
+      group.name = 'vfx_hot_drop_beam';
+      group.visible = false;
+
+      const outerBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xf59e0b,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const outerBeamMesh = new THREE.Mesh(this.beamCylGeo, outerBeamMat);
+      outerBeamMesh.position.y = 14;
+      group.add(outerBeamMesh);
+
+      const coreBeamMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfef08a,
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const coreBeamMesh = new THREE.Mesh(this.beamCylGeo, coreBeamMat);
+      coreBeamMesh.position.y = 14;
+      group.add(coreBeamMesh);
+
+      const groundRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.94,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const groundRingMesh = new THREE.Mesh(this.unitRingGeo, groundRingMat);
+      groundRingMesh.rotation.x = -Math.PI / 2;
+      groundRingMesh.position.y = 0.08;
+      group.add(groundRingMesh);
+
+      const hexRingMat = this.trackMat(
+        new THREE.MeshBasicMaterial({
+          color: 0xfde047,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      const hexRingMesh = new THREE.Mesh(this.hexRingGeo, hexRingMat);
+      hexRingMesh.rotation.x = -Math.PI / 2;
+      hexRingMesh.position.y = 0.25;
+      group.add(hexRingMesh);
+
+      const sparks: HotDropBeamSpark[] = [];
+      for (let s = 0; s < HOT_DROP_BEAM_SPARK_COUNT; s++) {
+        const material = this.trackMat(
+          new THREE.MeshBasicMaterial({
+            color: s % 3 === 0 ? 0xfef08a : s % 2 === 0 ? 0xfbbf24 : 0xf59e0b,
+            transparent: true,
+            opacity: 0.96,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        const mesh = new THREE.Mesh(this.unitCrystalGeo, material);
+        group.add(mesh);
+        sparks.push({
+          mesh,
+          material,
+          angle: (s / HOT_DROP_BEAM_SPARK_COUNT) * Math.PI * 2,
+          radius: 1.2,
+          speedY: 4.5,
+          spin: 3.4,
+          baseScale: 0.14,
+        });
+      }
+
+      this.root.add(group);
+      this.hotDropBeams.push({
+        active: false,
+        age: 0,
+        duration: 1.25,
+        group,
+        outerBeamMesh,
+        outerBeamMat,
+        coreBeamMesh,
+        coreBeamMat,
+        groundRingMesh,
+        groundRingMat,
+        hexRingMesh,
+        hexRingMat,
+        sparks,
+      });
+    }
   }
 
   private createRiftEndpoint(baseScale: number): RiftTearEndpoint {
@@ -6142,6 +6699,14 @@ export class VFXManager {
       this.eventBus.on('vfx:turret_laser', (e) => this.spawnTurretLaser(e.from, e.to)),
       this.eventBus.on('vfx:slurp_orb', (e) => this.spawnSlurpOrb(e.position, e.radius)),
       this.eventBus.on('vfx:fishing_splash', (e) => this.spawnFishingSplash(e.position)),
+      this.eventBus.on('vfx:tank_shell', (e) =>
+        this.spawnTankShell(e.origin, e.target, e.radius),
+      ),
+      this.eventBus.on('vfx:shield_ricochet', (e) =>
+        this.spawnShieldRicochet(e.position, e.normal),
+      ),
+      this.eventBus.on('vfx:c4_blast', (e) => this.spawnC4Blast(e.position, e.radius)),
+      this.eventBus.on('vfx:hot_drop_beam', (e) => this.spawnHotDropBeam(e.position)),
     );
   }
 
@@ -6239,6 +6804,12 @@ export class VFXManager {
     } else if (weaponId === 'auto_turret') {
       scale = 0.9;
       color = 0x38bdf8;
+    } else if (weaponId === 'ballistic_shield') {
+      scale = 0.85;
+      color = 0xfbbf24;
+    } else if (weaponId === 'remote_c4') {
+      scale = 0.85;
+      color = 0xef4444;
     } else if (weaponId === 'smg' || weaponId === 'pistol') {
       scale = 0.78;
     }
@@ -8753,6 +9324,183 @@ export class VFXManager {
         dr.material.opacity = 0.94 * fade;
       }
     }
+
+    // 52. Vanguard Tank Main Cannon Shell
+    for (let i = 0; i < TANK_SHELL_POOL_SIZE; i++) {
+      const ts = this.tankShells[i];
+      if (!ts.active) continue;
+      ts.age += safeDt;
+      const t = ts.age / ts.duration;
+      if (t >= 1) {
+        ts.active = false;
+        ts.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const beamFade = Math.max(0, 1 - t * 2.4);
+
+      if (ts.beamLength > 0.001) {
+        ts.beamMesh.visible = beamFade > 0.01;
+        ts.coreBeamMesh.visible = beamFade > 0.01;
+        ts.beamMesh.scale.set(0.32 * (1 - 0.65 * Math.min(1, t * 2.2)), ts.beamLength, 0.32 * (1 - 0.65 * Math.min(1, t * 2.2)));
+        ts.beamMat.opacity = 0.86 * beamFade;
+        ts.coreBeamMesh.scale.set(0.13 * (1 - 0.72 * Math.min(1, t * 2.2)), ts.beamLength, 0.13 * (1 - 0.72 * Math.min(1, t * 2.2)));
+        ts.coreBeamMat.opacity = 0.96 * beamFade;
+      }
+
+      ts.flashMesh.scale.setScalar(ts.radius * 0.48 * Math.max(0.05, 1 - t * 2.1));
+      ts.flashMat.opacity = Math.max(0, 0.96 * (1 - t * 1.9));
+
+      ts.fireballMesh.scale.setScalar(ts.radius * (0.35 + 0.85 * easeOut));
+      ts.fireballMat.opacity = 0.72 * fade * fade;
+
+      ts.shockRingMesh.scale.setScalar(ts.radius * (0.35 + 1.05 * easeOut));
+      ts.shockRingMat.opacity = 0.92 * fade;
+
+      ts.hexRingMesh.rotation.z += 3.2 * safeDt;
+      ts.hexRingMesh.scale.setScalar(ts.radius * (0.28 + 0.92 * easeOut));
+      ts.hexRingMat.opacity = 0.88 * fade;
+
+      for (let s = 0; s < TANK_SHELL_SHARD_COUNT; s++) {
+        const sh = ts.shards[s];
+        sh.vy -= 14.5 * safeDt;
+        sh.mesh.position.x += sh.vx * safeDt;
+        sh.mesh.position.y = Math.max(0.05, sh.mesh.position.y + sh.vy * safeDt);
+        sh.mesh.position.z += sh.vz * safeDt;
+        sh.mesh.rotation.x += sh.rx * safeDt;
+        sh.mesh.rotation.y += sh.ry * safeDt;
+        sh.mesh.scale.setScalar(sh.baseScale * (1 - 0.55 * t));
+        sh.material.opacity = 0.95 * fade;
+      }
+    }
+
+    // 53. Aegis Ballistic Shield Ricochet
+    for (let i = 0; i < SHIELD_RICOCHET_POOL_SIZE; i++) {
+      const sr = this.shieldRicochets[i];
+      if (!sr.active) continue;
+      sr.age += safeDt;
+      const t = sr.age / sr.duration;
+      if (t >= 1) {
+        sr.active = false;
+        sr.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      sr.flashMesh.scale.setScalar(0.28 * Math.max(0.08, 1 - 0.78 * t));
+      sr.flashMat.opacity = 0.96 * fade;
+
+      sr.outerRingMesh.scale.setScalar(0.24 + 0.95 * easeOut);
+      sr.outerRingMat.opacity = 0.94 * fade;
+
+      sr.hexShieldMesh.rotation.z += 4.5 * safeDt;
+      sr.hexShieldMesh.scale.setScalar(0.18 + 0.72 * easeOut);
+      sr.hexShieldMat.opacity = 0.9 * fade;
+
+      for (let s = 0; s < SHIELD_RICOCHET_SPARK_COUNT; s++) {
+        const sp = sr.sparks[s];
+        sp.vy -= 7.5 * safeDt;
+        sp.mesh.position.x += sp.vx * safeDt;
+        sp.mesh.position.y += sp.vy * safeDt;
+        sp.mesh.position.z += sp.vz * safeDt;
+        sp.mesh.rotation.x += sp.rx * safeDt;
+        sp.mesh.rotation.y += sp.ry * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.5 * t));
+        sp.material.opacity = 0.96 * fade;
+      }
+    }
+
+    // 54. Remote C4 Demolition Blast
+    for (let i = 0; i < C4_BLAST_POOL_SIZE; i++) {
+      const cb = this.c4Blasts[i];
+      if (!cb.active) continue;
+      cb.age += safeDt;
+      const t = cb.age / cb.duration;
+      if (t >= 1) {
+        cb.active = false;
+        cb.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+
+      cb.flashMesh.scale.setScalar(cb.radius * 0.52 * Math.max(0.05, 1 - t * 2.2));
+      cb.flashMat.opacity = Math.max(0, 0.96 * (1 - t * 1.8));
+
+      cb.domeMesh.scale.set(
+        cb.radius * (0.36 + 0.88 * easeOut),
+        cb.radius * (0.32 + 0.74 * easeOut),
+        cb.radius * (0.36 + 0.88 * easeOut),
+      );
+      cb.domeMat.opacity = 0.62 * fade * fade;
+
+      cb.shockRingMesh.scale.setScalar(cb.radius * (0.38 + 1.12 * easeOut));
+      cb.shockRingMat.opacity = 0.92 * fade;
+
+      cb.emberRingMesh.rotation.z -= 3.6 * safeDt;
+      cb.emberRingMesh.scale.setScalar(cb.radius * (0.28 + 0.94 * easeOut));
+      cb.emberRingMat.opacity = 0.88 * fade;
+
+      for (let s = 0; s < C4_BLAST_SHARD_COUNT; s++) {
+        const sh = cb.shards[s];
+        sh.vy -= 13.5 * safeDt;
+        sh.mesh.position.x += sh.vx * safeDt;
+        sh.mesh.position.y = Math.max(0.04, sh.mesh.position.y + sh.vy * safeDt);
+        sh.mesh.position.z += sh.vz * safeDt;
+        sh.mesh.rotation.x += sh.rx * safeDt;
+        sh.mesh.rotation.y += sh.ry * safeDt;
+        sh.mesh.scale.setScalar(sh.baseScale * (1 - 0.5 * t));
+        sh.material.opacity = 0.96 * fade;
+      }
+    }
+
+    // 55. Hot-Drop Gold POI Sky Beam
+    for (let i = 0; i < HOT_DROP_BEAM_POOL_SIZE; i++) {
+      const hd = this.hotDropBeams[i];
+      if (!hd.active) continue;
+      hd.age += safeDt;
+      const t = hd.age / hd.duration;
+      if (t >= 1) {
+        hd.active = false;
+        hd.group.visible = false;
+        continue;
+      }
+
+      const easeOut = 1 - Math.pow(1 - t, 3);
+      const fade = 1 - t;
+      const pulse = 1 + 0.14 * Math.sin(hd.age * 16);
+
+      hd.outerBeamMesh.scale.set(1.25 * pulse * (1 - 0.35 * t), 28, 1.25 * pulse * (1 - 0.35 * t));
+      hd.outerBeamMat.opacity = 0.42 * fade;
+
+      hd.coreBeamMesh.scale.set(0.48 * pulse * (1 - 0.45 * t), 28, 0.48 * pulse * (1 - 0.45 * t));
+      hd.coreBeamMat.opacity = 0.72 * fade;
+
+      hd.groundRingMesh.scale.setScalar(0.85 + 3.4 * easeOut);
+      hd.groundRingMat.opacity = 0.94 * fade;
+
+      hd.hexRingMesh.position.y = 0.25 + 4.8 * easeOut;
+      hd.hexRingMesh.rotation.z += 3.5 * safeDt;
+      hd.hexRingMesh.scale.setScalar(0.72 + 2.2 * easeOut);
+      hd.hexRingMat.opacity = 0.9 * fade;
+
+      for (let s = 0; s < HOT_DROP_BEAM_SPARK_COUNT; s++) {
+        const sp = hd.sparks[s];
+        const ang = sp.angle + hd.age * sp.spin;
+        const rad = sp.radius * (1 - 0.35 * t);
+        sp.mesh.position.x = Math.cos(ang) * rad;
+        sp.mesh.position.y += sp.speedY * safeDt;
+        sp.mesh.position.z = Math.sin(ang) * rad;
+        sp.mesh.rotation.y += 5 * safeDt;
+        sp.mesh.scale.setScalar(sp.baseScale * (1 - 0.4 * t));
+        sp.material.opacity = 0.96 * fade;
+      }
+    }
   }
 
   private spawnGrappleLine(from: Vec3Like, to: Vec3Like, duration = 0.35): void {
@@ -10545,6 +11293,247 @@ export class VFXManager {
     }
   }
 
+  private spawnTankShell(origin: Vec3Like, target: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(origin) || !isFiniteVec3(target)) return;
+
+    const slot = this.tankShells[this.tankShellCursor];
+    this.tankShellCursor = (this.tankShellCursor + 1) % TANK_SHELL_POOL_SIZE;
+
+    const safeRadius = clamp(Number.isFinite(radius) && radius > 0 ? radius : 5.5, 1.5, 35);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.78;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(target.x, target.y + 0.05, target.z);
+    slot.group.visible = true;
+
+    this.tmpA.set(origin.x, origin.y, origin.z);
+    this.tmpB.set(target.x, target.y, target.z);
+    this.tmpDir.subVectors(this.tmpB, this.tmpA);
+    const rawLen = this.tmpDir.length();
+    if (Number.isFinite(rawLen) && rawLen >= 1e-4) {
+      const len = clamp(rawLen, 0.05, 500);
+      slot.beamLength = len;
+      this.tmpDir.divideScalar(rawLen);
+      this.tmpQuat.setFromUnitVectors(this.upAxis, this.tmpDir);
+      slot.beamMesh.position.set(
+        (origin.x - target.x) * 0.5,
+        (origin.y - target.y) * 0.5,
+        (origin.z - target.z) * 0.5,
+      );
+      slot.beamMesh.quaternion.copy(this.tmpQuat);
+      slot.beamMesh.scale.set(0.32, len, 0.32);
+      slot.beamMat.opacity = 0.86;
+      slot.beamMesh.visible = true;
+
+      slot.coreBeamMesh.position.copy(slot.beamMesh.position);
+      slot.coreBeamMesh.quaternion.copy(this.tmpQuat);
+      slot.coreBeamMesh.scale.set(0.13, len, 0.13);
+      slot.coreBeamMat.opacity = 0.96;
+      slot.coreBeamMesh.visible = true;
+    } else {
+      slot.beamLength = 0;
+      slot.beamMesh.position.set(0, 0, 0);
+      slot.beamMesh.quaternion.identity();
+      slot.beamMesh.scale.set(0.05, 0.05, 0.05);
+      slot.beamMat.opacity = 0;
+      slot.beamMesh.visible = false;
+
+      slot.coreBeamMesh.position.set(0, 0, 0);
+      slot.coreBeamMesh.quaternion.identity();
+      slot.coreBeamMesh.scale.set(0.05, 0.05, 0.05);
+      slot.coreBeamMat.opacity = 0;
+      slot.coreBeamMesh.visible = false;
+    }
+
+    slot.flashMesh.scale.setScalar(safeRadius * 0.48);
+    slot.flashMat.opacity = 0.96;
+
+    slot.fireballMesh.scale.setScalar(safeRadius * 0.35);
+    slot.fireballMat.opacity = 0.72;
+
+    slot.shockRingMesh.scale.setScalar(safeRadius * 0.35);
+    slot.shockRingMat.opacity = 0.92;
+
+    slot.hexRingMesh.rotation.set(-Math.PI / 2, 0, this.nextRand() * Math.PI);
+    slot.hexRingMesh.scale.setScalar(safeRadius * 0.28);
+    slot.hexRingMat.opacity = 0.88;
+
+    for (let s = 0; s < TANK_SHELL_SHARD_COUNT; s++) {
+      const sh = slot.shards[s];
+      const ang = (s / TANK_SHELL_SHARD_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      const spd = (2.8 + this.nextRand() * 5.2) * Math.min(2.2, safeRadius * 0.32);
+      sh.vx = Math.cos(ang) * spd;
+      sh.vy = 3.4 + this.nextRand() * 4.4;
+      sh.vz = Math.sin(ang) * spd;
+      sh.rx = (this.nextRand() - 0.5) * 14;
+      sh.ry = (this.nextRand() - 0.5) * 14;
+      sh.baseScale = 0.14 + this.nextRand() * 0.09;
+      sh.mesh.position.set(0, 0.15, 0);
+      sh.mesh.scale.setScalar(sh.baseScale);
+      sh.material.opacity = 0.95;
+      sh.mesh.visible = true;
+    }
+  }
+
+  private spawnShieldRicochet(position: Vec3Like, normal: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const safeNormal: Vec3Like = isFiniteVec3(normal) ? normal : { x: 0, y: 1, z: 0 };
+    this.tmpDir.set(safeNormal.x, safeNormal.y, safeNormal.z);
+    if (this.tmpDir.lengthSq() < 1e-8) {
+      this.tmpDir.set(0, 1, 0);
+    } else {
+      this.tmpDir.normalize();
+    }
+
+    const slot = this.shieldRicochets[this.shieldRicochetCursor];
+    this.shieldRicochetCursor = (this.shieldRicochetCursor + 1) % SHIELD_RICOCHET_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.34;
+
+    slot.group.position.set(
+      position.x + this.tmpDir.x * 0.03,
+      position.y + this.tmpDir.y * 0.03,
+      position.z + this.tmpDir.z * 0.03,
+    );
+    slot.group.visible = true;
+
+    this.tmpQuat.setFromUnitVectors(this.zAxis, this.tmpDir);
+
+    slot.flashMesh.scale.setScalar(0.28);
+    slot.flashMat.opacity = 0.96;
+
+    slot.outerRingMesh.quaternion.copy(this.tmpQuat);
+    slot.outerRingMesh.scale.setScalar(0.24);
+    slot.outerRingMat.opacity = 0.94;
+
+    slot.hexShieldMesh.quaternion.copy(this.tmpQuat);
+    slot.hexShieldMesh.scale.setScalar(0.18);
+    slot.hexShieldMat.opacity = 0.9;
+
+    for (let s = 0; s < SHIELD_RICOCHET_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      const ang = (s / SHIELD_RICOCHET_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.4;
+      const spread = 2.6 + this.nextRand() * 4.2;
+      this.tmpA.set(
+        this.tmpDir.x * 0.85 + Math.cos(ang) * 0.85,
+        this.tmpDir.y * 0.85 + (this.nextRand() - 0.15) * 0.95,
+        this.tmpDir.z * 0.85 + Math.sin(ang) * 0.85,
+      );
+      if (this.tmpA.lengthSq() < 1e-6) this.tmpA.set(0, 1, 0);
+      this.tmpA.normalize().multiplyScalar(spread);
+
+      sp.vx = this.tmpA.x;
+      sp.vy = this.tmpA.y;
+      sp.vz = this.tmpA.z;
+      sp.rx = (this.nextRand() - 0.5) * 16;
+      sp.ry = (this.nextRand() - 0.5) * 16;
+      sp.baseScale = 0.075 + this.nextRand() * 0.045;
+      sp.mesh.position.set(0, 0, 0);
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.96;
+      sp.mesh.visible = true;
+    }
+  }
+
+  private spawnC4Blast(position: Vec3Like, radius: number): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.c4Blasts[this.c4BlastCursor];
+    this.c4BlastCursor = (this.c4BlastCursor + 1) % C4_BLAST_POOL_SIZE;
+
+    const safeRadius = clamp(Number.isFinite(radius) && radius > 0 ? radius : 5.5, 1.5, 35);
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 0.88;
+    slot.radius = safeRadius;
+
+    slot.group.position.set(position.x, position.y + 0.05, position.z);
+    slot.group.visible = true;
+
+    slot.flashMesh.scale.setScalar(safeRadius * 0.52);
+    slot.flashMat.opacity = 0.96;
+
+    slot.domeMesh.scale.set(safeRadius * 0.36, safeRadius * 0.32, safeRadius * 0.36);
+    slot.domeMat.opacity = 0.62;
+
+    slot.shockRingMesh.scale.setScalar(safeRadius * 0.38);
+    slot.shockRingMat.opacity = 0.92;
+
+    slot.emberRingMesh.rotation.set(-Math.PI / 2, 0, this.nextRand() * Math.PI);
+    slot.emberRingMesh.scale.setScalar(safeRadius * 0.28);
+    slot.emberRingMat.opacity = 0.88;
+
+    for (let s = 0; s < C4_BLAST_SHARD_COUNT; s++) {
+      const sh = slot.shards[s];
+      const ang = (s / C4_BLAST_SHARD_COUNT) * Math.PI * 2 + this.nextRand() * 0.3;
+      const spd = (3.0 + this.nextRand() * 5.6) * Math.min(2.2, safeRadius * 0.34);
+      sh.vx = Math.cos(ang) * spd;
+      sh.vy = 3.2 + this.nextRand() * 4.8;
+      sh.vz = Math.sin(ang) * spd;
+      sh.rx = (this.nextRand() - 0.5) * 16;
+      sh.ry = (this.nextRand() - 0.5) * 16;
+      sh.baseScale = 0.13 + this.nextRand() * 0.085;
+      sh.mesh.position.set(0, 0.12, 0);
+      sh.mesh.scale.setScalar(sh.baseScale);
+      sh.material.opacity = 0.96;
+      sh.mesh.visible = true;
+    }
+  }
+
+  private spawnHotDropBeam(position: Vec3Like): void {
+    if (this.disposed || !isFiniteVec3(position)) return;
+
+    const slot = this.hotDropBeams[this.hotDropBeamCursor];
+    this.hotDropBeamCursor = (this.hotDropBeamCursor + 1) % HOT_DROP_BEAM_POOL_SIZE;
+
+    slot.active = true;
+    slot.age = 0;
+    slot.duration = 1.25;
+
+    slot.group.position.set(position.x, position.y + 0.04, position.z);
+    slot.group.visible = true;
+
+    slot.outerBeamMesh.position.set(0, 14, 0);
+    slot.outerBeamMesh.scale.set(1.25, 28, 1.25);
+    slot.outerBeamMat.opacity = 0.42;
+
+    slot.coreBeamMesh.position.set(0, 14, 0);
+    slot.coreBeamMesh.scale.set(0.48, 28, 0.48);
+    slot.coreBeamMat.opacity = 0.72;
+
+    slot.groundRingMesh.scale.setScalar(0.85);
+    slot.groundRingMat.opacity = 0.94;
+
+    slot.hexRingMesh.position.set(0, 0.25, 0);
+    slot.hexRingMesh.rotation.set(-Math.PI / 2, 0, 0);
+    slot.hexRingMesh.scale.setScalar(0.72);
+    slot.hexRingMat.opacity = 0.9;
+
+    for (let s = 0; s < HOT_DROP_BEAM_SPARK_COUNT; s++) {
+      const sp = slot.sparks[s];
+      sp.angle = (s / HOT_DROP_BEAM_SPARK_COUNT) * Math.PI * 2 + this.nextRand() * 0.35;
+      sp.radius = 0.85 + this.nextRand() * 0.95;
+      sp.speedY = 3.2 + this.nextRand() * 3.8;
+      sp.spin = (s % 2 === 0 ? 1 : -1) * (2.6 + this.nextRand() * 2.2);
+      sp.baseScale = 0.12 + this.nextRand() * 0.07;
+      sp.mesh.position.set(
+        Math.cos(sp.angle) * sp.radius,
+        0.15 + this.nextRand() * 1.4,
+        Math.sin(sp.angle) * sp.radius,
+      );
+      sp.mesh.scale.setScalar(sp.baseScale);
+      sp.material.opacity = 0.96;
+      sp.mesh.visible = true;
+    }
+  }
+
   /**
    * Updates the throwable parabolic trajectory preview line + landing ring.
    * Pass `null` (or < 2 points) to hide the preview cleanly.
@@ -10697,6 +11686,10 @@ export class VFXManager {
     for (const tl of this.turretLasers) if (tl.active) count++;
     for (const so of this.slurpOrbs) if (so.active) count++;
     for (const fs of this.fishingSplashes) if (fs.active) count++;
+    for (const ts of this.tankShells) if (ts.active) count++;
+    for (const sr of this.shieldRicochets) if (sr.active) count++;
+    for (const cb of this.c4Blasts) if (cb.active) count++;
+    for (const hd of this.hotDropBeams) if (hd.active) count++;
     return count;
   }
 
@@ -10968,6 +11961,30 @@ export class VFXManager {
     return count;
   }
 
+  public getActiveTankShellCount(): number {
+    let count = 0;
+    for (const ts of this.tankShells) if (ts.active) count++;
+    return count;
+  }
+
+  public getActiveShieldRicochetCount(): number {
+    let count = 0;
+    for (const sr of this.shieldRicochets) if (sr.active) count++;
+    return count;
+  }
+
+  public getActiveC4BlastCount(): number {
+    let count = 0;
+    for (const cb of this.c4Blasts) if (cb.active) count++;
+    return count;
+  }
+
+  public getActiveHotDropBeamCount(): number {
+    let count = 0;
+    for (const hd of this.hotDropBeams) if (hd.active) count++;
+    return count;
+  }
+
   public clear(): void {
     for (const s of this.tracers) {
       s.active = false;
@@ -11170,6 +12187,22 @@ export class VFXManager {
     for (const fs of this.fishingSplashes) {
       fs.active = false;
       fs.group.visible = false;
+    }
+    for (const ts of this.tankShells) {
+      ts.active = false;
+      ts.group.visible = false;
+    }
+    for (const sr of this.shieldRicochets) {
+      sr.active = false;
+      sr.group.visible = false;
+    }
+    for (const cb of this.c4Blasts) {
+      cb.active = false;
+      cb.group.visible = false;
+    }
+    for (const hd of this.hotDropBeams) {
+      hd.active = false;
+      hd.group.visible = false;
     }
     this.throwArcGroup.visible = false;
     this.throwArcPointCount = 0;

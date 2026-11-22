@@ -431,6 +431,7 @@ export interface BotWorldContext {
   onPlayerRevived?: (reviverId: string) => void;
   getSquadmates?: (squadId: string) => BotEntity[];
   getMedallionHolders?: () => MedallionHolderInfo[];
+  hotDropPoiIds?: string[];
   dropBotLoot(bot: BotEntity): void;
   eventBus: EventBus;
 }

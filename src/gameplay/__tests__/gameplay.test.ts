@@ -55,6 +55,8 @@ import type {
 } from '../../types';
 import {
   AUGMENTS,
+  BALLISTIC_SHIELD_MAX_HP,
+  BALLISTIC_SHIELD_REGEN_PER_SEC,
   BOUNCER_IMPULSE_FWD,
   BOUNCER_IMPULSE_Y,
   DBNO_BLEED_DPS,
@@ -73,11 +75,13 @@ import {
   JETPACK_RECHARGE_RATE,
   LOW_GRAVITY_DURATION_SEC,
   LOW_GRAVITY_SCALE,
+  MAX_ACTIVE_C4_PER_PLAYER,
   MAX_GOLD_BARS,
   MAX_MATS,
   PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
+  POIS,
   RARITY_MULTIPLIER,
   REBOOT_DURATION_SEC,
   FISHING_CAST_SEC,
@@ -86,6 +90,10 @@ import {
   SKY_BALLOON_HEIGHT,
   SPIKE_TRAP_DAMAGE,
   STARTING_GOLD_BARS,
+  TANK_CANNON_COOLDOWN_SEC,
+  TANK_CANNON_DAMAGE,
+  TANK_CANNON_SPLASH_RADIUS,
+  TANK_CANNON_STRUCT_DMG,
   TEAM_RUMBLE_RESPAWN_SEC,
   TEAM_RUMBLE_TARGET_SCORE,
   THERMAL_FLOPPER_DURATION_SEC,
@@ -7467,7 +7475,7 @@ describe('Wave 11 Gameplay Systems (Auto-Turret, Chug Cannon, Fishing, Sky Ballo
     expect(TURRET_FIRE_RATE).toBe(3.5);
     expect(TURRET_DAMAGE).toBe(14);
     expect(TURRET_DURATION_SEC).toBe(40);
-    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(35);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBeGreaterThanOrEqual(35);
     expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
     expect(WEAPON_SOUND_MAP.auto_turret).toBe('turret_deploy');
     expect(WEAPON_SOUND_MAP.chug_cannon).toBe('chug_cannon_fire');
@@ -8017,4 +8025,484 @@ describe('Wave 11 Gameplay Systems (Auto-Turret, Chug Cannon, Fishing, Sky Ballo
     expect(player.getHudSnapshot().deployedTurrets ?? []).toEqual([]);
   });
 });
+
+describe('Wave 12 Gameplay Systems (Aegis Ballistic Shield, Sticky Remote C4, Vanguard Tank Cannon, Kill-Streak Surge)', () => {
+  function setupWave12Harness(terrain: TerrainQuery = createFlatTerrain(() => 0)) {
+    const collision = new CollisionSystem(terrain);
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const building = new BuildingSystem(scene, terrain, bus);
+    collision.setBuildPiecesProvider(() => building.getPieces());
+    const propsBridge = createMockPropsBridge();
+    const weapons = new WeaponSystem(collision, building, propsBridge, bus);
+    const camera = new THREE.PerspectiveCamera(80, 16 / 9, 0.1, 1000);
+    const player = new PlayerController(
+      camera,
+      terrain,
+      collision,
+      building,
+      weapons,
+      propsBridge,
+      bus,
+      DEFAULT_SETTINGS,
+    );
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave12Tester');
+    player.setPhase('playing');
+    player.teleport({ x: 0, y: 0, z: 0 });
+    return { terrain, collision, scene, bus, building, propsBridge, weapons, camera, player };
+  }
+
+  it('registers Wave-12 WEAPON_SOUND_MAP entries (37 total) and enforces Aegis Ballistic Shield frontal absorption, regen & break SFX', () => {
+    expect(BALLISTIC_SHIELD_MAX_HP).toBe(250);
+    expect(BALLISTIC_SHIELD_REGEN_PER_SEC).toBe(28);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(37);
+    expect(Object.keys(WEAPON_SOUND_MAP).length).toBe(Object.keys(WEAPONS).length);
+    expect(WEAPON_SOUND_MAP.ballistic_shield).toBe('shot_pistol');
+    expect(WEAPON_SOUND_MAP.remote_c4).toBe('c4_plant');
+
+    const { bus, player } = setupWave12Harness();
+    const sounds: SoundEventId[] = [];
+    const ricochets: Array<{ position: Vec3Like; normal: Vec3Like }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:shield_ricochet', (ev) => ricochets.push(ev));
+
+    const shieldItem: ItemInstance = {
+      uid: 'aegis_shield_1',
+      weaponId: 'ballistic_shield',
+      rarity: 'epic',
+      magAmmo: 15,
+      stackCount: 1,
+    };
+    player.getInventory().addItem(shieldItem);
+    player.getInventory().addAmmo('light', 60);
+    player.pressKey('Digit2');
+    player.releaseKey('Digit2');
+
+    // Look toward -Z (yaw = PI => sin(PI)=0, cos(PI)=-1)
+    player.setLook(Math.PI, 0);
+    let t = 0.05;
+    player.update(0.05, t);
+    expect(player.getHudSnapshot().ballisticShieldHp).toEqual({
+      current: 250,
+      max: 250,
+      blocking: false,
+    });
+    expect(player.getCharacterRenderState().isShieldBlocking).toBe(false);
+
+    // Hold RMB to raise Aegis Ballistic Shield
+    player.setMouseButton(2, true);
+    t += 0.05;
+    player.update(0.05, t);
+    expect(player.getCharacterRenderState().isShieldBlocking).toBe(true);
+    expect(player.getHudSnapshot().ballisticShieldHp?.blocking).toBe(true);
+
+    // Frontal hit (at z = -4, dot with -Z = +1.0 > 0.15) is absorbed by shield
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_front',
+      attackerName: 'BotFront',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 80,
+      hpDamage: 80,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1.2, z: -4 },
+      distance: 4,
+    });
+    expect(player.getHealth()).toBe(100);
+    expect(player.getBallisticShieldHp()).toBe(170);
+    expect(player.getStats().shieldBlockedDmg).toBe(80);
+    expect(ricochets.length).toBe(1);
+    expect(sounds).toContain('shield_block');
+
+    // Rear hit (z = +4, dot = -1.0) & perpendicular flank (x = +4, dot = 0) bypass shield
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_rear',
+      attackerName: 'BotRear',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 25,
+      hpDamage: 25,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1.2, z: 4 },
+      distance: 4,
+    });
+    expect(player.getHealth()).toBe(75);
+    expect(player.getBallisticShieldHp()).toBe(170);
+
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_side',
+      attackerName: 'BotSide',
+      weaponId: 'ar',
+      rarity: 'rare',
+      damage: 10,
+      hpDamage: 10,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 4, y: 1.2, z: 0 },
+      distance: 4,
+    });
+    expect(player.getHealth()).toBe(65);
+
+    // Lower shield (release RMB) and regen 28 HP/sec for 1.0s => 170 + 28 = 198
+    player.setMouseButton(2, false);
+    for (let i = 0; i < 20; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getCharacterRenderState().isShieldBlocking).toBe(false);
+    expect(player.getBallisticShieldHp()).toBeCloseTo(198, 2);
+
+    // Raise shield again and take 220 frontal damage => absorbs 198, breaks shield ('shield_break'), 22 bleed-through reduces HP (65 -> 43)
+    player.setMouseButton(2, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.applyDamage({
+      targetId: 'player',
+      attackerId: 'bot_heavy',
+      attackerName: 'BotHeavy',
+      weaponId: 'sniper',
+      rarity: 'epic',
+      damage: 220,
+      hpDamage: 220,
+      shieldDamage: 0,
+      isHeadshot: false,
+      isElimination: false,
+      hitPoint: { x: 0, y: 1.2, z: -5 },
+      distance: 5,
+    });
+    expect(player.getBallisticShieldHp()).toBe(0);
+    expect(player.getHealth()).toBeCloseTo(43, 2);
+    expect(sounds).toContain('shield_break');
+    expect(player.getCharacterRenderState().isShieldBlocking).toBe(false);
+    expect(player.getStats().shieldBlockedDmg).toBeCloseTo(278, 2);
+
+    // QA helper sets shield HP directly
+    player.setBallisticShieldHp(140);
+    expect(player.getBallisticShieldHp()).toBe(140);
+  });
+
+  it('implements Sticky Remote C4 placement (MAX=6 oldest-evict), WeaponSystem projectile stick & RMB detonation (320 build dmg / 90 splash)', () => {
+    expect(MAX_ACTIVE_C4_PER_PLAYER).toBe(6);
+
+    const { bus, building, weapons, player } = setupWave12Harness();
+    player.setGameMode('duos'); // Squad id: 'player_squad'
+    const sounds: SoundEventId[] = [];
+    const c4Vfx: Array<{ position: Vec3Like; radius: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:c4_blast', (ev) => c4Vfx.push(ev));
+
+    // Verify oldest-evict cap at MAX_ACTIVE_C4_PER_PLAYER = 6
+    const plantedIds: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const ent = building.placeC4({ x: i * 2, y: 0, z: -2 }, 'player');
+      plantedIds.push(ent.id);
+    }
+    const activeAfterCap = building.getPlacedC4('player');
+    expect(activeAfterCap.length).toBe(6);
+    expect(activeAfterCap.some((c) => c.id === plantedIds[0])).toBe(false);
+    expect(activeAfterCap.some((c) => c.id === plantedIds[6])).toBe(true);
+    expect(sounds.filter((s) => s === 'c4_plant').length).toBe(7);
+
+    building.clearAll();
+    expect(building.getPlacedC4().length).toBe(0);
+
+    // Setup structures (full-HP 300 brick wall & 150 wood wall at z = -4) + actors
+    const brickWall = building.placePieceForEntity('bot', 'wall', 'brick', 0, 0, -1, 'N', 0)!;
+    brickWall.hp = 300; // Full 300 HP brick wall destroyed by 320 C4 structure dmg
+    const woodWall = building.placePieceForEntity('bot', 'wall', 'wood', -1, 0, -1, 'N', 0)!;
+    expect(building.getPieces().length).toBe(2);
+
+    const enemyNear: CombatActor = {
+      id: 'c4_enemy_near',
+      name: 'C4EnemyNear',
+      position: { x: 0.4, y: 0, z: -3.5 },
+      eyePos: { x: 0.4, y: 1.5, z: -3.5 },
+      hp: 100,
+      maxHp: 100,
+      shield: 0,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_squad',
+    };
+    const allySquad: CombatActor = {
+      id: 'c4_ally_squad',
+      name: 'C4Ally',
+      position: { x: 0, y: 0, z: -3.2 },
+      eyePos: { x: 0, y: 1.5, z: -3.2 },
+      hp: 100,
+      maxHp: 100,
+      shield: 0,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      squadId: 'player_squad',
+    };
+    const enemyFar: CombatActor = {
+      id: 'c4_enemy_far',
+      name: 'C4EnemyFar',
+      position: { x: 0, y: 0, z: -20 },
+      eyePos: { x: 0, y: 1.5, z: -20 },
+      hp: 100,
+      maxHp: 100,
+      shield: 0,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+      squadId: 'enemy_squad',
+    };
+    weapons.registerActorsProvider(() => [
+      player.getCombatActor(),
+      enemyNear,
+      allySquad,
+      enemyFar,
+    ]);
+
+    const c4Item: ItemInstance = {
+      uid: 'remote_c4_1',
+      weaponId: 'remote_c4',
+      rarity: 'epic',
+      magAmmo: 1,
+      stackCount: 3,
+    };
+    player.getInventory().addItem(c4Item);
+    player.pressKey('Digit2');
+    player.releaseKey('Digit2');
+
+    // Aim slightly forward & downward so thrown C4 sticks around z = -3m (within 5.5m of brick & wood walls)
+    player.teleport({ x: 0, y: 0, z: 0 });
+    player.setLook(Math.PI, -0.45);
+    player.setMouseButton(0, true);
+    let t = 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(player.getInventory().getSlot(1)?.stackCount).toBe(2);
+    expect(weapons.getProjectiles().length).toBe(1);
+
+    for (let i = 0; i < 40; i++) {
+      t += 0.05;
+      weapons.update(0.05);
+      player.update(0.05, t);
+      if (building.getPlacedC4('player').length > 0) break;
+    }
+
+    expect(building.getPlacedC4('player').length).toBe(1);
+    expect(player.getHudSnapshot().activeC4Count).toBe(1);
+
+    // Press RMB while holding 'remote_c4' to detonate!
+    player.setMouseButton(2, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(2, false);
+
+    expect(c4Vfx.length).toBe(1);
+    expect(c4Vfx[0].radius).toBe(5.5);
+    expect(sounds).toContain('c4_detonate');
+    expect(building.getPlacedC4('player').length).toBe(0);
+    expect(player.getHudSnapshot().activeC4Count).toBe(0);
+    expect(player.getStats().c4Blasts).toBe(1);
+
+    // 320 structure damage destroyed full-HP 300 brick wall & wood wall
+    expect(building.getPieceById(brickWall.id)).toBeUndefined();
+    expect(building.getPieceById(woodWall.id)).toBeUndefined();
+    expect(building.getPieces().length).toBe(0);
+
+    // 90 splash damage hit enemyNear, spared owner & allySquad & far enemy
+    expect(enemyNear.hp).toBe(10);
+    expect(player.getHealth()).toBe(100);
+    expect(allySquad.hp).toBe(100);
+    expect(enemyFar.hp).toBe(100);
+    expect(player.getStats().damageDealt).toBe(90);
+
+    // dispose() clears placed C4 cleanly
+    building.placeC4({ x: 1, y: 0, z: 1 }, 'player');
+    expect(building.getPlacedC4().length).toBe(1);
+    building.dispose();
+    expect(building.getPlacedC4().length).toBe(0);
+  });
+
+  it('drives Vanguard Hover Tank to fire explosive Main Cannon shells on 2.2s cooldown with kill-streak >= 3 streak_surge SFX', () => {
+    expect(TANK_CANNON_COOLDOWN_SEC).toBe(2.2);
+    expect(TANK_CANNON_DAMAGE).toBe(85);
+    expect(TANK_CANNON_STRUCT_DMG).toBe(240);
+    expect(TANK_CANNON_SPLASH_RADIUS).toBe(5.5);
+
+    const { bus, building, weapons, player } = setupWave12Harness();
+    const sounds: SoundEventId[] = [];
+    const shellVfx: Array<{ origin: Vec3Like; target: Vec3Like; radius: number }> = [];
+    bus.on('sound:play', (ev) => sounds.push(ev.id));
+    bus.on('vfx:tank_shell', (ev) => shellVfx.push(ev));
+
+    const tank: VehicleEntity = {
+      id: 'tank_1',
+      kind: 'hover_tank',
+      x: 0,
+      y: 0,
+      z: 0,
+      yaw: Math.PI,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 1200,
+      maxHp: 1200,
+      boostCharge: 1,
+      isBoosting: false,
+      driverId: null,
+      destroyed: false,
+    };
+    const vehicleBridge: VehicleBridge = {
+      getVehicles: () => [tank],
+      enterVehicle: (id, driverId) => {
+        if (id !== tank.id || tank.driverId) return false;
+        tank.driverId = driverId;
+        return true;
+      },
+      exitVehicle: (id, driverId) => {
+        if (id !== tank.id || tank.driverId !== driverId) return null;
+        tank.driverId = null;
+        return { x: tank.x + 2, y: tank.y, z: tank.z };
+      },
+      driveVehicle: () => {},
+      damageVehicle: (id, dmg) => {
+        if (id !== tank.id) return false;
+        tank.hp = Math.max(0, tank.hp - dmg);
+        if (tank.hp <= 0) tank.destroyed = true;
+        return true;
+      },
+      getTankCannonMuzzle: (id) =>
+        id === tank.id ? { x: tank.x, y: tank.y + 1.75, z: tank.z - 2.3 } : null,
+    };
+    player.setVehicleBridge(vehicleBridge);
+
+    // Check interact prompt near Vanguard Tank and board with KeyE
+    player.teleport({ x: 0, y: 0, z: 1.5 });
+    let t = 0.05;
+    player.update(0.05, t);
+    expect(player.getInteractPrompt()?.label).toContain('Vanguard Tank');
+
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(player.getActiveVehicleId()).toBe(tank.id);
+
+    // Place target enemy (hp: 80 <= 85 tank shell dmg -> elim!) & metal wall (hp: 300 -> 60 after 240 struct dmg) at z = -12
+    const metalWall = building.placePieceForEntity('bot', 'wall', 'metal', 0, 0, -3, 'N', 0)!;
+    metalWall.hp = 300;
+    const tankTarget: CombatActor = {
+      id: 'tank_victim',
+      name: 'TankVictim',
+      position: { x: 0.5, y: 0, z: -11.5 },
+      eyePos: { x: 0.5, y: 1.5, z: -11.5 },
+      hp: 80,
+      maxHp: 100,
+      shield: 0,
+      maxShield: 100,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+    weapons.registerActorsProvider(() => [player.getCombatActor(), tankTarget]);
+
+    // Aim toward -Z wall/enemy and fire Tank Main Cannon via LMB
+    player.setLook(Math.PI, -0.05);
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+
+    expect(sounds).toContain('tank_cannon');
+    expect(weapons.getProjectiles().some((p) => p.isTankShell)).toBe(true);
+    expect(player.getHudSnapshot().tankCannonCooldown).toBeGreaterThan(2.0);
+    expect(player.getHudSnapshot().tankCannonCooldown).toBeLessThanOrEqual(
+      TANK_CANNON_COOLDOWN_SEC,
+    );
+
+    // Second immediate LMB press respects 2.2s cooldown and does NOT spawn another shell
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+    expect(weapons.getProjectiles().filter((p) => p.isTankShell).length).toBe(1);
+
+    // Advance shell until impact
+    for (let i = 0; i < 30; i++) {
+      t += 0.05;
+      weapons.update(0.05);
+      player.update(0.05, t);
+      if (shellVfx.length > 0) break;
+    }
+
+    expect(shellVfx.length).toBe(1);
+    expect(shellVfx[0].radius).toBe(TANK_CANNON_SPLASH_RADIUS);
+    expect(sounds).toContain('tank_impact');
+    expect(tankTarget.alive).toBe(false);
+    expect(tankTarget.hp).toBe(0);
+    expect(metalWall.hp).toBe(60); // 300 - 240 = 60 structure dmg
+    expect(player.getStats().tankElims).toBe(1);
+    expect(player.getStats().damageDealt).toBe(85);
+
+    // Cooldown ticks down cleanly to 0 after 2.2s total elapsed, allowing next cannon shot
+    for (let i = 0; i < 45; i++) {
+      t += 0.05;
+      player.update(0.05, t);
+    }
+    expect(player.getHudSnapshot().tankCannonCooldown).toBe(0);
+
+    const cannonCountBefore = sounds.filter((s) => s === 'tank_cannon').length;
+    player.setMouseButton(0, true);
+    t += 0.05;
+    player.update(0.05, t);
+    player.setMouseButton(0, false);
+    expect(sounds.filter((s) => s === 'tank_cannon').length).toBe(cannonCountBefore + 1);
+
+    // Kill-streak escalation >= 3 emits 'streak_surge' SFX and updates render state
+    player.addKill(); // pairs tankTarget combat:damage elimination (kills = 1, streak = 1)
+    player.addKill(); // streak 2: kill_streak
+    expect(sounds.filter((s) => s === 'streak_surge').length).toBe(0);
+    player.addKill(); // streak 3: kill_streak + streak_surge!
+    expect(player.getKillStreak()).toBe(3);
+    expect(player.getCharacterRenderState().killStreak).toBe(3);
+    expect(sounds).toContain('streak_surge');
+
+    // QA helper & Hot Drop POI detection
+    player.setKillStreak(5);
+    expect(player.getCharacterRenderState().killStreak).toBe(5);
+    player.pressKey('KeyE');
+    t += 0.05;
+    player.update(0.05, t);
+    player.releaseKey('KeyE');
+    expect(player.getActiveVehicleId()).toBeNull();
+    player.setHotDropPoiIds([POIS[0].id]);
+    player.teleport({ x: POIS[0].x, y: 0, z: POIS[0].z });
+    expect(player.getHudSnapshot().inHotDropPoi).toBe(true);
+    player.teleport({ x: 999, y: 0, z: 999 });
+    expect(player.getHudSnapshot().inHotDropPoi).toBe(false);
+
+    // Match reset clears Wave-12 stats cleanly
+    player.resetForMatch({ x: 0, y: 0, z: 0 }, 'Wave12Reset');
+    player.setPhase('playing');
+    expect(player.getStats().c4Blasts).toBe(0);
+    expect(player.getStats().shieldBlockedDmg).toBe(0);
+    expect(player.getStats().tankElims).toBe(0);
+    expect(player.getBallisticShieldHp()).toBe(BALLISTIC_SHIELD_MAX_HP);
+    expect(player.getHudSnapshot().tankCannonCooldown).toBeNull();
+    expect(player.getHudSnapshot().inHotDropPoi).toBe(false);
+  });
+});
+
 

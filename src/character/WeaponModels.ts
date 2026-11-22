@@ -22,6 +22,7 @@ const RANGED_WEAPONS = new Set<WeaponId>([
   'plasma_flamethrower',
   'flare_gun',
   'chug_cannon',
+  'ballistic_shield',
 ]);
 
 const THROWABLE_WEAPONS = new Set<WeaponId>([
@@ -32,6 +33,7 @@ const THROWABLE_WEAPONS = new Set<WeaponId>([
   'port_a_bunker',
   'emp_grenade',
   'auto_turret',
+  'remote_c4',
 ]);
 
 export function isRangedWeapon(weaponId: WeaponId): boolean {
@@ -2166,6 +2168,156 @@ function buildChugCannon(): THREE.Group {
   return group;
 }
 
+function buildBallisticShield(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_ballistic_shield';
+
+  const frameDark = makeStandardMat('#0f172a', 0.44, 0.64);
+  const armorPlate = makeStandardMat('#1e293b', 0.36, 0.54);
+  const hexComposite = makeStandardMat('#334155', 0.32, 0.68);
+  const steelTrim = makeStandardMat('#94a3b8', 0.24, 0.84);
+  const cyanGlow = makeStandardMat('#22d3ee', 0.12, 0.18, '#22d3ee', 0.96);
+  const sightAmber = makeStandardMat('#facc15', 0.2, 0.2, '#facc15', 0.55);
+  const visorMat = new THREE.MeshStandardMaterial({
+    color: '#06b6d4',
+    emissive: '#22d3ee',
+    emissiveIntensity: 0.92,
+    roughness: 0.12,
+    metalness: 0.2,
+    transparent: true,
+    opacity: 0.78,
+  });
+
+  // Main curved hex-composite tactical riot shield positioned ahead of right hand grip (centered around x = +0.09)
+  const sx = 0.09;
+  const sy = 0.04;
+  const sz = 0.20;
+
+  // Center ballistic composite plate + upper brow crown & lower reinforced skirt
+  tagWrapTarget(addBox(group, 0.28, 0.72, 0.044, armorPlate, sx, sy, sz));
+  addBox(group, 0.30, 0.072, 0.052, frameDark, sx, sy + 0.38, sz - 0.004, -0.14, 0, 0);
+  addBox(group, 0.28, 0.088, 0.048, frameDark, sx, sy - 0.38, sz - 0.004, 0.14, 0, 0);
+
+  // Curved left wing (angled back around character torso) + right split wings framing sidearm gun port
+  tagWrapTarget(addBox(group, 0.17, 0.68, 0.038, armorPlate, sx + 0.20, sy, sz - 0.038, 0, -0.42, 0));
+  tagWrapTarget(addBox(group, 0.15, 0.24, 0.038, armorPlate, sx - 0.19, sy + 0.22, sz - 0.034, 0, 0.40, 0));
+  tagWrapTarget(addBox(group, 0.15, 0.28, 0.038, armorPlate, sx - 0.19, sy - 0.19, sz - 0.034, 0, 0.40, 0));
+
+  // Hex-composite raised reactive armor tiles along shield front face
+  const hexPositions: Array<[number, number]> = [
+    [sx - 0.055, sy - 0.06],
+    [sx + 0.055, sy - 0.06],
+    [sx, sy - 0.16],
+    [sx - 0.055, sy - 0.26],
+    [sx + 0.055, sy - 0.26],
+  ];
+  for (const [hx, hy] of hexPositions) {
+    addCylinder(group, 0.054, 0.054, 0.016, hexComposite, hx, hy, sz + 0.025, Math.PI / 2, 0, 0, 6);
+  }
+
+  // Horizontal titanium reinforcement ribs + corner bolts + glowing cyan edge beacons
+  addBox(group, 0.31, 0.024, 0.054, hexComposite, sx, sy + 0.06, sz + 0.004);
+  addBox(group, 0.31, 0.024, 0.054, hexComposite, sx, sy - 0.32, sz + 0.004);
+  for (const bx of [sx - 0.11, sx + 0.11]) {
+    for (const by of [sy + 0.32, sy - 0.32]) {
+      addCylinder(group, 0.012, 0.012, 0.058, steelTrim, bx, by, sz + 0.004, Math.PI / 2, 0, 0, 8);
+    }
+  }
+  addBox(group, 0.014, 0.56, 0.014, cyanGlow, sx + 0.26, sy, sz - 0.068, 0, -0.42, 0);
+  addBox(group, 0.014, 0.22, 0.014, cyanGlow, sx - 0.25, sy + 0.22, sz - 0.062, 0, 0.40, 0);
+
+  // Armored viewport bezel + glowing cyan translucent ballistic visor pane
+  const vy = sy + 0.21;
+  const vz = sz + 0.024;
+  addBox(group, 0.24, 0.022, 0.024, frameDark, sx, vy + 0.064, vz);
+  addBox(group, 0.24, 0.022, 0.024, frameDark, sx, vy - 0.064, vz);
+  addBox(group, 0.024, 0.145, 0.024, frameDark, sx - 0.11, vy, vz);
+  addBox(group, 0.024, 0.145, 0.024, frameDark, sx + 0.11, vy, vz);
+  addBox(group, 0.20, 0.105, 0.016, visorMat, sx, vy, vz - 0.002);
+  addBox(group, 0.18, 0.010, 0.018, cyanGlow, sx, vy + 0.044, vz + 0.004);
+  addBox(group, 0.18, 0.010, 0.018, cyanGlow, sx, vy - 0.044, vz + 0.004);
+
+  // Rear tactical grip strut & forearm shield brace connecting cleanly to right hand grip (0, 0, 0)
+  addBox(group, 0.036, 0.18, 0.036, frameDark, sx, sy, sz - 0.055);
+  addBox(group, 0.14, 0.032, 0.044, hexComposite, 0.045, 0.035, 0.13);
+  addBox(group, 0.032, 0.095, 0.032, steelTrim, sx + 0.08, 0.02, sz - 0.052);
+
+  // Integrated sidearm pistol nestled in the shield's right tactical firing notch (origin at hand grip 0, 0, 0)
+  const px = -0.02;
+  addBox(group, 0.036, 0.115, 0.048, frameDark, 0, -0.025, -0.01, 0.24, 0, 0);
+  addBox(group, 0.040, 0.018, 0.054, steelTrim, 0, -0.08, -0.025, 0.24, 0, 0);
+  addBox(group, 0.038, 0.026, 0.20, frameDark, px, 0.045, 0.075);
+  addBox(group, 0.014, 0.032, 0.055, frameDark, px, 0.022, 0.05);
+  addBox(group, 0.040, 0.042, 0.23, steelTrim, px, 0.075, 0.095);
+  addBox(group, 0.014, 0.012, 0.014, cyanGlow, px, 0.102, 0.195);
+  addBox(group, 0.020, 0.012, 0.012, sightAmber, px, 0.102, -0.005);
+  // Extended tactical sidearm pistol barrel protruding cleanly past the shield firing notch
+  addCylinder(group, 0.013, 0.014, 0.125, frameDark, px, 0.075, 0.265, Math.PI / 2, 0, 0, 10);
+  addCylinder(group, 0.017, 0.017, 0.026, steelTrim, px, 0.075, 0.322, Math.PI / 2, 0, 0, 10);
+
+  group.userData.muzzleOffset = new THREE.Vector3(px, 0.075, 0.345);
+  return group;
+}
+
+function buildRemoteC4(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'weapon_remote_c4';
+  group.userData.wrapDisabled = true;
+
+  const packBody = makeStandardMat('#3f4d36', 0.62, 0.18);
+  const darkStrap = makeStandardMat('#0f172a', 0.48, 0.56);
+  const slatePod = makeStandardMat('#1e293b', 0.38, 0.62);
+  const steelClasp = makeStandardMat('#94a3b8', 0.24, 0.84);
+  const copperWire = makeStandardMat('#d97706', 0.3, 0.78);
+  const redArmedLed = makeStandardMat('#ef4444', 0.1, 0.15, '#ef4444', 1.18);
+  const redCoreHot = makeStandardMat('#fca5a5', 0.08, 0.1, '#ef4444', 1.25);
+  const lcdCyan = makeStandardMat('#22d3ee', 0.14, 0.2, '#0ea5e9', 0.85);
+
+  // Tactical demolition C4 charge brick held at (-0.03, 0.065, 0.065)
+  const bx = -0.03;
+  const by = 0.065;
+  const bz = 0.065;
+
+  addBox(group, 0.128, 0.145, 0.068, packBody, bx, by, bz);
+  // Adhesive magnetic rear pad
+  addBox(group, 0.118, 0.132, 0.012, darkStrap, bx, by, bz - 0.038);
+  // Twin tactical nylon retention straps + steel buckle clasps
+  for (const sx of [-0.038, 0.038]) {
+    addBox(group, 0.022, 0.154, 0.076, darkStrap, bx + sx, by, bz);
+    addBox(group, 0.028, 0.022, 0.082, steelClasp, bx + sx, by + 0.035, bz);
+  }
+  addBox(group, 0.136, 0.022, 0.076, darkStrap, bx, by - 0.025, bz);
+
+  // Top electronic detonator receiver pod + copper blasting-cap leads + LCD status readout + whip antenna
+  addBox(group, 0.098, 0.044, 0.056, slatePod, bx, by + 0.068, bz + 0.012);
+  addBox(group, 0.042, 0.018, 0.010, lcdCyan, bx - 0.020, by + 0.068, bz + 0.042);
+  addCylinder(group, 0.006, 0.006, 0.042, copperWire, bx - 0.022, by + 0.042, bz + 0.038, 0, 0, 0.18, 6);
+  addCylinder(group, 0.006, 0.006, 0.042, copperWire, bx + 0.022, by + 0.042, bz + 0.038, 0, 0, -0.18, 6);
+  addCylinder(group, 0.005, 0.007, 0.095, steelClasp, bx + 0.036, by + 0.132, bz + 0.012, 0, 0, 0, 8);
+
+  // Prominent glowing red armed LED dome + collar bezel on C4 pack
+  addCylinder(group, 0.017, 0.017, 0.012, darkStrap, bx + 0.022, by + 0.068, bz + 0.042, Math.PI / 2, 0, 0, 10);
+  addMesh(group, new THREE.SphereGeometry(0.013, 10, 8), redArmedLed, bx + 0.022, by + 0.068, bz + 0.048);
+  addMesh(group, new THREE.SphereGeometry(0.007, 8, 8), redCoreHot, bx + 0.022, by + 0.068, bz + 0.054);
+
+  // Wireless detonator trigger fob (clacker) gripped alongside pack at (+0.058, +0.028, +0.012)
+  const fx = 0.058;
+  const fy = 0.028;
+  const fz = 0.012;
+  addBox(group, 0.046, 0.105, 0.044, slatePod, fx, fy, fz, 0.18, 0, 0);
+  addBox(group, 0.050, 0.058, 0.048, darkStrap, fx, fy - 0.022, fz - 0.004, 0.18, 0, 0);
+  // Wireless trigger antenna + hinged red flip guard + big red detonator trigger plunger + armed LED
+  addCylinder(group, 0.0045, 0.006, 0.088, steelClasp, fx + 0.014, fy + 0.092, fz + 0.008, 0.18, 0, 0, 8);
+  addBox(group, 0.038, 0.012, 0.036, redArmedLed, fx, fy + 0.062, fz + 0.022, -0.45, 0, 0);
+  addCylinder(group, 0.013, 0.014, 0.022, redArmedLed, fx - 0.004, fy + 0.056, fz + 0.012, 0.18, 0, 0, 10);
+  addMesh(group, new THREE.SphereGeometry(0.008, 8, 8), redCoreHot, fx + 0.012, fy + 0.028, fz + 0.026);
+  // Connecting tactical lanyard strap between C4 brick and wireless fob
+  addBox(group, 0.068, 0.016, 0.022, darkStrap, 0.014, 0.028, 0.034, 0, -0.42, 0);
+
+  group.userData.muzzleOffset = new THREE.Vector3(0, 0.08, 0.24);
+  return group;
+}
+
 const MOD_CHILD_NAMES = new Set([
   'mod_red_dot',
   'mod_suppressor',
@@ -2266,6 +2418,13 @@ function getWeaponModAnchors(weaponGroup: THREE.Group): WeaponModAnchors {
         redDot: [0, 0.242, 0.11],
         drumMag: [0, -0.025, 0.18],
         foregrip: [0, 0.006, 0.34],
+        suppressor: supPos,
+      };
+    case 'weapon_ballistic_shield':
+      return {
+        redDot: [-0.02, 0.104, 0.095],
+        drumMag: [-0.02, -0.060, 0.005],
+        foregrip: [-0.02, 0.015, 0.145],
         suppressor: supPos,
       };
     default:
@@ -2506,6 +2665,10 @@ export function createWeaponModel(weaponId: WeaponId, pickaxeDef?: PickaxeDef): 
       return buildAutoTurret();
     case 'chug_cannon':
       return buildChugCannon();
+    case 'ballistic_shield':
+      return buildBallisticShield();
+    case 'remote_c4':
+      return buildRemoteC4();
   }
 }
 

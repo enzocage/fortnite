@@ -143,6 +143,7 @@ const KNOCKED_CRAWL_SPEED = 1.4;
 const REVIVE_REACH_DIST = 3.4;
 const SQUAD_REVIVE_RANGE = 55.0;
 const SQUAD_UNSAFE_ENEMY_DIST = 16.0;
+export const TANK_THREAT_RANGE = 48.0;
 const playerReviveCompletedLatch = new WeakMap<BotEntity, boolean>();
 
 const SCORCHED_CALDERA_POI = POIS.find((p) => p.id === 'scorched_caldera');
@@ -271,7 +272,8 @@ function isOffensiveThrowable(weaponId: WeaponId): boolean {
     weaponId === 'frag_grenade' ||
     weaponId === 'shockwave_grenade' ||
     weaponId === 'emp_grenade' ||
-    weaponId === 'auto_turret'
+    weaponId === 'auto_turret' ||
+    weaponId === 'remote_c4'
   );
 }
 
@@ -375,8 +377,17 @@ function getTotalMaterials(bot: Pick<BotEntity, 'inventory'>): number {
   return (m.wood ?? 0) + (m.brick ?? 0) + (m.metal ?? 0);
 }
 
-function pickAvailableMaterial(bot: BotEntity): MaterialType | null {
+function pickAvailableMaterial(
+  bot: BotEntity,
+  preferStrongMaterial = false,
+): MaterialType | null {
   const m = bot.inventory.materials;
+  if (preferStrongMaterial) {
+    if (m.metal >= BUILD_COST) return 'metal';
+    if (m.brick >= BUILD_COST) return 'brick';
+    if (m.wood >= BUILD_COST) return 'wood';
+    return null;
+  }
   if (m.wood >= BUILD_COST) return 'wood';
   if (m.brick >= BUILD_COST) return 'brick';
   if (m.metal >= BUILD_COST) return 'metal';
@@ -429,6 +440,10 @@ function scoreWeaponForDistance(
       if (!Number.isFinite(distance) || distance < 10 || distance > 32) return -1;
       return 24;
     }
+    if (item.weaponId === 'remote_c4' || def.isRemoteC4) {
+      if (!Number.isFinite(distance) || distance < 6 || distance >= 26) return -1;
+      return nearBuilds ? 34 : 21;
+    }
     if (distance < 8 || distance > 52) return -1;
     if (item.weaponId === 'emp_grenade' || def.isEmpGrenade) return 18;
     return item.weaponId === 'frag_grenade' ? 20 : 14;
@@ -472,6 +487,17 @@ function scoreWeaponForDistance(
     case 'pistol':
       if (distance > def.range) return 0.5;
       base = distance <= 28 ? 64 - distance * 0.45 : Math.max(5, 51 - (distance - 28) * 0.45);
+      break;
+    case 'ballistic_shield':
+      if (distance > def.range) return 0.5;
+      if (distance < 42) {
+        base =
+          distance <= 22
+            ? 116 - distance * 0.25
+            : 110.5 - (distance - 22) * 0.2;
+      } else {
+        base = Math.max(10, 62 - (distance - 42) * 1.6);
+      }
       break;
     case 'ar':
       if (distance > def.range) return 0.5;
@@ -614,7 +640,7 @@ export interface ThrowableDecision {
 
 /**
  * Evaluates whether a bot should throw a `frag_grenade`, `shockwave_grenade`,
- * `emp_grenade`, or deploy an `auto_turret` in combat.
+ * `emp_grenade`, `remote_c4`, or deploy an `auto_turret` in combat.
  */
 export function selectThrowableForCombat(
   bot: Pick<BotEntity, 'id' | 'position' | 'inventory' | 'throwCooldown'> & {
@@ -639,12 +665,13 @@ export function selectThrowableForCombat(
     target.position.x,
     target.position.z,
   );
-  if (horizDist < 8 || horizDist > 46) return null;
+  if (horizDist < 6 || horizDist > 46) return null;
 
   let fragSlot = -1;
   let shockwaveSlot = -1;
   let empSlot = -1;
   let autoTurretSlot = -1;
+  let remoteC4Slot = -1;
   for (let i = 0; i < bot.inventory.items.length; i++) {
     const it = bot.inventory.items[i];
     if (!it || it.stackCount <= 0) continue;
@@ -652,8 +679,14 @@ export function selectThrowableForCombat(
     if (it.weaponId === 'shockwave_grenade' && shockwaveSlot < 0) shockwaveSlot = i;
     if (it.weaponId === 'emp_grenade' && empSlot < 0) empSlot = i;
     if (it.weaponId === 'auto_turret' && autoTurretSlot < 0) autoTurretSlot = i;
+    if (it.weaponId === 'remote_c4' && remoteC4Slot < 0) remoteC4Slot = i;
   }
-  if (fragSlot < 0 && shockwaveSlot < 0 && empSlot < 0 && autoTurretSlot < 0) {
+
+  const canThrowFrag = fragSlot >= 0 && horizDist >= 8;
+  const canThrowShockwave = shockwaveSlot >= 0 && horizDist >= 8;
+  const canThrowEmp = empSlot >= 0 && horizDist >= 8;
+  const canThrowC4 = remoteC4Slot >= 0 && horizDist >= 6 && horizDist < 26;
+  if (!canThrowFrag && !canThrowShockwave && !canThrowEmp && autoTurretSlot < 0 && !canThrowC4) {
     return null;
   }
 
@@ -702,17 +735,30 @@ export function selectThrowableForCombat(
   const isBoxed = !hasLOS || hasNearbyBuild;
 
   if (!friendlyNearTarget) {
-    if (isClustered && (fragSlot >= 0 || shockwaveSlot >= 0 || empSlot >= 0)) {
-      const slotIndex =
-        fragSlot >= 0 ? fragSlot : shockwaveSlot >= 0 ? shockwaveSlot : empSlot;
+    if (isClustered && (canThrowFrag || canThrowShockwave || canThrowEmp || canThrowC4)) {
+      const slotIndex = canThrowFrag
+        ? fragSlot
+        : canThrowShockwave
+          ? shockwaveSlot
+          : canThrowC4
+            ? remoteC4Slot
+            : empSlot;
       const item = bot.inventory.items[slotIndex];
       if (item) return { slotIndex, item, reason: 'clustered' };
     }
 
-    if (isBoxed && (shockwaveSlot >= 0 || fragSlot >= 0 || empSlot >= 0)) {
-      // Boxed target: prefer shockwave to shatter builds/displace, or frag/emp grenade to pressure box
+    if (isBoxed && (canThrowC4 || canThrowShockwave || canThrowFrag || canThrowEmp)) {
+      // Boxed target: prefer Remote C4 when enemy builds are present <26m, else shockwave/frag/emp
       const slotIndex =
-        shockwaveSlot >= 0 ? shockwaveSlot : fragSlot >= 0 ? fragSlot : empSlot;
+        hasNearbyBuild && canThrowC4
+          ? remoteC4Slot
+          : canThrowShockwave
+            ? shockwaveSlot
+            : canThrowFrag
+              ? fragSlot
+              : canThrowC4
+                ? remoteC4Slot
+                : empSlot;
       const item = bot.inventory.items[slotIndex];
       if (item) return { slotIndex, item, reason: 'boxed' };
     }
@@ -931,7 +977,8 @@ export function findIncomingVehicleThreat(
     const dx = botPos.x - v.x;
     const dz = botPos.z - v.z;
     const dist = Math.hypot(dx, dz);
-    if (dist > 22 || dist < 0.2 || dist >= bestDist) continue;
+    const maxIncomingDist = v.kind === 'hover_tank' ? 28 : 22;
+    if (dist > maxIncomingDist || dist < 0.2 || dist >= bestDist) continue;
 
     const vxN = v.vx / spd;
     const vzN = v.vz / spd;
@@ -940,7 +987,8 @@ export function findIncomingVehicleThreat(
 
     // Signed perpendicular offset along vehicle right normal (-vzN, vxN)
     const perp = dx * -vzN + dz * vxN;
-    if (Math.abs(perp) <= 3.8) {
+    const corridorWidth = v.kind === 'hover_tank' ? 4.8 : 3.8;
+    if (Math.abs(perp) <= corridorWidth) {
       const side = perp >= 0 ? 1 : -1;
       bestDist = dist;
       closestThreat = {
@@ -1070,6 +1118,116 @@ export function findHostileTurretHazard(
   };
 }
 
+export interface HoverTankThreat {
+  vehicle: VehicleEntity;
+  distance: number;
+  evadeDirX: number;
+  evadeDirZ: number;
+}
+
+function isFriendlyVehicleDriver(
+  bot: Pick<BotEntity, 'id' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'>,
+  driverId: string,
+  squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+  gameMode?: GameModeId,
+  combatTargets?: ReadonlyArray<
+    Pick<
+      BotCombatTarget,
+      'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+    >
+  >,
+): boolean {
+  if (driverId === bot.id) return true;
+  if (squadmates && squadmates.some((m) => m.id === driverId)) return true;
+
+  const matchedTarget = combatTargets?.find((t) => t.id === driverId);
+  if (matchedTarget && isFriendlyTarget(bot, matchedTarget, squadmates, gameMode)) {
+    return true;
+  }
+
+  const botIsBlueTeam =
+    bot.teamId === 'team_blue' ||
+    (gameMode === 'team_rumble' && bot.squadId === 'team_blue');
+  const botInPlayerSquad =
+    Boolean(bot.isAlly) ||
+    Boolean(bot.isDuoPartner) ||
+    bot.squadId === 'player_squad' ||
+    botIsBlueTeam;
+  if (botInPlayerSquad && (driverId === 'player' || driverId === 'duo_partner')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Finds the nearest active hostile `hover_tank` within `maxRange` (default `48m`),
+ * returning the vehicle, distance, and a perpendicular lateral evasion vector.
+ */
+export function findHoverTankThreat(
+  bot: Pick<
+    BotEntity,
+    'id' | 'position' | 'strafeDir' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+  >,
+  vehicles: ReadonlyArray<VehicleEntity>,
+  maxRange = TANK_THREAT_RANGE,
+  squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+  gameMode?: GameModeId,
+  combatTargets?: ReadonlyArray<
+    Pick<
+      BotCombatTarget,
+      'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+    >
+  >,
+): HoverTankThreat | null {
+  if (!vehicles || vehicles.length === 0 || !Number.isFinite(maxRange) || maxRange <= 0) {
+    return null;
+  }
+
+  let closest: VehicleEntity | null = null;
+  let closestDist = Infinity;
+
+  for (const v of vehicles) {
+    if (v.kind !== 'hover_tank' || v.destroyed || v.hp <= 0 || !v.driverId) continue;
+    if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) {
+      continue;
+    }
+    if (Math.abs(bot.position.y - v.y) > 18) continue;
+    if (isFriendlyVehicleDriver(bot, v.driverId, squadmates, gameMode, combatTargets)) {
+      continue;
+    }
+
+    const d = dist3D(bot.position, v);
+    if (d > maxRange || d >= closestDist) continue;
+    closestDist = d;
+    closest = v;
+  }
+
+  if (!closest) return null;
+
+  const dx = closest.x - bot.position.x;
+  const dz = closest.z - bot.position.z;
+  const horiz = Math.hypot(dx, dz);
+  const dirSign = bot.strafeDir === -1 ? -1 : 1;
+  let evadeDirX: number;
+  let evadeDirZ: number;
+  if (horiz > 1e-4) {
+    const fwdX = dx / horiz;
+    const fwdZ = dz / horiz;
+    evadeDirX = -fwdZ * dirSign;
+    evadeDirZ = fwdX * dirSign;
+  } else {
+    evadeDirX = dirSign;
+    evadeDirZ = 0;
+  }
+
+  return {
+    vehicle: closest,
+    distance: closestDist,
+    evadeDirX,
+    evadeDirZ,
+  };
+}
+
 /**
  * Selects the optimal usable healing item (consumable, `chug_splash`, or `chug_cannon`) respecting
  * Fortnite's heal caps (mini shields cap at 50 shield, bandages cap at 75 HP)
@@ -1195,6 +1353,7 @@ export function shouldBotBuildDefense(
   roll?: number,
   gameMode: GameModeId = 'solo',
   hasTurretHazard = false,
+  hasHeavyVehicleThreat = false,
 ): boolean {
   if (gameMode === 'zero_build') {
     return false;
@@ -1229,17 +1388,32 @@ export function shouldBotBuildDefense(
     bot.state === 'combat' &&
     threatDistance < 45;
 
-  if (!recentlyDamaged && !lowHpThreat && !underAmbush && !builderEngaged && !hasTurretHazard) {
+  if (
+    !recentlyDamaged &&
+    !lowHpThreat &&
+    !underAmbush &&
+    !builderEngaged &&
+    !hasTurretHazard &&
+    !hasHeavyVehicleThreat
+  ) {
     return false;
   }
 
   if (roll !== undefined) {
-    const bonus = (bot.personality === 'builder' ? 0.15 : 0) + (hasTurretHazard ? 0.25 : 0);
+    const bonus =
+      (bot.personality === 'builder' ? 0.15 : 0) +
+      (hasTurretHazard ? 0.25 : 0) +
+      (hasHeavyVehicleThreat ? 0.35 : 0);
     return roll < clamp(profile.buildChance + bonus, 0, 1);
   }
 
   if (difficulty === 'casual') {
-    return effectiveHp < 70 * scale || bot.personality === 'builder' || hasTurretHazard;
+    return (
+      effectiveHp < 70 * scale ||
+      bot.personality === 'builder' ||
+      hasTurretHazard ||
+      hasHeavyVehicleThreat
+    );
   }
   return true;
 }
@@ -1250,8 +1424,9 @@ function tryBuildCover(
   difficulty: Difficulty,
   threatPos: Vec3Like,
   elapsed: number,
+  preferStrongMaterial = false,
 ): boolean {
-  if (!pickAvailableMaterial(bot)) return false;
+  if (!pickAvailableMaterial(bot, preferStrongMaterial)) return false;
 
   const profile = DIFFICULTY_PROFILES[difficulty];
   const cell = worldToGrid(bot.position.x, bot.position.y + 0.3, bot.position.z);
@@ -1272,7 +1447,7 @@ function tryBuildCover(
   let builtAny = false;
 
   const placeWallFace = (f: 0 | 1 | 2 | 3): boolean => {
-    const mat = pickAvailableMaterial(bot);
+    const mat = pickAvailableMaterial(bot, preferStrongMaterial);
     if (!mat) return false;
     const wall = canonicalizeWall(cell.gx, cell.gy, cell.gz, f);
     const placed = ctx.placeBuildPiece(
@@ -1297,7 +1472,7 @@ function tryBuildCover(
   };
 
   const placeRamp = (): boolean => {
-    const mat = pickAvailableMaterial(bot);
+    const mat = pickAvailableMaterial(bot, preferStrongMaterial);
     if (!mat) return false;
     const placed = ctx.placeBuildPiece(
       bot.id,
@@ -1321,6 +1496,7 @@ function tryBuildCover(
   };
 
   const wantsMultiWallBox =
+    preferStrongMaterial ||
     difficulty !== 'casual' ||
     bot.personality === 'builder' ||
     bot.hp + bot.shield < 75 * (bot.maxHp / 100);
@@ -1393,6 +1569,7 @@ function getWeaponOverallValue(item: ItemInstance): number {
     heavy_shotgun: 56,
     plasma_flamethrower: 56,
     minigun: 55,
+    ballistic_shield: 54,
     rocket_launcher: 54,
     tactical_dmr: 53,
     boom_bow: 53,
@@ -2995,6 +3172,9 @@ function getPreferredCombatRange(
   }
   if (weaponId === 'minigun') {
     return { min: 7, max: 24 };
+  }
+  if (weaponId === 'ballistic_shield') {
+    return { min: 7, max: 26 };
   }
   if (weaponId === 'boom_bow') {
     return { min: 22, max: 62 };
@@ -5236,25 +5416,36 @@ function stepSquadmateRevive(
   return true;
 }
 
-function applyTurretHazardStrafe(
+function applyLateralHazardStrafe(
   bot: BotEntity,
-  hazard: HostileTurretHazard,
+  hazardX: number,
+  hazardZ: number,
+  distance: number,
   intent: MoveIntent,
   needRotateStorm: boolean,
   hasCombatTarget: boolean,
   safeDt: number,
+  opts: {
+    strafeWeight: number;
+    awayBias: number;
+    combatBlend: number;
+    sprintNow: boolean;
+    wantsJump: boolean;
+    strafeMinSec: number;
+    strafeSpanSec: number;
+  },
 ): MoveIntent {
   if (!hasCombatTarget) {
     bot.strafeTimer -= safeDt;
     if (bot.strafeTimer <= 0) {
       bot.strafeDir = nextBotRand(bot) < 0.5 ? -1 : 1;
-      bot.strafeTimer = 0.65 + nextBotRand(bot) * 1.1;
+      bot.strafeTimer = opts.strafeMinSec + nextBotRand(bot) * opts.strafeSpanSec;
     }
   }
 
   const dirSign = bot.strafeDir === -1 ? -1 : 1;
-  const dx = hazard.turret.x - bot.position.x;
-  const dz = hazard.turret.z - bot.position.z;
+  const dx = hazardX - bot.position.x;
+  const dz = hazardZ - bot.position.z;
   const horiz = Math.hypot(dx, dz);
   const fwdX = horiz > 1e-4 ? dx / horiz : 0;
   const fwdZ = horiz > 1e-4 ? dz / horiz : 1;
@@ -5265,37 +5456,102 @@ function applyTurretHazardStrafe(
     bot.yaw = lerpAngle(bot.yaw, Math.atan2(fwdX, fwdZ), clamp(8 * safeDt, 0, 1));
   }
 
-  const awayBias = hazard.distance < 20 ? 0.35 : 0.14;
   const stormBias = needRotateStorm && intent.speed > 0.5 ? 0.45 : 0;
   const combX =
-    strafeX * 0.92 -
-    fwdX * awayBias +
-    (stormBias > 0 ? intent.dirX * stormBias : hasCombatTarget ? intent.dirX * 0.45 : 0);
+    strafeX * opts.strafeWeight -
+    fwdX * opts.awayBias +
+    (stormBias > 0
+      ? intent.dirX * stormBias
+      : hasCombatTarget
+        ? intent.dirX * opts.combatBlend
+        : 0);
   const combZ =
-    strafeZ * 0.92 -
-    fwdZ * awayBias +
-    (stormBias > 0 ? intent.dirZ * stormBias : hasCombatTarget ? intent.dirZ * 0.45 : 0);
+    strafeZ * opts.strafeWeight -
+    fwdZ * opts.awayBias +
+    (stormBias > 0
+      ? intent.dirZ * stormBias
+      : hasCombatTarget
+        ? intent.dirZ * opts.combatBlend
+        : 0);
   const len = Math.hypot(combX, combZ) || 1;
   const dirX = combX / len;
   const dirZ = combZ / len;
 
   bot.isCrouching = false;
-  const sprintNow = needRotateStorm || hazard.distance < 22 || bot.isSprinting;
-  bot.isSprinting = sprintNow;
-
-  const wantsJump =
-    intent.wantsJump ||
-    (bot.grounded &&
-      bot.jumpCooldown <= 0 &&
-      hazard.distance < 18 &&
-      nextBotRand(bot) < 0.35);
+  bot.isSprinting = opts.sprintNow;
 
   return {
     dirX,
     dirZ,
-    speed: sprintNow ? SPRINT_SPEED : Math.max(intent.speed, RUN_SPEED),
-    wantsJump,
+    speed: opts.sprintNow ? SPRINT_SPEED : Math.max(intent.speed, RUN_SPEED),
+    wantsJump: intent.wantsJump || opts.wantsJump,
   };
+}
+
+function applyTurretHazardStrafe(
+  bot: BotEntity,
+  hazard: HostileTurretHazard,
+  intent: MoveIntent,
+  needRotateStorm: boolean,
+  hasCombatTarget: boolean,
+  safeDt: number,
+): MoveIntent {
+  return applyLateralHazardStrafe(
+    bot,
+    hazard.turret.x,
+    hazard.turret.z,
+    hazard.distance,
+    intent,
+    needRotateStorm,
+    hasCombatTarget,
+    safeDt,
+    {
+      strafeWeight: 0.92,
+      awayBias: hazard.distance < 20 ? 0.35 : 0.14,
+      combatBlend: 0.45,
+      sprintNow: needRotateStorm || hazard.distance < 22 || bot.isSprinting,
+      wantsJump:
+        bot.grounded &&
+        bot.jumpCooldown <= 0 &&
+        hazard.distance < 18 &&
+        nextBotRand(bot) < 0.35,
+      strafeMinSec: 0.65,
+      strafeSpanSec: 1.1,
+    },
+  );
+}
+
+function applyHoverTankEvasiveStrafe(
+  bot: BotEntity,
+  threat: HoverTankThreat,
+  intent: MoveIntent,
+  needRotateStorm: boolean,
+  hasCombatTarget: boolean,
+  safeDt: number,
+): MoveIntent {
+  return applyLateralHazardStrafe(
+    bot,
+    threat.vehicle.x,
+    threat.vehicle.z,
+    threat.distance,
+    intent,
+    needRotateStorm,
+    hasCombatTarget,
+    safeDt,
+    {
+      strafeWeight: 0.95,
+      awayBias: threat.distance < 22 ? 0.55 : threat.distance < 34 ? 0.35 : 0.18,
+      combatBlend: 0.35,
+      sprintNow: true,
+      wantsJump:
+        bot.grounded &&
+        bot.jumpCooldown <= 0 &&
+        threat.distance < 28 &&
+        nextBotRand(bot) < 0.4,
+      strafeMinSec: 0.55,
+      strafeSpanSec: 0.9,
+    },
+  );
 }
 
 /**
@@ -5610,6 +5866,19 @@ export function updateBot(
         )
       : null;
 
+  const vehicles = !isFarLOD && ctx.getVehicles ? ctx.getVehicles() : null;
+  const hoverTankThreat =
+    vehicles && vehicles.some((v) => v.kind === 'hover_tank' && !v.destroyed && v.hp > 0 && v.driverId)
+      ? findHoverTankThreat(
+          bot,
+          vehicles,
+          TANK_THREAT_RANGE,
+          effectiveSquadmates,
+          effectiveMode,
+          ctx.getCombatTargets(),
+        )
+      : null;
+
   if (effectiveMode === 'zero_build' || bot.isAlly) {
     bot.isBuilding = false;
     bot.buildAnimTimer = 0;
@@ -5621,27 +5890,45 @@ export function updateBot(
       Math.min(
         combatMatch ? combatMatch.distance : Infinity,
         turretHazard ? turretHazard.distance : Infinity,
+        hoverTankThreat ? hoverTankThreat.distance : Infinity,
       ),
       undefined,
       effectiveMode,
       Boolean(turretHazard),
+      Boolean(hoverTankThreat),
     )
   ) {
+    const tankPos = hoverTankThreat
+      ? {
+          x: hoverTankThreat.vehicle.x,
+          y: hoverTankThreat.vehicle.y,
+          z: hoverTankThreat.vehicle.z,
+        }
+      : null;
+    const turretPos = turretHazard
+      ? {
+          x: turretHazard.turret.x,
+          y: turretHazard.turret.y,
+          z: turretHazard.turret.z,
+        }
+      : null;
     const threatPos =
-      turretHazard && (!combatMatch || turretHazard.distance <= combatMatch.distance)
-        ? {
-            x: turretHazard.turret.x,
-            y: turretHazard.turret.y,
-            z: turretHazard.turret.z,
-          }
-        : combatMatch?.target.position ??
-          bot.lastKnownEnemyPos ??
-          bot.lastHeardNoisePos ?? {
-            x: bot.position.x + Math.sin(bot.yaw) * 15,
-            y: bot.position.y,
-            z: bot.position.z + Math.cos(bot.yaw) * 15,
-          };
-    tryBuildCover(bot, ctx, difficulty, threatPos, elapsed);
+      hoverTankThreat &&
+      (!turretHazard || hoverTankThreat.distance <= turretHazard.distance) &&
+      (!combatMatch || hoverTankThreat.distance <= combatMatch.distance + 4)
+        ? tankPos!
+        : turretHazard && (!combatMatch || turretHazard.distance <= combatMatch.distance)
+          ? turretPos!
+          : combatMatch?.target.position ??
+            tankPos ??
+            turretPos ??
+            bot.lastKnownEnemyPos ??
+            bot.lastHeardNoisePos ?? {
+              x: bot.position.x + Math.sin(bot.yaw) * 15,
+              y: bot.position.y,
+              z: bot.position.z + Math.cos(bot.yaw) * 15,
+            };
+    tryBuildCover(bot, ctx, difficulty, threatPos, elapsed, Boolean(hoverTankThreat));
   }
 
   if (!isFarLOD && !bot.isAlly) {
@@ -5957,11 +6244,25 @@ export function updateBot(
     }
   }
 
-  if (!isFarLOD && ctx.getVehicles) {
+  if (hoverTankThreat && !isFarLOD) {
+    intent = applyHoverTankEvasiveStrafe(
+      bot,
+      hoverTankThreat,
+      intent,
+      needRotateStorm,
+      Boolean(combatMatch),
+      safeDt,
+    );
+    if (isPlayerCompanion && effectivePlayerPos && (bot.state === 'combat' || bot.state === 'healing')) {
+      intent = enforceAllyCombatLeash(bot, effectivePlayerPos, intent);
+    }
+  }
+
+  if (!isFarLOD && vehicles) {
     const incomingVehicle = findIncomingVehicleThreat(
       bot.position,
       bot.id,
-      ctx.getVehicles(),
+      vehicles,
     );
     if (incomingVehicle) {
       bot.isSprinting = true;
@@ -6178,6 +6479,25 @@ export class BotBrain {
     return findIncomingVehicleThreat(botPos, botId, vehicles);
   }
 
+  findHoverTankThreat(
+    bot: Pick<
+      BotEntity,
+      'id' | 'position' | 'strafeDir' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+    >,
+    vehicles: ReadonlyArray<VehicleEntity>,
+    maxRange = TANK_THREAT_RANGE,
+    squadmates?: ReadonlyArray<Pick<BotEntity, 'id'>>,
+    gameMode?: GameModeId,
+    combatTargets?: ReadonlyArray<
+      Pick<
+        BotCombatTarget,
+        'id' | 'isPlayer' | 'isAlly' | 'isDuoPartner' | 'squadId' | 'teamId'
+      >
+    >,
+  ): HoverTankThreat | null {
+    return findHoverTankThreat(bot, vehicles, maxRange, squadmates, gameMode, combatTargets);
+  }
+
   selectLaunchPadForRotation(
     bot: Pick<BotEntity, 'position' | 'launchPadCooldown' | 'isBoss'>,
     launchPads: LaunchPadEntity[],
@@ -6272,6 +6592,7 @@ export class BotBrain {
     roll?: number,
     gameMode: GameModeId = 'solo',
     hasTurretHazard = false,
+    hasHeavyVehicleThreat = false,
   ): boolean {
     return shouldBotBuildDefense(
       bot,
@@ -6281,6 +6602,7 @@ export class BotBrain {
       roll,
       gameMode,
       hasTurretHazard,
+      hasHeavyVehicleThreat,
     );
   }
 

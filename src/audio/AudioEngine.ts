@@ -398,6 +398,11 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'turret_deploy':
     case 'turret_destroy':
     case 'balloon_ascend':
+    case 'tank_cannon':
+    case 'tank_impact':
+    case 'c4_detonate':
+    case 'streak_surge':
+    case 'hot_drop_chime':
       return 3;
     case 'footstep':
     case 'footstep_wood':
@@ -458,6 +463,8 @@ export function getSoundPriority(id: SoundEventId): number {
     case 'chug_cannon_fire':
     case 'chug_cannon_splash':
     case 'fishing_catch':
+    case 'shield_block':
+    case 'c4_plant':
     default:
       return 2;
   }
@@ -496,6 +503,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'crown_glint':
     case 'low_g_jump':
     case 'water_splash_wake':
+    case 'c4_plant':
       return 75;
     case 'augment_ready':
     case 'augment_select':
@@ -534,6 +542,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
       return 110;
     case 'medallion_pickup':
     case 'trap_snap':
+    case 'shield_block':
       return 115;
     case 'ally_hired':
       return 120;
@@ -546,6 +555,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'shield_bubble_deploy':
       return 140;
     case 'flare_fire':
+    case 'streak_surge':
       return 145;
     case 'tactical_ping':
     case 'rumble_respawn':
@@ -586,6 +596,7 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'flag_captured':
     case 'forecast_scan':
     case 'train_hack_complete':
+    case 'hot_drop_chime':
       return 220;
     case 'balloon_ascend':
       return 225;
@@ -602,10 +613,16 @@ export function getMaxHearDistance(id: SoundEventId): number {
     case 'bunker_unlock':
     case 'emp_blast':
       return 240;
+    case 'c4_detonate':
+      return 245;
     case 'flare_burst':
       return 250;
     case 'shot_railgun':
       return 260;
+    case 'tank_impact':
+      return 265;
+    case 'tank_cannon':
+      return 275;
     case 'reboot_complete':
       return 280;
     case 'train_horn':
@@ -1057,7 +1074,8 @@ export class AudioEngine {
   /**
    * Maintains a continuous pitch-mapped dual-oscillator + bandpass vehicle
    * engine synthesizer loop with cyber_bike harmonic whine, speedboat deep
-   * aquatic outboard hum, and boost sub-layer.
+   * aquatic outboard hum, hover_tank heavy armored diesel-turbine growl,
+   * and boost sub-layer.
    * Cleanly ramps down and releases nodes when inactive, paused, muted, or disposed.
    */
   updateVehicleEngine(
@@ -1071,7 +1089,9 @@ export class AudioEngine {
     const cleanSpeed = Number.isFinite(speedKmh) ? clamp(speedKmh, 0, 220) : 0;
     const cleanBoosting = Boolean(isBoosting);
     const cleanKind: VehicleKind =
-      kind === 'cyber_bike' || kind === 'speedboat' ? kind : 'hover_atv';
+      kind === 'cyber_bike' || kind === 'speedboat' || kind === 'hover_tank'
+        ? kind
+        : 'hover_atv';
 
     if (!active || this.paused || this.isSfxMuted()) {
       this.teardownVehicleEngine();
@@ -1860,47 +1880,76 @@ export class AudioEngine {
     kind: VehicleKind,
   ): void {
     const now = ctx.currentTime;
-    const speedNorm = clamp(speedKmh / 145, 0, 1);
     const isBoat = kind === 'speedboat';
     const isBike = kind === 'cyber_bike';
+    const isTank = kind === 'hover_tank';
+    const speedNorm = isTank ? clamp(speedKmh / 95, 0, 1) : clamp(speedKmh / 145, 0, 1);
 
-    const boostLiftHz = isBoosting ? (isBoat ? 14 : 16) : 0;
+    const boostLiftHz = isBoosting ? (isTank ? 12 : isBoat ? 14 : 16) : 0;
     const kindLiftHz = isBike ? 6 : 0;
-    const baseFreq = isBoat
-      ? clamp(52 + speedNorm * 76 + boostLiftHz, 52, 148)
-      : clamp(78 + speedNorm * 110 + boostLiftHz + kindLiftHz, 78, 210);
+    const baseFreq = isTank
+      ? clamp(40 + speedNorm * 50 + boostLiftHz, 40, 108)
+      : isBoat
+        ? clamp(52 + speedNorm * 76 + boostLiftHz, 52, 148)
+        : clamp(78 + speedNorm * 110 + boostLiftHz + kindLiftHz, 78, 210);
     const harmonicFreq = Math.max(
       40,
-      isBoat ? baseFreq * 1.25 : isBike ? baseFreq * 3.1 : baseFreq * 1.5,
+      isTank
+        ? baseFreq * 2.25
+        : isBoat
+          ? baseFreq * 1.25
+          : isBike
+            ? baseFreq * 3.1
+            : baseFreq * 1.5,
     );
     const boostFreq = Math.max(24, baseFreq * 0.5);
     const filterFreq = Math.max(
       60,
-      isBoat ? baseFreq * 1.45 : isBike ? baseFreq * 2.8 : baseFreq * 1.95,
+      isTank
+        ? baseFreq * 1.55
+        : isBoat
+          ? baseFreq * 1.45
+          : isBike
+            ? baseFreq * 2.8
+            : baseFreq * 1.95,
     );
-    const filterQ = isBoat ? 0.95 : isBike ? 2.1 : 1.4;
+    const filterQ = isTank ? 1.65 : isBoat ? 0.95 : isBike ? 2.1 : 1.4;
 
     const humLevel = Math.max(
       0.0001,
-      isBoat ? 0.064 + speedNorm * 0.042 : 0.045 + speedNorm * 0.032,
+      isTank
+        ? 0.078 + speedNorm * 0.048
+        : isBoat
+          ? 0.064 + speedNorm * 0.042
+          : 0.045 + speedNorm * 0.032,
     );
     const whineLevel = Math.max(
       0.0001,
-      isBoat
-        ? 0.014 + speedNorm * 0.012
-        : isBike
-          ? 0.052 + speedNorm * 0.038 + (isBoosting ? 0.015 : 0)
-          : 0.022 + speedNorm * 0.018,
+      isTank
+        ? 0.032 + speedNorm * 0.028 + (isBoosting ? 0.014 : 0)
+        : isBoat
+          ? 0.014 + speedNorm * 0.012
+          : isBike
+            ? 0.052 + speedNorm * 0.038 + (isBoosting ? 0.015 : 0)
+            : 0.022 + speedNorm * 0.018,
     );
     const boostLevel = Math.max(
       0.0001,
-      isBoosting ? (isBoat ? 0.11 + speedNorm * 0.04 : 0.095 + speedNorm * 0.035) : 0.0001,
+      isBoosting
+        ? isTank
+          ? 0.13 + speedNorm * 0.045
+          : isBoat
+            ? 0.11 + speedNorm * 0.04
+            : 0.095 + speedNorm * 0.035
+        : 0.0001,
     );
     const masterLevel = Math.max(
       0.0001,
-      isBoat
-        ? 0.088 + speedNorm * 0.052 + (isBoosting ? 0.028 : 0)
-        : 0.08 + speedNorm * 0.05 + (isBoosting ? 0.025 : 0),
+      isTank
+        ? 0.098 + speedNorm * 0.056 + (isBoosting ? 0.032 : 0)
+        : isBoat
+          ? 0.088 + speedNorm * 0.052 + (isBoosting ? 0.028 : 0)
+          : 0.08 + speedNorm * 0.05 + (isBoosting ? 0.025 : 0),
     );
 
     try {

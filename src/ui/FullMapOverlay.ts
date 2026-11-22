@@ -38,6 +38,7 @@ import {
   drawSkyforgeMapOverlay,
   drawSpeedboatMapChevron,
   drawTideMapOverlay,
+  drawVanguardMapOverlay,
   formatKeyCodeLabel,
   mapNormToWorld,
   type ResolvedChapterOverlay,
@@ -68,6 +69,8 @@ import {
   getForecastTowerSvg,
   getGrindRailSvg,
   getHopCrystalSvg,
+  getHotDropSvg,
+  getHoverTankSvg,
   getLootIslandIconSvg,
   getMedallionSvg,
   getModBenchSvg,
@@ -341,6 +344,14 @@ export class FullMapOverlay {
       <div class="fdr-map-legend-row">
         <span class="fdr-legend-swatch fishinghole">${getFishingHoleSvg()}</span>
         <span>FISHING HOLE</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch hovertank">${getHoverTankSvg()}</span>
+        <span>VANGUARD TANK</span>
+      </div>
+      <div class="fdr-map-legend-row">
+        <span class="fdr-legend-swatch hotdrop">${getHotDropSvg()}</span>
+        <span>HOT DROP</span>
       </div>
     `;
 
@@ -714,11 +725,11 @@ export class FullMapOverlay {
       ctx.restore();
     }
 
-    // Driveable Vehicles
+    // Driveable Vehicles (hover_tank rendered in Wave-12 drawVanguardMapOverlay before POI labels)
     if (this.vehicles.length > 0) {
       ctx.save();
       for (const vehicle of this.vehicles) {
-        if (vehicle.destroyed) continue;
+        if (vehicle.destroyed || vehicle.kind === 'hover_tank') continue;
         const vp = toPx(vehicle.x, vehicle.z);
         const occupied = vehicle.driverId !== null;
         if (vehicle.kind === 'speedboat') {
@@ -1277,7 +1288,21 @@ export class FullMapOverlay {
       performance.now(),
     );
 
-    // 10 POI Text Labels + Boss Tags (rendered AFTER stationary markers for crisp readability)
+    // Wave-12 Vanguard Overlay (Golden Hot-Drop POI halos/markers & Vanguard Hover Tanks)
+    drawVanguardMapOverlay(
+      ctx,
+      size,
+      pxPerMeter,
+      toPx,
+      state.hotDropPoiIds,
+      this.vehicles,
+      performance.now(),
+    );
+
+    // 10 POI Text Labels + Boss / Hot-Drop Tags (rendered AFTER stationary markers for crisp readability)
+    const hotDropSet = new Set(
+      Array.isArray(state.hotDropPoiIds) ? state.hotDropPoiIds : [],
+    );
     ctx.save();
     ctx.font = '800 13px "Barlow Condensed", sans-serif';
     ctx.textAlign = 'center';
@@ -1285,18 +1310,24 @@ export class FullMapOverlay {
     for (const poi of POIS) {
       const p = toPx(poi.x, poi.z);
       const bossName = BOSS_POI_LABELS[poi.id];
+      const isHotDrop = hotDropSet.has(poi.id);
       ctx.lineWidth = 4;
       ctx.strokeStyle = 'rgba(6, 12, 26, 0.92)';
       ctx.strokeText(poi.name, p.x, p.y);
-      ctx.fillStyle = bossName ? '#fde047' : '#ffffff';
+      ctx.fillStyle = bossName || isHotDrop ? '#fde047' : '#ffffff';
       ctx.fillText(poi.name, p.x, p.y);
 
-      if (bossName) {
+      if (bossName || isHotDrop) {
         ctx.save();
         ctx.font = '800 10px "Barlow Condensed", sans-serif';
         ctx.lineWidth = 3;
         ctx.strokeStyle = 'rgba(6, 12, 26, 0.95)';
-        const tag = `★ BOSS: ${bossName}`;
+        const tag =
+          bossName && isHotDrop
+            ? `★ BOSS: ${bossName} • HOT DROP`
+            : bossName
+              ? `★ BOSS: ${bossName}`
+              : '★ HOT DROP';
         ctx.strokeText(tag, p.x, p.y + 13);
         ctx.fillStyle = '#ffd000';
         ctx.fillText(tag, p.x, p.y + 13);

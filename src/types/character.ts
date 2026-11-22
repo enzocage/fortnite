@@ -154,4 +154,6 @@ export interface CharacterRenderState {
   isJetpackThrusting?: boolean;
   hasLowGravityBuff?: boolean;
   isBurning?: boolean;
+  isShieldBlocking?: boolean;
+  killStreak?: number;
 }

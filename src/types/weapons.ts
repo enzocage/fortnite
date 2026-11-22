@@ -35,7 +35,9 @@ export type WeaponId =
   | 'shockwave_hammer'
   | 'flare_gun'
   | 'auto_turret'
-  | 'chug_cannon';
+  | 'chug_cannon'
+  | 'ballistic_shield'
+  | 'remote_c4';
 
 export type WeaponCategory =
   | 'pickaxe'
@@ -129,6 +131,9 @@ export interface WeaponDef {
   isAutoTurret?: boolean;
   isChugCannon?: boolean;
   chugRegenSec?: number;
+  isBallisticShield?: boolean;
+  shieldMaxBlockHp?: number;
+  isRemoteC4?: boolean;
   allowedRarities: Rarity[];
 }
 
@@ -184,4 +189,6 @@ export interface ProjectileState {
   flareScanRadius?: number;
   isAutoTurret?: boolean;
   isChugOrb?: boolean;
+  isC4Charge?: boolean;
+  isTankShell?: boolean;
 }

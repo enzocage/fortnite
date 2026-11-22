@@ -85,9 +85,9 @@ function assertFiniteBox(obj: THREE.Object3D): THREE.Box3 {
 }
 
 describe('WeaponModels', () => {
-  it('builds distinct stylized 3D models for all 35 WeaponIds with muzzleOffsets on ranged & throwables', () => {
+  it('builds distinct stylized 3D models for all 37 WeaponIds with muzzleOffsets on ranged & throwables', () => {
     const allIds = Object.keys(WEAPONS) as WeaponId[];
-    expect(allIds).toHaveLength(35);
+    expect(allIds).toHaveLength(37);
 
     const seenNames = new Set<string>();
 
@@ -4370,6 +4370,465 @@ describe('Wave-11 Sentry Auto-Turret, Exotic Chug Cannon, Launcher Stance & VFX 
     expect(vfx.getActiveTurretLaserCount()).toBe(0);
     expect(vfx.getActiveSlurpOrbCount()).toBe(0);
     expect(vfx.getActiveFishingSplashCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+  });
+});
+
+describe('Wave-12 Ballistic Shield, Remote C4, Kill-Streak Overdrive Aura & VFX Channels', () => {
+  it('builds bespoke Aegis Ballistic Shield (curved hex visor + sidearm + wraps) and Remote C4 (red armed LED + fob + wrapDisabled)', () => {
+    const shield = createWeaponModel('ballistic_shield');
+    expect(shield.name).toBe('weapon_ballistic_shield');
+    expect(isRangedWeapon('ballistic_shield')).toBe(true);
+    expect(isThrowableWeapon('ballistic_shield')).toBe(false);
+    expect(hasMuzzleOffset('ballistic_shield')).toBe(true);
+    expect(countMeshes(shield)).toBeGreaterThanOrEqual(18);
+    const shieldMuzzle = shield.userData.muzzleOffset as THREE.Vector3;
+    expect(shieldMuzzle).toBeInstanceOf(THREE.Vector3);
+    expect(shieldMuzzle.z).toBeGreaterThan(0.15);
+
+    const cyanHex = new THREE.Color('#22d3ee').getHex();
+    let translucentCyanVisor = 0;
+    let hexPlates = 0;
+    let wrapTargets = 0;
+    shield.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) wrapTargets++;
+      if (
+        child.geometry instanceof THREE.CylinderGeometry &&
+        child.geometry.parameters.radialSegments === 6
+      ) {
+        hexPlates++;
+      }
+      if (child.material instanceof THREE.MeshStandardMaterial) {
+        if (
+          child.material.transparent &&
+          child.material.opacity < 0.9 &&
+          child.material.emissive.getHex() === cyanHex
+        ) {
+          translucentCyanVisor++;
+        }
+      }
+    });
+    expect(translucentCyanVisor).toBeGreaterThanOrEqual(1);
+    expect(hexPlates).toBeGreaterThanOrEqual(5);
+    expect(wrapTargets).toBeGreaterThanOrEqual(4);
+
+    applyWeaponWrap(shield, 'neon_cyber');
+    const neonMat = getWeaponWrapMaterial('neon_cyber');
+    let wrappedCount = 0;
+    shield.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.wrapTarget === true) {
+        expect(child.material).toBe(neonMat);
+        wrappedCount++;
+      } else {
+        expect(child.material).not.toBe(neonMat);
+      }
+    });
+    expect(wrappedCount).toBe(wrapTargets);
+    assertFiniteBox(shield);
+    disposeObject3D(shield);
+
+    const c4 = createWeaponModel('remote_c4');
+    expect(c4.name).toBe('weapon_remote_c4');
+    expect(c4.userData.wrapDisabled).toBe(true);
+    expect(isRangedWeapon('remote_c4')).toBe(false);
+    expect(isThrowableWeapon('remote_c4')).toBe(true);
+    expect(hasMuzzleOffset('remote_c4')).toBe(true);
+    expect(countMeshes(c4)).toBeGreaterThanOrEqual(14);
+    const c4Muzzle = c4.userData.muzzleOffset as THREE.Vector3;
+    expect(c4Muzzle).toBeInstanceOf(THREE.Vector3);
+    expect(c4Muzzle.z).toBeGreaterThan(0.15);
+
+    const redHex = new THREE.Color('#ef4444').getHex();
+    let redArmedMeshes = 0;
+    c4.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (
+        child.material instanceof THREE.MeshStandardMaterial &&
+        child.material.emissive.getHex() === redHex
+      ) {
+        redArmedMeshes++;
+      }
+    });
+    expect(redArmedMeshes).toBeGreaterThanOrEqual(3);
+
+    applyWeaponWrap(c4, 'midas_gold');
+    const goldMat = getWeaponWrapMaterial('midas_gold');
+    c4.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        expect(child.material).not.toBe(goldMat);
+      }
+    });
+    assertFiniteBox(c4);
+    disposeObject3D(c4);
+
+    // Ballistic shield sidearm ejects light casings on fire; Remote C4 does not
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.5 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'ballistic_shield',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(1);
+    bus.emit('vfx:muzzle', {
+      position: { x: 0, y: 1.4, z: 0.3 },
+      direction: { x: 0, y: 0, z: 1 },
+      weaponId: 'remote_c4',
+    });
+    expect(vfx.getActiveCasingCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(3);
+    vfx.dispose();
+  });
+
+  it('animates Ballistic Shield raised forward guard stance (isShieldBlocking) and Remote C4 throwable/detonator stance cleanly', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    // 1. Unblocked Ballistic Shield ready carry
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'ballistic_shield',
+        animState: 'idle',
+        isShieldBlocking: false,
+        isAiming: false,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('ballistic_shield');
+    expect(rig.joints.rightShoulder.rotation.x).toBeGreaterThan(-0.9);
+    assertFiniteBox(rig.getGroup());
+
+    // 2. Raised forward guard stance when isShieldBlocking is true (braced even during sprint!)
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'ballistic_shield',
+        animState: 'sprint',
+        moveSpeed: 8.5,
+        isShieldBlocking: true,
+        pitch: 0,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.0);
+    expect(rig.joints.rightShoulder.rotation.y).toBeGreaterThan(0.3);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.9);
+    expect(rig.joints.leftShoulder.rotation.y).toBeLessThan(-0.4);
+    expect(rig.joints.chest.rotation.y).toBeGreaterThan(0.1);
+    const guardMuzzleLevelY = rig.getMuzzleWorldPosition(new THREE.Vector3()).y;
+    assertFiniteBox(rig.getGroup());
+
+    // Pitch tracking while shield blocking
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'ballistic_shield',
+        animState: 'idle',
+        isShieldBlocking: true,
+        pitch: 0.45,
+      }),
+      0,
+    );
+    const guardMuzzleUpY = rig.getMuzzleWorldPosition(new THREE.Vector3()).y;
+    expect(guardMuzzleUpY).toBeGreaterThan(guardMuzzleLevelY);
+
+    // Unblocked sidearm firing stance
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'ballistic_shield',
+        animState: 'idle',
+        isShieldBlocking: false,
+        isFiring: true,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.9);
+    assertFiniteBox(rig.getGroup());
+
+    // 3. Remote C4 ready carry -> wireless detonator trigger stance (isAiming) -> throw wind-up (isFiring) -> sprint
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'remote_c4',
+        animState: 'idle',
+        isAiming: false,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.getEquippedWeaponId()).toBe('remote_c4');
+    expect(rig.joints.rightShoulder.rotation.x).toBeGreaterThan(-0.9);
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'remote_c4',
+        animState: 'idle',
+        isAiming: true,
+        isFiring: false,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.95);
+    expect(rig.joints.rightShoulder.rotation.x).toBeGreaterThan(-1.45);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.85);
+    assertFiniteBox(rig.getGroup());
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'remote_c4',
+        animState: 'idle',
+        isAiming: false,
+        isFiring: true,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-1.6);
+    expect(rig.joints.leftShoulder.rotation.x).toBeLessThan(-0.9);
+    assertFiniteBox(rig.getGroup());
+
+    animator.update(
+      rig,
+      makeRenderState({
+        weaponId: 'remote_c4',
+        animState: 'sprint',
+        moveSpeed: 8.5,
+      }),
+      0,
+    );
+    expect(rig.joints.rightShoulder.rotation.x).toBeLessThan(-0.3);
+    assertFiniteBox(rig.getGroup());
+
+    rig.dispose();
+  });
+
+  it('activates, animates, toggles, and disposes Golden-Amber Kill-Streak Overdrive Aura when killStreak >= 3', () => {
+    const rig = new CharacterRig();
+    const animator = new CharacterAnimator();
+
+    expect(rig.isStreakAuraVisible()).toBe(false);
+    expect(rig.getStreakAuraGroup()).toBeNull();
+
+    // Streaks below 3 keep Overdrive Aura hidden
+    for (const streak of [0, 1, 2]) {
+      animator.update(rig, makeRenderState({ killStreak: streak }), 0.02);
+      expect(rig.isStreakAuraVisible()).toBe(false);
+    }
+
+    // Streak === 3 activates Golden-Amber Overdrive Aura under chest joint
+    animator.update(rig, makeRenderState({ killStreak: 3 }), 0.04);
+    expect(rig.isStreakAuraVisible()).toBe(true);
+    const auraGrp = rig.getStreakAuraGroup();
+    expect(auraGrp).toBeInstanceOf(THREE.Group);
+    expect(auraGrp!.name).toBe('streak_aura_group');
+    expect(auraGrp!.visible).toBe(true);
+    expect(rig.joints.chest.getObjectByName('streak_aura_group')).toBe(auraGrp);
+
+    let ringCount = 0;
+    let sparkCount = 0;
+    auraGrp!.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.geometry instanceof THREE.TorusGeometry) ringCount++;
+      if (child.geometry instanceof THREE.OctahedronGeometry) sparkCount++;
+    });
+    expect(ringCount).toBeGreaterThanOrEqual(3);
+    expect(sparkCount).toBeGreaterThanOrEqual(8);
+    assertFiniteBox(rig.getGroup());
+
+    // Advancing animation updates orbital ring rotation & spark positions smoothly
+    const firstRingRotY = auraGrp!.children[0].rotation.y;
+    const firstSparkPos = auraGrp!.children[3].position.clone();
+    animator.update(rig, makeRenderState({ killStreak: 5 }), 0.08);
+    expect(rig.isStreakAuraVisible()).toBe(true);
+    expect(auraGrp!.children[0].rotation.y).not.toBeCloseTo(firstRingRotY, 3);
+    expect(auraGrp!.children[3].position.distanceTo(firstSparkPos)).toBeGreaterThan(0.01);
+    assertFiniteBox(rig.getGroup());
+
+    // Dropping below 3 or NaN hides Overdrive Aura cleanly
+    animator.update(rig, makeRenderState({ killStreak: 2 }), 0.02);
+    expect(rig.isStreakAuraVisible()).toBe(false);
+    expect(auraGrp!.visible).toBe(false);
+
+    rig.updateFromState(makeRenderState({ killStreak: 4 }));
+    expect(rig.isStreakAuraVisible()).toBe(true);
+    rig.updateFromState(makeRenderState({ killStreak: Number.NaN }));
+    expect(rig.isStreakAuraVisible()).toBe(false);
+
+    // Clean teardown in dispose()
+    rig.dispose();
+    expect(rig.isStreakAuraVisible()).toBe(false);
+    expect(rig.getStreakAuraGroup()).toBeNull();
+    expect(rig.joints.chest.getObjectByName('streak_aura_group')).toBeUndefined();
+  });
+
+  it('spawns, updates, expires, guards NaN/range, clears, and disposes all 4 Wave-12 VFX channels', () => {
+    const scene = new THREE.Scene();
+    const bus = new EventBus();
+    const vfx = new VFXManager(scene, bus);
+
+    // 1. vfx:tank_shell
+    bus.emit('vfx:tank_shell', {
+      origin: { x: -12, y: 2.2, z: -18 },
+      target: { x: 14, y: 0.4, z: 10 },
+      radius: 5.5,
+    });
+    expect(vfx.getActiveTankShellCount()).toBe(1);
+
+    // 2. vfx:shield_ricochet
+    bus.emit('vfx:shield_ricochet', {
+      position: { x: 1.2, y: 1.35, z: 0.6 },
+      normal: { x: 0, y: 0.25, z: 1 },
+    });
+    expect(vfx.getActiveShieldRicochetCount()).toBe(1);
+
+    // 3. vfx:c4_blast
+    bus.emit('vfx:c4_blast', {
+      position: { x: 6, y: 1.0, z: -8 },
+      radius: 5.5,
+    });
+    expect(vfx.getActiveC4BlastCount()).toBe(1);
+
+    // 4. vfx:hot_drop_beam
+    bus.emit('vfx:hot_drop_beam', {
+      position: { x: -24, y: 0, z: 32 },
+    });
+    expect(vfx.getActiveHotDropBeamCount()).toBe(1);
+    expect(vfx.getActiveEffectCount()).toBe(4);
+
+    // Advance 0.15s -> all 4 active with strictly finite transforms
+    for (let i = 0; i < 3; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveTankShellCount()).toBe(1);
+    expect(vfx.getActiveShieldRicochetCount()).toBe(1);
+    expect(vfx.getActiveC4BlastCount()).toBe(1);
+    expect(vfx.getActiveHotDropBeamCount()).toBe(1);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // Advance past 0.35s -> shield_ricochet (0.34s) expires
+    for (let i = 0; i < 4; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveShieldRicochetCount()).toBe(0);
+    expect(vfx.getActiveTankShellCount()).toBe(1);
+    expect(vfx.getActiveC4BlastCount()).toBe(1);
+    expect(vfx.getActiveHotDropBeamCount()).toBe(1);
+
+    // Advance past 0.80s -> tank_shell (0.78s) expires
+    for (let i = 0; i < 9; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveTankShellCount()).toBe(0);
+    expect(vfx.getActiveC4BlastCount()).toBe(1);
+    expect(vfx.getActiveHotDropBeamCount()).toBe(1);
+
+    // Advance past 0.90s -> c4_blast (0.88s) expires
+    vfx.update(0.05);
+    vfx.update(0.05);
+    expect(vfx.getActiveC4BlastCount()).toBe(0);
+    expect(vfx.getActiveHotDropBeamCount()).toBe(1);
+
+    // Advance past 1.30s -> hot_drop_beam (1.25s) expires cleanly back to pool
+    for (let i = 0; i < 8; i++) {
+      vfx.update(0.05);
+    }
+    expect(vfx.getActiveHotDropBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Strict NaN / Infinity guards
+    bus.emit('vfx:tank_shell', {
+      origin: { x: Number.NaN, y: 0, z: 0 },
+      target: { x: 10, y: 0, z: 10 },
+      radius: 5.5,
+    });
+    bus.emit('vfx:tank_shell', {
+      origin: { x: 0, y: 1, z: 0 },
+      target: { x: 10, y: Number.POSITIVE_INFINITY, z: 10 },
+      radius: 5.5,
+    });
+    bus.emit('vfx:shield_ricochet', {
+      position: { x: Number.NaN, y: 1, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+    });
+    bus.emit('vfx:c4_blast', {
+      position: { x: 0, y: 0, z: Number.NEGATIVE_INFINITY },
+      radius: 5.5,
+    });
+    bus.emit('vfx:hot_drop_beam', {
+      position: { x: Number.NaN, y: 0, z: 0 },
+    });
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // Zero-length tank_shell & invalid radius/normal safely clamped without NaN transforms
+    bus.emit('vfx:tank_shell', {
+      origin: { x: 4, y: 2, z: 4 },
+      target: { x: 4, y: 2, z: 4 },
+      radius: -10,
+    });
+    bus.emit('vfx:shield_ricochet', {
+      position: { x: 2, y: 1, z: 2 },
+      normal: { x: 0, y: 0, z: 0 },
+    });
+    bus.emit('vfx:c4_blast', {
+      position: { x: 6, y: 1, z: 6 },
+      radius: Number.NaN,
+    });
+    expect(vfx.getActiveTankShellCount()).toBe(1);
+    expect(vfx.getActiveShieldRicochetCount()).toBe(1);
+    expect(vfx.getActiveC4BlastCount()).toBe(1);
+    vfx.update(0.05);
+    scene.traverse((obj) => {
+      expect(Number.isFinite(obj.position.x)).toBe(true);
+      expect(Number.isFinite(obj.position.y)).toBe(true);
+      expect(Number.isFinite(obj.position.z)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.x)).toBe(true);
+      expect(Number.isFinite(obj.quaternion.w)).toBe(true);
+      expect(Number.isFinite(obj.scale.x)).toBe(true);
+    });
+
+    // clear() resets all 4 Wave-12 pools immediately
+    bus.emit('vfx:hot_drop_beam', { position: { x: 0, y: 0, z: 0 } });
+    expect(vfx.getActiveEffectCount()).toBe(4);
+    vfx.clear();
+    expect(vfx.getActiveTankShellCount()).toBe(0);
+    expect(vfx.getActiveShieldRicochetCount()).toBe(0);
+    expect(vfx.getActiveC4BlastCount()).toBe(0);
+    expect(vfx.getActiveHotDropBeamCount()).toBe(0);
+    expect(vfx.getActiveEffectCount()).toBe(0);
+
+    // dispose() removes root and unsubscribes all 4 Wave-12 channels cleanly
+    vfx.dispose();
+    expect(scene.getObjectByName('vfx_root')).toBeUndefined();
+
+    bus.emit('vfx:tank_shell', {
+      origin: { x: 0, y: 1, z: 0 },
+      target: { x: 10, y: 0, z: 10 },
+      radius: 5.5,
+    });
+    bus.emit('vfx:shield_ricochet', {
+      position: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+    });
+    bus.emit('vfx:c4_blast', { position: { x: 0, y: 0, z: 0 }, radius: 5.5 });
+    bus.emit('vfx:hot_drop_beam', { position: { x: 0, y: 0, z: 0 } });
+    expect(vfx.getActiveTankShellCount()).toBe(0);
+    expect(vfx.getActiveShieldRicochetCount()).toBe(0);
+    expect(vfx.getActiveC4BlastCount()).toBe(0);
+    expect(vfx.getActiveHotDropBeamCount()).toBe(0);
     expect(vfx.getActiveEffectCount()).toBe(0);
   });
 });

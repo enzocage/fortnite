@@ -56,6 +56,7 @@ const CONTRAIL_PARTICLES_PER_LIMB = 6;
 const BURNING_EMBER_COLOR = new THREE.Color('#f97316');
 const LOW_G_MOTES_PER_BOOT = 4;
 const BURNING_EMBER_MOTE_COUNT = 6;
+const STREAK_AURA_SPARK_COUNT = 10;
 
 function normalizeWeaponMods(mods?: WeaponModId[]): WeaponModId[] {
   if (!mods || mods.length === 0) return [];
@@ -365,6 +366,21 @@ export class CharacterRig {
     mesh: THREE.Mesh;
     angle: number;
     radius: number;
+    speed: number;
+    phase: number;
+  }> = [];
+  private streakAuraVisible = false;
+  private killStreakCount = 0;
+  private streakAuraTime = 0;
+  private streakAuraGroup: THREE.Group | null = null;
+  private readonly streakAuraRings: THREE.Mesh[] = [];
+  private readonly streakAuraRingMats: THREE.MeshBasicMaterial[] = [];
+  private streakAuraSparkMat: THREE.MeshBasicMaterial | null = null;
+  private readonly streakAuraSparks: Array<{
+    mesh: THREE.Mesh;
+    angle: number;
+    radius: number;
+    yOffset: number;
     speed: number;
     phase: number;
   }> = [];
@@ -1394,6 +1410,13 @@ export class CharacterRig {
       this.setBurningState(
         burning,
         burning ? this.burningTime + 1 / 60 : this.burningTime,
+      );
+    }
+    if (state.killStreak !== undefined) {
+      const safeStreak = Number.isFinite(state.killStreak) ? state.killStreak : 0;
+      this.setStreakAura(
+        safeStreak,
+        safeStreak >= 3 ? this.streakAuraTime + 1 / 60 : this.streakAuraTime,
       );
     }
   }
@@ -2799,6 +2822,190 @@ export class CharacterRig {
     return this.burningEmberGroup;
   }
 
+  private buildStreakAuraGroup(): void {
+    const grp = new THREE.Group();
+    grp.name = 'streak_aura_group';
+    grp.position.set(0, 0.08, 0);
+    grp.visible = false;
+    grp.scale.setScalar(0.001);
+
+    this.streakAuraRings.length = 0;
+    this.streakAuraRingMats.length = 0;
+    this.streakAuraSparks.length = 0;
+
+    const ringSpecs: Array<{
+      radius: number;
+      tube: number;
+      arc: number;
+      color: number;
+      opacity: number;
+      posY: number;
+      rx: number;
+      ry: number;
+      rz: number;
+    }> = [
+      {
+        radius: 0.36,
+        tube: 0.015,
+        arc: Math.PI * 1.55,
+        color: 0xfbbf24,
+        opacity: 0.88,
+        posY: 0.02,
+        rx: 0.48,
+        ry: 0,
+        rz: 0.36,
+      },
+      {
+        radius: 0.41,
+        tube: 0.013,
+        arc: Math.PI * 1.45,
+        color: 0xf59e0b,
+        opacity: 0.84,
+        posY: 0.04,
+        rx: -0.46,
+        ry: 0,
+        rz: -0.34,
+      },
+      {
+        radius: 0.31,
+        tube: 0.012,
+        arc: Math.PI * 1.35,
+        color: 0xfef08a,
+        opacity: 0.86,
+        posY: 0.16,
+        rx: Math.PI / 2 - 0.16,
+        ry: 0,
+        rz: 0,
+      },
+    ];
+
+    for (let i = 0; i < ringSpecs.length; i++) {
+      const spec = ringSpecs[i];
+      const mat = new THREE.MeshBasicMaterial({
+        color: spec.color,
+        transparent: true,
+        opacity: spec.opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(
+        new THREE.TorusGeometry(spec.radius, spec.tube, 8, 28, spec.arc),
+        mat,
+      );
+      mesh.position.set(0, spec.posY, 0);
+      mesh.rotation.set(spec.rx, spec.ry, spec.rz);
+      mesh.castShadow = false;
+      grp.add(mesh);
+      this.streakAuraRings.push(mesh);
+      this.streakAuraRingMats.push(mat);
+    }
+
+    const sparkMat = new THREE.MeshBasicMaterial({
+      color: 0xfde047,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.streakAuraSparkMat = sparkMat;
+
+    for (let i = 0; i < STREAK_AURA_SPARK_COUNT; i++) {
+      const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.028, 0), sparkMat);
+      mesh.castShadow = false;
+      grp.add(mesh);
+      this.streakAuraSparks.push({
+        mesh,
+        angle: (i / STREAK_AURA_SPARK_COUNT) * Math.PI * 2,
+        radius: 0.32 + (i % 3) * 0.055,
+        yOffset: -0.06 + (i % 4) * 0.09,
+        speed: 2.3 + (i % 3) * 0.55,
+        phase: i / STREAK_AURA_SPARK_COUNT,
+      });
+    }
+
+    this.joints.chest.add(grp);
+    this.streakAuraGroup = grp;
+  }
+
+  public setStreakAura(killStreak: number, elapsed?: number): void {
+    if (this.disposed) return;
+
+    const safeStreak = Number.isFinite(killStreak) ? Math.max(0, Math.floor(killStreak)) : 0;
+    this.killStreakCount = safeStreak;
+
+    if (safeStreak < 3) {
+      this.streakAuraVisible = false;
+      if (this.streakAuraGroup) {
+        this.streakAuraGroup.visible = false;
+        this.streakAuraGroup.scale.setScalar(0.001);
+      }
+      return;
+    }
+
+    if (!this.streakAuraGroup) {
+      this.buildStreakAuraGroup();
+    }
+
+    this.streakAuraVisible = true;
+    if (elapsed !== undefined && Number.isFinite(elapsed)) {
+      this.streakAuraTime = elapsed;
+    }
+    const t = this.streakAuraTime;
+    const tierScale = 1 + Math.min(safeStreak - 3, 5) * 0.035;
+    const pulse = 1 + 0.075 * Math.sin(t * 7.5);
+
+    const grp = this.streakAuraGroup!;
+    grp.visible = true;
+    grp.scale.setScalar(tierScale);
+
+    if (this.streakAuraRings[0]) {
+      this.streakAuraRings[0].rotation.y = t * 3.1;
+      this.streakAuraRings[0].scale.setScalar(pulse);
+    }
+    if (this.streakAuraRings[1]) {
+      this.streakAuraRings[1].rotation.y = -t * 2.6;
+      this.streakAuraRings[1].scale.setScalar(1 + 0.075 * Math.cos(t * 7.0));
+    }
+    if (this.streakAuraRings[2]) {
+      this.streakAuraRings[2].rotation.z = t * 3.8;
+      this.streakAuraRings[2].position.y = 0.16 + Math.sin(t * 5.5) * 0.02;
+      this.streakAuraRings[2].scale.setScalar(1 + 0.06 * Math.sin(t * 8.4));
+    }
+    for (let i = 0; i < this.streakAuraRingMats.length; i++) {
+      this.streakAuraRingMats[i].opacity = 0.72 + 0.24 * Math.sin(t * 8.0 + i * 1.4);
+    }
+
+    for (let i = 0; i < this.streakAuraSparks.length; i++) {
+      const sp = this.streakAuraSparks[i];
+      const ang = sp.angle + t * sp.speed;
+      const bob = Math.sin(t * 4.8 + sp.phase * Math.PI * 2) * 0.085;
+      sp.mesh.position.set(
+        Math.cos(ang) * sp.radius,
+        sp.yOffset + bob,
+        Math.sin(ang) * sp.radius,
+      );
+      sp.mesh.rotation.set(t * 5.0 + i, t * 6.2, 0);
+      sp.mesh.scale.setScalar(0.85 + 0.35 * Math.sin(t * 9.0 + i * 0.9));
+    }
+
+    if (this.streakAuraSparkMat) {
+      this.streakAuraSparkMat.opacity = 0.78 + 0.2 * Math.sin(t * 10.5);
+    }
+  }
+
+  public isStreakAuraVisible(): boolean {
+    return this.streakAuraVisible && Boolean(this.streakAuraGroup?.visible);
+  }
+
+  public getStreakAuraGroup(): THREE.Group | null {
+    return this.streakAuraGroup;
+  }
+
+  public getKillStreak(): number {
+    return this.killStreakCount;
+  }
+
   public isBossAuraEnabled(): boolean {
     return this.bossAuraEnabled;
   }
@@ -2991,6 +3198,17 @@ export class CharacterRig {
       this.burningEmberMat = null;
       this.burningEmberMotes.length = 0;
       this.burningActive = false;
+    }
+    if (this.streakAuraGroup) {
+      disposeObject3D(this.streakAuraGroup);
+      this.streakAuraGroup.parent?.remove(this.streakAuraGroup);
+      this.streakAuraGroup = null;
+      this.streakAuraRings.length = 0;
+      this.streakAuraRingMats.length = 0;
+      this.streakAuraSparkMat = null;
+      this.streakAuraSparks.length = 0;
+      this.streakAuraVisible = false;
+      this.killStreakCount = 0;
     }
     this.skinEmissiveTargets.length = 0;
 

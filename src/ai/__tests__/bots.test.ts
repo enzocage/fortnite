@@ -47,11 +47,13 @@ import {
   BotBrain,
   BotManager,
   DIFFICULTY_PROFILES,
+  TANK_THREAT_RANGE,
   VOLCANO_LAVA_CENTER_X,
   VOLCANO_LAVA_CENTER_Z,
   computeAimPitch,
   computeBotSpread,
   findHostileTurretHazard,
+  findHoverTankThreat,
   findIncomingVehicleThreat,
   isFriendlyTurret,
   isInVolcanoLavaHazard,
@@ -5374,5 +5376,357 @@ describe('Wave 11 Apex Overlord: Chug Cannon Heal Utility, Auto-Turret Scoring &
     expect(calmBot.isBuilding).toBe(false);
     expect(Math.abs(calmBot.position.x)).toBeLessThan(0.01);
     expect(calmBot.position.z).toBeGreaterThan(1.0);
+  });
+});
+
+describe('Wave 12 Vanguard Rising: Ballistic Shield & Remote C4 Scoring, Hot-Drop POI Bias & Hover Tank Threat', () => {
+  it('scores ballistic_shield (<42m firearm) and remote_c4 (<26m anti-build explosive) cleanly in selectBestWeaponForRange and combat', () => {
+    const brain = new BotBrain();
+    const fullAmmo = { light: 90, medium: 90, shells: 16, heavy: 10, rockets: 0 };
+
+    // 1. ballistic_shield dominates close/mid (<42m) over pistol/smg/combat_smg/ar, yields >= 42m
+    const shieldLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('pistol', 'epic', 15),
+      makeItem('combat_smg', 'epic', 30),
+      makeItem('ar', 'epic', 30),
+      makeItem('ballistic_shield', 'epic', 15),
+    ];
+    expect(selectBestWeaponForRange(shieldLoadout, 10, fullAmmo)?.item.weaponId).toBe(
+      'ballistic_shield',
+    );
+    expect(brain.selectBestWeaponForRange(shieldLoadout, 25, fullAmmo)?.item.weaponId).toBe(
+      'ballistic_shield',
+    );
+    expect(selectBestWeaponForRange(shieldLoadout, 38, fullAmmo)?.item.weaponId).toBe(
+      'ballistic_shield',
+    );
+    expect(selectBestWeaponForRange(shieldLoadout, 42, fullAmmo)?.item.weaponId).toBe('ar');
+    expect(selectBestWeaponForRange(shieldLoadout, 65, fullAmmo)?.item.weaponId).toBe('ar');
+
+    // Empty ballistic_shield (magAmmo=0, light=0) is skipped cleanly
+    const noLight = { ...fullAmmo, light: 0 };
+    const emptyShieldLoadout: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('ballistic_shield', 'mythic', 0),
+    ];
+    expect(selectBestWeaponForRange(emptyShieldLoadout, 18, noLight)?.item.weaponId).toBe('ar');
+
+    // 2. remote_c4 scores as a tactical anti-build explosive at 6..<26m, excludes >=26m, <6m, and stackCount=0
+    const c4Only: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('remote_c4', 'epic', 0, 3),
+    ];
+    expect(selectBestWeaponForRange(c4Only, 1.8, fullAmmo)?.item.weaponId).toBe('pickaxe');
+    expect(selectBestWeaponForRange(c4Only, 4.5, fullAmmo)).toBeNull();
+    expect(selectBestWeaponForRange(c4Only, 10, fullAmmo)?.item.weaponId).toBe('remote_c4');
+    expect(brain.selectBestWeaponForRange(c4Only, 20, fullAmmo)?.item.weaponId).toBe(
+      'remote_c4',
+    );
+    expect(selectBestWeaponForRange(c4Only, 25, fullAmmo)?.item.weaponId).toBe('remote_c4');
+    expect(selectBestWeaponForRange(c4Only, 26, fullAmmo)).toBeNull();
+    expect(selectBestWeaponForRange(c4Only, 34, fullAmmo)).toBeNull();
+
+    const emptyC4: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('remote_c4', 'epic', 0, 0),
+    ];
+    expect(selectBestWeaponForRange(emptyC4, 15, fullAmmo)).toBeNull();
+
+    // Outscores frag_grenade at <26m, beats auto_turret near builds, and yields to primary firearms
+    const c4VsThrowables: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('frag_grenade', 'rare', 0, 2),
+      makeItem('auto_turret', 'epic', 0, 1),
+      makeItem('remote_c4', 'epic', 0, 3),
+    ];
+    expect(selectBestWeaponForRange(c4VsThrowables, 16, fullAmmo, false)?.item.weaponId).toBe(
+      'auto_turret',
+    );
+    expect(selectBestWeaponForRange(c4VsThrowables, 16, fullAmmo, true)?.item.weaponId).toBe(
+      'remote_c4',
+    );
+    expect(selectBestWeaponForRange(c4VsThrowables, 8, fullAmmo, false)?.item.weaponId).toBe(
+      'remote_c4',
+    );
+
+    const c4WithAr: (ItemInstance | null)[] = [
+      makeItem('pickaxe', 'common', 0),
+      makeItem('ar', 'rare', 30),
+      makeItem('remote_c4', 'epic', 0, 3),
+    ];
+    expect(selectBestWeaponForRange(c4WithAr, 18, fullAmmo, true)?.item.weaponId).toBe('ar');
+
+    // 3. Live combat integration: boxed target with nearby build <26m triggers remote_c4 throw, then switches to ballistic_shield
+    const nearbyWall: BuildPiece = {
+      id: 'wall_w12',
+      key: '0_3_4_N',
+      type: 'wall',
+      material: 'brick',
+      gx: 0,
+      gy: 3,
+      gz: 4,
+      dir: 'N',
+      rotation: 0,
+      hp: 300,
+      maxHp: 300,
+      targetMaxHp: 300,
+      buildProgress: 1,
+      ownerId: 'player',
+      editMask: 0,
+      editVariant: 'full',
+      createdAt: 1,
+    };
+    const boxedEnemy: BotCombatTarget = {
+      id: 'player',
+      name: 'Player',
+      position: { x: 0, y: 10, z: 16 },
+      eyePos: { x: 0, y: 11.55, z: 16 },
+      hp: 100,
+      shield: 50,
+      alive: true,
+      isPlayer: true,
+    };
+    const combatCtx = makeMockContext({
+      getCombatTargets: () => [boxedEnemy],
+      getBuildPieces: () => [nearbyWall],
+    });
+    const mgr = new BotManager(combatCtx, 'sweaty', 1201);
+    mgr.spawnBots(1, 20);
+    const bot = mgr.getBots()[0];
+    bot.state = 'combat';
+    bot.position = { x: 0, y: 10, z: 0 };
+    bot.yaw = 0;
+    bot.grounded = true;
+    bot.targetEnemyId = 'player';
+    bot.reactionTimer = 0;
+    bot.fireCooldown = 0;
+    bot.throwCooldown = 0;
+    bot.inventory.items[1] = makeItem('ballistic_shield', 'epic', 15);
+    bot.inventory.items[2] = makeItem('remote_c4', 'epic', 0, 2);
+    bot.inventory.items[3] = makeItem('ar', 'epic', 30);
+    bot.inventory.ammo.light = 90;
+    bot.inventory.ammo.medium = 90;
+
+    expect(
+      selectThrowableForCombat(bot, boxedEnemy, [boxedEnemy], true, [nearbyWall])?.item
+        .weaponId,
+    ).toBe('remote_c4');
+
+    mgr.update(0.05, 10, { x: 0, y: 175, z: 0 }, boxedEnemy.position);
+    expect(combatCtx.firedCalls).toHaveLength(1);
+    expect(combatCtx.firedCalls[0].weaponId).toBe('remote_c4');
+    expect(bot.inventory.items[2]?.stackCount).toBe(1);
+
+    // Subsequent tick with throwCooldown > 0 fires ballistic_shield and reports isShieldBlocking
+    bot.fireCooldown = 0;
+    mgr.update(0.05, 10.1, { x: 0, y: 175, z: 0 }, boxedEnemy.position);
+    expect(combatCtx.firedCalls.some((c) => c.weaponId === 'ballistic_shield')).toBe(true);
+    const render = mgr.getRenderStates()[0];
+    expect(render.weaponId).toBe('ballistic_shield');
+    expect(render.isShieldBlocking).toBe(true);
+
+    mgr.dispose();
+  });
+
+  it('mildly biases bus drop initial POI selection toward ctx.hotDropPoiIds while keeping the rest of the map populated', () => {
+    const hotDropIds = ['metro_towers', 'crater_depot'];
+    const hotSet = new Set(hotDropIds);
+
+    let baselineHotCount = 0;
+    let biasedHotCount = 0;
+    let totalRegular = 0;
+
+    for (const seed of [101, 202, 303, 404, 505]) {
+      const baseCtx = makeMockContext();
+      const baseMgr = new BotManager(baseCtx, 'standard', seed, 'solo');
+      baseMgr.spawnBots(25, 20, 'solo');
+      const baseRegular = baseMgr.getBots().filter((b) => !b.isBoss);
+      baselineHotCount += baseRegular.filter((b) => hotSet.has(b.targetPoiId ?? '')).length;
+      baseMgr.dispose();
+
+      const hotCtx = makeMockContext({ hotDropPoiIds: hotDropIds });
+      const hotMgr = new BotManager(hotCtx, 'standard', seed, 'solo');
+      hotMgr.spawnBots(25, 20, 'solo');
+      const hotRegular = hotMgr.getBots().filter((b) => !b.isBoss);
+      totalRegular += hotRegular.length;
+      const matchHot = hotRegular.filter((b) => hotSet.has(b.targetPoiId ?? '')).length;
+      biasedHotCount += matchHot;
+      // Mild bias: non-hot-drop POIs still receive a healthy share of bots
+      expect(hotRegular.length - matchHot).toBeGreaterThan(0);
+      hotMgr.dispose();
+    }
+
+    // 2/10 baseline ~20% vs ~43% with Hot-Drop bias -> clearly higher & still mild (<75%)
+    expect(biasedHotCount).toBeGreaterThan(baselineHotCount);
+    expect(biasedHotCount / totalRegular).toBeGreaterThanOrEqual(0.32);
+    expect(biasedHotCount / totalRegular).toBeLessThan(0.75);
+
+    // Duos partners still share the exact same targetPoiId even with hotDropPoiIds active
+    const duosCtx = makeMockContext({
+      gameMode: 'duos',
+      hotDropPoiIds: hotDropIds,
+    });
+    const duosMgr = new BotManager(duosCtx, 'standard', 777, 'duos');
+    duosMgr.spawnBots(10, 20, 'duos');
+    const bySquad = new Map<string, BotEntity[]>();
+    for (const b of duosMgr.getBots().filter((bot) => !bot.isDuoPartner)) {
+      const list = bySquad.get(b.squadId!) ?? [];
+      list.push(b);
+      bySquad.set(b.squadId!, list);
+    }
+    for (const members of bySquad.values()) {
+      expect(members).toHaveLength(2);
+      expect(members[0].targetPoiId).toBe(members[1].targetPoiId);
+    }
+    duosMgr.dispose();
+  });
+
+  it('reacts cleanly to nearby hover_tank threats with extra build cover weight, reinforced material priority, and evasive strafing', () => {
+    const brain = new BotBrain();
+    const makeTank = (overrides: Partial<VehicleEntity> = {}): VehicleEntity => ({
+      id: 'tank_1',
+      kind: 'hover_tank',
+      x: 0,
+      y: 10,
+      z: 26,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 900,
+      maxHp: 900,
+      boostCharge: 100,
+      isBoosting: false,
+      driverId: 'player',
+      destroyed: false,
+      ...overrides,
+    });
+
+    const bot = makeBotEntity({
+      id: 'bot_tank_evader',
+      state: 'rotating',
+      personality: 'looter',
+      hp: 100,
+      shield: 100,
+      lastDamageTime: -500,
+      position: { x: 0, y: 10, z: 0 },
+      strafeDir: 1,
+      grounded: true,
+    });
+    bot.inventory.materials = { wood: 80, brick: 40, metal: 60 };
+
+    // 1. findHoverTankThreat filters kind === 'hover_tank', driverId, alive/hp, range, and friendly immunity
+    expect(findHoverTankThreat(bot, [makeTank({ z: TANK_THREAT_RANGE })])?.distance).toBe(
+      TANK_THREAT_RANGE,
+    );
+    expect(
+      brain.findHoverTankThreat(bot, [makeTank({ z: TANK_THREAT_RANGE + 1 })]),
+    ).toBeNull();
+    expect(findHoverTankThreat(bot, [makeTank({ driverId: null })])).toBeNull();
+    expect(findHoverTankThreat(bot, [makeTank({ destroyed: true })])).toBeNull();
+    expect(findHoverTankThreat(bot, [makeTank({ hp: 0 })])).toBeNull();
+    expect(findHoverTankThreat(bot, [makeTank({ kind: 'hover_atv' })])).toBeNull();
+
+    // Friendly squadmate / team ally driving a hover_tank is NOT treated as hostile threat
+    const blueBot = makeBotEntity({
+      id: 'bot_blue_tank',
+      teamId: 'team_blue',
+      position: { x: 0, y: 10, z: 0 },
+    });
+    expect(
+      findHoverTankThreat(
+        blueBot,
+        [makeTank({ driverId: 'player' })],
+        TANK_THREAT_RANGE,
+        undefined,
+        'team_rumble',
+      ),
+    ).toBeNull();
+    const redDriver: BotCombatTarget = {
+      id: 'bot_red_1',
+      name: 'Red',
+      position: { x: 0, y: 10, z: 26 },
+      eyePos: { x: 0, y: 11.55, z: 26 },
+      hp: 100,
+      shield: 0,
+      alive: true,
+      teamId: 'team_red',
+    };
+    expect(
+      findHoverTankThreat(
+        blueBot,
+        [makeTank({ driverId: 'bot_red_1' })],
+        TANK_THREAT_RANGE,
+        undefined,
+        'team_rumble',
+        [redDriver],
+      ),
+    ).not.toBeNull();
+
+    // 2. shouldBotBuildDefense gives extra build cover weight (+0.35) against hover_tank threats
+    // Casual profile buildChance is 0.2 -> roll 0.48 fails normally, succeeds with hasHeavyVehicleThreat=true (0.55)
+    expect(shouldBotBuildDefense(bot, 'casual', 10, 26, 0.48, 'solo', false, false)).toBe(
+      false,
+    );
+    expect(
+      brain.shouldBotBuildDefense(bot, 'casual', 10, 26, 0.48, 'solo', false, true),
+    ).toBe(true);
+    expect(shouldBotBuildDefense(bot, 'casual', 10, 26, undefined, 'solo', false, true)).toBe(
+      true,
+    );
+    expect(shouldBotBuildDefense(bot, 'casual', 10, 26, 0.48, 'zero_build', false, true)).toBe(
+      false,
+    );
+
+    // 3. Live updateBot builds reinforced metal cover facing the hover_tank and sprints into evasive lateral strafe
+    const hostileTank = makeTank({ x: 0, y: 10, z: 26 });
+    const tankCtx = makeMockContext({
+      getVehicles: () => [hostileTank],
+    });
+    for (let i = 0; i < 10; i++) {
+      updateBot(bot, tankCtx, 'casual', { x: 0, y: 175, z: 0 }, 10 + i * 0.05, 0.05, false);
+    }
+    expect(tankCtx.placedBuilds.some((b) => b.type === 'wall' && b.rotation === 2)).toBe(true);
+    expect(tankCtx.placedBuilds.some((b) => b.material === 'metal')).toBe(true);
+    expect(bot.isSprinting).toBe(true);
+    expect(Math.abs(bot.position.x)).toBeGreaterThan(2.0);
+
+    // 4. In Zero Build, skips building against hover_tank while still evasively sprinting laterally
+    const zbBot = makeBotEntity({
+      id: 'bot_zb_tank',
+      state: 'looting',
+      position: { x: 0, y: 10, z: 0 },
+      strafeDir: -1,
+      grounded: true,
+    });
+    const zbCtx = makeMockContext({
+      gameMode: 'zero_build',
+      getVehicles: () => [hostileTank],
+    });
+    for (let i = 0; i < 10; i++) {
+      updateBot(
+        zbBot,
+        zbCtx,
+        'standard',
+        { x: 0, y: 175, z: 0 },
+        10 + i * 0.05,
+        0.05,
+        false,
+        'zero_build',
+      );
+    }
+    expect(zbCtx.placedBuilds).toHaveLength(0);
+    expect(zbBot.isSprinting).toBe(true);
+    expect(Math.abs(zbBot.position.x)).toBeGreaterThan(2.0);
+
+    // 5. Fast-charging hover_tank also triggers urgent perpendicular collision dodge
+    const chargingTank = makeTank({ x: 0, y: 10, z: 0, vx: 0, vz: 16 });
+    const incoming = findIncomingVehicleThreat({ x: 4.2, y: 10, z: 18 }, 'bot_1', [chargingTank]);
+    expect(incoming).not.toBeNull();
+    expect(incoming!.evadeDirX).toBeGreaterThan(0.5);
   });
 });

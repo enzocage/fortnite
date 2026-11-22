@@ -108,7 +108,7 @@ export interface LootLlamaEntity {
   opened: boolean;
 }
 
-export type VehicleKind = 'hover_atv' | 'cyber_bike' | 'speedboat';
+export type VehicleKind = 'hover_atv' | 'cyber_bike' | 'speedboat' | 'hover_tank';
 
 export interface VehicleEntity {
   id: string;
@@ -464,6 +464,17 @@ export interface TurretEntity {
   maxHp: number;
   remainingSec: number;
   fireCooldown: number;
+  alive: boolean;
+}
+
+export interface PlacedC4Entity {
+  id: string;
+  ownerId: string;
+  squadId?: string;
+  teamId?: TeamId;
+  x: number;
+  y: number;
+  z: number;
   alive: boolean;
 }
 

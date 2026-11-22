@@ -43,7 +43,7 @@ const WEAKPOINT_SEMITONES = [0, 2, 4, 7, 9, 12, 14, 16] as const;
 const WEAKPOINT_COMBO_WINDOW_SEC = 1.8;
 
 /**
- * 100% procedural Web Audio API sound synthesizer for all 144 Fortnite-style SFX
+ * 100% procedural Web Audio API sound synthesizer for all 151 Fortnite-style SFX
  * and spatial chest hum loops.
  */
 export class SoundSynthesizer {
@@ -387,6 +387,20 @@ export class SoundSynthesizer {
         return this.playFishingCatch(t, targetNode, vol, pitch);
       case 'balloon_ascend':
         return this.playBalloonAscend(t, targetNode, vol, pitch);
+      case 'tank_cannon':
+        return this.playTankCannon(t, targetNode, vol, pitch);
+      case 'tank_impact':
+        return this.playTankImpact(t, targetNode, vol, pitch);
+      case 'shield_block':
+        return this.playShieldBlock(t, targetNode, vol, pitch);
+      case 'c4_plant':
+        return this.playC4Plant(t, targetNode, vol, pitch);
+      case 'c4_detonate':
+        return this.playC4Detonate(t, targetNode, vol, pitch);
+      case 'streak_surge':
+        return this.playStreakSurge(t, targetNode, vol, pitch);
+      case 'hot_drop_chime':
+        return this.playHotDropChime(t, targetNode, vol, pitch);
       default: {
         const exhaustive: never = id;
         return exhaustive;
@@ -8352,6 +8366,529 @@ export class SoundSynthesizer {
       wet: 0.34,
     });
     return 0.68;
+  }
+
+  // --- Wave 12 Bespoke SFX ---
+
+  private playTankCannon(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Deep seismic 120mm cannon sub-kick
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 112 * pitch,
+      freqEnd: 24 * pitch,
+      duration: 0.48,
+      gain: 0.72 * vol,
+      wet: 0.28,
+    });
+    // Heavy armored barrel low-mid blast punch
+    this.tone(target, t, {
+      type: 'sawtooth',
+      freqStart: 195 * pitch,
+      freqEnd: 42 * pitch,
+      duration: 0.34,
+      gain: 0.42 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1200 * pitch,
+      filterFreqEnd: 160,
+      wet: 0.26,
+    });
+    // Metallic turret breech recoil slam
+    this.tone(target, t + 0.015, {
+      type: 'triangle',
+      freqStart: 540 * pitch,
+      freqEnd: 165 * pitch,
+      duration: 0.16,
+      gain: 0.28 * vol,
+      wet: 0.2,
+    });
+    // High-velocity armor-piercing shell launch whine
+    this.tone(target, t + 0.03, {
+      type: 'sine',
+      freqStart: 1360 * pitch,
+      freqEnd: 420 * pitch,
+      duration: 0.28,
+      attack: 0.012,
+      gain: 0.16 * vol,
+      wet: 0.3,
+    });
+    // Automated breech shell-casing eject latch
+    this.tone(target, t + 0.14, {
+      type: 'square',
+      freqStart: 780 * pitch,
+      freqEnd: 340 * pitch,
+      duration: 0.055,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1900 * pitch,
+      filterQ: 2.5,
+    });
+    // Muzzle overpressure supersonic crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.16,
+      gain: 0.56 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2200 * pitch,
+      filterFreqEnd: 460,
+      filterQ: 1.2,
+      distort: true,
+      wet: 0.26,
+    });
+    // Long rolling tank cannon thunder tail
+    this.noise(target, t + 0.01, {
+      buffer: 'pink',
+      duration: 0.68,
+      attack: 0.008,
+      gain: 0.62 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1800 * pitch,
+      filterFreqEnd: 140,
+      distort: true,
+      wet: 0.38,
+    });
+    return 0.74;
+  }
+
+  private playTankImpact(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Seismic HE crater sub-shockwave
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 98 * pitch,
+      freqEnd: 20 * pitch,
+      duration: 0.62,
+      gain: 0.74 * vol,
+      wet: 0.32,
+    });
+    // Concussive blast pressure chest punch
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 260 * pitch,
+      freqEnd: 38 * pitch,
+      duration: 0.36,
+      gain: 0.44 * vol,
+      wet: 0.26,
+    });
+    // Heavy armor & reinforced concrete crunch
+    this.tone(target, t + 0.01, {
+      type: 'sawtooth',
+      freqStart: 340 * pitch,
+      freqEnd: 58 * pitch,
+      duration: 0.28,
+      gain: 0.28 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1600 * pitch,
+      filterFreqEnd: 190,
+      wet: 0.24,
+    });
+    // Flying metallic shrapnel ring
+    this.tone(target, t + 0.04, {
+      type: 'sine',
+      freqStart: 1580 * pitch,
+      freqEnd: 520 * pitch,
+      duration: 0.24,
+      gain: 0.16 * vol,
+      wet: 0.3,
+    });
+    // Sharp high-explosive brisance crack
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.14,
+      gain: 0.54 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2800 * pitch,
+      filterFreqEnd: 720,
+      filterQ: 1.4,
+      distort: true,
+      wet: 0.26,
+    });
+    // Rolling 120mm HE fireball & shockwave rumble
+    this.noise(target, t + 0.015, {
+      buffer: 'pink',
+      duration: 0.82,
+      attack: 0.006,
+      gain: 0.66 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2100 * pitch,
+      filterFreqEnd: 120,
+      distort: true,
+      wet: 0.4,
+    });
+    // Secondary gravel & structural debris scatter
+    this.noise(target, t + 0.14, {
+      buffer: 'white',
+      duration: 0.38,
+      attack: 0.02,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1400 * pitch,
+      filterFreqEnd: 520,
+      filterQ: 1.6,
+      wet: 0.28,
+    });
+    return 0.86;
+  }
+
+  private playShieldBlock(t: number, target: AudioNode, vol: number, pitch: number): number {
+    const jitter = this.pitchJitter(0.05) * pitch;
+    // Heavy composite ballistic plate blunt thud
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 195 * jitter,
+      freqEnd: 62 * jitter,
+      duration: 0.11,
+      gain: 0.46 * vol,
+      wet: 0.16,
+    });
+    // Reinforced steel-composite plate resonance
+    this.tone(target, t, {
+      type: 'triangle',
+      freqStart: 420 * jitter,
+      freqEnd: 185 * jitter,
+      duration: 0.12,
+      gain: 0.28 * vol,
+      wet: 0.18,
+    });
+    // Crisp oblique bullet ricochet whine
+    this.tone(target, t + 0.006, {
+      type: 'sine',
+      freqStart: 1920 * jitter,
+      freqEnd: 3180 * jitter,
+      duration: 0.11,
+      gain: 0.22 * vol,
+      wet: 0.24,
+    });
+    // Secondary tactical armor deflection harmonic
+    this.tone(target, t + 0.018, {
+      type: 'triangle',
+      freqStart: 1340 * jitter,
+      freqEnd: 860 * jitter,
+      duration: 0.09,
+      gain: 0.16 * vol,
+      wet: 0.22,
+    });
+    // Sharp metallic spark & composite slap
+    this.noise(target, t, {
+      buffer: 'white',
+      duration: 0.075,
+      gain: 0.36 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3200 * jitter,
+      filterFreqEnd: 1400,
+      filterQ: 2.2,
+      distort: true,
+      wet: 0.2,
+    });
+    // Cyan visor energy dispersion hiss
+    this.noise(target, t + 0.01, {
+      buffer: 'pink',
+      duration: 0.11,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 2800,
+      wet: 0.2,
+    });
+    return 0.18;
+  }
+
+  private playC4Plant(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Sticky demolition satchel surface slap thud
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 165 * pitch,
+      freqEnd: 58 * pitch,
+      duration: 0.11,
+      gain: 0.38 * vol,
+      wet: 0.16,
+    });
+    // Rugged tactical polymer casing clack
+    this.tone(target, t + 0.02, {
+      type: 'triangle',
+      freqStart: 380 * pitch,
+      freqEnd: 160 * pitch,
+      duration: 0.08,
+      gain: 0.22 * vol,
+      wet: 0.14,
+    });
+    // Electronic armed chirp 1 (E6)
+    this.tone(target, t + 0.09, {
+      type: 'square',
+      freqStart: 1318.51 * pitch,
+      duration: 0.055,
+      gain: 0.14 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2400 * pitch,
+      filterQ: 2.4,
+      wet: 0.18,
+    });
+    // Electronic armed chirp 2 - higher lock beep (A6)
+    this.tone(target, t + 0.165, {
+      type: 'sine',
+      freqStart: 1760 * pitch,
+      duration: 0.085,
+      gain: 0.19 * vol,
+      wet: 0.22,
+    });
+    // Crisp lock confirmation harmonic overtone
+    this.tone(target, t + 0.165, {
+      type: 'triangle',
+      freqStart: 2637.02 * pitch,
+      duration: 0.075,
+      gain: 0.1 * vol,
+      wet: 0.22,
+    });
+    // Sticky adhesive pad grab & pouch rustle
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.08,
+      gain: 0.26 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1200 * pitch,
+      filterFreqEnd: 480,
+      filterQ: 1.5,
+      wet: 0.14,
+    });
+    // Mechanical arming switch micro-click
+    this.noise(target, t + 0.07, {
+      buffer: 'white',
+      duration: 0.032,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3200,
+      wet: 0.12,
+    });
+    return 0.28;
+  }
+
+  private playC4Detonate(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Crisp wireless detonator trigger chirp
+    this.tone(target, t, {
+      type: 'square',
+      freqStart: 1980 * pitch,
+      freqEnd: 1320 * pitch,
+      duration: 0.036,
+      gain: 0.15 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 2800 * pitch,
+      filterQ: 2.6,
+    });
+    // Massive shaped-charge demolition sub-boom
+    this.tone(target, t + 0.025, {
+      type: 'sine',
+      freqStart: 106 * pitch,
+      freqEnd: 21 * pitch,
+      duration: 0.68,
+      gain: 0.78 * vol,
+      wet: 0.32,
+    });
+    // Heavy structural breach punch
+    this.tone(target, t + 0.025, {
+      type: 'sawtooth',
+      freqStart: 280 * pitch,
+      freqEnd: 44 * pitch,
+      duration: 0.34,
+      gain: 0.36 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 1900 * pitch,
+      filterFreqEnd: 170,
+      wet: 0.26,
+    });
+    // Mid-range overpressure wall slam
+    this.tone(target, t + 0.03, {
+      type: 'triangle',
+      freqStart: 440 * pitch,
+      freqEnd: 74 * pitch,
+      duration: 0.24,
+      gain: 0.32 * vol,
+      wet: 0.24,
+    });
+    // Sharp C4 high-brisance shock crack
+    this.noise(target, t + 0.025, {
+      buffer: 'white',
+      duration: 0.15,
+      gain: 0.6 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 3200 * pitch,
+      filterFreqEnd: 850,
+      filterQ: 1.3,
+      distort: true,
+      wet: 0.28,
+    });
+    // Deep roaring demolition fireball
+    this.noise(target, t + 0.03, {
+      buffer: 'pink',
+      duration: 0.88,
+      attack: 0.005,
+      gain: 0.68 * vol,
+      filterType: 'lowpass',
+      filterFreqStart: 2400 * pitch,
+      filterFreqEnd: 130,
+      distort: true,
+      wet: 0.4,
+    });
+    // Shattering wood/steel/brick debris cascade
+    this.noise(target, t + 0.16, {
+      buffer: 'white',
+      duration: 0.42,
+      attack: 0.018,
+      gain: 0.24 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 1650 * pitch,
+      filterFreqEnd: 460,
+      filterQ: 1.5,
+      wet: 0.3,
+    });
+    return 0.92;
+  }
+
+  private playStreakSurge(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Overdrive ignition bass sub-drop
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 145 * pitch,
+      freqEnd: 44 * pitch,
+      duration: 0.26,
+      gain: 0.48 * vol,
+      wet: 0.24,
+    });
+    // Rising golden overdrive turbine sweep
+    this.tone(target, t + 0.01, {
+      type: 'sawtooth',
+      freqStart: 220 * pitch,
+      freqEnd: 880 * pitch,
+      duration: 0.32,
+      attack: 0.015,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 520 * pitch,
+      filterFreqEnd: 2800 * pitch,
+      filterQ: 1.8,
+      wet: 0.28,
+    });
+    // Energetic 3x+ Kill-Streak power triad fanfare (A4 -> C#5 -> E5 -> A5)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.04, freq: 440.0, dur: 0.12, gain: 0.16 },
+        { offset: 0.1, freq: 554.37, dur: 0.13, gain: 0.17 },
+        { offset: 0.16, freq: 659.25, dur: 0.15, gain: 0.18 },
+        { offset: 0.23, freq: 880.0, dur: 0.34, gain: 0.21 },
+      ],
+      'sawtooth',
+      'triangle',
+      1.5,
+      0.32,
+      3600,
+    );
+    // Blazing golden overdrive aura FM shimmer
+    this.playFmAura(
+      target,
+      t + 0.14,
+      0.44,
+      660 * pitch,
+      1320 * pitch,
+      330 * pitch,
+      660 * pitch,
+      130 * pitch,
+      0.18 * vol,
+      1600,
+      4600,
+      0.36,
+    );
+    // Igniting golden plasma surge whoosh
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.34,
+      attack: 0.015,
+      gain: 0.34 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 420 * pitch,
+      filterFreqEnd: 2600 * pitch,
+      filterQ: 1.4,
+      distort: true,
+      wet: 0.28,
+    });
+    // High-voltage electric arc spark tail
+    this.noise(target, t + 0.16, {
+      buffer: 'white',
+      duration: 0.36,
+      attack: 0.02,
+      gain: 0.18 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3600,
+      wet: 0.32,
+    });
+    return 0.62;
+  }
+
+  private playHotDropChime(t: number, target: AudioNode, vol: number, pitch: number): number {
+    // Warm golden sky-beacon arrival sub-bloom
+    this.tone(target, t, {
+      type: 'sine',
+      freqStart: 146.83 * pitch,
+      freqEnd: 73.42 * pitch,
+      duration: 0.42,
+      attack: 0.02,
+      gain: 0.36 * vol,
+      wet: 0.3,
+    });
+    // Luminous Golden Hot-Drop bell arpeggio (D5 -> F#5 -> A5 -> E6)
+    this.playHarmonicProgression(
+      target,
+      t,
+      pitch,
+      vol,
+      [
+        { offset: 0.02, freq: 587.33, dur: 0.22, gain: 0.15 },
+        { offset: 0.09, freq: 739.99, dur: 0.24, gain: 0.16 },
+        { offset: 0.16, freq: 880.0, dur: 0.28, gain: 0.17 },
+        { offset: 0.24, freq: 1318.51, dur: 0.42, gain: 0.19 },
+      ],
+      'sine',
+      'triangle',
+      0.5,
+      0.4,
+    );
+    // Celestial golden light-pillar FM shimmer
+    this.playFmAura(
+      target,
+      t + 0.08,
+      0.56,
+      587.33 * pitch,
+      1174.66 * pitch,
+      293.66 * pitch,
+      587.33 * pitch,
+      85 * pitch,
+      0.15 * vol,
+      1800,
+      4800,
+      0.42,
+    );
+    // Golden orbital beam descending air shimmer
+    this.noise(target, t, {
+      buffer: 'pink',
+      duration: 0.48,
+      attack: 0.04,
+      gain: 0.22 * vol,
+      filterType: 'bandpass',
+      filterFreqStart: 680 * pitch,
+      filterFreqEnd: 2200 * pitch,
+      filterQ: 1.6,
+      wet: 0.36,
+    });
+    // High crystalline golden sparkle dust
+    this.noise(target, t + 0.12, {
+      buffer: 'white',
+      duration: 0.42,
+      attack: 0.03,
+      gain: 0.16 * vol,
+      filterType: 'highpass',
+      filterFreqStart: 3800,
+      wet: 0.38,
+    });
+    return 0.72;
   }
 
   private playHarmonicProgression(

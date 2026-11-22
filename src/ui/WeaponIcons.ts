@@ -365,6 +365,32 @@ const WEAPON_SVGS: Record<WeaponId, string> = {
     <rect x="24" y="31" width="16" height="4" rx="1.4" fill="#fbbf24" stroke="#0f172a" stroke-width="1.2"/>
     <circle cx="15" cy="22" r="2.6" fill="#34d399" stroke="#ecfdf5" stroke-width="1.2"/>
   </svg>`,
+
+  ballistic_shield: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <path d="M16 10H38L44 16V41L36 55H18L13 43V16L16 10Z" fill="#334155" stroke="#0f172a" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M19 14H36L40 18V39L34 50H20L17 41V18L19 14Z" fill="#475569" stroke="#94a3b8" stroke-width="1.3" stroke-linejoin="round"/>
+    <rect x="20" y="18" width="16" height="7" rx="2" fill="#22d3ee" stroke="#0f172a" stroke-width="1.6"/>
+    <path d="M22 20.5H33" stroke="#e0f2fe" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M28 29L34 32V38C34 42 31.5 45 28 46.5C24.5 45 22 42 22 38V32L28 29Z" fill="#0ea5e9" stroke="#bae6fd" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M40 27H55V33H45L43 43H38L40 27Z" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.7" stroke-linejoin="round"/>
+    <rect x="44" y="29" width="8" height="2" rx="0.8" fill="#38bdf8"/>
+    <circle cx="18" cy="14" r="1.6" fill="#38bdf8"/>
+    <circle cx="38" cy="14" r="1.6" fill="#38bdf8"/>
+  </svg>`,
+
+  remote_c4: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <rect x="10" y="21" width="34" height="27" rx="4" fill="#475569" stroke="#0f172a" stroke-width="2.2"/>
+    <rect x="14" y="25" width="26" height="19" rx="2.5" fill="#334155"/>
+    <rect x="16" y="21" width="6" height="27" fill="#d97706" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="32" y="21" width="6" height="27" fill="#d97706" stroke="#0f172a" stroke-width="1.4"/>
+    <rect x="21" y="28" width="12" height="10" rx="2" fill="#0f172a" stroke="#94a3b8" stroke-width="1.4"/>
+    <circle cx="27" cy="33" r="3.4" fill="#ef4444" stroke="#fecaca" stroke-width="1.2"/>
+    <path d="M27 21V11" stroke="#cbd5e1" stroke-width="2.6" stroke-linecap="round"/>
+    <circle cx="27" cy="10" r="2.6" fill="#f87171"/>
+    <path d="M46 27H55V48H46V27Z" fill="#1e293b" stroke="#0f172a" stroke-width="1.8" stroke-linejoin="round"/>
+    <rect x="48.5" y="22" width="4" height="5" rx="1" fill="#ef4444" stroke="#0f172a" stroke-width="1.2"/>
+    <circle cx="50.5" cy="34" r="2" fill="#ffd000"/>
+  </svg>`,
 };
 
 const BUILD_SVGS: Record<BuildPieceType, string> = {
@@ -480,6 +506,9 @@ export function getBountyTargetSvg(): string {
 }
 
 export function getVehicleIconSvg(kind: VehicleKind): string {
+  if (kind === 'hover_tank') {
+    return getHoverTankSvg();
+  }
   if (kind === 'speedboat') {
     return getSpeedboatSvg();
   }
@@ -1007,5 +1036,34 @@ export function getThermalVisionSvg(): string {
     <path d="M2.5 12C5 7.5 8.5 5.5 12 5.5C15.5 5.5 19 7.5 21.5 12C19 16.5 15.5 18.5 12 18.5C8.5 18.5 5 16.5 2.5 12Z" fill="rgba(146,64,14,0.85)" stroke="#fbbf24" stroke-width="1.8" stroke-linejoin="round"/>
     <circle cx="12" cy="12" r="4" fill="#f97316" stroke="#fef08a" stroke-width="1.4"/>
     <circle cx="12" cy="12" r="1.6" fill="#fef08a"/>
+  </svg>`;
+}
+
+export function getHoverTankSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <rect x="8" y="38" width="48" height="10" rx="5" fill="#1e293b" stroke="#22d3ee" stroke-width="2.2"/>
+    <rect x="13" y="41.5" width="38" height="3" rx="1.5" fill="#38bdf8"/>
+    <path d="M10 38L16 26H46L54 38H10Z" fill="#475569" stroke="#0f172a" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M18 26L23 17H40L44 26H18Z" fill="#64748b" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="42" y="19" width="17" height="4.5" rx="1.5" fill="#fbbf24" stroke="#0f172a" stroke-width="1.6"/>
+    <rect x="24" y="28.5" width="16" height="4" rx="1.4" fill="#ffd000" stroke="#0f172a" stroke-width="1.2"/>
+    <circle cx="31" cy="21.5" r="2.6" fill="#22d3ee" stroke="#e0f2fe" stroke-width="1.1"/>
+  </svg>`;
+}
+
+export function getHotDropSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="16" r="12" fill="rgba(120,53,15,0.88)" stroke="#ffd000" stroke-width="2"/>
+    <path d="M16 4V28" stroke="#fef08a" stroke-width="2.2" stroke-linecap="round" opacity="0.65"/>
+    <path d="M16 6L23 16L16 26L9 16L16 6Z" fill="#ffd000" stroke="#78350f" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M16 10L19.5 16L16 22L12.5 16L16 10Z" fill="#fef9c3"/>
+    <circle cx="16" cy="16" r="2.2" fill="#f59e0b"/>
+  </svg>`;
+}
+
+export function getStreakFlameSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+    <path d="M12.5 2C12.5 2 19 7.6 19 13.6C19 17.8 15.9 21.2 12 21.2C8.1 21.2 5 17.8 5 13.6C5 9.8 7.8 7.2 9.5 5.5C9.5 7.7 11 8.8 11 8.8C10.8 6.2 12.5 2 12.5 2Z" fill="#f97316" stroke="#fde047" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M12 10.5C12 10.5 15.2 13.2 15.2 16C15.2 17.8 13.8 19.2 12 19.2C10.2 19.2 8.8 17.8 8.8 16C8.8 13.6 12 10.5 12 10.5Z" fill="#fef08a"/>
   </svg>`;
 }

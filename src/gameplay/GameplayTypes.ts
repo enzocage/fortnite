@@ -67,6 +67,7 @@ export interface VehicleBridge {
     dt: number,
   ): void;
   damageVehicle(id: string, dmg: number, hitPos: Vec3Like): boolean;
+  getTankCannonMuzzle?(id: string): Vec3Like | null;
 }
 
 export interface VaultBridge {
@@ -495,6 +496,9 @@ export interface PlayerMatchStats {
   turretsDeployed?: number;
   fishCaught?: number;
   chugHeals?: number;
+  c4Blasts?: number;
+  shieldBlockedDmg?: number;
+  tankElims?: number;
 }
 
 export interface PlayerInteractPrompt {
@@ -605,4 +609,8 @@ export interface PlayerHudSnapshot {
   thermalVisionRemainingSec?: number | null;
   fishingProgress?: number | null;
   deployedTurrets?: Array<{ x: number; z: number; isFriendly: boolean }>;
+  ballisticShieldHp?: { current: number; max: number; blocking: boolean } | null;
+  activeC4Count?: number;
+  tankCannonCooldown?: number | null;
+  inHotDropPoi?: boolean;
 }

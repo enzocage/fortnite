@@ -101,6 +101,8 @@ const WEAPON_LOOT_POOL_FLOOR: WeaponId[] = [
   'flare_gun',
   'auto_turret',
   'chug_cannon',
+  'ballistic_shield',
+  'remote_c4',
 ];
 
 const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
@@ -126,6 +128,8 @@ const WEAPON_LOOT_POOL_CHEST: WeaponId[] = [
   'flare_gun',
   'auto_turret',
   'chug_cannon',
+  'ballistic_shield',
+  'remote_c4',
 ];
 
 const SUPPLY_DROP_WEAPONS: WeaponId[] = [
@@ -148,6 +152,8 @@ const SUPPLY_DROP_WEAPONS: WeaponId[] = [
   'flare_gun',
   'auto_turret',
   'chug_cannon',
+  'ballistic_shield',
+  'remote_c4',
 ];
 
 const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = [
@@ -162,6 +168,7 @@ const CONSUMABLE_POOL: Array<{ id: WeaponId; stack: number; weight: number }> = 
   { id: 'shield_bubble', stack: 1, weight: 9 },
   { id: 'port_a_bunker', stack: 1, weight: 10 },
   { id: 'emp_grenade', stack: 2, weight: 10 },
+  { id: 'remote_c4', stack: 3, weight: 8 },
 ];
 
 const THROWABLE_POOL: Array<{ id: WeaponId; stack: number }> = [
@@ -172,6 +179,7 @@ const THROWABLE_POOL: Array<{ id: WeaponId; stack: number }> = [
   { id: 'port_a_bunker', stack: 1 },
   { id: 'emp_grenade', stack: 2 },
   { id: 'auto_turret', stack: 1 },
+  { id: 'remote_c4', stack: 3 },
 ];
 
 const AMMO_CHEST_AMOUNTS: Record<AmmoType, number> = {
@@ -1666,7 +1674,7 @@ export class PropsAndLoot {
       weaponId,
       rarity,
       magAmmo: def.magSize,
-      stackCount: 1,
+      stackCount: weaponId === 'remote_c4' ? 3 : 1,
     };
   }
 
@@ -2211,6 +2219,101 @@ export class PropsAndLoot {
         grip.position.set(0, -0.15, -0.14);
         chugGroup.add(chassis, nozzle, slurpTank, glowRing, carryHandle, grip);
         itemMesh = chugGroup;
+      } else if (def.isBallisticShield) {
+        const shieldGroup = new THREE.Group();
+        const armorMat = this.getMat('loot_bshield_armor', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#1e293b',
+            roughness: 0.34,
+            metalness: 0.8,
+          }),
+        );
+        const visorMat = this.getMat('loot_bshield_visor', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#38bdf8',
+            emissive: '#0ea5e9',
+            emissiveIntensity: 1.5,
+            roughness: 0.15,
+            metalness: 0.3,
+          }),
+        );
+        const centerPlate = new THREE.Mesh(
+          this.getGeo('loot_bshield_plate', () => new THREE.BoxGeometry(0.42, 0.7, 0.08)),
+          armorMat,
+        );
+        const wingGeo = this.getGeo('loot_bshield_wing', () => new THREE.BoxGeometry(0.14, 0.64, 0.07));
+        const wingL = new THREE.Mesh(wingGeo, itemMat);
+        wingL.position.set(-0.24, 0, -0.04);
+        wingL.rotation.y = 0.38;
+        const wingR = new THREE.Mesh(wingGeo, itemMat);
+        wingR.position.set(0.24, 0, -0.04);
+        wingR.rotation.y = -0.38;
+        const visor = new THREE.Mesh(
+          this.getGeo('loot_bshield_visor_geo', () => new THREE.BoxGeometry(0.28, 0.13, 0.095)),
+          visorMat,
+        );
+        visor.position.set(0, 0.17, 0.01);
+        const spineTrim = new THREE.Mesh(
+          this.getGeo('loot_bshield_trim', () => new THREE.BoxGeometry(0.1, 0.44, 0.095)),
+          itemMat,
+        );
+        spineTrim.position.set(0, -0.12, 0.01);
+        const sidearmBarrel = new THREE.Mesh(
+          this.getGeo('loot_bshield_pistol', () => new THREE.BoxGeometry(0.08, 0.11, 0.32)),
+          itemMat,
+        );
+        sidearmBarrel.position.set(0.26, 0.02, 0.11);
+        shieldGroup.add(centerPlate, wingL, wingR, visor, spineTrim, sidearmBarrel);
+        itemMesh = shieldGroup;
+      } else if (def.isRemoteC4) {
+        const c4Group = new THREE.Group();
+        const blockMat = this.getMat('loot_c4_pack', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#334155',
+            roughness: 0.55,
+            metalness: 0.35,
+          }),
+        );
+        const armedLedMat = this.getMat('loot_c4_led', () =>
+          new THREE.MeshStandardMaterial({
+            color: '#ef4444',
+            emissive: '#dc2626',
+            emissiveIntensity: 1.85,
+            roughness: 0.18,
+          }),
+        );
+        const chargeBrick = new THREE.Mesh(
+          this.getGeo('loot_c4_brick', () => new THREE.BoxGeometry(0.32, 0.12, 0.24)),
+          blockMat,
+        );
+        const strapGeo = this.getGeo('loot_c4_strap', () => new THREE.BoxGeometry(0.06, 0.135, 0.26));
+        const strapL = new THREE.Mesh(strapGeo, itemMat);
+        strapL.position.x = -0.09;
+        const strapR = new THREE.Mesh(strapGeo, itemMat);
+        strapR.position.x = 0.09;
+        const receiver = new THREE.Mesh(
+          this.getGeo('loot_c4_receiver', () => new THREE.BoxGeometry(0.18, 0.055, 0.14)),
+          itemMat,
+        );
+        receiver.position.set(0, 0.085, 0);
+        const antenna = new THREE.Mesh(
+          this.getGeo('loot_c4_antenna', () => new THREE.CylinderGeometry(0.012, 0.016, 0.22, 6)),
+          blockMat,
+        );
+        antenna.position.set(0.065, 0.19, -0.04);
+        const armedLed = new THREE.Mesh(
+          this.getGeo('loot_c4_led_geo', () => new THREE.SphereGeometry(0.042, 8, 6)),
+          armedLedMat,
+        );
+        armedLed.position.set(-0.04, 0.125, 0.02);
+        const fob = new THREE.Mesh(
+          this.getGeo('loot_c4_fob', () => new THREE.BoxGeometry(0.1, 0.16, 0.055)),
+          itemMat,
+        );
+        fob.position.set(0.22, 0.04, 0.06);
+        fob.rotation.z = -0.25;
+        c4Group.add(chargeBrick, strapL, strapR, receiver, antenna, armedLed, fob);
+        itemMesh = c4Group;
       } else if (def.isThrowable) {
         itemMesh = new THREE.Mesh(
           this.getGeo('loot_throwable', () => new THREE.DodecahedronGeometry(0.22, 0)),
@@ -2404,7 +2507,7 @@ export class PropsAndLoot {
           weaponId,
           rarity,
           magAmmo: def.magSize,
-          stackCount: 1,
+          stackCount: weaponId === 'remote_c4' ? 3 : 1,
         },
       },
       scatter(0),

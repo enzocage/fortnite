@@ -10,6 +10,7 @@ import type {
   MaterialType,
   TeamId,
   TerrainQuery,
+  PlacedC4Entity,
   TrapEntity,
   TrapKind,
   TurretEntity,
@@ -24,6 +25,7 @@ import {
   GRID_XZ,
   GRID_Y,
   MATERIAL_STATS,
+  MAX_ACTIVE_C4_PER_PLAYER,
   SPIKE_TRAP_DAMAGE,
   TURRET_DAMAGE,
   TURRET_DURATION_SEC,
@@ -256,6 +258,13 @@ interface TurretVisual {
   muzzleFlashMesh: THREE.Mesh;
 }
 
+interface C4Visual {
+  entity: PlacedC4Entity;
+  group: THREE.Group;
+  ledMat: THREE.MeshBasicMaterial;
+  blinkPhase: number;
+}
+
 export class BuildingSystem {
   private scene: THREE.Scene;
   private terrain: TerrainQuery;
@@ -264,6 +273,7 @@ export class BuildingSystem {
   private rootGroup = new THREE.Group();
   private trapGroup = new THREE.Group();
   private turretGroup = new THREE.Group();
+  private c4Group = new THREE.Group();
   private previewGroup = new THREE.Group();
   private editGridGroup = new THREE.Group();
 
@@ -306,6 +316,19 @@ export class BuildingSystem {
   private turretTrimMetalMat: THREE.MeshStandardMaterial | null = null;
   private turretFlashMat: THREE.MeshBasicMaterial | null = null;
 
+  private placedC4s: PlacedC4Entity[] = [];
+  private c4Visuals = new Map<string, C4Visual>();
+  private nextC4Seq = 1;
+  private c4DmgSeq = 1;
+  private c4AnimElapsed = 0;
+  private c4SharedGeos: THREE.BufferGeometry[] = [];
+  private c4SharedMats: THREE.Material[] = [];
+  private c4PackMat: THREE.MeshStandardMaterial | null = null;
+  private c4StrapMat: THREE.MeshStandardMaterial | null = null;
+  private c4AntennaMat: THREE.MeshStandardMaterial | null = null;
+  private c4BodyGeo: THREE.BufferGeometry | null = null;
+  private c4LedGeo: THREE.BufferGeometry | null = null;
+
   private unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
   private previewTileGeo = new THREE.PlaneGeometry(1, 1);
   private previewMeshMatValid: THREE.MeshBasicMaterial;
@@ -343,6 +366,7 @@ export class BuildingSystem {
     this.rootGroup.name = 'BuildingSystemRoot';
     this.trapGroup.name = 'BuildingTrapRoot';
     this.turretGroup.name = 'BuildingTurretRoot';
+    this.c4Group.name = 'BuildingC4Root';
     this.previewGroup.name = 'BuildingPreview';
     this.editGridGroup.name = 'BuildingEditGrid';
     this.previewGroup.visible = false;
@@ -351,6 +375,7 @@ export class BuildingSystem {
     this.scene.add(this.rootGroup);
     this.scene.add(this.trapGroup);
     this.scene.add(this.turretGroup);
+    this.scene.add(this.c4Group);
     this.scene.add(this.previewGroup);
     this.scene.add(this.editGridGroup);
 
@@ -1292,6 +1317,7 @@ export class BuildingSystem {
 
     this.updateTraps(dt);
     this.updateTurretVisuals(dt, elapsed);
+    this.updateC4Visuals(dt, elapsed);
   }
 
   private ensureTrapSharedAssets(): void {
@@ -2247,6 +2273,341 @@ export class BuildingSystem {
     }
 
     this.updateTurretVisuals(safeDt, this.turretAnimElapsed + safeDt);
+    this.updateC4Visuals(safeDt, this.c4AnimElapsed + safeDt);
+  }
+
+  private ensureC4SharedAssets(): void {
+    if (this.c4BodyGeo) return;
+
+    this.c4BodyGeo = new THREE.BoxGeometry(0.28, 0.11, 0.34);
+    this.c4LedGeo = new THREE.SphereGeometry(0.036, 8, 8);
+    this.c4SharedGeos.push(this.c4BodyGeo, this.c4LedGeo);
+
+    this.c4PackMat = new THREE.MeshStandardMaterial({
+      color: 0x374151,
+      roughness: 0.68,
+      metalness: 0.25,
+    });
+    this.c4StrapMat = new THREE.MeshStandardMaterial({
+      color: 0x4b5320,
+      roughness: 0.85,
+      metalness: 0.08,
+    });
+    this.c4AntennaMat = new THREE.MeshStandardMaterial({
+      color: 0x9ca3af,
+      roughness: 0.35,
+      metalness: 0.72,
+    });
+    this.c4SharedMats.push(this.c4PackMat, this.c4StrapMat, this.c4AntennaMat);
+  }
+
+  private createC4Visual(entity: PlacedC4Entity): void {
+    this.ensureC4SharedAssets();
+    const group = new THREE.Group();
+    group.name = `placed_c4_${entity.id}`;
+    group.position.set(entity.x, entity.y + 0.06, entity.z);
+
+    const body = new THREE.Mesh(this.c4BodyGeo!, this.c4PackMat!);
+    body.castShadow = true;
+    group.add(body);
+
+    const strap = new THREE.Mesh(this.unitBoxGeo, this.c4StrapMat!);
+    strap.scale.set(0.3, 0.125, 0.12);
+    group.add(strap);
+
+    const antenna = new THREE.Mesh(this.unitBoxGeo, this.c4AntennaMat!);
+    antenna.scale.set(0.025, 0.14, 0.025);
+    antenna.position.set(0.08, 0.09, -0.09);
+    group.add(antenna);
+
+    const ledMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+    const led = new THREE.Mesh(this.c4LedGeo!, ledMat);
+    led.position.set(-0.05, 0.075, 0.06);
+    group.add(led);
+
+    this.c4Group.add(group);
+    this.c4Visuals.set(entity.id, {
+      entity,
+      group,
+      ledMat,
+      blinkPhase: (this.nextC4Seq * 1.13) % (Math.PI * 2),
+    });
+  }
+
+  private removeC4Internal(c4Id: string): void {
+    const idx = this.placedC4s.findIndex((c) => c.id === c4Id);
+    if (idx !== -1) {
+      this.placedC4s[idx].alive = false;
+      this.placedC4s.splice(idx, 1);
+    }
+    const visual = this.c4Visuals.get(c4Id);
+    if (visual) {
+      this.c4Group.remove(visual.group);
+      visual.ledMat.dispose();
+      this.c4Visuals.delete(c4Id);
+    }
+  }
+
+  private updateC4Visuals(dt: number, elapsed: number): void {
+    const safeDt = Math.max(0, Number.isFinite(dt) ? dt : 0);
+    this.c4AnimElapsed = Number.isFinite(elapsed)
+      ? elapsed
+      : this.c4AnimElapsed + safeDt;
+
+    for (const cv of this.c4Visuals.values()) {
+      const pulse = Math.sin(this.c4AnimElapsed * 9.0 + cv.blinkPhase);
+      cv.ledMat.color.setHex(pulse > 0 ? 0xff2626 : 0x5c0a0a);
+    }
+  }
+
+  private isActorFriendlyToC4(c4: PlacedC4Entity, actor: CombatActor): boolean {
+    if (actor.id === c4.ownerId) return true;
+    if (
+      c4.squadId &&
+      (actor.squadId === c4.squadId || actor.teamId === c4.squadId)
+    ) {
+      return true;
+    }
+    if (
+      c4.teamId &&
+      (actor.teamId === c4.teamId || actor.squadId === c4.teamId)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  private distanceToPieceBounds(pos: Vec3Like, piece: BuildPiece): number {
+    const bx = piece.gx * GRID_XZ;
+    const by = piece.gy * GRID_Y;
+    const bz = piece.gz * GRID_XZ;
+
+    let minX = bx;
+    let maxX = bx + GRID_XZ;
+    let minY = by;
+    let maxY = by + GRID_Y;
+    let minZ = bz;
+    let maxZ = bz + GRID_XZ;
+
+    if (piece.type === 'wall') {
+      if (piece.dir === 'N') {
+        minZ = bz - 0.15;
+        maxZ = bz + 0.15;
+      } else {
+        minX = bx - 0.15;
+        maxX = bx + 0.15;
+      }
+    } else if (piece.type === 'floor') {
+      minY = by - 0.15;
+      maxY = by + 0.15;
+    }
+
+    const dx = pos.x < minX ? minX - pos.x : pos.x > maxX ? pos.x - maxX : 0;
+    const dy = pos.y < minY ? minY - pos.y : pos.y > maxY ? pos.y - maxY : 0;
+    const dz = pos.z < minZ ? minZ - pos.z : pos.z > maxZ ? pos.z - maxZ : 0;
+    return Math.hypot(dx, dy, dz);
+  }
+
+  placeC4(
+    pos: Vec3Like,
+    ownerId: string,
+    squadId?: string,
+    teamId?: TeamId,
+  ): PlacedC4Entity {
+    const x = Number.isFinite(pos.x) ? pos.x : 0;
+    const z = Number.isFinite(pos.z) ? pos.z : 0;
+    const y = Number.isFinite(pos.y) ? pos.y : this.terrain.getHeightAt(x, z);
+
+    const ownerC4s = this.placedC4s.filter(
+      (c) => c.alive && c.ownerId === ownerId,
+    );
+    while (ownerC4s.length >= MAX_ACTIVE_C4_PER_PLAYER) {
+      const oldest = ownerC4s.shift()!;
+      this.removeC4Internal(oldest.id);
+    }
+
+    const entity: PlacedC4Entity = {
+      id: `c4_${this.nextC4Seq++}`,
+      ownerId,
+      ...(squadId !== undefined ? { squadId } : {}),
+      ...(teamId !== undefined ? { teamId } : {}),
+      x,
+      y,
+      z,
+      alive: true,
+    };
+
+    this.placedC4s.push(entity);
+    this.createC4Visual(entity);
+
+    this.eventBus.emit('sound:play', {
+      id: 'c4_plant',
+      position: { x, y, z },
+      spatial: true,
+    });
+
+    return { ...entity };
+  }
+
+  getPlacedC4(ownerId?: string): PlacedC4Entity[] {
+    if (ownerId !== undefined) {
+      return this.placedC4s
+        .filter((c) => c.alive && c.ownerId === ownerId)
+        .map((c) => ({ ...c }));
+    }
+    return this.placedC4s.filter((c) => c.alive).map((c) => ({ ...c }));
+  }
+
+  detonateC4ForOwner(
+    ownerId: string,
+    actors: CombatActor[],
+  ): { blasts: number; hits: number; buildsDestroyed: number } {
+    const owned = this.placedC4s.filter(
+      (c) => c.alive && c.ownerId === ownerId,
+    );
+    if (owned.length === 0) {
+      return { blasts: 0, hits: 0, buildsDestroyed: 0 };
+    }
+
+    const C4_RADIUS = 5.5;
+    const C4_ACTOR_DMG = 90;
+    const C4_STRUCT_DMG = 320;
+
+    let blasts = 0;
+    let hits = 0;
+    let buildsDestroyed = 0;
+
+    for (let cIdx = 0; cIdx < owned.length; cIdx++) {
+      const c4 = owned[cIdx];
+      c4.alive = false;
+      this.removeC4Internal(c4.id);
+      blasts += 1;
+
+      const blastPos: Vec3Like = { x: c4.x, y: c4.y, z: c4.z };
+      this.eventBus.emit('vfx:c4_blast', {
+        position: blastPos,
+        radius: C4_RADIUS,
+      });
+      this.eventBus.emit('sound:play', {
+        id: 'c4_detonate',
+        position: blastPos,
+        volume: 0.9,
+        spatial: true,
+      });
+
+      const piecesSnapshot = [...this.piecesArray];
+      for (let pIdx = 0; pIdx < piecesSnapshot.length; pIdx++) {
+        const piece = piecesSnapshot[pIdx];
+        if (!this.piecesById.has(piece.id)) continue;
+        const center = this.getPieceWorldCenter(piece);
+        if (
+          this.distanceToPieceBounds(blastPos, piece) <= C4_RADIUS ||
+          dist3D(blastPos, center) <= C4_RADIUS
+        ) {
+          const res = this.damagePiece(piece.id, C4_STRUCT_DMG);
+          if (res.destroyed) {
+            buildsDestroyed += 1;
+          }
+        }
+      }
+
+      const turretSnapshot = [...this.turrets];
+      for (let tIdx = 0; tIdx < turretSnapshot.length; tIdx++) {
+        const turret = turretSnapshot[tIdx];
+        if (!turret.alive || turret.hp <= 0) continue;
+        if (turret.ownerId === ownerId) continue;
+        if (
+          c4.squadId &&
+          (turret.squadId === c4.squadId || turret.teamId === c4.squadId)
+        ) {
+          continue;
+        }
+        if (
+          c4.teamId &&
+          (turret.teamId === c4.teamId || turret.squadId === c4.teamId)
+        ) {
+          continue;
+        }
+        const td = dist3D(blastPos, { x: turret.x, y: turret.y + 0.5, z: turret.z });
+        if (td <= C4_RADIUS) {
+          this.damageTurret(turret.id, C4_STRUCT_DMG);
+        }
+      }
+
+      for (let aIdx = 0; aIdx < actors.length; aIdx++) {
+        const actor = actors[aIdx];
+        if (!actor.alive || actor.hp <= 0) continue;
+        if (this.isActorFriendlyToC4(c4, actor)) continue;
+
+        const bodyCenter: Vec3Like = {
+          x: actor.position.x,
+          y: actor.position.y + 0.9,
+          z: actor.position.z,
+        };
+        const d = Math.min(
+          dist3D(blastPos, actor.position),
+          dist3D(blastPos, bodyCenter),
+        );
+        if (d > C4_RADIUS) continue;
+
+        const dmg = C4_ACTOR_DMG;
+        const overshieldBefore = Math.max(0, actor.overshield ?? 0);
+        const overshieldDmg = Math.min(overshieldBefore, dmg);
+        const afterOs = dmg - overshieldDmg;
+        const shieldBefore = Math.max(0, actor.shield);
+        const shieldDmg = Math.min(shieldBefore, afterOs);
+        const remaining = afterOs - shieldDmg;
+        const hpDmg = Math.min(Math.max(0, actor.hp), remaining);
+        const isElimination = actor.hp - hpDmg <= 0;
+
+        if (actor.overshield !== undefined) {
+          actor.overshield = Math.max(0, actor.overshield - overshieldDmg);
+        }
+        actor.shield = Math.max(0, actor.shield - shieldDmg);
+        actor.hp = Math.max(0, actor.hp - hpDmg);
+        if (actor.hp <= 0) {
+          actor.alive = false;
+        }
+
+        const ev: DamageEvent = {
+          targetId: actor.id,
+          attackerId: ownerId,
+          attackerName: ownerId === 'player' ? 'Player' : ownerId,
+          weaponId: 'remote_c4',
+          rarity: 'epic',
+          damage: dmg,
+          hpDamage: hpDmg,
+          shieldDamage: shieldDmg,
+          isHeadshot: false,
+          isElimination,
+          hitPoint: bodyCenter,
+          distance: d,
+        };
+        actor.onDamage?.(ev);
+        this.eventBus.emit('combat:damage', ev);
+        hits += 1;
+
+        if (ownerId === 'player' && actor.id !== 'player') {
+          const hitShield = shieldDmg > 0 || overshieldDmg > 0;
+          this.eventBus.emit('combat:hitmarker', {
+            attackerId: 'player',
+            isHeadshot: false,
+            isShield: hitShield,
+            isElimination,
+          });
+          this.eventBus.emit('ui:damage_number', {
+            id: `c4_dmg_${this.c4DmgSeq++}`,
+            worldPos: bodyCenter,
+            amount: dmg,
+            isShield: hitShield && hpDmg === 0,
+            isHeadshot: false,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    }
+
+    return { blasts, hits, buildsDestroyed };
   }
 
   getPieces(): BuildPiece[] {
@@ -2666,6 +3027,17 @@ export class BuildingSystem {
     this.turrets = [];
     this.turretsById.clear();
 
+    for (const c4 of this.placedC4s) {
+      c4.alive = false;
+    }
+    for (const cv of this.c4Visuals.values()) {
+      this.c4Group.remove(cv.group);
+      cv.ledMat.dispose();
+    }
+    this.c4Group.clear();
+    this.c4Visuals.clear();
+    this.placedC4s = [];
+
     this.setPreviewVisible(false);
   }
 
@@ -2709,6 +3081,20 @@ export class BuildingSystem {
     this.turretTrimMetalMat = null;
     this.turretFlashMat = null;
 
+    for (let i = 0; i < this.c4SharedGeos.length; i++) {
+      this.c4SharedGeos[i].dispose();
+    }
+    this.c4SharedGeos = [];
+    for (let i = 0; i < this.c4SharedMats.length; i++) {
+      this.c4SharedMats[i].dispose();
+    }
+    this.c4SharedMats = [];
+    this.c4PackMat = null;
+    this.c4StrapMat = null;
+    this.c4AntennaMat = null;
+    this.c4BodyGeo = null;
+    this.c4LedGeo = null;
+
     this.previewMeshMatValid.dispose();
     this.previewMeshMatInvalid.dispose();
     this.previewWireMatValid.dispose();
@@ -2719,6 +3105,7 @@ export class BuildingSystem {
     this.scene.remove(this.rootGroup);
     this.scene.remove(this.trapGroup);
     this.scene.remove(this.turretGroup);
+    this.scene.remove(this.c4Group);
     this.scene.remove(this.previewGroup);
     this.scene.remove(this.editGridGroup);
   }

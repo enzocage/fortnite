@@ -1358,6 +1358,78 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     maxStack: 1,
     allowedRarities: ['mythic'],
   },
+  ballistic_shield: {
+    id: 'ballistic_shield',
+    name: 'Aegis Ballistic Shield',
+    shortName: 'AEGIS SHIELD',
+    category: 'pistol',
+    ammoType: 'light',
+    isConsumable: false,
+    isBallisticShield: true,
+    shieldMaxBlockHp: 250,
+    isProjectile: false,
+    projectileSpeed: 0,
+    projectileGravity: 0,
+    splashRadius: 0,
+    baseDamage: 24,
+    structureDamage: 20,
+    headshotMultiplier: 1.75,
+    fireRate: 4.5,
+    pellets: 1,
+    magSize: 15,
+    reloadTime: 1.6,
+    baseSpread: 0.018,
+    adsSpread: 0.008,
+    crouchSpreadMult: 0.8,
+    moveSpreadAdd: 0.012,
+    bloomPerShot: 0.004,
+    bloomMax: 0.028,
+    bloomRecovery: 0.09,
+    range: 70,
+    falloffStart: 28,
+    falloffEnd: 65,
+    minFalloffMult: 0.65,
+    recoilPitch: 0.014,
+    recoilYaw: 0.004,
+    maxStack: 1,
+    allowedRarities: ['epic', 'mythic'],
+  },
+  remote_c4: {
+    id: 'remote_c4',
+    name: 'Remote C4 Charges',
+    shortName: 'REMOTE C4',
+    category: 'throwable',
+    ammoType: null,
+    isConsumable: false,
+    isThrowable: true,
+    isRemoteC4: true,
+    isProjectile: true,
+    projectileSpeed: 18,
+    projectileGravity: 24,
+    splashRadius: 5.5,
+    baseDamage: 90,
+    structureDamage: 320,
+    headshotMultiplier: 1.0,
+    fireRate: 1.4,
+    pellets: 0,
+    magSize: 0,
+    reloadTime: 0,
+    baseSpread: 0.005,
+    adsSpread: 0.002,
+    crouchSpreadMult: 1,
+    moveSpreadAdd: 0,
+    bloomPerShot: 0,
+    bloomMax: 0,
+    bloomRecovery: 0,
+    range: 35,
+    falloffStart: 0,
+    falloffEnd: 0,
+    minFalloffMult: 1,
+    recoilPitch: 0.01,
+    recoilYaw: 0,
+    maxStack: 6,
+    allowedRarities: ['rare', 'epic'],
+  },
 };
 
 export const POIS: POIDef[] = [
@@ -2078,6 +2150,15 @@ export const TURRET_DURATION_SEC = 40;
 export const FISHING_CAST_SEC = 1.8;
 export const THERMAL_FLOPPER_DURATION_SEC = 12;
 export const SKY_BALLOON_HEIGHT = 38;
+
+export const BALLISTIC_SHIELD_MAX_HP = 250;
+export const BALLISTIC_SHIELD_REGEN_PER_SEC = 28;
+export const TANK_CANNON_COOLDOWN_SEC = 2.2;
+export const TANK_CANNON_DAMAGE = 85;
+export const TANK_CANNON_STRUCT_DMG = 240;
+export const TANK_CANNON_SPLASH_RADIUS = 5.5;
+export const MAX_ACTIVE_C4_PER_PLAYER = 6;
+export const HOT_DROP_POI_COUNT = 2;
 
 export const WEAPON_MODS: readonly WeaponModDef[] = [
   {

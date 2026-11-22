@@ -79,6 +79,21 @@ const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
     halfL: 2.35,
     height: 1.45,
   },
+  hover_tank: {
+    maxHp: 900,
+    hoverHeight: 0.72,
+    maxSpeed: 18,
+    boostSpeed: 24,
+    reverseSpeed: 9,
+    accel: 18,
+    boostAccel: 30,
+    brakeDecel: 28,
+    turnRate: 1.55,
+    maxBankRoll: 0.08,
+    halfW: 1.75,
+    halfL: 2.55,
+    height: 2.05,
+  },
 };
 
 interface DefaultVehicleSpawn {
@@ -105,15 +120,23 @@ const DEFAULT_VEHICLE_SPAWNS: readonly DefaultVehicleSpawn[] = [
   { kind: 'speedboat', x: 103, z: 52, yaw: 0.05, accentHex: '#06b6d4' }, // Central River
   { kind: 'speedboat', x: 240, z: 240, yaw: -Math.PI * 0.75, accentHex: '#22d3ee' }, // Southeast Coastal Cove
   { kind: 'speedboat', x: -195, z: -279, yaw: Math.PI * 0.25, accentHex: '#38bdf8' }, // Northwest Coastal Cove
+  // 2 Vanguard Hover Tanks stationed at Crater Depot & Scorched Caldera approaches
+  { kind: 'hover_tank', x: 10, z: 102, yaw: Math.PI * 0.25, accentHex: '#475569' }, // Crater Depot Northwest Approach
+  { kind: 'hover_tank', x: -124, z: 138, yaw: -Math.PI * 0.44, accentHex: '#64748b' }, // Scorched Caldera East Approach
 ];
 
 const VOLCANO_LAVA_RADIUS = 11.8;
 const SPEEDBOAT_DRY_TERRAIN_SPEED_SCALE = 0.78;
+const _tmpMuzzleWorld = new THREE.Vector3();
 
 interface VehicleEntry {
   data: VehicleEntity;
   group: THREE.Group;
   bodyPivot: THREE.Group;
+  turretPivot?: THREE.Group;
+  cannonMuzzle?: THREE.Object3D;
+  turretYawOffset: number;
+  hasCustomTurretYaw: boolean;
   hoverPads: THREE.Mesh[];
   thrusterFlames: THREE.Mesh[];
   headlightMat: THREE.MeshStandardMaterial;
@@ -129,9 +152,9 @@ interface VehicleEntry {
 }
 
 /**
- * Manages deterministic 3D driveable vehicles (`hover_atv`, `cyber_bike`, and amphibious `speedboat`)
- * with terrain-conforming hover/buoyancy physics, water wake emission, lava thermal boost,
- * and boost VFX emission.
+ * Manages deterministic 3D driveable vehicles (`hover_atv`, `cyber_bike`, amphibious `speedboat`,
+ * and heavy composite-armored `hover_tank`) with terrain-conforming hover/buoyancy physics,
+ * water wake emission, lava thermal boost, turret cannon muzzle queries, and boost VFX emission.
  */
 export class VehicleSystem {
   private terrain: TerrainQuery;
@@ -265,7 +288,13 @@ export class VehicleSystem {
 
     const accentHex =
       accentOverride ??
-      (kind === 'hover_atv' ? '#38bdf8' : kind === 'cyber_bike' ? '#ec4899' : '#0ea5e9');
+      (kind === 'hover_atv'
+        ? '#38bdf8'
+        : kind === 'cyber_bike'
+          ? '#ec4899'
+          : kind === 'speedboat'
+            ? '#0ea5e9'
+            : '#475569');
     const visual = this.buildVehicleMesh(kind, accentHex);
     visual.group.name = `Vehicle_${id}`;
     visual.group.rotation.order = 'YXZ';
@@ -288,6 +317,10 @@ export class VehicleSystem {
       data,
       group: visual.group,
       bodyPivot: visual.bodyPivot,
+      turretPivot: visual.turretPivot,
+      cannonMuzzle: visual.cannonMuzzle,
+      turretYawOffset: 0,
+      hasCustomTurretYaw: false,
       hoverPads: visual.hoverPads,
       thrusterFlames: visual.thrusterFlames,
       headlightMat: visual.headlightMat,
@@ -314,6 +347,8 @@ export class VehicleSystem {
   ): {
     group: THREE.Group;
     bodyPivot: THREE.Group;
+    turretPivot?: THREE.Group;
+    cannonMuzzle?: THREE.Object3D;
     hoverPads: THREE.Mesh[];
     thrusterFlames: THREE.Mesh[];
     headlightMat: THREE.MeshStandardMaterial;
@@ -396,6 +431,9 @@ export class VehicleSystem {
 
     const hoverPads: THREE.Mesh[] = [];
     const thrusterFlames: THREE.Mesh[] = [];
+
+    let turretPivot: THREE.Group | undefined;
+    let cannonMuzzle: THREE.Object3D | undefined;
 
     if (kind === 'hover_atv') {
       // Rugged quad-hover chassis (+Z forward)
@@ -639,7 +677,7 @@ export class VehicleSystem {
       flame.visible = false;
       bodyPivot.add(flame);
       thrusterFlames.push(flame);
-    } else {
+    } else if (kind === 'speedboat') {
       this.createSpeedboatMesh(bodyPivot, hoverPads, thrusterFlames, {
         darkFrameMat,
         chromeMat,
@@ -651,9 +689,32 @@ export class VehicleSystem {
         headlightMat,
         hoverPadMat,
       });
+    } else {
+      const tankRig = this.createHoverTankMesh(bodyPivot, hoverPads, thrusterFlames, {
+        darkFrameMat,
+        chromeMat,
+        seatMat,
+        bodyMat,
+        goldMat,
+        windMat,
+        flameMat,
+        headlightMat,
+        hoverPadMat,
+      });
+      turretPivot = tankRig.turretPivot;
+      cannonMuzzle = tankRig.cannonMuzzle;
     }
 
-    return { group, bodyPivot, hoverPads, thrusterFlames, headlightMat, hoverPadMat };
+    return {
+      group,
+      bodyPivot,
+      turretPivot,
+      cannonMuzzle,
+      hoverPads,
+      thrusterFlames,
+      headlightMat,
+      hoverPadMat,
+    };
   }
 
   private createSpeedboatMesh(
@@ -846,6 +907,280 @@ export class VehicleSystem {
     }
   }
 
+  private createHoverTankMesh(
+    bodyPivot: THREE.Group,
+    hoverPads: THREE.Mesh[],
+    thrusterFlames: THREE.Mesh[],
+    mats: {
+      darkFrameMat: THREE.Material;
+      chromeMat: THREE.Material;
+      seatMat: THREE.Material;
+      bodyMat: THREE.Material;
+      goldMat: THREE.Material;
+      windMat: THREE.Material;
+      flameMat: THREE.Material;
+      headlightMat: THREE.MeshStandardMaterial;
+      hoverPadMat: THREE.MeshStandardMaterial;
+    },
+  ): { turretPivot: THREE.Group; cannonMuzzle: THREE.Object3D } {
+    const {
+      darkFrameMat,
+      chromeMat,
+      seatMat,
+      bodyMat,
+      goldMat,
+      windMat,
+      flameMat,
+      headlightMat,
+      hoverPadMat,
+    } = mats;
+
+    const reactiveArmorMat = this.getMat('tank_reactive_armor', () =>
+      new THREE.MeshStandardMaterial({
+        color: '#334155',
+        roughness: 0.45,
+        metalness: 0.68,
+      }),
+    );
+
+    // 1. Sloped composite armor hull (+Z forward)
+    const lowerHull = new THREE.Mesh(
+      this.getGeo('tank_lower_hull', () => new THREE.BoxGeometry(2.35, 0.48, 4.0)),
+      darkFrameMat,
+    );
+    lowerHull.position.set(0, 0.14, 0);
+    lowerHull.castShadow = true;
+    lowerHull.receiveShadow = true;
+    bodyPivot.add(lowerHull);
+
+    const upperDeck = new THREE.Mesh(
+      this.getGeo('tank_upper_deck', () => new THREE.BoxGeometry(2.18, 0.34, 3.25)),
+      bodyMat,
+    );
+    upperDeck.position.set(0, 0.44, -0.1);
+    upperDeck.castShadow = true;
+    upperDeck.receiveShadow = true;
+    bodyPivot.add(upperDeck);
+
+    // Steep sloped front glacis composite armor
+    const glacis = new THREE.Mesh(
+      this.getGeo('tank_glacis', () => new THREE.BoxGeometry(2.12, 0.3, 1.38)),
+      reactiveArmorMat,
+    );
+    glacis.position.set(0, 0.34, 1.78);
+    glacis.rotation.x = 0.42;
+    glacis.castShadow = true;
+    bodyPivot.add(glacis);
+
+    const frontRamProw = new THREE.Mesh(
+      this.getGeo('tank_ram_prow', () => new THREE.BoxGeometry(2.42, 0.24, 0.34)),
+      goldMat,
+    );
+    frontRamProw.position.set(0, 0.12, 2.28);
+    bodyPivot.add(frontRamProw);
+
+    // Driver viewport visor & dual recessed LED headlights
+    const driverVisor = new THREE.Mesh(
+      this.getGeo('tank_driver_visor', () => new THREE.BoxGeometry(0.84, 0.1, 0.14)),
+      windMat,
+    );
+    driverVisor.position.set(0, 0.56, 1.28);
+    bodyPivot.add(driverVisor);
+
+    const hlGeo = this.getGeo('tank_hl', () => new THREE.BoxGeometry(0.28, 0.13, 0.12));
+    for (const hx of [-0.78, 0.78]) {
+      const hl = new THREE.Mesh(hlGeo, headlightMat);
+      hl.position.set(hx, 0.28, 2.22);
+      bodyPivot.add(hl);
+    }
+
+    // Sloped rear engine louver deck & twin boost thruster nozzles
+    const rearDeck = new THREE.Mesh(
+      this.getGeo('tank_rear_deck', () => new THREE.BoxGeometry(2.04, 0.32, 1.04)),
+      reactiveArmorMat,
+    );
+    rearDeck.position.set(0, 0.44, -1.78);
+    rearDeck.rotation.x = -0.22;
+    rearDeck.castShadow = true;
+    bodyPivot.add(rearDeck);
+
+    const nozzleGeo = this.getGeo('tank_nozzle', () => {
+      const g = new THREE.CylinderGeometry(0.2, 0.28, 0.44, 10);
+      g.rotateX(Math.PI * 0.5);
+      return g;
+    });
+    const flameGeo = this.getGeo('veh_flame_cone', () => {
+      const g = new THREE.ConeGeometry(0.18, 1.25, 10);
+      g.rotateX(-Math.PI * 0.5);
+      return g;
+    });
+    for (const nx of [-0.54, 0.54]) {
+      const nozzle = new THREE.Mesh(nozzleGeo, chromeMat);
+      nozzle.position.set(nx, 0.28, -2.14);
+      bodyPivot.add(nozzle);
+
+      const flame = new THREE.Mesh(flameGeo, flameMat);
+      flame.position.set(nx, 0.28, -2.84);
+      flame.scale.set(1.25, 1.25, 1.1);
+      flame.visible = false;
+      bodyPivot.add(flame);
+      thrusterFlames.push(flame);
+    }
+
+    // 2. Twin glowing energy treads & armored side track sponsons
+    const sponsonGeo = this.getGeo('tank_sponson', () => new THREE.BoxGeometry(0.56, 0.44, 4.32));
+    const skirtTrimGeo = this.getGeo('tank_skirt_trim', () => new THREE.BoxGeometry(0.62, 0.14, 3.85));
+    const treadRibbonGeo = this.getGeo('tank_tread_ribbon', () => new THREE.BoxGeometry(0.46, 0.12, 4.18));
+    const treadSlopeGeo = this.getGeo('tank_tread_slope', () => new THREE.BoxGeometry(0.44, 0.12, 0.72));
+    const wheelDiskGeo = this.getGeo('tank_wheel_disk', () => {
+      const g = new THREE.CylinderGeometry(0.21, 0.21, 0.5, 12);
+      g.rotateZ(Math.PI * 0.5);
+      return g;
+    });
+
+    for (const sx of [-1.36, 1.36]) {
+      const sponson = new THREE.Mesh(sponsonGeo, reactiveArmorMat);
+      sponson.position.set(sx, 0.08, 0);
+      sponson.castShadow = true;
+      sponson.receiveShadow = true;
+      bodyPivot.add(sponson);
+
+      const skirtTrim = new THREE.Mesh(skirtTrimGeo, goldMat);
+      skirtTrim.position.set(sx, 0.34, 0);
+      bodyPivot.add(skirtTrim);
+
+      const bottomTread = new THREE.Mesh(treadRibbonGeo, hoverPadMat);
+      bottomTread.position.set(sx, -0.18, 0);
+      bodyPivot.add(bottomTread);
+      hoverPads.push(bottomTread);
+
+      const frontTread = new THREE.Mesh(treadSlopeGeo, hoverPadMat);
+      frontTread.position.set(sx, 0.02, 2.24);
+      frontTread.rotation.x = 0.62;
+      bodyPivot.add(frontTread);
+      hoverPads.push(frontTread);
+
+      const rearTread = new THREE.Mesh(treadSlopeGeo, hoverPadMat);
+      rearTread.position.set(sx, 0.02, -2.24);
+      rearTread.rotation.x = -0.62;
+      bodyPivot.add(rearTread);
+      hoverPads.push(rearTread);
+
+      for (const wz of [-1.45, -0.48, 0.48, 1.45]) {
+        const wheel = new THREE.Mesh(wheelDiskGeo, hoverPadMat);
+        wheel.position.set(sx, -0.04, wz);
+        bodyPivot.add(wheel);
+        hoverPads.push(wheel);
+      }
+    }
+
+    // 3. Rotating upper Turret Cannon Barrel assembly
+    const turretPivot = new THREE.Group();
+    turretPivot.name = 'TankTurretPivot';
+    turretPivot.position.set(0, 0.66, -0.18);
+    bodyPivot.add(turretPivot);
+
+    const turretRing = new THREE.Mesh(
+      this.getGeo('tank_turret_ring', () => new THREE.CylinderGeometry(0.92, 1.0, 0.16, 16)),
+      darkFrameMat,
+    );
+    turretRing.position.set(0, -0.02, 0);
+    turretPivot.add(turretRing);
+
+    const turretCore = new THREE.Mesh(
+      this.getGeo('tank_turret_core', () => new THREE.BoxGeometry(1.58, 0.5, 1.92)),
+      bodyMat,
+    );
+    turretCore.position.set(0, 0.28, -0.08);
+    turretCore.castShadow = true;
+    turretCore.receiveShadow = true;
+    turretPivot.add(turretCore);
+
+    const cheekGeo = this.getGeo('tank_turret_cheek', () => new THREE.BoxGeometry(0.24, 0.42, 1.54));
+    for (const cx of [-0.88, 0.88]) {
+      const cheek = new THREE.Mesh(cheekGeo, reactiveArmorMat);
+      cheek.position.set(cx, 0.26, -0.05);
+      cheek.rotation.z = cx < 0 ? 0.22 : -0.22;
+      cheek.castShadow = true;
+      turretPivot.add(cheek);
+    }
+
+    const turretBustle = new THREE.Mesh(
+      this.getGeo('tank_turret_bustle', () => new THREE.BoxGeometry(1.28, 0.42, 0.68)),
+      reactiveArmorMat,
+    );
+    turretBustle.position.set(0, 0.34, -1.24);
+    turretBustle.castShadow = true;
+    turretPivot.add(turretBustle);
+
+    const cupola = new THREE.Mesh(
+      this.getGeo('tank_cupola', () => new THREE.CylinderGeometry(0.32, 0.36, 0.2, 12)),
+      seatMat,
+    );
+    cupola.position.set(-0.34, 0.62, -0.28);
+    turretPivot.add(cupola);
+
+    const turretOptic = new THREE.Mesh(
+      this.getGeo('tank_turret_optic', () => new THREE.BoxGeometry(0.46, 0.12, 0.16)),
+      hoverPadMat,
+    );
+    turretOptic.position.set(0.38, 0.58, 0.54);
+    turretPivot.add(turretOptic);
+
+    const mantlet = new THREE.Mesh(
+      this.getGeo('tank_mantlet', () => new THREE.BoxGeometry(0.58, 0.36, 0.52)),
+      darkFrameMat,
+    );
+    mantlet.position.set(0, 0.26, 0.94);
+    mantlet.castShadow = true;
+    turretPivot.add(mantlet);
+
+    const cannonGroup = new THREE.Group();
+    cannonGroup.name = 'TankCannonBarrel';
+    cannonGroup.position.set(0, 0.26, 1.05);
+    turretPivot.add(cannonGroup);
+
+    const barrelTube = new THREE.Mesh(
+      this.getGeo('tank_cannon_tube', () => {
+        const g = new THREE.CylinderGeometry(0.115, 0.15, 2.24, 12);
+        g.rotateX(Math.PI * 0.5);
+        return g;
+      }),
+      chromeMat,
+    );
+    barrelTube.position.set(0, 0, 1.12);
+    barrelTube.castShadow = true;
+    cannonGroup.add(barrelTube);
+
+    const barrelShroud = new THREE.Mesh(
+      this.getGeo('tank_barrel_shroud', () => new THREE.BoxGeometry(0.34, 0.32, 0.92)),
+      reactiveArmorMat,
+    );
+    barrelShroud.position.set(0, 0, 0.54);
+    cannonGroup.add(barrelShroud);
+
+    const accelRingGeo = this.getGeo('tank_accel_ring', () => new THREE.TorusGeometry(0.145, 0.03, 6, 14));
+    for (const rz of [1.22, 1.66]) {
+      const ring = new THREE.Mesh(accelRingGeo, hoverPadMat);
+      ring.position.set(0, 0, rz);
+      cannonGroup.add(ring);
+    }
+
+    const muzzleBrake = new THREE.Mesh(
+      this.getGeo('tank_muzzle_brake', () => new THREE.BoxGeometry(0.32, 0.26, 0.3)),
+      darkFrameMat,
+    );
+    muzzleBrake.position.set(0, 0, 2.24);
+    cannonGroup.add(muzzleBrake);
+
+    const cannonMuzzle = new THREE.Object3D();
+    cannonMuzzle.name = 'TankCannonMuzzle';
+    cannonMuzzle.position.set(0, 0, 2.42);
+    cannonGroup.add(cannonMuzzle);
+
+    return { turretPivot, cannonMuzzle };
+  }
+
   private syncVisualAndCollider(entry: VehicleEntry, elapsed: number): void {
     const v = entry.data;
     const spec = VEHICLE_SPECS[v.kind];
@@ -857,6 +1192,15 @@ export class VehicleSystem {
     entry.group.rotation.set(v.pitch, v.yaw, v.roll, 'YXZ');
     entry.bodyPivot.position.y = bob;
     entry.bodyPivot.rotation.x = v.kind === 'speedboat' ? -clamp(speed / 45, 0, 0.1) : 0;
+    if (v.kind === 'hover_tank' && entry.turretPivot) {
+      if (entry.hasCustomTurretYaw) {
+        entry.turretPivot.rotation.y = entry.turretYawOffset;
+      } else if (v.driverId !== null) {
+        entry.turretPivot.rotation.y = -entry.lastSteer * 0.28;
+      } else {
+        entry.turretPivot.rotation.y = Math.sin(elapsed * 0.75) * 0.22 * Math.min(1, elapsed);
+      }
+    }
 
     const absCos = Math.abs(Math.cos(v.yaw));
     const absSin = Math.abs(Math.sin(v.yaw));
@@ -1208,11 +1552,15 @@ export class VehicleSystem {
     const leftX = Math.cos(v.yaw);
     const leftZ = -Math.sin(v.yaw);
 
+    const spec = VEHICLE_SPECS[v.kind];
+    const sideDist = Math.max(2.25, spec.halfW + 0.85);
+    const endDist = Math.max(2.45, spec.halfL + 0.85);
+
     const candidateOffsets: Array<[number, number]> = [
-      [leftX * 2.25, leftZ * 2.25],
-      [-leftX * 2.25, -leftZ * 2.25],
-      [-fwdX * 2.45, -fwdZ * 2.45],
-      [fwdX * 2.45, fwdZ * 2.45],
+      [leftX * sideDist, leftZ * sideDist],
+      [-leftX * sideDist, -leftZ * sideDist],
+      [-fwdX * endDist, -fwdZ * endDist],
+      [fwdX * endDist, fwdZ * endDist],
       [0, 0],
     ];
 
@@ -1320,6 +1668,42 @@ export class VehicleSystem {
   ): VehicleEntity {
     const id = `vehicle_${this.spawnCounter++}`;
     return this.createVehicle(id, kind, x, z, yaw);
+  }
+
+  getTankCannonMuzzle(vehicleId: string): Vec3Like | null {
+    const entry = this.vehiclesMap.get(vehicleId);
+    if (
+      !entry ||
+      entry.data.destroyed ||
+      entry.data.kind !== 'hover_tank' ||
+      !entry.cannonMuzzle
+    ) {
+      return null;
+    }
+    entry.group.updateMatrixWorld(true);
+    entry.cannonMuzzle.getWorldPosition(_tmpMuzzleWorld);
+    return {
+      x: _tmpMuzzleWorld.x,
+      y: _tmpMuzzleWorld.y,
+      z: _tmpMuzzleWorld.z,
+    };
+  }
+
+  setTankTurretYaw(vehicleId: string, worldYaw: number): boolean {
+    const entry = this.vehiclesMap.get(vehicleId);
+    if (
+      !entry ||
+      entry.data.destroyed ||
+      entry.data.kind !== 'hover_tank' ||
+      !entry.turretPivot ||
+      !Number.isFinite(worldYaw)
+    ) {
+      return false;
+    }
+    entry.hasCustomTurretYaw = true;
+    entry.turretYawOffset = normalizeAngle(worldYaw - entry.data.yaw);
+    entry.turretPivot.rotation.y = entry.turretYawOffset;
+    return true;
   }
 
   update(dt: number, elapsed: number): void {

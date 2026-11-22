@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import {
   EventBus,
   GRIND_RAIL_SPEED,
+  HOT_DROP_POI_COUNT,
   ISLAND_RADIUS,
   METEOR_CRATER_CRYSTAL_RESPAWN_SEC,
   PLAYER_HEIGHT,
@@ -45,6 +46,7 @@ import {
   type Wave9ShowcaseResult,
   type Wave10ShowcaseResult,
   type Wave11ShowcaseResult,
+  type Wave12ShowcaseResult,
 } from '../index';
 import type { WeatherKind } from '../../types';
 
@@ -1205,7 +1207,7 @@ describe('WorldInteractables & EnvironmentDetail', () => {
 });
 
 describe('VehicleSystem', () => {
-  it('spawns 12 deterministic vehicles (4 hover_atv + 4 cyber_bike + 4 speedboat) clear of buildings', () => {
+  it('spawns 14 deterministic vehicles (4 hover_atv + 4 cyber_bike + 4 speedboat + 2 hover_tank) clear of buildings', () => {
     const terrain = new TerrainSystem(4201);
     const builder = new WorldBuilder();
     const world = builder.build(terrain, 'low');
@@ -1215,13 +1217,14 @@ describe('VehicleSystem', () => {
 
     const v1 = vs1.getVehicles();
     const v2 = vs2.getVehicles();
-    expect(v1).toHaveLength(12);
-    expect(v2).toHaveLength(12);
+    expect(v1).toHaveLength(14);
+    expect(v2).toHaveLength(14);
     expect(v1.filter((v) => v.kind === 'hover_atv')).toHaveLength(4);
     expect(v1.filter((v) => v.kind === 'cyber_bike')).toHaveLength(4);
     expect(v1.filter((v) => v.kind === 'speedboat')).toHaveLength(4);
+    expect(v1.filter((v) => v.kind === 'hover_tank')).toHaveLength(2);
     expect(vs1.getGroup()).toBeInstanceOf(THREE.Group);
-    expect(vs1.getActiveVehicleColliders()).toHaveLength(12);
+    expect(vs1.getActiveVehicleColliders()).toHaveLength(14);
 
     for (let i = 0; i < v1.length; i++) {
       expect(v1[i].id).toBe(v2[i].id);
@@ -1305,7 +1308,7 @@ describe('VehicleSystem', () => {
 
     // Water floatation over Crystal Basin lake (25 + 35, -115)
     const waterBike = vs.spawnVehicleAt('cyber_bike', 60, -115, 0);
-    expect(vs.getVehicles()).toHaveLength(13);
+    expect(vs.getVehicles()).toHaveLength(15);
     expect(terrain.isWater(waterBike.x, waterBike.z)).toBe(true);
     expect(waterBike.y).toBeGreaterThan(WATER_LEVEL + 0.3);
 
@@ -1335,7 +1338,7 @@ describe('VehicleSystem', () => {
     vs.exitVehicle(waterBoat.id, 'boat_driver');
 
     const dryBoat = vs.spawnVehicleAt('speedboat', -75, -40, 0);
-    expect(vs.getVehicles()).toHaveLength(14);
+    expect(vs.getVehicles()).toHaveLength(16);
     expect(terrain.isWater(dryBoat.x, dryBoat.z)).toBe(false);
     vs.enterVehicle(dryBoat.id, 'land_driver');
     for (let i = 0; i < 60; i++) {
@@ -1345,7 +1348,7 @@ describe('VehicleSystem', () => {
     const dryTopSpeed = Math.hypot(dryBoat.vx, dryBoat.vz);
 
     const waterCruiseBoat = vs.spawnVehicleAt('speedboat', 260, 260, Math.PI * 0.25);
-    expect(vs.getVehicles()).toHaveLength(15);
+    expect(vs.getVehicles()).toHaveLength(17);
     vs.enterVehicle(waterCruiseBoat.id, 'water_cruise_driver');
     for (let i = 0; i < 60; i++) {
       vs.driveVehicle(waterCruiseBoat.id, 1, 0, false, 0.05);
@@ -1373,13 +1376,98 @@ describe('VehicleSystem', () => {
     expect(first.hp).toBe(0);
     expect(explosionSpy).toHaveBeenCalledTimes(1);
     expect(vs.enterVehicle(first.id, 'player')).toBe(false);
-    expect(vs.getActiveVehicleColliders()).toHaveLength(15);
+    expect(vs.getActiveVehicleColliders()).toHaveLength(17);
 
     vs.reset();
-    expect(vs.getVehicles()).toHaveLength(12);
+    expect(vs.getVehicles()).toHaveLength(14);
     expect(vs.getVehicles().filter((v) => v.kind === 'speedboat')).toHaveLength(4);
+    expect(vs.getVehicles().filter((v) => v.kind === 'hover_tank')).toHaveLength(2);
     expect(vs.getVehicles().every((v) => !v.destroyed && v.hp === v.maxHp)).toBe(true);
 
+    vs.dispose();
+    terrain.dispose();
+  });
+
+  it('spawns 2 Vanguard Hover Tanks at crater_depot & scorched_caldera approaches with 900 HP, 18/24 speed, rotating turret & getTankCannonMuzzle', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const vs = new VehicleSystem(terrain, bus, 4201);
+
+    const tanks = vs.getVehicles().filter((v) => v.kind === 'hover_tank');
+    expect(tanks).toHaveLength(2);
+
+    const craterDepot = POIS.find((p) => p.id === 'crater_depot')!;
+    const scorchedCaldera = POIS.find((p) => p.id === 'scorched_caldera')!;
+    expect(tanks.some((t) => Math.hypot(t.x - craterDepot.x, t.z - craterDepot.z) < 60)).toBe(true);
+    expect(tanks.some((t) => Math.hypot(t.x - scorchedCaldera.x, t.z - scorchedCaldera.z) < 60)).toBe(true);
+
+    const tank0 = tanks[0];
+    expect(tank0.maxHp).toBe(900);
+    expect(tank0.hp).toBe(900);
+    expect(terrain.isWater(tank0.x, tank0.z)).toBe(false);
+
+    const tankGroup = vs.getGroup().getObjectByName(`Vehicle_${tank0.id}`) as THREE.Group;
+    expect(tankGroup).toBeDefined();
+    const turretPivot = tankGroup.getObjectByName('TankTurretPivot') as THREE.Group;
+    const cannonBarrel = tankGroup.getObjectByName('TankCannonBarrel') as THREE.Group;
+    const muzzleObj = tankGroup.getObjectByName('TankCannonMuzzle');
+    expect(turretPivot).toBeDefined();
+    expect(cannonBarrel).toBeDefined();
+    expect(muzzleObj).toBeDefined();
+
+    // Non-tank & unknown vehicle IDs return null for getTankCannonMuzzle
+    const atv = vs.getVehicles().find((v) => v.kind === 'hover_atv')!;
+    expect(vs.getTankCannonMuzzle(atv.id)).toBeNull();
+    expect(vs.getTankCannonMuzzle('nonexistent_vehicle')).toBeNull();
+
+    // Muzzle position sits ahead of tank chassis along forward yaw
+    const muzzleBefore = vs.getTankCannonMuzzle(tank0.id);
+    expect(muzzleBefore).not.toBeNull();
+    expect(Number.isFinite(muzzleBefore!.x)).toBe(true);
+    expect(Number.isFinite(muzzleBefore!.y)).toBe(true);
+    expect(Number.isFinite(muzzleBefore!.z)).toBe(true);
+    expect(muzzleBefore!.y).toBeGreaterThan(tank0.y + 0.4);
+    const muzzleDist = Math.hypot(muzzleBefore!.x - tank0.x, muzzleBefore!.z - tank0.z);
+    expect(muzzleDist).toBeGreaterThan(2.5);
+    expect(muzzleDist).toBeLessThan(4.2);
+
+    // Rotating turret moves muzzle world position cleanly
+    const turretRotBefore = turretPivot.rotation.y;
+    vs.update(0.4, 1.2);
+    expect(turretPivot.rotation.y).not.toBeCloseTo(turretRotBefore, 3);
+    const muzzleRotated = vs.getTankCannonMuzzle(tank0.id)!;
+    expect(Math.hypot(muzzleRotated.x - muzzleBefore!.x, muzzleRotated.z - muzzleBefore!.z)).toBeGreaterThan(0.2);
+
+    // Driving & boosting respects maxSpeed 18, boostSpeed 24, turnRate 1.55
+    const spawnedTank = vs.spawnVehicleAt('hover_tank', -75, -10, 0);
+    expect(spawnedTank.kind).toBe('hover_tank');
+    expect(spawnedTank.maxHp).toBe(900);
+    expect(vs.getVehicles()).toHaveLength(15);
+
+    vs.enterVehicle(spawnedTank.id, 'tanker');
+    for (let i = 0; i < 80; i++) {
+      vs.driveVehicle(spawnedTank.id, 1, 0, false, 0.05);
+      vs.update(0.05, 2 + i * 0.05);
+    }
+    const cruiseSpeed = Math.hypot(spawnedTank.vx, spawnedTank.vz);
+    expect(cruiseSpeed).toBeGreaterThan(16.5);
+    expect(cruiseSpeed).toBeLessThanOrEqual(18.05);
+
+    for (let i = 0; i < 40; i++) {
+      vs.driveVehicle(spawnedTank.id, 1, 0, true, 0.05);
+      vs.update(0.05, 6 + i * 0.05);
+    }
+    const boostSpeed = Math.hypot(spawnedTank.vx, spawnedTank.vz);
+    expect(boostSpeed).toBeGreaterThan(21.5);
+    expect(boostSpeed).toBeLessThanOrEqual(24.05);
+
+    // Destroyed tank returns null for getTankCannonMuzzle
+    expect(vs.damageVehicle(spawnedTank.id, 950, { x: spawnedTank.x, y: spawnedTank.y, z: spawnedTank.z })).toBe(true);
+    expect(vs.getTankCannonMuzzle(spawnedTank.id)).toBeNull();
+
+    vs.reset();
+    expect(vs.getVehicles()).toHaveLength(14);
+    expect(vs.getVehicles().filter((v) => v.kind === 'hover_tank')).toHaveLength(2);
     vs.dispose();
     terrain.dispose();
   });
@@ -4591,6 +4679,261 @@ describe('Wave-11 Loot Pools, 3D Pickup Silhouettes & GLSL Shader Validation', (
     const fx = new EnvironmentFX(4201, bus);
     const storm = new StormSystem(4201, 'solo');
     const interactables = new WorldInteractables(terrain, bus);
+    const detail = new EnvironmentDetail(terrain, world.colliders, 'low', 4201);
+
+    const shaderMats: THREE.ShaderMaterial[] = [];
+    for (const root of [fx.getGroup(), world.group, storm.getMesh(), interactables.getGroup()]) {
+      root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof THREE.ShaderMaterial) {
+          shaderMats.push(obj.material);
+        }
+      });
+    }
+    expect(shaderMats.length).toBeGreaterThanOrEqual(6);
+
+    for (const mat of shaderMats) {
+      for (const glsl of [mat.vertexShader, mat.fragmentShader]) {
+        const smoothMatches = [
+          ...glsl.matchAll(/smoothstep\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,/g),
+        ];
+        for (const m of smoothMatches) {
+          expect(Number(m[1])).toBeLessThan(Number(m[2]));
+        }
+        const usedUniforms = new Set(glsl.match(/\bu[A-Z][A-Za-z0-9_]*/g) ?? []);
+        for (const uName of usedUniforms) {
+          expect(glsl).toMatch(
+            new RegExp(`uniform\\s+(?:float|int|bool|vec2|vec3|vec4|mat3|mat4|sampler2D)\\s+${uName}\\b`),
+          );
+          expect(mat.uniforms[uName]).toBeDefined();
+        }
+      }
+    }
+
+    const grassMesh = detail.getGroup().getObjectByName('InstancedGrass') as THREE.InstancedMesh;
+    const grassMat = grassMesh.material as THREE.MeshStandardMaterial;
+    const mockShader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: '#include <common>\nvoid main() {\n#include <begin_vertex>\n}',
+      fragmentShader: '',
+    };
+    grassMat.onBeforeCompile(
+      mockShader as unknown as THREE.WebGLProgramParametersWithUniforms,
+      {} as THREE.WebGLRenderer,
+    );
+    expect(mockShader.vertexShader).toContain('uniform float uWindTime;');
+    expect(mockShader.vertexShader).toContain('uniform float uWindStrength;');
+
+    detail.dispose();
+    interactables.dispose();
+    storm.dispose();
+    fx.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('WorldInteractables Wave-12 Golden Hot-Drop POIs & Showcase', () => {
+  it('deterministically selects HOT_DROP_POI_COUNT (2) distinct POIs, spawns 2 extra Golden Supply Drones per Hot Drop, and cleans up on reset()/dispose()', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    expect(interactables.getHotDropPoiIds()).toEqual([]);
+    expect(interactables.getSupplyDrones()).toHaveLength(12);
+
+    const picked1 = interactables.selectHotDropPois(4201);
+    expect(picked1).toHaveLength(HOT_DROP_POI_COUNT);
+    expect(new Set(picked1).size).toBe(HOT_DROP_POI_COUNT);
+    const validPoiIds = new Set(POIS.map((p) => p.id));
+    for (const id of picked1) {
+      expect(validPoiIds.has(id)).toBe(true);
+      expect(interactables.isHotDropPoi(id)).toBe(true);
+      expect(interactables.getGroup().getObjectByName(`HotDropBeacon_hotdrop_beacon_${id}`)).toBeDefined();
+    }
+    expect(interactables.isHotDropPoi('nonexistent_poi')).toBe(false);
+
+    // Returned list is defensive copy
+    const snap = interactables.getHotDropPoiIds();
+    expect(snap).toEqual(picked1);
+    snap.push('fake_poi');
+    expect(interactables.getHotDropPoiIds()).toEqual(picked1);
+
+    // 12 base + 2*2 golden hot-drop drones = 16
+    const allDrones = interactables.getSupplyDrones();
+    expect(allDrones).toHaveLength(16);
+    const hotDropDrones = allDrones.filter((d) => d.id.startsWith('drone_hotdrop_'));
+    expect(hotDropDrones).toHaveLength(4);
+    for (const hd of hotDropDrones) {
+      expect(picked1).toContain(hd.poiId);
+      expect(['legendary', 'mythic']).toContain(hd.rarity);
+      expect(hd.destroyed).toBe(false);
+      const localGroundY = terrain.getHeightAt(hd.x, hd.z);
+      expect(hd.y - localGroundY).toBeGreaterThanOrEqual(11);
+      expect(hd.y - localGroundY).toBeLessThanOrEqual(18);
+      const dmgRes = interactables.damageSupplyDrone(hd.id, 999);
+      expect(dmgRes).not.toBeNull();
+      expect(dmgRes!.destroyed).toBe(true);
+      expect(WEAPONS[dmgRes!.weaponId].allowedRarities).toContain(dmgRes!.rarity);
+    }
+
+    // Determinism check with identical seed
+    const interactables2 = new WorldInteractables(terrain, bus);
+    const picked2 = interactables2.selectHotDropPois(4201);
+    expect(picked2).toEqual(picked1);
+    interactables2.dispose();
+
+    // QA override via setHotDropPoiIds deduplicates & replaces cleanly without leaking drones
+    const overridden = interactables.setHotDropPoiIds(['metro_towers', 'metro_towers', 'crater_depot']);
+    expect(overridden).toEqual(['metro_towers', 'crater_depot']);
+    expect(interactables.isHotDropPoi('metro_towers')).toBe(true);
+    expect(interactables.isHotDropPoi('crater_depot')).toBe(true);
+    expect(interactables.getSupplyDrones()).toHaveLength(16);
+    expect(interactables.getSupplyDrones().filter((d) => d.id.startsWith('drone_hotdrop_'))).toHaveLength(4);
+
+    // reset() cleans up dynamic hot-drop drones, beacons, and hotDropPoiIds back to 12 base drones
+    interactables.reset();
+    expect(interactables.getHotDropPoiIds()).toEqual([]);
+    expect(interactables.getSupplyDrones()).toHaveLength(12);
+    expect(interactables.getGroup().getObjectByName('HotDropBeacon_hotdrop_beacon_metro_towers')).toBeUndefined();
+
+    // Re-populate then dispose() cleans everything
+    interactables.selectHotDropPois(777);
+    expect(interactables.getSupplyDrones()).toHaveLength(16);
+    interactables.dispose();
+    expect(interactables.getHotDropPoiIds()).toEqual([]);
+    expect(interactables.getSupplyDrones()).toHaveLength(0);
+
+    terrain.dispose();
+  });
+
+  it('supports qaPlaceWave12Showcase(centerPos, poiId) flagging Golden Hot Drop, emitting beam+chime, placing showcase beacon/drone, and cleaning up', () => {
+    const terrain = new TerrainSystem(4201);
+    const bus = new EventBus();
+    const interactables = new WorldInteractables(terrain, bus);
+
+    const beamSpy = vi.fn();
+    const soundSpy = vi.fn();
+    bus.on('vfx:hot_drop_beam', beamSpy);
+    bus.on('sound:play', soundSpy);
+
+    const center = { x: 25, y: terrain.getHeightAt(25, -55), z: -55 };
+    const showcase: Wave12ShowcaseResult = interactables.qaPlaceWave12Showcase(center, 'crystal_basin');
+
+    expect(showcase.poiId).toBe('crystal_basin');
+    expect(interactables.isHotDropPoi('crystal_basin')).toBe(true);
+    expect(showcase.hotDropPoiIds).toContain('crystal_basin');
+    expect(showcase.drone.id).toBe('drone_qa_wave12_showcase');
+    expect(showcase.drone.poiId).toBe('crystal_basin');
+    expect(['legendary', 'mythic']).toContain(showcase.drone.rarity);
+    expect(terrain.isWater(showcase.beaconPosition.x, showcase.beaconPosition.z)).toBe(false);
+    expect(interactables.getGroup().getObjectByName('HotDropBeacon_hotdrop_beacon_qa_showcase')).toBeDefined();
+    expect(interactables.getGroup().getObjectByName('SupplyDrone_drone_qa_wave12_showcase')).toBeDefined();
+
+    expect(beamSpy).toHaveBeenCalledTimes(1);
+    expect(beamSpy).toHaveBeenCalledWith({ position: showcase.beaconPosition });
+    expect(soundSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'hot_drop_chime' }));
+
+    // Re-calling with default nearest poiId replaces cleanly without duplicating showcase drone
+    const metroCenter = { x: -75, y: terrain.getHeightAt(-75, -12), z: -12 };
+    const showcase2 = interactables.qaPlaceWave12Showcase(metroCenter);
+    expect(showcase2.poiId).toBe('metro_towers');
+    expect(interactables.isHotDropPoi('metro_towers')).toBe(true);
+    expect(interactables.isHotDropPoi('crystal_basin')).toBe(false);
+    expect(interactables.getSupplyDrones()).toHaveLength(13);
+
+    // Update animates golden hot-drop beacon smoothly
+    const beaconGroup = interactables.getGroup().getObjectByName('HotDropBeacon_hotdrop_beacon_qa_showcase') as THREE.Group;
+    const diamond = beaconGroup.children[2] as THREE.Mesh;
+    const rotBefore = diamond.rotation.y;
+    interactables.update(0.3, 1.4);
+    expect(diamond.rotation.y).not.toBeCloseTo(rotBefore, 3);
+
+    interactables.reset();
+    expect(interactables.getHotDropPoiIds()).toEqual([]);
+    expect(interactables.getSupplyDrones()).toHaveLength(12);
+    expect(interactables.getGroup().getObjectByName('HotDropBeacon_hotdrop_beacon_qa_showcase')).toBeUndefined();
+
+    interactables.dispose();
+    terrain.dispose();
+  });
+});
+
+describe('Wave-12 Loot Pools, 3D Pickup Silhouettes & GLSL Shader Validation', () => {
+  it('spawns ballistic_shield and remote_c4 across floor, chest, and supply-drop pools with crisp multi-part 3D pickup silhouettes', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const pal = new PropsAndLoot(terrain, bus, 4201);
+    pal.populate(world.chestSpots, world.floorLootSpots, world.colliders);
+
+    const floorIds = new Set<string>();
+    const chestIds = new Set<string>();
+    for (let i = 0; i < 600; i++) {
+      const fw = pal.rollWeaponLoot(false);
+      expect(WEAPONS[fw.weaponId].allowedRarities).toContain(fw.rarity);
+      expect(fw.magAmmo).toBe(WEAPONS[fw.weaponId].magSize);
+      floorIds.add(fw.weaponId);
+
+      const cw = pal.rollWeaponLoot(true);
+      expect(WEAPONS[cw.weaponId].allowedRarities).toContain(cw.rarity);
+      expect(cw.magAmmo).toBe(WEAPONS[cw.weaponId].magSize);
+      chestIds.add(cw.weaponId);
+    }
+    expect(floorIds.has('ballistic_shield')).toBe(true);
+    expect(floorIds.has('remote_c4')).toBe(true);
+    expect(chestIds.has('ballistic_shield')).toBe(true);
+    expect(chestIds.has('remote_c4')).toBe(true);
+
+    const dropsBeforeSupply = pal.getLootDrops().length;
+    for (let i = 0; i < 130; i++) {
+      const sd = pal.spawnSupplyDrop(-75 + i, -40);
+      pal.openSupplyDrop(sd.id);
+    }
+    const supplyIds = new Set(
+      pal
+        .getLootDrops()
+        .slice(dropsBeforeSupply)
+        .filter((d) => Boolean(d.item))
+        .map((d) => d.item!.weaponId),
+    );
+    expect(supplyIds.has('ballistic_shield')).toBe(true);
+    expect(supplyIds.has('remote_c4')).toBe(true);
+
+    // Distinct multi-part 3D pickup silhouettes for ballistic_shield & remote_c4
+    const groupBefore = pal.getGroup().children.length;
+    pal.spawnLootDrop(
+      { x: 0, y: 12, z: 0 },
+      { item: { uid: 'shield_mesh_test', weaponId: 'ballistic_shield', rarity: 'epic', magAmmo: 15, stackCount: 1 } },
+    );
+    const shieldDropGroup = pal.getGroup().children[groupBefore] as THREE.Group;
+    const shieldSilhouette = shieldDropGroup.children[1] as THREE.Group;
+    expect(shieldSilhouette).toBeInstanceOf(THREE.Group);
+    expect(shieldSilhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.spawnLootDrop(
+      { x: 4, y: 12, z: 0 },
+      { item: { uid: 'c4_mesh_test', weaponId: 'remote_c4', rarity: 'epic', magAmmo: 0, stackCount: 3 } },
+    );
+    const c4DropGroup = pal.getGroup().children[groupBefore + 1] as THREE.Group;
+    const c4Silhouette = c4DropGroup.children[1] as THREE.Group;
+    expect(c4Silhouette).toBeInstanceOf(THREE.Group);
+    expect(c4Silhouette.children.length).toBeGreaterThanOrEqual(5);
+
+    pal.dispose();
+    builder.dispose();
+    terrain.dispose();
+  });
+
+  it('validates GLSL ShaderMaterial uniforms, smoothstep bounds, and EnvironmentDetail wind shader injection after Wave-12 additions', () => {
+    const terrain = new TerrainSystem(4201);
+    const builder = new WorldBuilder();
+    const world = builder.build(terrain, 'low');
+    const bus = new EventBus();
+    const fx = new EnvironmentFX(4201, bus);
+    const storm = new StormSystem(4201, 'solo');
+    const interactables = new WorldInteractables(terrain, bus);
+    interactables.selectHotDropPois(4201);
     const detail = new EnvironmentDetail(terrain, world.colliders, 'low', 4201);
 
     const shaderMats: THREE.ShaderMaterial[] = [];

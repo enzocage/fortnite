@@ -26,6 +26,9 @@ import {
   GRID_XZ,
   GRID_Y,
   RARITY_MULTIPLIER,
+  TANK_CANNON_DAMAGE,
+  TANK_CANNON_SPLASH_RADIUS,
+  TANK_CANNON_STRUCT_DMG,
   WEAPONS,
   clamp,
   dist2D,
@@ -89,6 +92,8 @@ export const WEAPON_SOUND_MAP: Record<WeaponId, SoundEventId> = {
   bandages: 'ui_click',
   medkit: 'ui_click',
   slurp_juice: 'ui_click',
+  ballistic_shield: 'shot_pistol',
+  remote_c4: 'c4_plant',
 };
 
 const SHOT_SOUND_MAP = WEAPON_SOUND_MAP;
@@ -269,6 +274,7 @@ interface ActiveProjectile extends ProjectileState {
   onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
   onTurretDeployed?: (turret: TurretEntity) => void;
   onChugHeal?: (report: ChugHealReport) => void;
+  onTankDamage?: (ev: DamageEvent) => void;
 }
 
 interface PendingBurst {
@@ -894,11 +900,14 @@ export class WeaponSystem {
       if (veh.destroyed || veh.hp <= 0) continue;
       if (excludeDriverId && veh.driverId === excludeDriverId) continue;
       const r =
-        veh.kind === 'speedboat'
-          ? 1.5
-          : veh.kind === 'hover_atv'
-            ? 1.25
-            : 0.95;
+        veh.kind === 'hover_tank'
+          ? 1.85
+          : veh.kind === 'speedboat'
+            ? 1.5
+            : veh.kind === 'hover_atv'
+              ? 1.25
+              : 0.95;
+      const topY = veh.kind === 'hover_tank' ? veh.y + 1.85 : veh.y + 1.35;
       const hit = this.intersectRayAABB(
         origin,
         dir,
@@ -906,7 +915,7 @@ export class WeaponSystem {
         veh.y - 0.2,
         veh.z - r,
         veh.x + r,
-        veh.y + 1.35,
+        topY,
         veh.z + r,
         bestDist,
       );
@@ -1239,6 +1248,7 @@ export class WeaponSystem {
     attacker: CombatActor | null;
     isPlayer: boolean;
     tideBridge?: WorldTideBridge | null;
+    excludeVehicleDriverId?: string;
     onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
   }): number {
     let hits = 0;
@@ -1283,10 +1293,17 @@ export class WeaponSystem {
     for (let i = 0; i < vehicles.length; i++) {
       const veh = vehicles[i];
       if (veh.destroyed || veh.hp <= 0) continue;
+      if (
+        opts.excludeVehicleDriverId &&
+        veh.driverId === opts.excludeVehicleDriverId
+      ) {
+        continue;
+      }
+      const vehRadius = veh.kind === 'hover_tank' ? 2.1 : 1.4;
       const center = { x: veh.x, y: veh.y + 0.65, z: veh.z };
       const d = dist3D(impactPos, center);
-      if (d <= radius + 1.4 && !this.isBlockedByShieldBubble(impactPos, center)) {
-        const falloff = clamp(1 - (d / (radius + 1.4)) * 0.5, 0.4, 1.0);
+      if (d <= radius + vehRadius && !this.isBlockedByShieldBubble(impactPos, center)) {
+        const falloff = clamp(1 - (d / (radius + vehRadius)) * 0.5, 0.4, 1.0);
         this.vehicleBridge?.damageVehicle(
           veh.id,
           Math.round(structureDamage * falloff),
@@ -3463,7 +3480,7 @@ export class WeaponSystem {
 
     if (def.isThrowable) {
       const throwSound: SoundEventId =
-        def.isPortABunker || def.isEmpGrenade || def.isAutoTurret
+        def.isPortABunker || def.isEmpGrenade || def.isAutoTurret || def.isRemoteC4
           ? 'pickaxe_swing'
           : SHOT_SOUND_MAP[params.item.weaponId];
       this.eventBus.emit('sound:play', {
@@ -3521,6 +3538,9 @@ export class WeaponSystem {
     );
     const isChugOrb = Boolean(
       def.isChugCannon || params.item.weaponId === 'chug_cannon',
+    );
+    const isC4Charge = Boolean(
+      def.isRemoteC4 || params.item.weaponId === 'remote_c4',
     );
     const flareScanRadius = isFlare ? (def.flareScanRadius ?? 75) : undefined;
     const effectiveRarityMult = isFlare || isChugOrb ? 1.0 : rarityMult;
@@ -3591,6 +3611,7 @@ export class WeaponSystem {
       flareScanRadius,
       isAutoTurret,
       isChugOrb,
+      isC4Charge,
       settled: false,
       bounceSoundCooldown: 0,
       demolisherActive: hasDemolisher,
@@ -3616,6 +3637,111 @@ export class WeaponSystem {
       damageDealt: 0,
       bloomScale: modFx.bloomMult,
       recoilScale: modFx.recoilMult,
+    };
+  }
+
+  fireTankCannon(
+    actor: CombatActor,
+    origin: Vec3Like,
+    aimDir: Vec3Like,
+    opts?: {
+      isPlayer?: boolean;
+      actorTeamId?: TeamId;
+      tideBridge?: WorldTideBridge | null;
+      onBoarEliminated?: (pos: Vec3Like, attackerId: string) => void;
+      onTankDamage?: (ev: DamageEvent) => void;
+    },
+  ): FireWeaponResult {
+    if (!actor.alive || actor.hp <= 0) {
+      return {
+        fired: false,
+        shotsHit: 0,
+        headshots: 0,
+        damageDealt: 0,
+        bloomScale: 1,
+        recoilScale: 1,
+      };
+    }
+
+    const shotDir = normalizeVec(aimDir);
+    const isPlayer = opts?.isPlayer ?? actor.id === 'player';
+    const horizLen = Math.hypot(shotDir.x, shotDir.z);
+    const derivedYaw = horizLen > 1e-4 ? Math.atan2(shotDir.x, shotDir.z) : 0;
+    const speed = 46;
+    const spawnPos: Vec3Like = {
+      x: origin.x + shotDir.x * 0.55,
+      y: origin.y + shotDir.y * 0.55,
+      z: origin.z + shotDir.z * 0.55,
+    };
+
+    this.eventBus.emit('sound:play', {
+      id: 'tank_cannon',
+      position: origin,
+      volume: 0.92,
+      spatial: true,
+    });
+    this.eventBus.emit('vfx:muzzle', {
+      position: origin,
+      direction: shotDir,
+      weaponId: 'rocket_launcher',
+    });
+    this.eventBus.emit('audio:noise', {
+      position: origin,
+      kind: 'gunfire',
+      sourceId: actor.id,
+      radius: 175,
+    });
+    if (isPlayer) {
+      this.eventBus.emit('vfx:camera_shake', {
+        intensity: 0.42,
+        duration: 0.22,
+      });
+    }
+
+    const proj: ActiveProjectile = {
+      id: `proj_${this.nextProjId++}`,
+      ownerId: actor.id,
+      ownerName: actor.name,
+      weaponId: 'rocket_launcher',
+      rarity: 'legendary',
+      position: spawnPos,
+      startPos: { ...origin },
+      startVy: shotDir.y * speed,
+      velocity: {
+        x: shotDir.x * speed,
+        y: shotDir.y * speed,
+        z: shotDir.z * speed,
+      },
+      gravity: 6.5,
+      damage: TANK_CANNON_DAMAGE,
+      structureDamage: TANK_CANNON_STRUCT_DMG,
+      headshotMultiplier: 1.0,
+      splashRadius: TANK_CANNON_SPLASH_RADIUS,
+      age: 0,
+      maxAge: 6.0,
+      alive: true,
+      isPlayer,
+      isThrowable: false,
+      bouncesRemaining: 0,
+      isTankShell: true,
+      settled: false,
+      bounceSoundCooldown: 0,
+      ownerYaw: derivedYaw,
+      actorSquadId: actor.squadId,
+      actorTeamId: opts?.actorTeamId ?? actor.teamId,
+      tideBridge: opts?.tideBridge ?? null,
+      onBoarEliminated: opts?.onBoarEliminated,
+      onTankDamage: opts?.onTankDamage,
+    };
+
+    this.projectiles.push(proj);
+    return {
+      fired: true,
+      shotsHit: 0,
+      headshots: 0,
+      damageDealt: 0,
+      bloomScale: 1,
+      recoilScale: 1,
     };
   }
 
@@ -4913,6 +5039,153 @@ export class WeaponSystem {
     }
   }
 
+  private detonateTankShell(
+    proj: ActiveProjectile,
+    impactPos: Vec3Like,
+    directActorId?: string,
+  ): void {
+    this.eventBus.emit('vfx:tank_shell', {
+      origin: proj.startPos,
+      target: impactPos,
+      radius: proj.splashRadius,
+    });
+    this.eventBus.emit('sound:play', {
+      id: 'tank_impact',
+      position: impactPos,
+      volume: 0.92,
+      spatial: true,
+    });
+    this.eventBus.emit('audio:noise', {
+      position: impactPos,
+      kind: 'gunfire',
+      sourceId: proj.ownerId,
+      radius: 170,
+    });
+    this.emitBlastCameraShake(impactPos, 0.72, proj.isPlayer);
+
+    const attackerStub: CombatActor = {
+      id: proj.ownerId,
+      name: proj.ownerName,
+      position: proj.startPos,
+      eyePos: proj.startPos,
+      squadId: proj.actorSquadId,
+      teamId: proj.actorTeamId,
+      hp: 100,
+      shield: 0,
+      radius: 0.42,
+      height: 1.85,
+      alive: true,
+    };
+
+    const pieces = [...this.building.getPieces()];
+    for (let i = 0; i < pieces.length; i++) {
+      const p = pieces[i];
+      const bx = p.gx * GRID_XZ;
+      const by = p.gy * GRID_Y;
+      const bz = p.gz * GRID_XZ;
+      let minX = bx;
+      let maxX = bx + GRID_XZ;
+      let minY = by;
+      let maxY = by + GRID_Y;
+      let minZ = bz;
+      let maxZ = bz + GRID_XZ;
+      if (p.type === 'wall') {
+        if (p.dir === 'N') {
+          minZ = bz - 0.15;
+          maxZ = bz + 0.15;
+        } else {
+          minX = bx - 0.15;
+          maxX = bx + 0.15;
+        }
+      } else if (p.type === 'floor') {
+        minY = by - 0.15;
+        maxY = by + 0.15;
+      }
+      const dx = impactPos.x < minX ? minX - impactPos.x : impactPos.x > maxX ? impactPos.x - maxX : 0;
+      const dy = impactPos.y < minY ? minY - impactPos.y : impactPos.y > maxY ? impactPos.y - maxY : 0;
+      const dz = impactPos.z < minZ ? minZ - impactPos.z : impactPos.z > maxZ ? impactPos.z - maxZ : 0;
+      const d = Math.hypot(dx, dy, dz);
+      const center = {
+        x: (minX + maxX) * 0.5,
+        y: (minY + maxY) * 0.5,
+        z: (minZ + maxZ) * 0.5,
+      };
+      if (d <= proj.splashRadius && !this.isBlockedByShieldBubble(impactPos, center)) {
+        const falloff =
+          d <= 2.4
+            ? 1.0
+            : clamp(1 - ((d - 2.4) / proj.splashRadius) * 0.5, 0.45, 1.0);
+        this.building.damagePiece(p.id, Math.round(proj.structureDamage * falloff));
+      }
+    }
+
+    this.applySplashEnvironmentDamage({
+      impactPos,
+      radius: proj.splashRadius,
+      structureDamage: proj.structureDamage,
+      boarDamage: proj.damage,
+      ownerId: proj.ownerId,
+      ownerSquadId: proj.actorSquadId,
+      ownerTeamId: proj.actorTeamId,
+      attacker: attackerStub,
+      isPlayer: proj.isPlayer,
+      tideBridge: proj.tideBridge,
+      excludeVehicleDriverId: proj.ownerId,
+      onBoarEliminated: proj.onBoarEliminated,
+    });
+
+    if (this.actorsProvider) {
+      const actors = this.actorsProvider();
+      for (let i = 0; i < actors.length; i++) {
+        const actor = actors[i];
+        if (!actor.alive || actor.hp <= 0) continue;
+        if (
+          isFriendlyCombatActor(
+            proj.ownerId,
+            proj.actorSquadId,
+            proj.actorTeamId,
+            actor,
+          )
+        ) {
+          continue;
+        }
+        const center = {
+          x: actor.position.x,
+          y: actor.position.y + actor.height * 0.5,
+          z: actor.position.z,
+        };
+        const isDirectHit = directActorId === actor.id;
+        const d = Math.min(dist3D(impactPos, actor.position), dist3D(impactPos, center));
+        if (
+          isDirectHit ||
+          (d <= proj.splashRadius && !this.isBlockedByShieldBubble(impactPos, center))
+        ) {
+          const falloff =
+            isDirectHit || d <= 2.2
+              ? 1.0
+              : clamp(
+                  1 - ((d - 2.2) / Math.max(0.5, proj.splashRadius - 2.2)) * 0.6,
+                  0.4,
+                  1.0,
+                );
+          const splashDmg = Math.round(proj.damage * falloff);
+          const ev = this.applyActorDamage(
+            attackerStub,
+            actor,
+            proj.weaponId,
+            proj.rarity,
+            splashDmg,
+            false,
+            center,
+            d,
+            proj.isPlayer && actor.id !== proj.ownerId,
+          );
+          proj.onTankDamage?.(ev);
+        }
+      }
+    }
+  }
+
   private detonateFlare(
     proj: ActiveProjectile,
     impactPos: Vec3Like,
@@ -5741,39 +6014,45 @@ export class WeaponSystem {
                                 };
 
         const tracerColor =
-          proj.isChugOrb
-            ? 0x22d3ee
-            : proj.isAutoTurret
-              ? 0x38bdf8
-              : proj.isFlare
-                ? 0xff6b2b
-                : proj.isBoomArrow
-                  ? 0xfbbf24
-                  : proj.weaponId === 'rocket_launcher'
-                    ? 0xff5a2a
-                    : proj.isShieldBubble || proj.isPortABunker
-                      ? 0x38bdf8
-                      : proj.isEmpGrenade
-                        ? 0x22d3ee
-                        : proj.isShockwave
-                          ? 0xa855f7
-                          : proj.isSplashHeal
+          proj.isTankShell
+            ? 0xf97316
+            : proj.isC4Charge
+              ? 0xef4444
+              : proj.isChugOrb
+                ? 0x22d3ee
+                : proj.isAutoTurret
+                  ? 0x38bdf8
+                  : proj.isFlare
+                    ? 0xff6b2b
+                    : proj.isBoomArrow
+                      ? 0xfbbf24
+                      : proj.weaponId === 'rocket_launcher'
+                        ? 0xff5a2a
+                        : proj.isShieldBubble || proj.isPortABunker
+                          ? 0x38bdf8
+                          : proj.isEmpGrenade
                             ? 0x22d3ee
-                            : proj.isThrowable
-                              ? 0xf59e0b
-                              : 0xfff3b0;
+                            : proj.isShockwave
+                              ? 0xa855f7
+                              : proj.isSplashHeal
+                                ? 0x22d3ee
+                                : proj.isThrowable
+                                  ? 0xf59e0b
+                                  : 0xfff3b0;
         const tracerWidth =
-          proj.weaponId === 'rocket_launcher'
-            ? 0.14
-            : proj.isChugOrb
-              ? 0.13
-              : proj.isFlare
-                ? 0.11
-                : proj.isBoomArrow || proj.isAutoTurret
-                  ? 0.09
-                  : proj.isThrowable
-                    ? 0.08
-                    : 0.06;
+          proj.isTankShell
+            ? 0.2
+            : proj.weaponId === 'rocket_launcher'
+              ? 0.14
+              : proj.isChugOrb
+                ? 0.13
+                : proj.isFlare
+                  ? 0.11
+                  : proj.isBoomArrow || proj.isAutoTurret
+                    ? 0.09
+                    : proj.isThrowable
+                      ? 0.08
+                      : 0.06;
 
         this.eventBus.emit('vfx:tracer', {
           from: prevPos,
@@ -5898,6 +6177,37 @@ export class WeaponSystem {
                 ? worldHit.targetId
                 : undefined;
             this.detonateFlare(proj, impactPos, directHit, directBuildId);
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
+          } else if (proj.isC4Charge) {
+            const stickPos =
+              hitType === 'bubble' && bubbleHit
+                ? {
+                    x: nextPos.x + bubbleHit.normal.x * 0.08,
+                    y: nextPos.y + bubbleHit.normal.y * 0.08,
+                    z: nextPos.z + bubbleHit.normal.z * 0.08,
+                  }
+                : { ...nextPos };
+            this.building.placeC4(
+              stickPos,
+              proj.ownerId,
+              proj.actorSquadId,
+              proj.actorTeamId,
+            );
+            proj.alive = false;
+            this.projectiles.splice(i, 1);
+          } else if (proj.isTankShell) {
+            const impactPos =
+              hitType === 'bubble' && bubbleHit
+                ? {
+                    x: nextPos.x + bubbleHit.normal.x * 0.08,
+                    y: nextPos.y + bubbleHit.normal.y * 0.08,
+                    z: nextPos.z + bubbleHit.normal.z * 0.08,
+                  }
+                : nextPos;
+            const directActorId =
+              hitType === 'actor' && actorHit ? actorHit.actor.id : undefined;
+            this.detonateTankShell(proj, impactPos, directActorId);
             proj.alive = false;
             this.projectiles.splice(i, 1);
           } else if (proj.splashRadius > 0) {

@@ -43,6 +43,7 @@ export {
   type Wave9ShowcaseResult,
   type Wave10ShowcaseResult,
   type Wave11ShowcaseResult,
+  type Wave12ShowcaseResult,
   type WeaponBunkerLootResult,
   type WildBoarDamageResult,
 } from './WorldInteractables';

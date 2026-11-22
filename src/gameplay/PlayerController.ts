@@ -33,6 +33,8 @@ import type {
   ZiplineEntity,
 } from '../types';
 import {
+  BALLISTIC_SHIELD_MAX_HP,
+  BALLISTIC_SHIELD_REGEN_PER_SEC,
   BUILD_COST,
   DBNO_BLEED_DPS,
   DBNO_MAX_HP,
@@ -56,11 +58,13 @@ import {
   PLAYER_CROUCH_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_RADIUS,
+  POIS,
   RARITY_ORDER,
   REBOOT_DURATION_SEC,
   REVIVE_DURATION_SEC,
   SHIELD_MUSHROOM_AMOUNT,
   STARTING_GOLD_BARS,
+  TANK_CANNON_COOLDOWN_SEC,
   THERMAL_FLOPPER_DURATION_SEC,
   UPGRADE_COSTS,
   WATER_LEVEL,
@@ -232,6 +236,9 @@ export class PlayerController {
   private fishingProgress: number | null = null;
   private activeFishingHoleId: string | null = null;
   private chugRegenTimers = new Map<string, number>();
+  private ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
+  private tankCannonCooldown = 0;
+  private hotDropPoiIds: string[] = [];
 
   private gameMode: GameModeId = 'solo';
   private overshield = 0;
@@ -382,6 +389,9 @@ export class PlayerController {
     turretsDeployed: 0,
     fishCaught: 0,
     chugHeals: 0,
+    c4Blasts: 0,
+    shieldBlockedDmg: 0,
+    tankElims: 0,
   };
 
   private interactPrompt: PlayerInteractPrompt | null = null;
@@ -591,7 +601,8 @@ export class PlayerController {
         if (
           ev.weaponId === 'kinetic_blade' ||
           ev.weaponId === 'shockwave_hammer' ||
-          ev.weaponId === 'flare_gun'
+          ev.weaponId === 'flare_gun' ||
+          ev.weaponId === 'remote_c4'
         ) {
           this.stats.damageDealt += ev.damage;
         }
@@ -883,6 +894,126 @@ export class PlayerController {
     }
   }
 
+  setKillStreak(n: number): void {
+    if (!Number.isFinite(n)) return;
+    this.killStreak = Math.max(0, Math.floor(n));
+  }
+
+  setBallisticShieldHp(hp: number): void {
+    if (!Number.isFinite(hp)) return;
+    this.ballisticShieldHp = clamp(hp, 0, BALLISTIC_SHIELD_MAX_HP);
+  }
+
+  getBallisticShieldHp(): number {
+    return this.ballisticShieldHp;
+  }
+
+  setHotDropPoiIds(ids: string[]): void {
+    this.hotDropPoiIds = Array.isArray(ids) ? [...ids] : [];
+  }
+
+  getHotDropPoiIds(): string[] {
+    return [...this.hotDropPoiIds];
+  }
+
+  detonatePlacedC4(): { blasts: number; hits: number; buildsDestroyed: number } {
+    if (this.phase !== 'playing' || !this.isAlive() || this.isKnocked) {
+      return { blasts: 0, hits: 0, buildsDestroyed: 0 };
+    }
+    const res = this.building.detonateC4ForOwner(
+      'player',
+      this.weapons.getActors(),
+    );
+    if (res.blasts > 0) {
+      this.stats.c4Blasts = (this.stats.c4Blasts ?? 0) + res.blasts;
+      this.eventBus.emit('vfx:camera_shake', {
+        intensity: 0.45,
+        duration: 0.2,
+      });
+    }
+    return res;
+  }
+
+  private isActivelyShieldBlocking(): boolean {
+    if (
+      this.phase !== 'playing' ||
+      !this.isAlive() ||
+      this.isKnocked ||
+      this.activeVehicleId !== null ||
+      this.isBuildMode ||
+      this.building.getEditState().active ||
+      this.ballisticShieldHp <= 0
+    ) {
+      return false;
+    }
+    const activeItem = this.inventory.getActiveItem();
+    if (!activeItem) return false;
+    const def = WEAPONS[activeItem.weaponId];
+    const isShieldItem = Boolean(
+      def?.isBallisticShield || activeItem.weaponId === 'ballistic_shield',
+    );
+    if (!isShieldItem) return false;
+    return this.isAiming || this.rightMouseDown;
+  }
+
+  private tryFireTankCannon(): boolean {
+    if (
+      this.phase !== 'playing' ||
+      !this.isAlive() ||
+      this.isKnocked ||
+      this.activeVehicleId === null ||
+      this.tankCannonCooldown > 0
+    ) {
+      return false;
+    }
+    const veh = this.getActiveVehicleEntity();
+    if (!veh || veh.destroyed || veh.hp <= 0 || veh.kind !== 'hover_tank') {
+      return false;
+    }
+
+    const look = this.getLookDirection();
+    const origin =
+      this.vehicleBridge?.getTankCannonMuzzle?.(veh.id) ?? {
+        x: veh.x + Math.sin(this.yaw) * 2.1,
+        y: veh.y + 1.75,
+        z: veh.z + Math.cos(this.yaw) * 2.1,
+      };
+
+    const res = this.weapons.fireTankCannon(this.getCombatActor(), origin, look, {
+      isPlayer: true,
+      actorTeamId: this.gameMode === 'team_rumble' ? 'team_blue' : undefined,
+      onTankDamage: (ev) => {
+        this.stats.damageDealt += ev.damage;
+        if (ev.isElimination) {
+          this.stats.tankElims = (this.stats.tankElims ?? 0) + 1;
+        }
+      },
+    });
+
+    if (res.fired) {
+      this.tankCannonCooldown = TANK_CANNON_COOLDOWN_SEC;
+      this.stats.shotsFired += 1;
+      return true;
+    }
+    return false;
+  }
+
+  private computeInHotDropPoi(): boolean {
+    if (this.hotDropPoiIds.length === 0) return false;
+    const terrainPois =
+      typeof this.terrain.getPOIs === 'function' ? this.terrain.getPOIs() : POIS;
+    const list = terrainPois && terrainPois.length > 0 ? terrainPois : POIS;
+    for (let i = 0; i < list.length; i++) {
+      const poi = list[i];
+      if (!this.hotDropPoiIds.includes(poi.id)) continue;
+      const d = dist2D(this.position.x, this.position.z, poi.x, poi.z);
+      if (d <= poi.radius * 0.85) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private isModdableFirearm(
     item: ItemInstance | null,
     slotIndex: number,
@@ -1050,6 +1181,8 @@ export class PlayerController {
     this.jetpackVfxTimer = 0;
     this.lowGravityTimer = 0;
     this.thermalVisionTimer = 0;
+    this.ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
+    this.tankCannonCooldown = 0;
     this.hammerCharges = WEAPONS.shockwave_hammer.hammerMaxCharges ?? 4;
     this.hammerRechargeTimer = 0;
     this.isSliding = false;
@@ -1823,6 +1956,9 @@ export class PlayerController {
     if (this.killStreak >= 2) {
       this.eventBus.emit('sound:play', { id: 'kill_streak' });
     }
+    if (this.killStreak >= 3) {
+      this.eventBus.emit('sound:play', { id: 'streak_surge' });
+    }
   }
 
   addKill(): void {
@@ -2093,10 +2229,13 @@ export class PlayerController {
     this.jetpackVfxTimer = 0;
     this.lowGravityTimer = 0;
     this.thermalVisionTimer = 0;
+    this.ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
+    this.tankCannonCooldown = 0;
     this.cancelTrainChestHack();
     this.cancelFishingChannel();
     this.chugRegenTimers.clear();
     this.weapons.clearActorBurn('player');
+    this.hotDropPoiIds = [];
     this.stats = {
       damageDealt: 0,
       shotsFired: 0,
@@ -2124,6 +2263,9 @@ export class PlayerController {
       turretsDeployed: 0,
       fishCaught: 0,
       chugHeals: 0,
+      c4Blasts: 0,
+      shieldBlockedDmg: 0,
+      tankElims: 0,
     };
     this.interactPrompt = null;
     this.hitmarker = null;
@@ -2288,9 +2430,6 @@ export class PlayerController {
       return;
     }
 
-    this.lastDamageTime = this.elapsedTime;
-    this.overshieldRecharging = false;
-
     const isEmp = ev.weaponId === 'emp_grenade';
     const totalDmg =
       ev.damage > 0
@@ -2298,6 +2437,8 @@ export class PlayerController {
         : Math.max(0, ev.shieldDamage) + Math.max(0, ev.hpDamage);
 
     if (this.isKnocked) {
+      this.lastDamageTime = this.elapsedTime;
+      this.overshieldRecharging = false;
       if (!isEmp) {
         this.bleedOutHp = Math.max(0, this.bleedOutHp - totalDmg);
       }
@@ -2314,13 +2455,81 @@ export class PlayerController {
       return;
     }
 
+    let remainingDmg = totalDmg;
+    let shieldAbsorbedAny = false;
+    if (
+      ev.attackerId !== 'environment' &&
+      ev.attackerId !== 'lava' &&
+      !isEmp &&
+      this.isActivelyShieldBlocking()
+    ) {
+      const look = this.getLookDirection();
+      const lookHorizLen = Math.hypot(look.x, look.z);
+      const fx = lookHorizLen > 1e-4 ? look.x / lookHorizLen : Math.sin(this.yaw);
+      const fz = lookHorizLen > 1e-4 ? look.z / lookHorizLen : Math.cos(this.yaw);
+
+      let dx = ev.hitPoint.x - this.position.x;
+      let dz = ev.hitPoint.z - this.position.z;
+      let hLen = Math.hypot(dx, dz);
+      if (hLen <= 1e-4 && ev.attackerId) {
+        const attacker = this.weapons
+          .getActors()
+          .find((a) => a.id === ev.attackerId);
+        if (attacker) {
+          dx = attacker.position.x - this.position.x;
+          dz = attacker.position.z - this.position.z;
+          hLen = Math.hypot(dx, dz);
+        }
+      }
+
+      const dot = hLen > 1e-4 ? (dx / hLen) * fx + (dz / hLen) * fz : 0;
+      if (dot > 0.15 && remainingDmg > 0) {
+        const blocked = Math.min(this.ballisticShieldHp, remainingDmg);
+        if (blocked > 0) {
+          shieldAbsorbedAny = true;
+          this.ballisticShieldHp = Math.max(0, this.ballisticShieldHp - blocked);
+          this.stats.shieldBlockedDmg =
+            (this.stats.shieldBlockedDmg ?? 0) + blocked;
+
+          const normLen = Math.hypot(dx, 0.1, dz) || 1;
+          this.eventBus.emit('vfx:shield_ricochet', {
+            position: {
+              x: this.position.x + fx * 0.65,
+              y: this.position.y + 1.15,
+              z: this.position.z + fz * 0.65,
+            },
+            normal: {
+              x: dx / normLen,
+              y: 0.1 / normLen,
+              z: dz / normLen,
+            },
+          });
+          this.eventBus.emit('sound:play', {
+            id: this.ballisticShieldHp <= 0 ? 'shield_break' : 'shield_block',
+            position: { ...this.position },
+            spatial: true,
+          });
+
+          remainingDmg = Math.max(0, remainingDmg - blocked);
+          if (remainingDmg <= 0) {
+            return;
+          }
+        }
+      }
+    }
+
+    this.lastDamageTime = this.elapsedTime;
+    this.overshieldRecharging = false;
+
     if (this.overshield > 0) {
-      const osDmg = Math.min(this.overshield, totalDmg);
+      const osDmg = Math.min(this.overshield, remainingDmg);
       this.overshield = Math.max(0, this.overshield - osDmg);
-      const rem = totalDmg - osDmg;
+      const rem = remainingDmg - osDmg;
       if (rem > 0) {
         if (ev.attackerId === 'environment' || ev.attackerId === 'lava') {
-          const sDmg = Math.min(this.shield, Math.max(0, ev.shieldDamage));
+          const sDmg = shieldAbsorbedAny
+            ? Math.min(this.shield, rem)
+            : Math.min(this.shield, Math.max(0, ev.shieldDamage));
           const hDmg = isEmp ? 0 : Math.min(this.health, Math.max(0, rem - sDmg));
           this.shield = Math.max(0, this.shield - sDmg);
           this.health = Math.max(0, this.health - hDmg);
@@ -2332,18 +2541,25 @@ export class PlayerController {
         }
       }
     } else {
-      let sDmg = ev.shieldDamage;
-      let hDmg = isEmp ? 0 : ev.hpDamage;
+      let sDmg = shieldAbsorbedAny
+        ? Math.min(this.shield, remainingDmg)
+        : ev.shieldDamage;
+      let hDmg = isEmp
+        ? 0
+        : shieldAbsorbedAny
+          ? Math.min(this.health, Math.max(0, remainingDmg - sDmg))
+          : ev.hpDamage;
       if (
-        (sDmg === 0 && hDmg === 0 && ev.damage > 0) ||
-        (ev.attackerId !== 'environment' &&
-          ev.attackerId !== 'lava' &&
-          this.shield > 0 &&
-          sDmg === 0 &&
-          ev.damage > 0)
+        !shieldAbsorbedAny &&
+        ((sDmg === 0 && hDmg === 0 && remainingDmg > 0) ||
+          (ev.attackerId !== 'environment' &&
+            ev.attackerId !== 'lava' &&
+            this.shield > 0 &&
+            sDmg === 0 &&
+            remainingDmg > 0))
       ) {
-        sDmg = Math.min(this.shield, ev.damage);
-        hDmg = isEmp ? 0 : Math.min(this.health, ev.damage - sDmg);
+        sDmg = Math.min(this.shield, remainingDmg);
+        hDmg = isEmp ? 0 : Math.min(this.health, remainingDmg - sDmg);
       }
 
       this.shield = Math.max(0, this.shield - sDmg);
@@ -2421,6 +2637,8 @@ export class PlayerController {
     this.jetpackDryLock = false;
     this.lowGravityTimer = 0;
     this.thermalVisionTimer = 0;
+    this.ballisticShieldHp = BALLISTIC_SHIELD_MAX_HP;
+    this.tankCannonCooldown = 0;
     this.chugRegenTimers.clear();
     this.flareBeacons = [];
     this.flareScanMarkedCount = 0;
@@ -2576,6 +2794,8 @@ export class PlayerController {
         this.handleSecondaryButtonDown();
       } else {
         this.rightMouseDown = false;
+        this.isAiming = false;
+        this.isScoped = false;
       }
     }
   }
@@ -2663,6 +2883,7 @@ export class PlayerController {
 
     if (this.phase === 'playing') {
       if (this.activeVehicleId !== null) {
+        this.tryFireTankCannon();
         return;
       }
       const editState = this.building.getEditState();
@@ -2697,6 +2918,8 @@ export class PlayerController {
           this.tryKineticDash();
         } else if (activeWeaponId === 'shockwave_hammer') {
           this.tryHammerBounce();
+        } else if (activeWeaponId === 'remote_c4') {
+          this.detonatePlacedC4();
         }
       }
     }
@@ -2715,6 +2938,8 @@ export class PlayerController {
       }
     } else if (e.button === 2) {
       this.rightMouseDown = false;
+      this.isAiming = false;
+      this.isScoped = false;
     }
     if (!this.leftMouseDown && !this.rightMouseDown) {
       this.isMouseDragging = false;
@@ -4450,11 +4675,13 @@ export class PlayerController {
             id: veh.id,
             prompt: {
               label:
-                veh.kind === 'cyber_bike'
-                  ? 'Drive Cyber Bike'
-                  : veh.kind === 'speedboat'
-                    ? 'Drive Speedboat'
-                    : 'Drive Hover ATV',
+                veh.kind === 'hover_tank'
+                  ? 'Drive Vanguard Tank'
+                  : veh.kind === 'cyber_bike'
+                    ? 'Drive Cyber Bike'
+                    : veh.kind === 'speedboat'
+                      ? 'Drive Speedboat'
+                      : 'Drive Hover ATV',
               key: interactKey,
               rarity: 'rare',
             },
@@ -5983,12 +6210,29 @@ export class PlayerController {
       this.currentBushId = null;
       this.isJetpackThrusting = false;
       this.thermalVisionTimer = 0;
+      if (this.tankCannonCooldown > 0) {
+        this.tankCannonCooldown = Math.max(0, this.tankCannonCooldown - safeDt);
+      }
     } else {
       if (this.lowGravityTimer > 0) {
         this.lowGravityTimer = Math.max(0, this.lowGravityTimer - safeDt);
       }
       if (this.thermalVisionTimer > 0) {
         this.thermalVisionTimer = Math.max(0, this.thermalVisionTimer - safeDt);
+      }
+      if (this.tankCannonCooldown > 0) {
+        this.tankCannonCooldown = Math.max(0, this.tankCannonCooldown - safeDt);
+      }
+      if (
+        this.isAlive() &&
+        !this.isKnocked &&
+        !this.isActivelyShieldBlocking() &&
+        this.ballisticShieldHp < BALLISTIC_SHIELD_MAX_HP
+      ) {
+        this.ballisticShieldHp = Math.min(
+          BALLISTIC_SHIELD_MAX_HP,
+          this.ballisticShieldHp + BALLISTIC_SHIELD_REGEN_PER_SEC * safeDt,
+        );
       }
     }
 
@@ -6497,7 +6741,8 @@ export class PlayerController {
       activeItem?.weaponId !== 'pickaxe' &&
       activeItem?.weaponId !== 'kinetic_blade' &&
       activeItem?.weaponId !== 'shockwave_hammer' &&
-      activeItem?.weaponId !== 'jetpack';
+      activeItem?.weaponId !== 'jetpack' &&
+      activeItem?.weaponId !== 'remote_c4';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
     const hasJetpack = this.inventory.findSlotByWeapon('jetpack') !== -1;
@@ -7247,7 +7492,8 @@ export class PlayerController {
       activeItem?.weaponId !== 'pickaxe' &&
       activeItem?.weaponId !== 'kinetic_blade' &&
       activeItem?.weaponId !== 'shockwave_hammer' &&
-      activeItem?.weaponId !== 'jetpack';
+      activeItem?.weaponId !== 'jetpack' &&
+      activeItem?.weaponId !== 'remote_c4';
     this.isScoped = this.isAiming && activeItem?.weaponId === 'sniper';
 
     if (this.isAiming || this.isFiring) {
@@ -7795,6 +8041,9 @@ export class PlayerController {
       this.building.setPreviewVisible(false);
       this.lastBuildPreview = null;
       this.isFiring = false;
+      if (this.leftMouseDown) {
+        this.tryFireTankCannon();
+      }
       return;
     }
 
@@ -7953,14 +8202,15 @@ export class PlayerController {
       targetFov = this.phase === 'skydiving' ? this.settings.fov + 8 : this.settings.fov + 2;
     } else if (this.activeVehicleId !== null) {
       const veh = this.getActiveVehicleEntity();
+      const isTank = veh?.kind === 'hover_tank';
       pivot = {
         x: this.position.x,
-        y: this.position.y + 1.25,
+        y: this.position.y + (isTank ? 1.75 : 1.25),
         z: this.position.z,
       };
-      backDist = 5.8;
+      backDist = isTank ? 7.2 : 5.8;
       rightOffset = 0;
-      upOffset = 1.05;
+      upOffset = isTank ? 1.45 : 1.05;
       targetFov = this.settings.fov + (veh?.isBoosting ? 12 : 6);
     } else if (this.isEmoting) {
       pivot = {
@@ -8215,6 +8465,8 @@ export class PlayerController {
       isJetpackThrusting: this.isJetpackThrusting,
       hasLowGravityBuff: this.lowGravityTimer > 0,
       isBurning: this.weapons.isActorBurning('player'),
+      isShieldBlocking: this.isActivelyShieldBlocking(),
+      killStreak: this.killStreak,
     };
   }
 
@@ -8446,6 +8698,26 @@ export class PlayerController {
           ? clamp(this.fishingProgress, 0, 1)
           : null,
       deployedTurrets,
+      ballisticShieldHp:
+        this.inventory.findSlotByWeapon('ballistic_shield') !== -1 ||
+        this.ballisticShieldHp < BALLISTIC_SHIELD_MAX_HP
+          ? {
+              current:
+                this.ballisticShieldHp > 0
+                  ? Math.max(1, Math.round(this.ballisticShieldHp))
+                  : 0,
+              max: BALLISTIC_SHIELD_MAX_HP,
+              blocking: this.isActivelyShieldBlocking(),
+            }
+          : null,
+      activeC4Count: this.building.getPlacedC4('player').length,
+      tankCannonCooldown:
+        activeVeh?.kind === 'hover_tank'
+          ? Math.max(0, this.tankCannonCooldown)
+          : this.tankCannonCooldown > 0
+            ? this.tankCannonCooldown
+            : null,
+      inHotDropPoi: this.computeInHotDropPoi(),
     };
   }
 }

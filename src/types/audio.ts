@@ -144,7 +144,14 @@ export type SoundEventId =
   | 'chug_cannon_splash'
   | 'fishing_cast'
   | 'fishing_catch'
-  | 'balloon_ascend';
+  | 'balloon_ascend'
+  | 'tank_cannon'
+  | 'tank_impact'
+  | 'shield_block'
+  | 'c4_plant'
+  | 'c4_detonate'
+  | 'streak_surge'
+  | 'hot_drop_chime';
 
 export type MusicTrackId =
   | 'none'

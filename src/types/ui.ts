@@ -232,6 +232,11 @@ export interface HUDState {
   thermalVisionRemainingSec?: number | null;
   fishingProgress?: number | null;
   deployedTurrets?: Array<{ x: number; z: number; isFriendly: boolean }>;
+  ballisticShieldHp?: { current: number; max: number; blocking: boolean } | null;
+  activeC4Count?: number;
+  tankCannonCooldown?: number | null;
+  inHotDropPoi?: boolean;
+  hotDropPoiIds?: string[];
 }
 
 export interface MatchQuest {
@@ -321,6 +326,9 @@ export interface MatchSummary {
   turretsDeployed?: number;
   fishCaught?: number;
   chugHeals?: number;
+  c4Blasts?: number;
+  shieldBlockedDmg?: number;
+  tankElims?: number;
 }
 
 export interface BannerMessage {
